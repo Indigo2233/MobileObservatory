@@ -63,4 +63,15 @@ class SerialAccessoryIdentityTest {
         ))
         assertFalse(SerialAccessoryIdentity.isFocuserBanner("F291"))
     }
+
+    @Test
+    fun geminiFlatHandshakesMatchKnownRevisions() {
+        assertEquals("PRO", SerialAccessoryIdentity.geminiFlatRevisionFromHandshake("*HGeminiFlatPanelPro"))
+        assertEquals("LITE", SerialAccessoryIdentity.geminiFlatRevisionFromHandshake("*HGeminiFlatPanelLite"))
+        assertEquals("REV2", SerialAccessoryIdentity.geminiFlatRevisionFromHandshake("*HGeminiFlatPanel"))
+        assertTrue(SerialAccessoryIdentity.isGeminiFlatRev1Handshake("*P99OOO"))
+        assertTrue(SerialAccessoryIdentity.isGeminiFlatHandshake("*HGeminiFlatPanel"))
+        assertFalse(SerialAccessoryIdentity.isGeminiFlatHandshake("*HSomethingElse"))
+        assertFalse(SerialAccessoryIdentity.isGeminiFlatRev1Handshake("*P19OOO"))
+    }
 }

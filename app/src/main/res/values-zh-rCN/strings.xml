@@ -26,6 +26,7 @@
     <string name="guiding">导星</string>
     <string name="efucoser_serial">EFucoser（USB 串口）</string>
     <string name="gemini_eaf">Gemini 电调</string>
+    <string name="gemini_flat">Gemini 平场</string>
     <string name="close">关闭</string>
     <string name="app_name">靛空台</string>
 
@@ -258,9 +259,9 @@
     <string name="confirm_mount_slew">确认赤道仪转动</string>
     <string name="mount_slew_safety_warning">请确认设备周围无碰撞风险，并已设置正确的地理位置和时间。</string>
     <string name="execute_goto">执行 GOTO</string>
-    <string name="accessories_protocol_hint">各类器材独立连接；USB 串口会自动识别 CAA / 电调 / Gemini 电调 / 电平场并连接。</string>
+    <string name="accessories_protocol_hint">各类器材独立连接；USB 串口会自动识别 CAA / 电调 / Gemini 电调 / Gemini 平场 / 电平场并连接。</string>
     <string name="serial_probing">正在识别串口协议…</string>
-    <string name="serial_unrecognized">未匹配电调 / Gemini 电调 / 镜头盖 / CAA 协议</string>
+    <string name="serial_unrecognized">未匹配电调 / Gemini 电调 / Gemini 平场 / 镜头盖 / CAA 协议</string>
     <string name="serial_manual_fallback">USB 串口 — 请点“识别并连接”，或手动选择角色</string>
     <string name="serial_detect_and_connect">识别并连接</string>
     <string name="serial_connected_as">已作为%1$s连接</string>

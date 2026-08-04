@@ -8,7 +8,7 @@ import com.hoho.android.usbserial.driver.UsbSerialPort
 import com.hoho.android.usbserial.driver.UsbSerialProber
 import kotlinx.coroutines.delay
 
-enum class SerialAccessoryRole { FOCUSER, GEMINI_EAF, COVER, ROTATOR }
+enum class SerialAccessoryRole { FOCUSER, GEMINI_EAF, COVER, GEMINI_FLAT, ROTATOR }
 
 /**
  * Lightweight identity probes for USB-serial accessories.
@@ -75,6 +75,20 @@ object SerialAccessoryProbe {
                 return setOf(SerialAccessoryRole.GEMINI_EAF)
             }
 
+            // Gemini flat panel (繁星电动平场) at 9600 before DLC's 115200.
+            drain(port)
+            val flatHash = exchangeHashTerminated(port, ">H#")
+            if (SerialAccessoryIdentity.geminiFlatRevisionFromHandshake(flatHash) != null) {
+                Log.i(TAG, "Probed Gemini flat panel on ${device.deviceName}: $flatHash")
+                return setOf(SerialAccessoryRole.GEMINI_FLAT)
+            }
+            drain(port)
+            val flatRev1 = exchangeNewlineTerminated(port, ">P000#")
+            if (SerialAccessoryIdentity.isGeminiFlatRev1Handshake(flatRev1)) {
+                Log.i(TAG, "Probed Gemini flat panel Rev1 on ${device.deviceName}")
+                return setOf(SerialAccessoryRole.GEMINI_FLAT)
+            }
+
             // DLCoverCalibrator uses 115200 framed commands.
             port.setParameters(115200, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
             runCatching { port.setDTR(false) }
@@ -105,6 +119,27 @@ object SerialAccessoryProbe {
             for (i in 0 until count) {
                 val b = buffer[i].toInt() and 0xff
                 if (b == '#'.code) {
+                    val text = response.toByteArray().toString(Charsets.US_ASCII).trim()
+                    if (text.isNotEmpty()) return text
+                    response.clear()
+                } else {
+                    response += b.toByte()
+                }
+            }
+        }
+        return response.toByteArray().toString(Charsets.US_ASCII).trim()
+    }
+
+    private fun exchangeNewlineTerminated(port: UsbSerialPort, command: String): String {
+        port.write(command.toByteArray(Charsets.US_ASCII), READ_TIMEOUT_MS)
+        val response = ArrayList<Byte>()
+        val buffer = ByteArray(256)
+        val deadline = System.currentTimeMillis() + READ_TIMEOUT_MS
+        while (System.currentTimeMillis() < deadline) {
+            val count = port.read(buffer, 200)
+            for (i in 0 until count) {
+                val b = buffer[i].toInt() and 0xff
+                if (b == '\n'.code || b == '\r'.code) {
                     val text = response.toByteArray().toString(Charsets.US_ASCII).trim()
                     if (text.isNotEmpty()) return text
                     response.clear()

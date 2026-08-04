@@ -10,7 +10,9 @@ import android.hardware.usb.UsbManager
 import android.os.Build
 import android.util.Log
 import com.hoho.android.usbserial.driver.UsbSerialProber
+import com.indigo.mobileobservatory.accessories.cover.CoverCalibratorControllerRouter
 import com.indigo.mobileobservatory.accessories.cover.DlcSerialCoverCalibratorAdapter
+import com.indigo.mobileobservatory.accessories.cover.GeminiFlatpanelSerialAdapter
 import com.indigo.mobileobservatory.accessories.focuser.EFucoserSerialFocuserController
 import com.indigo.mobileobservatory.accessories.focuser.FocuserControllerRouter
 import com.indigo.mobileobservatory.accessories.focuser.GeminiEafSerialFocuserController
@@ -74,7 +76,13 @@ class AccessoryDeviceManager(context: Context) {
         efucoser = efucoserFocuser,
         geminiEaf = geminiEafFocuser
     )
-    val coverController = DlcSerialCoverCalibratorAdapter()
+    private val dlcCover = DlcSerialCoverCalibratorAdapter()
+    private val geminiFlat = GeminiFlatpanelSerialAdapter()
+    val coverController = CoverCalibratorControllerRouter(
+        scope = scope,
+        dlc = dlcCover,
+        gemini = geminiFlat
+    )
     val rotatorController = EcaaSerialRotatorAdapter()
     private val _activeFocuserDeviceId = MutableStateFlow<Int?>(null)
     val activeFocuserDeviceId: StateFlow<Int?> = _activeFocuserDeviceId.asStateFlow()
@@ -178,9 +186,9 @@ class AccessoryDeviceManager(context: Context) {
                     val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
                     val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
                     if (granted && device != null && pendingCoverDeviceId == device.deviceId) {
-                        connectCoverGranted(device)
+                        connectSerialCoverByRole(device)
                     } else {
-                        _scanError.value = "DLCoverCalibrator USB permission denied"
+                        _scanError.value = "Cover / flat panel USB permission denied"
                     }
                     pendingCoverDeviceId = null
                 }
@@ -355,7 +363,7 @@ class AccessoryDeviceManager(context: Context) {
         pendingCoverDeviceId = device.usbDevice.deviceId
         requestPermission(device.usbDevice, ACTION_COVER_PERMISSION, 23) {
             pendingCoverDeviceId = null
-            connectCoverGranted(device.usbDevice)
+            connectSerialCoverByRole(device.usbDevice, device.serialRoles)
         }
     }
 
@@ -405,6 +413,8 @@ class AccessoryDeviceManager(context: Context) {
         coverConnectJob?.cancel()
         coverConnectJob = null
         coverController.close()
+        dlcCover.close()
+        geminiFlat.close()
         _activeCoverDeviceId.value = null
     }
 
@@ -440,8 +450,10 @@ class AccessoryDeviceManager(context: Context) {
             efucoserFocuser.connectedDeviceId == deviceId) {
             roles += SerialAccessoryRole.FOCUSER
         }
-        if (_activeCoverDeviceId.value == deviceId ||
-            coverController.connectedDeviceId == deviceId) {
+        if (geminiFlat.connectedDeviceId == deviceId) {
+            roles += SerialAccessoryRole.GEMINI_FLAT
+        } else if (_activeCoverDeviceId.value == deviceId ||
+            dlcCover.connectedDeviceId == deviceId) {
             roles += SerialAccessoryRole.COVER
         }
         if (_activeRotatorDeviceId.value == deviceId ||
@@ -530,7 +542,7 @@ class AccessoryDeviceManager(context: Context) {
                     roles.size == 1 -> connectProbedRole(device, roles.first())
                     roles.isEmpty() -> {
                         _scanError.value =
-                            "未识别到电调 / Gemini 电调 / 镜头盖 / CAA，请手动选择角色连接"
+                            "未识别到电调 / Gemini 电调 / Gemini 平场 / 镜头盖 / CAA，请手动选择角色连接"
                     }
                 }
             } finally {
@@ -551,7 +563,11 @@ class AccessoryDeviceManager(context: Context) {
             }
             SerialAccessoryRole.COVER -> {
                 if (!claimable(device.deviceId, "镜头盖")) return
-                connectCoverGranted(device)
+                connectDlcCover(device)
+            }
+            SerialAccessoryRole.GEMINI_FLAT -> {
+                if (!claimable(device.deviceId, "Gemini 平场")) return
+                connectGeminiFlat(device)
             }
             SerialAccessoryRole.ROTATOR -> {
                 if (!claimable(device.deviceId, "CAA")) return
@@ -586,7 +602,8 @@ class AccessoryDeviceManager(context: Context) {
             (pendingSerialAutoDeviceId == deviceId) ||
             (efucoserFocuser.connectedDeviceId == deviceId) ||
             (geminiEafFocuser.connectedDeviceId == deviceId) ||
-            (coverController.connectedDeviceId == deviceId) ||
+            (dlcCover.connectedDeviceId == deviceId) ||
+            (geminiFlat.connectedDeviceId == deviceId) ||
             (rotatorController.connectedDeviceId == deviceId)
     }
 
@@ -693,16 +710,79 @@ class AccessoryDeviceManager(context: Context) {
         }
     }
 
-    private fun connectCoverGranted(device: UsbDevice) {
+    private fun connectSerialCoverByRole(
+        device: UsbDevice,
+        roles: Set<SerialAccessoryRole>? = _devices.value
+            .firstOrNull { it.usbDevice.deviceId == device.deviceId }
+            ?.serialRoles
+    ) {
+        when {
+            roles == setOf(SerialAccessoryRole.GEMINI_FLAT) -> connectGeminiFlat(device)
+            roles == setOf(SerialAccessoryRole.COVER) -> connectDlcCover(device)
+            else -> connectSerialCoverAuto(device)
+        }
+    }
+
+    private fun connectDlcCover(device: UsbDevice) {
         coverConnectJob?.cancel()
         coverConnectJob = scope.launch {
             try {
                 awaitProbeIdle()
-                if (coverController.open(appContext, device)) {
+                geminiFlat.close()
+                if (dlcCover.open(appContext, device)) {
+                    coverController.useDlc()
                     _activeCoverDeviceId.value = device.deviceId
                 } else {
-                    _scanError.value = coverController.lastError.value
+                    _scanError.value = dlcCover.lastError.value
                         ?: "DLCoverCalibrator identification failed"
+                }
+            } finally {
+                coverConnectJob = null
+            }
+        }
+    }
+
+    private fun connectGeminiFlat(device: UsbDevice) {
+        coverConnectJob?.cancel()
+        coverConnectJob = scope.launch {
+            try {
+                awaitProbeIdle()
+                dlcCover.close()
+                if (geminiFlat.open(appContext, device)) {
+                    coverController.useGemini()
+                    _activeCoverDeviceId.value = device.deviceId
+                } else {
+                    _scanError.value = geminiFlat.lastError.value
+                        ?: "Gemini flat panel identification failed"
+                }
+            } finally {
+                coverConnectJob = null
+            }
+        }
+    }
+
+    /** Try Gemini flat panel first, then fall back to DLCoverCalibrator. */
+    private fun connectSerialCoverAuto(device: UsbDevice) {
+        coverConnectJob?.cancel()
+        coverConnectJob = scope.launch {
+            try {
+                awaitProbeIdle()
+                dlcCover.close()
+                geminiFlat.close()
+                when {
+                    geminiFlat.open(appContext, device) -> {
+                        coverController.useGemini()
+                        _activeCoverDeviceId.value = device.deviceId
+                    }
+                    dlcCover.open(appContext, device) -> {
+                        coverController.useDlc()
+                        _activeCoverDeviceId.value = device.deviceId
+                    }
+                    else -> {
+                        _scanError.value = geminiFlat.lastError.value
+                            ?: dlcCover.lastError.value
+                            ?: "Serial cover / flat panel identification failed"
+                    }
                 }
             } finally {
                 coverConnectJob = null
