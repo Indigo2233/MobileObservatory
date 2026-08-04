@@ -74,6 +74,9 @@ fun MountControlScreen(
     onOpenStarMap: () -> Unit,
     onOpenPolarAlignment: () -> Unit,
     onOpenGuiding: () -> Unit,
+    onOpenPushTo: () -> Unit = {},
+    onOpenCalibration: () -> Unit = {},
+    onOpenTargetLibrary: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val connectionState by viewModel.mountConnectionState.collectAsState()
@@ -508,6 +511,20 @@ fun MountControlScreen(
             }
             FilledTonalButton(onClick = onOpenPolarAlignment) {
                 Text(stringResource(R.string.polar_alignment))
+            }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            FilledTonalButton(onClick = onOpenPushTo) {
+                Text(stringResource(R.string.push_to_title))
+            }
+            FilledTonalButton(onClick = onOpenTargetLibrary) {
+                Text(stringResource(R.string.target_library_title))
+            }
+            FilledTonalButton(onClick = onOpenCalibration) {
+                Text(stringResource(R.string.calibration_title))
             }
         }
         Card(modifier = Modifier.fillMaxWidth()) {

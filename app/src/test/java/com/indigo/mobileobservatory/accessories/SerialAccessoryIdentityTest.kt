@@ -56,9 +56,9 @@ class SerialAccessoryIdentityTest {
     fun geminiEafFirmwareHandshakeMatches() {
         assertEquals(291, SerialAccessoryIdentity.geminiEafVersion("F291"))
         assertEquals(320, SerialAccessoryIdentity.geminiEafVersion("f320"))
-        assertTrue(SerialAccessoryIdentity.isgeminiEafFirmware("F291"))
-        assertFalse(SerialAccessoryIdentity.isgeminiEafFirmware("V 1103"))
-        assertFalse(SerialAccessoryIdentity.isgeminiEafFirmware(
+        assertTrue(SerialAccessoryIdentity.isGeminiEafFirmware("F291"))
+        assertFalse(SerialAccessoryIdentity.isGeminiEafFirmware("V 1103"))
+        assertFalse(SerialAccessoryIdentity.isGeminiEafFirmware(
             "EFucoser ESP8266 ULN2003 Focuser ver 1103"
         ))
         assertFalse(SerialAccessoryIdentity.isFocuserBanner("F291"))

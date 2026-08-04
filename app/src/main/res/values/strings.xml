@@ -538,4 +538,73 @@
     <string name="unable_match_dec_stars">Unable to match guide stars after DEC pulse</string>
     <string name="dec_calibration_too_small">DEC calibration movement is too small</string>
     <string name="guide_pulse_failed">Guide pulse failed</string>
+
+    <!-- Phone plate-solve / Push-to (WIP, open development) -->
+    <string name="phone_camera_debug">Phone sky probe</string>
+    <string name="phone_camera_permission_required">Camera permission is required for phone sky capture.</string>
+    <string name="phone_camera_permission_denied_forever">Camera permission was denied. Enable it for this app in system settings.</string>
+    <string name="phone_camera_waiting_permission">Camera permission is required to list lenses. Tap below to grant it.</string>
+    <string name="phone_camera_grant_permission">Grant camera permission</string>
+    <string name="phone_camera_open_settings">Open app settings</string>
+    <string name="phone_camera_probe_capabilities">Probe capabilities</string>
+    <string name="phone_camera_capture">Capture &amp; extract stars</string>
+    <string name="phone_camera_exposure_s">Exposure (s)</string>
+    <string name="phone_camera_iso">ISO</string>
+    <string name="phone_camera_prefer_raw">Prefer RAW</string>
+    <string name="phone_camera_lens">Lens</string>
+    <string name="phone_camera_lens_none">No rear camera found. Grant permission and probe again.</string>
+    <string name="phone_camera_lens_hint">The main camera usually finds more stars; telephoto FOV is narrower and fails more easily under light pollution.</string>
+    <string name="phone_camera_lenses_found">Found %1$d rear camera(s)</string>
+    <string name="phone_camera_m0_hint">M0 feasibility: full-manual sky frames and star extraction. Point at a dark sky. Compare main vs telephoto below.</string>
+    <string name="phone_camera_go_pass">GO: ≥15 stars and limiting mag ≥5.5</string>
+    <string name="phone_camera_go_fail">NO-GO: need ≥15 stars and limiting mag ≥5.5</string>
+    <string name="phone_camera_saved">Saved to %1$s</string>
+    <string name="phone_camera_storage_clear">Clear</string>
+    <string name="phone_camera_storage_cleared">Cleared %1$s of captures</string>
+    <string name="phone_camera_storage_usage">Capture cache: %1$s / %2$s (oldest auto-evicted when full)</string>
+
+    <string name="push_to_title">Push-to</string>
+    <string name="push_to_targets">Targets</string>
+    <string name="push_to_calibrate">Calibrate</string>
+    <string name="push_to_mock_banner">Demo mode: sliders fake the tube pointing. Swap in a real attitude source after M0 + plate-solve pass.</string>
+    <string name="push_to_demo_controls">Demo attitude (mock data)</string>
+    <string name="push_to_current_alt">Current alt: %1$.0f°</string>
+    <string name="push_to_current_az">Current az: %1$.0f°</string>
+    <string name="push_to_target_alt">Target alt: %1$.0f°</string>
+    <string name="push_to_target_az">Target az: %1$.0f°</string>
+    <string name="push_to_eyepiece_fov">Eyepiece FOV: %1$.1f°</string>
+    <string name="push_to_snap_on_target">Snap on-target</string>
+    <string name="push_to_snap_far">Snap far</string>
+    <string name="push_to_on_target">On target</string>
+    <string name="push_to_zenith_warn">Near zenith: lower altitude before turning azimuth.</string>
+    <string name="push_to_zenith_hint">Azimuth is unstable near zenith. Lower altitude first, then turn azimuth.</string>
+    <string name="push_to_status">Target %1$s · %2$s · sep %3$s · %4$s</string>
+    <string name="push_to_status_compact">%1$s · %2$s</string>
+
+    <string name="target_library_title">Target library</string>
+    <string name="target_library_shell_banner">Demo catalog (10 objects). OpenNGC + tonight ranking land in M7.</string>
+    <string name="target_library_search">Search</string>
+    <string name="target_library_guide">Guide</string>
+    <string name="target_library_meta">%1$s · mag %2$s · RA %3$.2fh Dec %4$.1f°</string>
+
+    <string name="calibration_title">Calibration</string>
+    <string name="calibration_shell_banner">Wizard shell. Day / star / main-camera modes solve phone↔optical-axis rotation once plate-solve is wired.</string>
+    <string name="calibration_mode_day">Daytime</string>
+    <string name="calibration_mode_star">Star</string>
+    <string name="calibration_mode_main">Main camera</string>
+    <string name="calibration_step">Step %1$d / %2$d</string>
+    <string name="calibration_day_step0">Point the tube at a distant landmark; keep the phone rigidly fixed.</string>
+    <string name="calibration_day_step1">Tap the landmark in the phone preview (preview hook pending). One sample → coarse rotation.</string>
+    <string name="calibration_star_step0">Center a bright star in the eyepiece.</string>
+    <string name="calibration_star_step1">Plate-solve with the phone now (solve hook pending).</string>
+    <string name="calibration_star_step2">Repeat in two more sky regions. At least 3 samples.</string>
+    <string name="calibration_main_step0">Connect the main imaging camera.</string>
+    <string name="calibration_main_step1">Expose: ASTAP solves the optical axis; phone solves in parallel (hooks pending).</string>
+    <string name="calibration_main_step2">Collect 3–5 pairs and fit the rotation residual.</string>
+    <string name="calibration_samples">Samples: %1$d</string>
+    <string name="calibration_residual">Demo residual: %1$.1f′</string>
+    <string name="calibration_prev">Previous</string>
+    <string name="calibration_next">Next</string>
+    <string name="calibration_capture_sample">Capture sample</string>
+    <string name="calibration_done_shell">Shell flow complete — real solving is not wired yet.</string>
 </resources>

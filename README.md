@@ -87,7 +87,7 @@
 | [`TODO.md`](TODO.md) | 已完成项与后续优化（导星增强、targetSdk 等） |
 | [`AGPL_SOURCE_DELIVERY.md`](AGPL_SOURCE_DELIVERY.md) | Stellarium Web 非商业交付与源码义务 |
 | [`docs/testing/HARDWARE_SMOKE_TESTS.md`](docs/testing/HARDWARE_SMOKE_TESTS.md) | 真机冒烟测试矩阵 |
-| [`docs/PHONE_PLATE_SOLVE_PLAN.md`](docs/PHONE_PLATE_SOLVE_PLAN.md) | 手机板解 / Push-to 方案（规划中，未实施） |
+| [`docs/PHONE_PLATE_SOLVE_PLAN.md`](docs/PHONE_PLATE_SOLVE_PLAN.md) | 手机板解 / Push-to 方案（开放开发中） |
 
 ## 技术要点（开发者）
 
