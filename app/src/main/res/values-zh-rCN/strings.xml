@@ -289,6 +289,7 @@
     <string name="stellarium_assets_missing">当前安装包未包含 Stellarium 星图资源。</string>
     <string name="stellarium_build_hint">请使用 Build.ps1 -AndroidOnly -NonCommercial 构建。</string>
     <string name="nearby_devices_permission_required">需要附近设备权限才能连接蓝牙赤道仪。</string>
+    <string name="nearby_devices_permission_denied_forever">附近设备权限已被拒绝。请在系统设置里为本应用开启该权限。</string>
     <string name="pair_mount_in_settings">请先在 Android 蓝牙设置中配对 OnStep 或 iOptron 设备。</string>
     <string name="cancel_connection">取消连接</string>
     <string name="loading_star_map">正在加载星图…</string>
@@ -377,11 +378,11 @@
     <string name="run">运行</string>
     <string name="protocol_auto">自动检测</string>
     <string name="goto_label">GOTO</string>
-    <string name="precision_goto_label">精定</string>
-    <string name="confirm_precision_goto">确认解析精定</string>
+    <string name="precision_goto_label">指向并居中</string>
+    <string name="confirm_precision_goto">确认指向并居中</string>
     <string name="precision_goto_warning">会 GOTO → 拍照解析 → 同步 → 再 GOTO，直到天空误差 ≤ 2′。需要已连接相机和 D50 星库。可用 STOP 中止。</string>
-    <string name="execute_precision_goto">开始精定</string>
-    <string name="precision_goto_need_camera">精定前请先连接成像相机。</string>
+    <string name="execute_precision_goto">开始指向并居中</string>
+    <string name="precision_goto_need_camera">指向并居中前请先连接成像相机。</string>
     <string name="precision_goto_need_d50">请先在「图像解析」页安装 D50 星库。</string>
     <string name="precision_goto_no_frame">没有可用于解析的新相机帧。</string>
     <string name="precision_goto_pass">第 %1$d/%2$d 轮</string>
@@ -474,6 +475,8 @@
     <string name="database_not_installed">未安装，下载大小约为 901 MB。</string>
     <string name="phone_location_failed">获取手机位置失败</string>
     <string name="location_permission_required">手机 GPS 需要位置权限。</string>
+    <string name="location_permission_denied_forever">位置权限已被拒绝。请在系统设置里为本应用开启位置权限。</string>
+    <string name="open_app_settings">打开应用设置</string>
     <string name="start_current">从当前位置开始</string>
     <string name="distance_deg">距离（度）</string>
     <string name="move_rate">移动速度</string>
@@ -547,7 +550,6 @@
     <string name="phone_camera_permission_denied_forever">相机权限已被拒绝。请在系统设置里为本应用开启相机权限。</string>
     <string name="phone_camera_waiting_permission">需要相机权限才能探测镜头。请点击下方按钮授权。</string>
     <string name="phone_camera_grant_permission">授予相机权限</string>
-    <string name="phone_camera_open_settings">打开应用设置</string>
     <string name="phone_camera_probe_capabilities">探测能力</string>
     <string name="phone_camera_capture">拍摄并提取星点</string>
     <string name="phone_camera_exposure_s">曝光（秒）</string>

@@ -289,6 +289,7 @@
     <string name="stellarium_assets_missing">This build does not include Stellarium assets.</string>
     <string name="stellarium_build_hint">Build with Build.ps1 -AndroidOnly -NonCommercial.</string>
     <string name="nearby_devices_permission_required">Nearby devices permission is required to connect a Bluetooth mount.</string>
+    <string name="nearby_devices_permission_denied_forever">Nearby devices permission was denied. Enable it for this app in system settings.</string>
     <string name="pair_mount_in_settings">Pair the OnStep or iOptron Bluetooth device in Android settings first.</string>
     <string name="cancel_connection">Cancel connection</string>
     <string name="loading_star_map">Loading star map…</string>
@@ -377,11 +378,11 @@
     <string name="run">Run</string>
     <string name="protocol_auto">Auto detect</string>
     <string name="goto_label">GOTO</string>
-    <string name="precision_goto_label">Solve align</string>
-    <string name="confirm_precision_goto">Confirm solve-and-align</string>
+    <string name="precision_goto_label">Point &amp; center</string>
+    <string name="confirm_precision_goto">Confirm point &amp; center</string>
     <string name="precision_goto_warning">GOTO, plate-solve, sync, and re-GOTO until sky error is within 2′. Requires a connected camera and D50 database. Use STOP to abort.</string>
-    <string name="execute_precision_goto">Start solve align</string>
-    <string name="precision_goto_need_camera">Connect the imaging camera before solve-and-align.</string>
+    <string name="execute_precision_goto">Start point &amp; center</string>
+    <string name="precision_goto_need_camera">Connect the imaging camera before point &amp; center.</string>
     <string name="precision_goto_need_d50">Install the D50 plate-solve database first (Plate solve screen).</string>
     <string name="precision_goto_no_frame">No fresh camera frame for plate solve.</string>
     <string name="precision_goto_pass">Pass %1$d/%2$d</string>
@@ -474,6 +475,8 @@
     <string name="database_not_installed">Not installed. Download size is about 901 MB.</string>
     <string name="phone_location_failed">Phone location failed</string>
     <string name="location_permission_required">Location permission is required for phone GPS.</string>
+    <string name="location_permission_denied_forever">Location permission was denied. Enable it for this app in system settings.</string>
+    <string name="open_app_settings">Open app settings</string>
     <string name="start_current">Start from current position</string>
     <string name="distance_deg">Distance (deg)</string>
     <string name="move_rate">Move rate</string>
@@ -547,7 +550,6 @@
     <string name="phone_camera_permission_denied_forever">Camera permission was denied. Enable it for this app in system settings.</string>
     <string name="phone_camera_waiting_permission">Camera permission is required to list lenses. Tap below to grant it.</string>
     <string name="phone_camera_grant_permission">Grant camera permission</string>
-    <string name="phone_camera_open_settings">Open app settings</string>
     <string name="phone_camera_probe_capabilities">Probe capabilities</string>
     <string name="phone_camera_capture">Capture &amp; extract stars</string>
     <string name="phone_camera_exposure_s">Exposure (s)</string>
