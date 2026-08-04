@@ -24,12 +24,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * USB-serial adapter for Gemini EAF (????).
+ * USB-serial adapter for Gemini EAF (繁星电调).
  *
  * Uses the INDI MyFocuserPro2 wire protocol
  * (`indi_myfocuserpro2_focus` / ASCOM StarFocuserPro102ASCOM).
  *
- * Protocol uses `#`-terminated commands (`:03#` handshake ? `F<ver>#`).
+ * Protocol uses `#`-terminated commands (`:03#` handshake → `F<ver>#`).
  */
 class GeminiEafSerialFocuserController : FocuserController {
     companion object {

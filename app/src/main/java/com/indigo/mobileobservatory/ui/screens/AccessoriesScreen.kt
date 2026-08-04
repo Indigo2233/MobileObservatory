@@ -142,12 +142,16 @@ private fun DeviceCard(
     val roles = device.serialRoles
     val matchedRoles = roles?.takeIf { it.isNotEmpty() }
     val probeFailed = roles != null && roles.isEmpty()
-    val showFocuser = !isSerial || matchedRoles == null || SerialAccessoryRole.FOCUSER in matchedRoles
+    val showFocuser = !isSerial || matchedRoles == null ||
+        SerialAccessoryRole.FOCUSER in matchedRoles ||
+        SerialAccessoryRole.GEMINI_EAF in matchedRoles
     val showCover = !isSerial || matchedRoles == null || SerialAccessoryRole.COVER in matchedRoles
     val showRotator = !isSerial || matchedRoles == null || SerialAccessoryRole.ROTATOR in matchedRoles
     val matchedLabel = when {
         matchedRoles?.singleOrNull() == SerialAccessoryRole.FOCUSER ->
             stringResource(R.string.focuser)
+        matchedRoles?.singleOrNull() == SerialAccessoryRole.GEMINI_EAF ->
+            stringResource(R.string.gemini_eaf)
         matchedRoles?.singleOrNull() == SerialAccessoryRole.COVER ->
             stringResource(R.string.cover)
         matchedRoles?.singleOrNull() == SerialAccessoryRole.ROTATOR -> "CAA"

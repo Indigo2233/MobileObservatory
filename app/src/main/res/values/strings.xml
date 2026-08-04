@@ -25,6 +25,7 @@
     <string name="polar_alignment">Polar alignment</string>
     <string name="guiding">Guiding</string>
     <string name="efucoser_serial">EFucoser (USB Serial)</string>
+    <string name="gemini_eaf">Gemini EAF</string>
     <string name="close">Close</string>
     <string name="app_name">Indigo Observatory</string>
 
@@ -257,9 +258,9 @@
     <string name="confirm_mount_slew">Confirm mount slew</string>
     <string name="mount_slew_safety_warning">Confirm the equipment is clear of collision hazards and that location and time are correct.</string>
     <string name="execute_goto">Run GOTO</string>
-    <string name="accessories_protocol_hint">Each accessory connects independently; USB serial devices are auto-detected (CAA / focuser / flat panel) when permitted.</string>
+    <string name="accessories_protocol_hint">Each accessory connects independently; USB serial devices are auto-detected (CAA / focuser / Gemini EAF / flat panel) when permitted.</string>
     <string name="serial_probing">Probing serial protocol…</string>
-    <string name="serial_unrecognized">No matching focuser / cover / CAA protocol</string>
+    <string name="serial_unrecognized">No matching focuser / Gemini EAF / cover / CAA protocol</string>
     <string name="serial_manual_fallback">USB serial — tap Detect &amp; connect, or choose a role manually</string>
     <string name="serial_detect_and_connect">Detect &amp; connect</string>
     <string name="serial_connected_as">Connected as %1$s</string>

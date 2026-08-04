@@ -121,6 +121,7 @@ class AccessoryDeviceManager(context: Context) {
                                 focuserConnectJob = null
                                 connectingFocuserDeviceId = null
                                 efucoserFocuser.close()
+                                geminiEafFocuser.close()
                             }
                             if (_activeFocuserDeviceId.value == device.deviceId) {
                                 focuserController.close()
@@ -167,7 +168,7 @@ class AccessoryDeviceManager(context: Context) {
                     val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
                     if (granted && device != null &&
                         pendingEfucoserDeviceId == device.deviceId) {
-                        connectEfucoser(device)
+                        connectSerialFocuserByRole(device)
                     } else {
                         _scanError.value = "EFucoser USB permission denied"
                     }
@@ -345,7 +346,7 @@ class AccessoryDeviceManager(context: Context) {
         pendingEfucoserDeviceId = device.usbDevice.deviceId
         requestPermission(device.usbDevice, ACTION_EFUCOSER_PERMISSION, 22) {
             pendingEfucoserDeviceId = null
-            connectEfucoser(device.usbDevice)
+            connectSerialFocuserByRole(device.usbDevice, device.serialRoles)
         }
     }
 
@@ -396,6 +397,7 @@ class AccessoryDeviceManager(context: Context) {
         connectingFocuserDeviceId = null
         focuserController.close()
         efucoserFocuser.close()
+        geminiEafFocuser.close()
         _activeFocuserDeviceId.value = null
     }
 
@@ -432,7 +434,9 @@ class AccessoryDeviceManager(context: Context) {
 
     private fun knownConnectedRoles(deviceId: Int): Set<SerialAccessoryRole>? {
         val roles = linkedSetOf<SerialAccessoryRole>()
-        if (_activeFocuserDeviceId.value == deviceId ||
+        if (geminiEafFocuser.connectedDeviceId == deviceId) {
+            roles += SerialAccessoryRole.GEMINI_EAF
+        } else if (_activeFocuserDeviceId.value == deviceId ||
             efucoserFocuser.connectedDeviceId == deviceId) {
             roles += SerialAccessoryRole.FOCUSER
         }
@@ -525,7 +529,8 @@ class AccessoryDeviceManager(context: Context) {
                 when {
                     roles.size == 1 -> connectProbedRole(device, roles.first())
                     roles.isEmpty() -> {
-                        _scanError.value = "未识别到电调 / 镜头盖 / CAA，请手动选择角色连接"
+                        _scanError.value =
+                            "未识别到电调 / Gemini 电调 / 镜头盖 / CAA，请手动选择角色连接"
                     }
                 }
             } finally {
@@ -539,6 +544,10 @@ class AccessoryDeviceManager(context: Context) {
             SerialAccessoryRole.FOCUSER -> {
                 if (!claimable(device.deviceId, "电调焦")) return
                 connectEfucoser(device)
+            }
+            SerialAccessoryRole.GEMINI_EAF -> {
+                if (!claimable(device.deviceId, "Gemini 电调")) return
+                connectGeminiEaf(device)
             }
             SerialAccessoryRole.COVER -> {
                 if (!claimable(device.deviceId, "镜头盖")) return
@@ -576,6 +585,7 @@ class AccessoryDeviceManager(context: Context) {
             (pendingRotatorDeviceId == deviceId) ||
             (pendingSerialAutoDeviceId == deviceId) ||
             (efucoserFocuser.connectedDeviceId == deviceId) ||
+            (geminiEafFocuser.connectedDeviceId == deviceId) ||
             (coverController.connectedDeviceId == deviceId) ||
             (rotatorController.connectedDeviceId == deviceId)
     }
@@ -589,6 +599,19 @@ class AccessoryDeviceManager(context: Context) {
         delay(250)
     }
 
+    private fun connectSerialFocuserByRole(
+        device: UsbDevice,
+        roles: Set<SerialAccessoryRole>? = _devices.value
+            .firstOrNull { it.usbDevice.deviceId == device.deviceId }
+            ?.serialRoles
+    ) {
+        when {
+            roles == setOf(SerialAccessoryRole.GEMINI_EAF) -> connectGeminiEaf(device)
+            roles == setOf(SerialAccessoryRole.FOCUSER) -> connectEfucoser(device)
+            else -> connectSerialFocuserAuto(device)
+        }
+    }
+
     private fun connectEfucoser(device: UsbDevice) {
         focuserConnectJob?.cancel()
         val generation = ++focuserConnectGeneration
@@ -596,12 +619,70 @@ class AccessoryDeviceManager(context: Context) {
         focuserConnectJob = scope.launch {
             try {
                 awaitProbeIdle()
+                geminiEafFocuser.close()
                 if (efucoserFocuser.open(appContext, device)) {
                     focuserController.useEfucoser()
                     _activeFocuserDeviceId.value = device.deviceId
                 } else {
                     _scanError.value = efucoserFocuser.lastError.value
                         ?: "EFucoser identification failed"
+                }
+            } finally {
+                if (focuserConnectGeneration == generation) {
+                    connectingFocuserDeviceId = null
+                    focuserConnectJob = null
+                }
+            }
+        }
+    }
+
+    private fun connectGeminiEaf(device: UsbDevice) {
+        focuserConnectJob?.cancel()
+        val generation = ++focuserConnectGeneration
+        connectingFocuserDeviceId = device.deviceId
+        focuserConnectJob = scope.launch {
+            try {
+                awaitProbeIdle()
+                efucoserFocuser.close()
+                if (geminiEafFocuser.open(appContext, device)) {
+                    focuserController.useGeminiEaf()
+                    _activeFocuserDeviceId.value = device.deviceId
+                } else {
+                    _scanError.value = geminiEafFocuser.lastError.value
+                        ?: "Gemini EAF identification failed"
+                }
+            } finally {
+                if (focuserConnectGeneration == generation) {
+                    connectingFocuserDeviceId = null
+                    focuserConnectJob = null
+                }
+            }
+        }
+    }
+
+    private fun connectSerialFocuserAuto(device: UsbDevice) {
+        focuserConnectJob?.cancel()
+        val generation = ++focuserConnectGeneration
+        connectingFocuserDeviceId = device.deviceId
+        focuserConnectJob = scope.launch {
+            try {
+                awaitProbeIdle()
+                efucoserFocuser.close()
+                geminiEafFocuser.close()
+                when {
+                    geminiEafFocuser.open(appContext, device) -> {
+                        focuserController.useGeminiEaf()
+                        _activeFocuserDeviceId.value = device.deviceId
+                    }
+                    efucoserFocuser.open(appContext, device) -> {
+                        focuserController.useEfucoser()
+                        _activeFocuserDeviceId.value = device.deviceId
+                    }
+                    else -> {
+                        _scanError.value = geminiEafFocuser.lastError.value
+                            ?: efucoserFocuser.lastError.value
+                            ?: "Serial focuser identification failed"
+                    }
                 }
             } finally {
                 if (focuserConnectGeneration == generation) {

@@ -36,7 +36,7 @@ class SerialAccessoryIdentityTest {
 
     @Test
     fun versionOnlyReplyIsNotEnoughToClassifyRole() {
-        // Both firmwares answer V# this way â€?must not be treated as identity.
+        // Both firmwares answer V# this way — must not be treated as identity.
         assertFalse(SerialAccessoryIdentity.isFocuserBanner("V 1103"))
         assertFalse(SerialAccessoryIdentity.isRotatorBanner("V 2007"))
         assertFalse(SerialAccessoryIdentity.isRotatorBanner("V 1103"))

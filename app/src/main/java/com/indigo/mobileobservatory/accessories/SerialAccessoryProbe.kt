@@ -8,7 +8,7 @@ import com.hoho.android.usbserial.driver.UsbSerialPort
 import com.hoho.android.usbserial.driver.UsbSerialProber
 import kotlinx.coroutines.delay
 
-enum class SerialAccessoryRole { FOCUSER, COVER, ROTATOR }
+enum class SerialAccessoryRole { FOCUSER, GEMINI_EAF, COVER, ROTATOR }
 
 /**
  * Lightweight identity probes for USB-serial accessories.
@@ -19,13 +19,9 @@ object SerialAccessoryProbe {
     private const val TAG = "SerialAccessoryProbe"
     private const val CAA_SETTLE_MS = 4000L
     private const val FOCUSER_SETTLE_MS = 2200L
+    private const val GEMINI_EAF_SETTLE_MS = 1000L
     private const val COVER_SETTLE_MS = 2200L
     private const val READ_TIMEOUT_MS = 2500
-    private val FOCUSER_IDENTITY = Regex(
-        "^EFucoser (?:ESP8266(?: ULN2003)?|Arduino Nano ULN2003) " +
-            "Focuser ver (\\d+)$"
-    )
-    private val ROTATOR_IDENTITY = Regex("^V\\s+(\\d+)$")
 
     suspend fun probe(context: Context, device: UsbDevice): Set<SerialAccessoryRole> {
         val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
@@ -48,23 +44,35 @@ object SerialAccessoryProbe {
             runCatching { port.setRTS(true) }
             delay(CAA_SETTLE_MS)
             drain(port)
-            val rotatorId = exchangeHashTerminated(port, "V#")
-            ROTATOR_IDENTITY.matchEntire(rotatorId)?.groupValues?.getOrNull(1)?.toIntOrNull()
-                ?.takeIf { it in 1000..2999 }
-                ?.let {
-                    Log.i(TAG, "Probed CAA V$it on ${device.deviceName}")
-                    return setOf(SerialAccessoryRole.ROTATOR)
-                }
+            val rotatorBanner = exchangeHashTerminated(port, "##")
+            if (SerialAccessoryIdentity.isRotatorBanner(rotatorBanner)) {
+                SerialAccessoryIdentity.rotatorVersion(rotatorBanner)
+                    ?.takeIf { it in 1000..2999 }
+                    ?.let {
+                        Log.i(TAG, "Probed CAA banner V$it on ${device.deviceName}")
+                        return setOf(SerialAccessoryRole.ROTATOR)
+                    }
+            }
 
             // EFucoser uses DTR/RTS low after boot.
             runCatching { port.setDTR(false) }
             runCatching { port.setRTS(false) }
             delay(FOCUSER_SETTLE_MS)
             drain(port)
-            val focuserId = exchangeHashTerminated(port, "#")
-            if (FOCUSER_IDENTITY.matches(focuserId)) {
+            val focuserBanner = exchangeHashTerminated(port, "##")
+            if (SerialAccessoryIdentity.isFocuserBanner(focuserBanner)) {
                 Log.i(TAG, "Probed EFucoser on ${device.deviceName}")
                 return setOf(SerialAccessoryRole.FOCUSER)
+            }
+
+            // Gemini EAF (繁星电调): MyFocuserPro2 handshake at 9600.
+            delay(GEMINI_EAF_SETTLE_MS)
+            drain(port)
+            val geminiFirmware = exchangeHashTerminated(port, ":03#")
+            if (SerialAccessoryIdentity.isGeminiEafFirmware(geminiFirmware)) {
+                val version = SerialAccessoryIdentity.geminiEafVersion(geminiFirmware)
+                Log.i(TAG, "Probed Gemini EAF F$version on ${device.deviceName}")
+                return setOf(SerialAccessoryRole.GEMINI_EAF)
             }
 
             // DLCoverCalibrator uses 115200 framed commands.
