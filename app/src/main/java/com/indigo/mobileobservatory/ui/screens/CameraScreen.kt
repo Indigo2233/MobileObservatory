@@ -31,9 +31,6 @@ import com.indigo.mobileobservatory.ui.viewmodel.CaptureFormat
 import com.indigo.mobileobservatory.ui.viewmodel.RecordFormat
 import com.indigo.mobileobservatory.BuildConfig
 import com.indigo.mobileobservatory.R
-import com.indigo.mobileobservatory.catalog.CatalogObject
-import com.indigo.mobileobservatory.pointing.PushToGuidance
-import kotlin.math.abs
 
 private enum class MainControlTab {
     CAMERA,
@@ -52,13 +49,7 @@ fun CameraScreen(
     var showPlateSolve by remember { mutableStateOf(false) }
     var showPolarAlign by remember { mutableStateOf(false) }
     var showGuide by remember { mutableStateOf(false) }
-    var showPhoneCameraDebug by remember { mutableStateOf(false) }
-    var showPushTo by remember { mutableStateOf(false) }
-    var showCalibration by remember { mutableStateOf(false) }
-    var showTargetLibrary by remember { mutableStateOf(false) }
-    var pushToTargetName by remember { mutableStateOf<String?>(null) }
-    var pushToTargetAlt by remember { mutableFloatStateOf(55f) }
-    var pushToTargetAz by remember { mutableFloatStateOf(180f) }
+    val phoneNav = rememberPhonePlateSolveNavState()
     var selectedTab by rememberSaveable { mutableStateOf(MainControlTab.CAMERA) }
     val globalMountMotionState by viewModel.mountMotionState.collectAsState()
 
@@ -67,40 +58,8 @@ fun CameraScreen(
         onStop = viewModel::stopMountMotion
     )
 
-    if (showPhoneCameraDebug) {
-        PhoneCameraDebugScreen(onBack = { showPhoneCameraDebug = false })
-        return
-    }
-
-    if (showCalibration) {
-        CalibrationWizardScreen(onBack = { showCalibration = false })
-        return
-    }
-
-    if (showTargetLibrary) {
-        TargetLibraryScreen(
-            onBack = { showTargetLibrary = false },
-            onGuideTo = { obj ->
-                val (alt, az) = demoAltAzFromEquatorial(obj)
-                pushToTargetName = "${obj.id} · ${obj.name}"
-                pushToTargetAlt = alt
-                pushToTargetAz = az
-                showTargetLibrary = false
-                showPushTo = true
-            }
-        )
-        return
-    }
-
-    if (showPushTo) {
-        PushToScreen(
-            onBack = { showPushTo = false },
-            onOpenCalibration = { showCalibration = true },
-            onOpenTargets = { showTargetLibrary = true },
-            initialTargetName = pushToTargetName,
-            initialTargetAlt = pushToTargetAlt,
-            initialTargetAz = pushToTargetAz
-        )
+    if (phoneNav.destination != null) {
+        PhonePlateSolveScreens(phoneNav)
         return
     }
 
@@ -336,9 +295,9 @@ fun CameraScreen(
                     onOpenStarMap = { selectedTab = MainControlTab.STAR_MAP },
                     onOpenPolarAlignment = { showPolarAlign = true },
                     onOpenGuiding = { showGuide = true },
-                    onOpenPushTo = { showPushTo = true },
-                    onOpenCalibration = { showCalibration = true },
-                    onOpenTargetLibrary = { showTargetLibrary = true },
+                    onOpenPushTo = { phoneNav.destination = PhonePlateSolveDestination.PUSH_TO },
+                    onOpenCalibration = { phoneNav.destination = PhonePlateSolveDestination.CALIBRATION },
+                    onOpenTargetLibrary = { phoneNav.destination = PhonePlateSolveDestination.TARGET_LIBRARY },
                     modifier = Modifier.weight(1f)
                 )
             }
@@ -692,7 +651,7 @@ fun CameraScreen(
                         )
                     }
                     SmallFloatingActionButton(
-                        onClick = { showPhoneCameraDebug = true },
+                        onClick = { phoneNav.destination = PhonePlateSolveDestination.PHONE_CAMERA_DEBUG },
                         containerColor = MaterialTheme.colorScheme.surfaceVariant
                     ) {
                         Icon(
@@ -1132,14 +1091,4 @@ private fun FocusAssistPreview(
         onDismiss = viewModel::toggleFocusAssist,
         modifier = modifier
     )
-}
-
-/**
- * Placeholder equatorial→horizontal for demo linking only.
- * Not for real sky; replaced when site + LST available.
- */
-private fun demoAltAzFromEquatorial(obj: CatalogObject): Pair<Float, Float> {
-    val alt = (abs(obj.decDeg) * 0.6 + 25.0).coerceIn(5.0, 85.0).toFloat()
-    val az = PushToGuidance.normalizeAzimuth(obj.raHours * 15.0).toFloat()
-    return alt to az
 }
