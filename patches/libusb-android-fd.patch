@@ -1,0 +1,113 @@
+diff --git a/libusb/os/linux_usbfs.c b/libusb/os/linux_usbfs.c
+index ed8597b..d8b1dbf 100644
+--- a/libusb/os/linux_usbfs.c
++++ b/libusb/os/linux_usbfs.c
+@@ -95,6 +95,50 @@ static int sysfs_available = -1;
+ /* how many times have we initted (and not exited) ? */
+ static int init_count = 0;
+ 
++/* Android pre-opened fd registry: bypasses SELinux by reusing an fd
++ * obtained from Android's UsbManager.openDevice(). */
++#define ANDROID_FD_MAX_DEVICES 4
++static struct {
++	int valid;
++	uint8_t busnum;
++	uint8_t devaddr;
++	int fd;
++} android_fd_table[ANDROID_FD_MAX_DEVICES];
++
++DEFAULT_VISIBILITY void libusb_set_android_fd(uint8_t busnum, uint8_t devaddr, int fd)
++{
++	for (int i = 0; i < ANDROID_FD_MAX_DEVICES; i++) {
++		if (!android_fd_table[i].valid) {
++			android_fd_table[i].valid = 1;
++			android_fd_table[i].busnum = busnum;
++			android_fd_table[i].devaddr = devaddr;
++			android_fd_table[i].fd = fd;
++			return;
++		}
++	}
++}
++
++DEFAULT_VISIBILITY void libusb_clear_android_fd(void)
++{
++	for (int i = 0; i < ANDROID_FD_MAX_DEVICES; i++)
++		android_fd_table[i].valid = 0;
++}
++
++static int get_android_fd(uint8_t busnum, uint8_t devaddr)
++{
++	for (int i = 0; i < ANDROID_FD_MAX_DEVICES; i++) {
++		if (android_fd_table[i].valid &&
++		    android_fd_table[i].busnum == busnum &&
++		    android_fd_table[i].devaddr == devaddr) {
++			int fd = dup(android_fd_table[i].fd);
++			if (fd >= 0)
++				lseek(fd, 0, SEEK_SET);
++			return fd;
++		}
++	}
++	return -1;
++}
++
+ /* Serialize scan-devices, event-thread, and poll */
+ usbi_mutex_static_t linux_hotplug_lock = USBI_MUTEX_INITIALIZER;
+ 
+@@ -199,6 +243,14 @@ static int get_usbfs_fd(struct libusb_device *dev, mode_t mode, int silent)
+ 	if (fd != -1)
+ 		return fd; /* Success */
+ 
++	/* Android fallback: use pre-registered fd from UsbManager */
++	fd = get_android_fd(dev->bus_number, dev->device_address);
++	if (fd >= 0) {
++		usbi_dbg(ctx, "using Android pre-opened fd for bus %u dev %u",
++			 dev->bus_number, dev->device_address);
++		return fd;
++	}
++
+ 	if (errno == ENOENT) {
+ 		const long delay_ms = 10L;
+ 		const struct timespec delay_ts = { 0L, delay_ms * 1000L * 1000L };
+@@ -1316,15 +1368,35 @@ static int sysfs_get_device_list(struct libusb_context *ctx)
+ 
+ static int linux_default_scan_devices(struct libusb_context *ctx)
+ {
+-	/* we can retrieve device list and descriptors from sysfs or usbfs.
+-	 * sysfs is preferable, because if we use usbfs we end up resuming
+-	 * any autosuspended USB devices. however, sysfs is not available
+-	 * everywhere, so we need a usbfs fallback too.
+-	 */
++	int ret;
++
+ 	if (sysfs_available)
+-		return sysfs_get_device_list(ctx);
++		ret = sysfs_get_device_list(ctx);
+ 	else
+-		return usbfs_get_device_list(ctx);
++		ret = usbfs_get_device_list(ctx);
++
++	/* Enumerate any pre-registered Android fds that weren't found
++	 * by the normal scan (SELinux blocks /dev/bus/usb access). */
++	for (int i = 0; i < ANDROID_FD_MAX_DEVICES; i++) {
++		if (!android_fd_table[i].valid)
++			continue;
++		unsigned long sid = (unsigned long)android_fd_table[i].busnum << 8
++				  | android_fd_table[i].devaddr;
++		struct libusb_device *existing =
++			usbi_get_device_by_session_id(ctx, sid);
++		if (existing) {
++			libusb_unref_device(existing);
++			continue;
++		}
++		usbi_dbg(ctx, "enumerating Android fd device bus %u dev %u",
++			 android_fd_table[i].busnum,
++			 android_fd_table[i].devaddr);
++		linux_enumerate_device(ctx,
++			android_fd_table[i].busnum,
++			android_fd_table[i].devaddr, NULL);
++	}
++
++	return ret;
+ }
+ #endif
+ 

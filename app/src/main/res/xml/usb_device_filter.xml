@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- ToupTek cameras (VID 0x0547 = 1351) -->
+    <usb-device vendor-id="1351" />
+    <!-- ZWO ASI cameras (VID 0x03C3 = 963) -->
+    <usb-device vendor-id="963" />
+    <!-- QHYCCD cameras (VID 0x1618 = 5656) -->
+    <usb-device vendor-id="5656" />
+</resources>

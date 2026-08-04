@@ -1,0 +1,8 @@
+ASTAP astap-cli
+Source: https://sourceforge.net/projects/astap-program/files/android/
+Project: https://github.com/han-k59/astap
+License: Mozilla Public License 2.0
+
+The Android plate solver integration bundles the official ASTAP command-line
+solver for aarch64 as libastap_cli.so. The D50 star database is downloaded by
+the user at runtime from the ASTAP SourceForge distribution.

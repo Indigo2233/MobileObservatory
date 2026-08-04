@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Outer lens ring -->
+    <path
+        android:pathData="M54,54m-26,0a26,26 0,1 1,52 0a26,26 0,1 1,-52 0"
+        android:fillColor="#5C6BC0"/>
+    <path
+        android:pathData="M54,54m-23,0a23,23 0,1 1,46 0a23,23 0,1 1,-46 0"
+        android:fillColor="#3949AB"/>
+
+    <!-- Inner lens -->
+    <path
+        android:pathData="M54,54m-20,0a20,20 0,1 1,40 0a20,20 0,1 1,-40 0"
+        android:fillColor="#1A237E"/>
+    <path
+        android:pathData="M54,54m-18,0a18,18 0,1 1,36 0a18,18 0,1 1,-36 0"
+        android:fillColor="#0D1547"/>
+
+    <!-- Letter "I" - bold sans-serif -->
+    <path
+        android:pathData="M41,44 L41,68 L47,68 L47,44 Z"
+        android:fillColor="#E8EAF6"/>
+
+    <!-- Letter "n" - bold sans-serif -->
+    <path
+        android:pathData="M52,50 L52,68 L57,68 L57,58 Q57,55 60,55 Q63,55 63,58 L63,68 L68,68 L68,56 Q68,50 62,50 Q59,50 57,52 L57,50 Z"
+        android:fillColor="#E8EAF6"/>
+
+    <!-- Lens reflection arc -->
+    <path
+        android:pathData="M42,44 Q48,38 58,40"
+        android:strokeColor="#7986CB"
+        android:strokeWidth="1.0"
+        android:fillColor="#00000000"/>
+
+    <!-- Star sparkle top-right -->
+    <path
+        android:pathData="M74,30 L75.5,34 L79.5,35.5 L75.5,37 L74,41 L72.5,37 L68.5,35.5 L72.5,34 Z"
+        android:fillColor="#FFD54F"/>
+
+    <!-- Small star -->
+    <path
+        android:pathData="M32,28 L32.8,30 L34.8,30.8 L32.8,31.6 L32,33.6 L31.2,31.6 L29.2,30.8 L31.2,30 Z"
+        android:fillColor="#FFF176"/>
+
+    <!-- Tiny star bottom-right -->
+    <path
+        android:pathData="M78,72 L78.4,73 L79.5,73.4 L78.4,73.8 L78,74.8 L77.6,73.8 L76.5,73.4 L77.6,73 Z"
+        android:fillColor="#FFEE58"/>
+</vector>

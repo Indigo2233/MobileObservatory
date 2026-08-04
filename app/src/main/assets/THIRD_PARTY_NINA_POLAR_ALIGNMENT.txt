@@ -1,0 +1,9 @@
+N.I.N.A. Three Point Polar Alignment plugin
+
+Project: https://bitbucket.org/Isbeorn/nina.plugin.polaralignment
+License: Mozilla Public License 2.0
+
+The Android three-point polar-alignment calculator is an independent Kotlin
+implementation derived from the geometry and validation approach used by the
+N.I.N.A. plugin. The Android UI, ASTAP integration, and app workflow are
+project-specific.
