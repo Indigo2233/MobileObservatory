@@ -9,8 +9,10 @@ secrets/
 .build_locked_backup/
 .industrial-overlay-applied
 
-# Industrial camera private overlay (maintainer Sync-IndustrialOverlay.ps1).
-# These paths must never be committed to the public repository.
+# Local maintainer Cursor rules (installed from the private kit; never publish).
+.cursor/
+
+# Private overlay artifacts (maintainer Sync script). Never commit these.
 app/libs/galaxy-android-source.jar
 app/libs/MvCameraControl.jar
 app/src/main/java/com/indigo/mobileobservatory/camera/DahengCamera.kt
@@ -21,6 +23,8 @@ app/src/main/cpp/do3think/
 app/src/main/cpp/hikvision_jni.cpp
 app/src/main/cpp/hikvision_usb_jni.cpp
 app/src/main/cpp/do3think_jni.cpp
+app/src/main/res/values/industrial_strings.xml
+app/src/main/res/values-zh-rCN/industrial_strings.xml
 BuildLocked.ps1
 BuildIndustrial.ps1
 **/libgxiapi.so
