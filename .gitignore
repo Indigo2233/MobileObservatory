@@ -27,6 +27,7 @@ app/src/main/res/values/industrial_strings.xml
 app/src/main/res/values-zh-rCN/industrial_strings.xml
 BuildLocked.ps1
 BuildIndustrial.ps1
+BuildLocal.ps1
 **/libgxiapi.so
 **/libgxijni.so
 **/libGxU3VTL.so
