@@ -459,6 +459,7 @@
     <string name="guide_pulse_error_detail">Guide pulse error: %s</string>
     <string name="recording_limit_reached">Recording limit reached</string>
     <string name="recording_error_detail">Recording error: %s</string>
+    <string name="pixel_format_switch_failed">Camera rejected %s, kept the previous bit depth</string>
     <string name="long_exposure_enabled">Long exposure enabled</string>
     <string name="long_exposure_disabled">Long exposure disabled</string>
     <string name="trial_recording_disabled">Trial version — recording disabled</string>

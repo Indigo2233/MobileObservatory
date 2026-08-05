@@ -1357,11 +1357,33 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _gain.value = cam.currentGain
     }
 
+    @Volatile private var pixelFormatSwitching = false
+
+    /**
+     * QHY changes bit depth by re-initialising (and sometimes re-enumerating)
+     * the camera, which takes seconds — never run it on the UI thread, and
+     * ignore taps while one switch is still in flight.
+     */
     fun setPixelFormat(format: PixelFormat) {
         val cam = cameraManager.activeCamera ?: return
-        frameProcessor.resetBitShiftDetection()
-        cam.setPixelFormat(format)
-        _pixelFormat.value = cam.currentPixelFormat
+        if (pixelFormatSwitching) return
+        pixelFormatSwitching = true
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                frameProcessor.resetBitShiftDetection()
+                cam.setPixelFormat(format)
+                if (cam.currentPixelFormat != format) {
+                    _statusMessage.value =
+                        app.getString(R.string.pixel_format_switch_failed, format.displayName)
+                }
+            } catch (e: Throwable) {
+                Log.e(TAG, "setPixelFormat failed", e)
+            } finally {
+                _pixelFormat.value = cam.currentPixelFormat
+                _supportedPixelFormats.value = cam.supportedPixelFormats
+                pixelFormatSwitching = false
+            }
+        }
     }
 
     fun setReadoutMode(mode: ReadoutMode) {

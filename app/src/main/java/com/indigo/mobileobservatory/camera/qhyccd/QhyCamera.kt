@@ -16,6 +16,9 @@ class QhyCamera : Camera {
 
     companion object {
         private const val TAG = "QhyCamera"
+
+        /** Transfer depths that map onto a [PixelFormat]; probed against the SDK range. */
+        private val CANDIDATE_TRANSFER_BITS = listOf(8, 12, 16)
     }
 
     private val _isOpen = MutableStateFlow(false)
@@ -40,6 +43,7 @@ class QhyCamera : Camera {
     private var sensorHeight = 0
     private var maxBpp = 16
     private var bayerType = -1
+    private var supportedTransferBits = listOf(8)
 
     private var frameCallback: FrameCallback? = null
     private var captureThread: Thread? = null
@@ -71,7 +75,7 @@ class QhyCamera : Camera {
         return openInternal(cameraId, singleFrame = false)
     }
 
-    private fun openInternal(cameraId: String, singleFrame: Boolean): Boolean {
+    private fun openInternal(cameraId: String, singleFrame: Boolean, desiredBits: Int = 8): Boolean {
         try {
             FileLogger.i(TAG, "openInternal: id=$cameraId singleFrame=$singleFrame usbFd=$usbFd")
 
@@ -100,7 +104,6 @@ class QhyCamera : Camera {
             }
 
             savedCameraId = resolvedId
-            useSingleFrameMode = singleFrame
             val streamMode = if (singleFrame) 0 else 1
             QhyccdJni.setReadMode(0)
             val smRet = QhyccdJni.setStreamMode(streamMode)
@@ -136,16 +139,6 @@ class QhyCamera : Camera {
                 }
             }
 
-            val transferBitRange = QhyccdJni.getParamRange(QhyccdJni.CONTROL_TRANSFERBIT)
-            if (transferBitRange != null) {
-                val sdkMin = transferBitRange[0].toInt()
-                val sdkMax = transferBitRange[1].toInt()
-                Log.i(TAG, "TRANSFERBIT range: $sdkMin..$sdkMax, chipInfo bpp=$maxBpp")
-                if (sdkMax < maxBpp) {
-                    maxBpp = sdkMax
-                }
-            }
-
             currentRoi = Roi(0, 0, sensorWidth, sensorHeight)
             cropInfo = CropInfo(0, 0, sensorWidth, sensorHeight)
 
@@ -153,7 +146,8 @@ class QhyCamera : Camera {
             QhyccdJni.setResolution(0, 0, sensorWidth, sensorHeight)
             QhyccdJni.setDebayerOnOff(false)
 
-            initPixelFormats()
+            useSingleFrameMode = singleFrame
+            initPixelFormats(desiredBits)
 
             val modelName = extractModelName(cameraId)
             cameraInfo = CameraInfo(
@@ -184,44 +178,73 @@ class QhyCamera : Camera {
         }
     }
 
-    private fun initPixelFormats() {
-        val formats = mutableListOf<PixelFormat>()
-        val base8 = if (bayerType > 0) bayerPixelFormat(8) else PixelFormat.MONO8
-
-        formats.add(base8)
-
-        // Check transfer bit range from SDK to determine supported bit depths
-        val chipBpp = maxBpp
-        val transferBitRange = QhyccdJni.getParamRange(QhyccdJni.CONTROL_TRANSFERBIT)
-        if (transferBitRange != null) {
-            val sdkMax = transferBitRange[1].toInt()
-            Log.i(TAG, "TRANSFERBIT range: ${transferBitRange[0]}..${transferBitRange[1]}, chipInfo bpp=$chipBpp")
-            maxBpp = sdkMax
-        }
-
-        // Add 12-bit format if supported
-        if (maxBpp >= 12) {
-            val base12 = if (bayerType > 0) bayerPixelFormat(12) else PixelFormat.MONO12
-            formats.add(base12)
-        }
-
-        // Only add 16-bit if BOTH chip and SDK report 16-bit capability
-        if (maxBpp >= 16 && chipBpp >= 16) {
-            val base16 = if (bayerType > 0) bayerPixelFormat(16) else PixelFormat.MONO16
-            formats.add(base16)
-        }
-
-        QhyccdJni.setParam(QhyccdJni.CONTROL_TRANSFERBIT, 8.0)
-        currentPixelFormat = base8
-
+    private fun initPixelFormats(desiredBits: Int) {
+        supportedTransferBits = probeTransferBits(chipBpp = maxBpp)
+        val formats = supportedTransferBits.map { pixelFormatForBits(it) }.distinct()
         supportedPixelFormats = formats
-
-        // Update maxBpp to reflect the highest supported format
         maxBpp = formats.maxOf { it.nativeBits }
-        Log.i(TAG, "Supported formats: ${formats.joinToString { it.name }}, maxBpp=$maxBpp")
+
+        val bits = if (desiredBits in supportedTransferBits) desiredBits else supportedTransferBits.first()
+        applyTransferBit(bits)
+        currentPixelFormat = pixelFormatForBits(bits)
+        Log.i(TAG, "Transfer bits $supportedTransferBits -> formats ${formats.joinToString { it.name }}, active=${currentPixelFormat.name}")
     }
 
-    private fun bayerPixelFormat(bits: Int): PixelFormat {
+    /**
+     * CONTROL_TRANSFERBIT is the USB transfer container (8 or 16 on nearly every
+     * model), not the sensor's native depth. Offering a value the SDK silently
+     * rejects leaves the camera streaming at a depth the UI does not expect, so
+     * derive the list from the SDK range and confirm each value by read-back.
+     */
+    private fun probeTransferBits(chipBpp: Int): List<Int> {
+        val range = QhyccdJni.getParamRange(QhyccdJni.CONTROL_TRANSFERBIT)
+        if (range == null) {
+            Log.w(TAG, "TRANSFERBIT range unavailable, assuming 8-bit only")
+            return listOf(8)
+        }
+        val min = range[0].toInt()
+        val max = (range[1].toInt()).coerceAtMost(maxOf(chipBpp, range[0].toInt()))
+        val step = range[2].toInt()
+        Log.i(TAG, "TRANSFERBIT range: ${range[0].toInt()}..${range[1].toInt()} step=$step chipInfo bpp=$chipBpp")
+        if (min <= 0 || max < min) return listOf(8)
+        if (min == max) return listOf(min)
+
+        val candidates = CANDIDATE_TRANSFER_BITS.filter {
+            it in min..max && (step <= 0 || (it - min) % step == 0)
+        }
+        if (candidates.isEmpty()) return listOf(min, max)
+
+        // GetQHYCCDParam does not report TRANSFERBIT on every model. Without a
+        // read-back an accepted value is indistinguishable from an ignored one,
+        // so fall back to the two endpoints the SDK range guarantees.
+        QhyccdJni.setParam(QhyccdJni.CONTROL_TRANSFERBIT, min.toDouble())
+        if (QhyccdJni.getParam(QhyccdJni.CONTROL_TRANSFERBIT).toInt() != min) {
+            Log.i(TAG, "TRANSFERBIT read-back unsupported, trusting SDK range endpoints")
+            return listOf(min, max)
+        }
+
+        val accepted = candidates.filter { bits ->
+            QhyccdJni.setParam(QhyccdJni.CONTROL_TRANSFERBIT, bits.toDouble()) == QhyccdJni.QHYCCD_SUCCESS &&
+                QhyccdJni.getParam(QhyccdJni.CONTROL_TRANSFERBIT).toInt() == bits
+        }
+        return accepted.ifEmpty { listOf(min) }
+    }
+
+    private fun applyTransferBit(bits: Int): Boolean {
+        val ret = QhyccdJni.setParam(QhyccdJni.CONTROL_TRANSFERBIT, bits.toDouble())
+        if (ret != QhyccdJni.QHYCCD_SUCCESS) {
+            FileLogger.e(TAG, "SetTransferBit($bits) failed: ret=$ret")
+            return false
+        }
+        val readback = QhyccdJni.getParam(QhyccdJni.CONTROL_TRANSFERBIT).toInt()
+        if (readback > 0 && readback != bits) {
+            FileLogger.e(TAG, "SetTransferBit($bits) ignored, camera reports ${readback}bit")
+            return false
+        }
+        return true
+    }
+
+    private fun pixelFormatForBits(bits: Int): PixelFormat {
         return when (bayerType) {
             QhyccdJni.BAYER_RG -> when { bits <= 8 -> PixelFormat.BAYER_RG8; bits <= 12 -> PixelFormat.BAYER_RG12; else -> PixelFormat.BAYER_RG16 }
             QhyccdJni.BAYER_GR -> when { bits <= 8 -> PixelFormat.BAYER_GR8; bits <= 12 -> PixelFormat.BAYER_GR12; else -> PixelFormat.BAYER_GR16 }
@@ -491,7 +514,7 @@ class QhyCamera : Camera {
 
     private fun resolvePixelFormat(bits: Int, channels: Int): PixelFormat {
         if (channels >= 3) return PixelFormat.RGB48
-        if (bayerType > 0) return bayerPixelFormat(bits)
+        if (bayerType > 0) return pixelFormatForBits(bits)
         return when (bits) {
             8 -> PixelFormat.MONO8
             10 -> PixelFormat.MONO10
@@ -534,58 +557,116 @@ class QhyCamera : Camera {
         QhyccdJni.setParam(QhyccdJni.CONTROL_GAIN, currentGain.toDouble())
     }
 
-    @Volatile private var modeSwitching = false
+    private val formatLock = Any()
 
     override fun setPixelFormat(format: PixelFormat) {
-        try {
+        synchronized(formatLock) {
             if (format !in supportedPixelFormats) return
             if (format == currentPixelFormat) return
-            if (modeSwitching) return
+            if (!_isOpen.value) return
 
+            val previous = currentPixelFormat
             val wasCapturing = _isCapturing.value
             val cb = frameCallback
-            if (wasCapturing) stopCapture()
+            try {
+                if (wasCapturing) stopCapture()
 
-            val bits = format.nativeBits
-            val needSingleFrame = bits > 8
-            val modeChanged = needSingleFrame != useSingleFrameMode
-            Log.i(TAG, "setPixelFormat: ${format.name} (${bits}bit) needSingleFrame=$needSingleFrame modeChanged=$modeChanged")
+                val bits = format.nativeBits
+                val needSingleFrame = bits > 8
+                Log.i(TAG, "setPixelFormat: ${previous.name} -> ${format.name} (${bits}bit) singleFrame=$needSingleFrame")
 
-            if (modeChanged) {
-                modeSwitching = true
-                try {
-                    val prevRoi = currentRoi
-                    val prevExposure = currentExposureUs
-                    val prevGain = currentGain
-                    val camId = savedCameraId ?: return
-
-                    if (!reopenWithUsbReset(camId, needSingleFrame)) {
-                        Log.e(TAG, "reopenWithUsbReset failed")
-                        return
-                    }
-
-                    QhyccdJni.setResolution(prevRoi.x, prevRoi.y, prevRoi.width, prevRoi.height)
-                    currentRoi = prevRoi
-                    cropInfo = CropInfo(prevRoi.x, prevRoi.y, prevRoi.width, prevRoi.height)
-                    setExposureTime(prevExposure)
-                    setGain(prevGain)
-                    FileLogger.i(TAG, "Restored: ROI=${prevRoi.width}x${prevRoi.height} exp=${prevExposure.toInt()}us gain=${prevGain}")
-                } finally {
-                    modeSwitching = false
+                val applied = if (needSingleFrame != useSingleFrameMode) {
+                    switchStreamMode(needSingleFrame, bits)
+                } else {
+                    applyTransferBit(bits)
                 }
-            } else {
-                val ret = QhyccdJni.setParam(QhyccdJni.CONTROL_TRANSFERBIT, bits.toDouble())
-                Log.i(TAG, "SetTransferBit($bits) ret=$ret")
+
+                if (applied) {
+                    currentPixelFormat = format
+                } else {
+                    FileLogger.e(TAG, "Switch to ${format.name} failed, reverting to ${previous.name}")
+                    revertTo(previous)
+                }
+            } catch (e: Throwable) {
+                FileLogger.e(TAG, "setPixelFormat(${format.name}) failed", e)
+                runCatching { revertTo(previous) }
             }
 
-            currentPixelFormat = format
             if (wasCapturing && cb != null) startCapture(cb)
-        } catch (e: Throwable) {
-            Log.e(TAG, "setPixelFormat failed", e)
         }
     }
 
-    private fun reopenWithUsbReset(cameraId: String, singleFrame: Boolean): Boolean {
+    /**
+     * Moves between live and single-frame streaming, then restores everything
+     * the SDK drops on re-init (resolution, exposure, gain, transfer bit).
+     */
+    private fun switchStreamMode(singleFrame: Boolean, bits: Int): Boolean {
+        val camId = savedCameraId ?: return false
+        val roi = currentRoi
+        val exposure = currentExposureUs
+        val gain = currentGain
+
+        if (!reinitStreamMode(singleFrame) && !reopenWithUsbReset(camId, singleFrame, bits)) {
+            return false
+        }
+
+        QhyccdJni.setResolution(roi.x, roi.y, roi.width, roi.height)
+        currentRoi = roi
+        cropInfo = CropInfo(roi.x, roi.y, roi.width, roi.height)
+        setExposureTime(exposure)
+        setGain(gain)
+        if (!applyTransferBit(bits)) return false
+
+        FileLogger.i(
+            TAG,
+            "Stream mode -> ${if (singleFrame) "single-frame" else "live"} @${bits}bit, " +
+                "ROI=${roi.width}x${roi.height} exp=${exposure.toInt()}us gain=$gain"
+        )
+        return true
+    }
+
+    /**
+     * SetQHYCCDStreamMode followed by InitQHYCCD on the open handle is the SDK's
+     * own way to change streaming mode. Trying it before [reopenWithUsbReset]
+     * avoids a USB re-enumeration, which regularly fails to bring the camera
+     * back and then leaves it unusable.
+     */
+    private fun reinitStreamMode(singleFrame: Boolean): Boolean {
+        val mode = if (singleFrame) 0 else 1
+        val smRet = QhyccdJni.setStreamMode(mode)
+        if (smRet != QhyccdJni.QHYCCD_SUCCESS) {
+            Log.w(TAG, "SetStreamMode($mode) failed: $smRet, falling back to USB reset")
+            return false
+        }
+        val initRet = QhyccdJni.initCamera()
+        if (initRet != QhyccdJni.QHYCCD_SUCCESS) {
+            Log.w(TAG, "InitQHYCCD after stream mode change failed: $initRet, falling back to USB reset")
+            return false
+        }
+        useSingleFrameMode = singleFrame
+        QhyccdJni.setBinMode(1, 1)
+        QhyccdJni.setDebayerOnOff(false)
+        return true
+    }
+
+    /**
+     * Best-effort return to the depth that was already working, so a rejected
+     * format cannot leave the camera closed or streaming a depth nobody asked for.
+     */
+    private fun revertTo(format: PixelFormat) {
+        val bits = format.nativeBits
+        val restored = if ((bits > 8) != useSingleFrameMode) {
+            switchStreamMode(bits > 8, bits)
+        } else {
+            applyTransferBit(bits)
+        }
+        if (!restored) {
+            FileLogger.e(TAG, "Could not restore ${format.name}; camera needs a reconnect")
+        }
+        currentPixelFormat = format
+    }
+
+    private fun reopenWithUsbReset(cameraId: String, singleFrame: Boolean, desiredBits: Int): Boolean {
         val ctx = appContext ?: run { Log.e(TAG, "No app context for USB reset"); return false }
         val dev = usbDevice ?: run { Log.e(TAG, "No USB device for reset"); return false }
 
@@ -605,22 +686,31 @@ class QhyCamera : Camera {
         val usbManager = ctx.getSystemService(Context.USB_SERVICE) as UsbManager
         val newConn = usbManager.openDevice(dev)
         if (newConn == null) {
-            Log.e(TAG, "reopenWithUsbReset: UsbManager.openDevice returned null")
+            FileLogger.e(TAG, "reopenWithUsbReset: UsbManager.openDevice returned null")
             return false
         }
         usbConnection = newConn
         for (i in 0 until dev.interfaceCount) {
-            newConn.claimInterface(dev.getInterface(i), true)
+            if (!newConn.claimInterface(dev.getInterface(i), true)) {
+                FileLogger.e(TAG, "reopenWithUsbReset: claimInterface($i) failed")
+                newConn.close()
+                usbConnection = null
+                return false
+            }
         }
         val newFd = newConn.fileDescriptor
         usbFd = newFd
         Log.i(TAG, "reopenWithUsbReset: new fd=$newFd")
 
-        QhyccdJni.initResource()
+        val resourceRet = QhyccdJni.initResource()
+        if (resourceRet != QhyccdJni.QHYCCD_SUCCESS) {
+            FileLogger.e(TAG, "reopenWithUsbReset: InitQHYCCDResource failed: $resourceRet")
+            return false
+        }
         QhyccdJni.initFirmware(usbVid, usbPid, newFd)
         Thread.sleep(300)
 
-        return openInternal(cameraId, singleFrame)
+        return openInternal(cameraId, singleFrame, desiredBits)
     }
 
     override fun setRoi(roi: Roi) {

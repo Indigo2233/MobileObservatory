@@ -459,6 +459,7 @@
     <string name="guide_pulse_error_detail">导星脉冲错误：%s</string>
     <string name="recording_limit_reached">已达到录制限制</string>
     <string name="recording_error_detail">录制错误：%s</string>
+    <string name="pixel_format_switch_failed">相机不支持切换到 %s，已保持原位深</string>
     <string name="long_exposure_enabled">长曝光已启用</string>
     <string name="long_exposure_disabled">长曝光已禁用</string>
     <string name="trial_recording_disabled">试用版已禁用录制</string>
