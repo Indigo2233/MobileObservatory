@@ -26,14 +26,18 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.OpenWith
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -53,7 +57,6 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -74,18 +77,25 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.doOnLayout
 import androidx.webkit.WebViewAssetLoader
 import com.indigo.mobileobservatory.R
-import com.indigo.mobileobservatory.astro.OpticsFov
+import com.indigo.mobileobservatory.astro.FovInstrumentMode
+import com.indigo.mobileobservatory.astro.OpticsEquipment
+import com.indigo.mobileobservatory.catalog.AssetDeepSkyCatalog
+import com.indigo.mobileobservatory.catalog.CatalogObject
 import com.indigo.mobileobservatory.mount.MountCoordinates
 import com.indigo.mobileobservatory.mount.MountDirection
 import com.indigo.mobileobservatory.mount.MountSite
 import com.indigo.mobileobservatory.mount.MountSlewRate
 import com.indigo.mobileobservatory.mount.PrecisionGotoPhase
 import com.indigo.mobileobservatory.mount.PrecisionGotoProgress
+import com.indigo.mobileobservatory.starmap.HipsTileCache
+import com.indigo.mobileobservatory.starmap.StarMapSearch
 import com.indigo.mobileobservatory.ui.components.StarMapBackButton
 import com.indigo.mobileobservatory.ui.components.StarMapGotoConfirmation
 import com.indigo.mobileobservatory.ui.components.StarMapPrecisionGotoConfirmation
 import com.indigo.mobileobservatory.ui.components.StarMapSyncConfirmation
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.util.Locale
 
@@ -201,51 +211,141 @@ fun StarMapScreen(
     var overlaysLocked by remember { mutableStateOf(false) }
     var targetExpanded by remember { mutableStateOf(false) }
     var settingsExpanded by remember { mutableStateOf(false) }
+    var searchDialogVisible by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+    var searchResults by remember { mutableStateOf<List<CatalogObject>>(emptyList()) }
     var directionPadExpanded by remember { mutableStateOf(false) }
     var fovDialogVisible by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val prefs = remember {
         context.getSharedPreferences("mobile_observatory", android.content.Context.MODE_PRIVATE)
     }
+    val hipsCache = remember { HipsTileCache.create(context.applicationContext) }
+    val catalog = remember { AssetDeepSkyCatalog(context.applicationContext) }
+    var onlineDssEnabled by remember {
+        mutableStateOf(prefs.getBoolean(HipsTileCache.PREFS_ONLINE_DSS, false))
+    }
+    var hipsCacheSizeLabel by remember {
+        mutableStateOf(HipsTileCache.formatCacheSize(hipsCache.cacheSizeBytes()))
+    }
     var followMount by remember {
         mutableStateOf(prefs.getBoolean("star_map_follow_mount", true))
     }
-    var eyepieceFovText by remember {
-        mutableStateOf(prefs.getString("star_map_eyepiece_fov", "1.0") ?: "1.0")
-    }
-    var sensorFovWidthText by remember {
-        mutableStateOf(prefs.getString("star_map_sensor_fov_w", "1.2") ?: "1.2")
-    }
-    var sensorFovHeightText by remember {
-        mutableStateOf(prefs.getString("star_map_sensor_fov_h", "0.8") ?: "0.8")
-    }
-    var showSensorFov by remember {
-        mutableStateOf(prefs.getBoolean("star_map_show_sensor_fov", true))
-    }
-    var showEyepieceFov by remember {
-        mutableStateOf(prefs.getBoolean("star_map_show_eyepiece_fov", false))
-    }
-    var focalLengthText by remember {
+    var fovMode by remember {
         mutableStateOf(
-            prefs.getFloat("plate_focal_length_mm", 0f).takeIf { it > 0f }?.let {
-                "%.1f".format(Locale.US, it)
-            } ?: ""
+            if (prefs.getString("star_map_fov_mode", "SENSOR") == "EYEPIECE") {
+                FovInstrumentMode.EYEPIECE
+            } else {
+                FovInstrumentMode.SENSOR
+            }
         )
     }
-    var useCameraFov by remember {
-        mutableStateOf(prefs.getBoolean("star_map_use_camera_fov", true))
+    var selectedTelescopeId by remember {
+        mutableStateOf(prefs.getString("star_map_telescope_id", "scope_80_500") ?: "scope_80_500")
+    }
+    var selectedEyepieceId by remember {
+        mutableStateOf(prefs.getString("star_map_eyepiece_id", "ep_25_50") ?: "ep_25_50")
+    }
+    var selectedSensorId by remember {
+        mutableStateOf(
+            prefs.getString("star_map_sensor_id", OpticsEquipment.CONNECTED_SENSOR_ID)
+                ?: OpticsEquipment.CONNECTED_SENSOR_ID
+        )
+    }
+    var customTelescopeFl by remember {
+        mutableStateOf(
+            prefs.getFloat("plate_focal_length_mm", 500f).takeIf { it > 0f }?.let {
+                "%.1f".format(Locale.US, it)
+            } ?: (prefs.getString("star_map_custom_scope_fl", "500") ?: "500")
+        )
+    }
+    var customEyepieceFl by remember {
+        mutableStateOf(prefs.getString("star_map_custom_ep_fl", "25") ?: "25")
+    }
+    var customEyepieceAfov by remember {
+        mutableStateOf(prefs.getString("star_map_custom_ep_afov", "50") ?: "50")
+    }
+    var customSensorPixelUm by remember {
+        mutableStateOf(prefs.getString("star_map_custom_sensor_um", "3.75") ?: "3.75")
+    }
+    var customSensorWidth by remember {
+        mutableStateOf(prefs.getString("star_map_custom_sensor_w", "1920") ?: "1920")
+    }
+    var customSensorHeight by remember {
+        mutableStateOf(prefs.getString("star_map_custom_sensor_h", "1080") ?: "1080")
+    }
+    var showFovOverlay by remember {
+        mutableStateOf(prefs.getBoolean("star_map_show_fov_overlay", true))
     }
     val moveEnabled = mountConnected && !mountBusy
 
-    val cameraComputedFov = remember(
+    val connectedSensorName = stringResource(R.string.connected_camera_sensor)
+    val connectedSensor = remember(
         cameraPixelSizeUm,
         cameraFrameWidthPx,
         cameraFrameHeightPx,
-        focalLengthText
+        connectedSensorName
     ) {
-        val px = cameraPixelSizeUm?.toDouble() ?: return@remember null
-        val fl = focalLengthText.toDoubleOrNull() ?: return@remember null
-        OpticsFov.rectangleDegrees(px, fl, cameraFrameWidthPx, cameraFrameHeightPx)
+        OpticsEquipment.connectedSensor(
+            cameraPixelSizeUm,
+            cameraFrameWidthPx,
+            cameraFrameHeightPx,
+            connectedSensorName
+        )
+    }
+    val telescopes = OpticsEquipment.defaultTelescopes
+    val eyepieces = OpticsEquipment.defaultEyepieces
+    val sensors = remember(connectedSensor) {
+        buildList {
+            connectedSensor?.let { add(it) }
+            addAll(OpticsEquipment.defaultSensors)
+        }
+    }
+    LaunchedEffect(sensors, selectedSensorId) {
+        if (sensors.none { it.id == selectedSensorId }) {
+            selectedSensorId = sensors.firstOrNull()?.id
+                ?: OpticsEquipment.defaultSensors.first().id
+        }
+    }
+
+    val telescopeFl = remember(selectedTelescopeId, customTelescopeFl, telescopes) {
+        resolveTelescopeFl(telescopes, selectedTelescopeId, customTelescopeFl)
+    }
+    val activeEyepiece = remember(
+        selectedEyepieceId,
+        customEyepieceFl,
+        customEyepieceAfov,
+        eyepieces
+    ) {
+        resolveEyepiece(eyepieces, selectedEyepieceId, customEyepieceFl, customEyepieceAfov)
+    }
+    val activeSensor = remember(
+        selectedSensorId,
+        customSensorPixelUm,
+        customSensorWidth,
+        customSensorHeight,
+        sensors
+    ) {
+        resolveSensor(
+            sensors,
+            selectedSensorId,
+            customSensorPixelUm,
+            customSensorWidth,
+            customSensorHeight
+        )
+    }
+    val fovComputation = remember(fovMode, telescopeFl, activeEyepiece, activeSensor) {
+        val fl = telescopeFl ?: return@remember null
+        when (fovMode) {
+            FovInstrumentMode.EYEPIECE -> {
+                val ep = activeEyepiece ?: return@remember null
+                OpticsEquipment.computeEyepiece(fl, ep)
+            }
+            FovInstrumentMode.SENSOR -> {
+                val sensor = activeSensor ?: return@remember null
+                OpticsEquipment.computeSensor(fl, sensor)
+            }
+        }
     }
 
     fun evalStarMap(script: String) {
@@ -255,51 +355,65 @@ fun StarMapScreen(
     fun persistFovPrefs() {
         prefs.edit()
             .putBoolean("star_map_follow_mount", followMount)
-            .putString("star_map_eyepiece_fov", eyepieceFovText)
-            .putString("star_map_sensor_fov_w", sensorFovWidthText)
-            .putString("star_map_sensor_fov_h", sensorFovHeightText)
-            .putBoolean("star_map_show_sensor_fov", showSensorFov)
-            .putBoolean("star_map_show_eyepiece_fov", showEyepieceFov)
-            .putBoolean("star_map_use_camera_fov", useCameraFov)
+            .putBoolean(HipsTileCache.PREFS_ONLINE_DSS, onlineDssEnabled)
+            .putString(
+                "star_map_fov_mode",
+                if (fovMode == FovInstrumentMode.EYEPIECE) "EYEPIECE" else "SENSOR"
+            )
+            .putString("star_map_telescope_id", selectedTelescopeId)
+            .putString("star_map_eyepiece_id", selectedEyepieceId)
+            .putString("star_map_sensor_id", selectedSensorId)
+            .putString("star_map_custom_scope_fl", customTelescopeFl)
+            .putString("star_map_custom_ep_fl", customEyepieceFl)
+            .putString("star_map_custom_ep_afov", customEyepieceAfov)
+            .putString("star_map_custom_sensor_um", customSensorPixelUm)
+            .putString("star_map_custom_sensor_w", customSensorWidth)
+            .putString("star_map_custom_sensor_h", customSensorHeight)
+            .putBoolean("star_map_show_fov_overlay", showFovOverlay)
             .apply()
-        focalLengthText.toFloatOrNull()?.takeIf { it > 0f }?.let {
+        customTelescopeFl.toFloatOrNull()?.takeIf { it > 0f }?.let {
+            prefs.edit().putFloat("plate_focal_length_mm", it).apply()
+        }
+        telescopeFl?.toFloat()?.takeIf { it > 0f }?.let {
             prefs.edit().putFloat("plate_focal_length_mm", it).apply()
         }
     }
 
-    fun applyCameraFovToFields(): Boolean {
-        val fov = cameraComputedFov ?: return false
-        sensorFovWidthText = "%.3f".format(Locale.US, fov.first)
-        sensorFovHeightText = "%.3f".format(Locale.US, fov.second)
-        showSensorFov = true
-        useCameraFov = true
-        persistFovPrefs()
-        return true
+    fun setOnlineDssEnabled(enabled: Boolean) {
+        onlineDssEnabled = enabled
+        prefs.edit().putBoolean(HipsTileCache.PREFS_ONLINE_DSS, enabled).apply()
+        evalStarMap(
+            "window.MercStarMap && window.MercStarMap.setOnlineSurveyEnabled(" +
+                "${if (enabled) "true" else "false"});"
+        )
+    }
+
+    fun refreshHipsCacheLabel() {
+        hipsCacheSizeLabel = HipsTileCache.formatCacheSize(hipsCache.cacheSizeBytes())
     }
 
     fun applyFovOverlays(alsoZoom: Boolean) {
-        if (useCameraFov) {
-            applyCameraFovToFields()
-        }
-        if (showSensorFov) {
-            val w = sensorFovWidthText.toDoubleOrNull()
-            val h = sensorFovHeightText.toDoubleOrNull()
-            if (w != null && h != null && w > 0 && h > 0) {
-                evalStarMap(
-                    "window.MercStarMap && window.MercStarMap.setSensorFovOverlay($w,$h,$alsoZoom);"
-                )
-            }
-        } else {
+        if (!showFovOverlay || fovComputation == null || !fovComputation.hasOverlay) {
             evalStarMap("window.MercStarMap && window.MercStarMap.clearSensorFovOverlay();")
+            evalStarMap("window.MercStarMap && window.MercStarMap.clearEyepieceFovOverlay();")
+            return
         }
-        if (showEyepieceFov) {
-            eyepieceFovText.toDoubleOrNull()?.takeIf { it > 0 }?.let { fov ->
+        when (fovComputation.mode) {
+            FovInstrumentMode.EYEPIECE -> {
+                val fov = fovComputation.circleDeg!!
+                evalStarMap("window.MercStarMap && window.MercStarMap.clearSensorFovOverlay();")
                 evalStarMap(
                     "window.MercStarMap && window.MercStarMap.setEyepieceFovOverlay($fov,$alsoZoom);"
                 )
             }
-        } else {
-            evalStarMap("window.MercStarMap && window.MercStarMap.clearEyepieceFovOverlay();")
+            FovInstrumentMode.SENSOR -> {
+                val w = fovComputation.rectWidthDeg!!
+                val h = fovComputation.rectHeightDeg!!
+                evalStarMap("window.MercStarMap && window.MercStarMap.clearEyepieceFovOverlay();")
+                evalStarMap(
+                    "window.MercStarMap && window.MercStarMap.setSensorFovOverlay($w,$h,$alsoZoom);"
+                )
+            }
         }
     }
 
@@ -322,12 +436,46 @@ fun StarMapScreen(
         overlaysVisible = true
     }
 
-    fun centerOnRaDec(raHours: Double, decDegrees: Double) {
+    fun centerOnRaDec(raHours: Double, decDegrees: Double, frame: String = "JNOW") {
         evalStarMap(
             "window.MercStarMap && window.MercStarMap.centerOnRaDec(" +
-                "%.8f,%.8f,1);".format(Locale.US, raHours, decDegrees)
+                "%.8f,%.8f,1,'%s');".format(Locale.US, raHours, decDegrees, frame)
         )
         overlaysVisible = true
+    }
+
+    fun gotoCatalogObject(obj: CatalogObject) {
+        selectedTarget = StarMapTarget(
+            name = "${obj.id} · ${obj.name}",
+            raHours = obj.raHours,
+            decDegrees = obj.decDeg,
+            frame = "J2000"
+        )
+        // OpenNGC coordinates are J2000 = ICRF for pointing purposes.
+        centerOnRaDec(obj.raHours, obj.decDeg, frame = "ICRF")
+        searchDialogVisible = false
+        searchQuery = ""
+        overlaysVisible = true
+    }
+
+    /**
+     * Prefer letting the engine resolve and select the object: it owns the
+     * coordinates the map is drawn from, so the view and the reported target
+     * cannot disagree. `core_search` only sees already-loaded tiles, so fall
+     * back to centering on the catalog position when it comes up empty.
+     */
+    fun gotoSearchResult(obj: CatalogObject) {
+        searchDialogVisible = false
+        searchQuery = ""
+        overlaysVisible = true
+        val view = webView
+        if (view == null) {
+            gotoCatalogObject(obj)
+            return
+        }
+        view.evaluateJavascript(StarMapSearch.selectScript(obj.engineDesignations())) { raw ->
+            if (raw?.trim() != "true") gotoCatalogObject(obj)
+        }
     }
 
     LaunchedEffect(mountConnected) {
@@ -336,19 +484,27 @@ fun StarMapScreen(
 
     fun destroyWebView(current: WebView?) {
         current?.apply {
+            // AndroidView.onRelease has already detached us from the parent.
             removeJavascriptInterface("AndroidStarMap")
             stopLoading()
             destroy()
         }
     }
 
+    /**
+     * Recreate the Stellarium WebView by bumping [webViewSession].
+     * Do **not** destroy the current WebView here: Compose disposes the old
+     * `AndroidView` after the new factory has already assigned [webView], so an
+     * eager destroy (or a session DisposableEffect that reads [webView]) would
+     * kill the replacement and leave a permanent black screen.
+     */
     fun reloadStarMap() {
-        destroyWebView(webView)
-        webView = null
         selectedTarget = null
         targetExpanded = false
+        settingsExpanded = false
         engineState = StarMapEngineState.Loading
         overlaysVisible = true
+        webView = null
         webViewSession++
     }
 
@@ -374,13 +530,6 @@ fun StarMapScreen(
 
     BackHandler(onBack = onBack)
 
-    DisposableEffect(webViewSession) {
-        onDispose {
-            destroyWebView(webView)
-            webView = null
-        }
-    }
-
     LaunchedEffect(webViewSession, engineState) {
         if (engineState !is StarMapEngineState.Loading) return@LaunchedEffect
         delay(StarMapLoadRules.READY_TIMEOUT_MS)
@@ -399,6 +548,7 @@ fun StarMapScreen(
         precisionConfirmation,
         precisionGotoProgress.isActive,
         settingsExpanded,
+        searchDialogVisible,
         directionPadExpanded,
         fovDialogVisible
     ) {
@@ -410,6 +560,7 @@ fun StarMapScreen(
             precisionConfirmation != null ||
             precisionGotoProgress.isActive ||
             settingsExpanded ||
+            searchDialogVisible ||
             directionPadExpanded ||
             fovDialogVisible
         ) {
@@ -443,20 +594,29 @@ fun StarMapScreen(
         webView,
         engineState,
         followMount,
-        showSensorFov,
-        showEyepieceFov,
-        useCameraFov,
-        cameraComputedFov,
+        showFovOverlay,
+        fovComputation,
+        fovMode,
+        selectedTelescopeId,
+        selectedEyepieceId,
+        selectedSensorId,
+        customTelescopeFl,
+        customEyepieceFl,
+        customEyepieceAfov,
+        customSensorPixelUm,
+        customSensorWidth,
+        customSensorHeight,
         cameraPixelSizeUm,
         cameraFrameWidthPx,
-        cameraFrameHeightPx,
-        focalLengthText
+        cameraFrameHeightPx
     ) {
         if (engineState !is StarMapEngineState.Ready) return@LaunchedEffect
         evalStarMap(
             "window.MercStarMap && window.MercStarMap.setFollowMount(${if (followMount) "true" else "false"});"
         )
-        applyFovOverlays(alsoZoom = false)
+        // Zoom once when the sheet is open so the frame fills the view; otherwise
+        // only redraw overlays so pan/zoom the user already set stays put.
+        applyFovOverlays(alsoZoom = fovDialogVisible)
     }
 
     LaunchedEffect(
@@ -472,11 +632,30 @@ fun StarMapScreen(
         centerOnRaDec(ra, dec)
     }
 
+    LaunchedEffect(searchDialogVisible, searchQuery) {
+        if (!searchDialogVisible || searchQuery.isBlank()) {
+            searchResults = emptyList()
+            return@LaunchedEffect
+        }
+        delay(180)
+        // 13k entries: parse and scan off the main thread.
+        searchResults = withContext(Dispatchers.Default) { catalog.search(searchQuery) }
+    }
+
     LaunchedEffect(webView, atmosphereVisible, engineState) {
         if (engineState !is StarMapEngineState.Ready) return@LaunchedEffect
         val script =
             "window.MercStarMap && window.MercStarMap.setAtmosphereVisible($atmosphereVisible);"
         webView?.evaluateJavascript(script, null)
+    }
+
+    LaunchedEffect(webView, onlineDssEnabled, engineState) {
+        if (engineState !is StarMapEngineState.Ready) return@LaunchedEffect
+        val enabled = if (onlineDssEnabled) "true" else "false"
+        webView?.evaluateJavascript(
+            "window.MercStarMap && window.MercStarMap.setOnlineSurveyEnabled($enabled);",
+            null
+        )
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -485,6 +664,7 @@ fun StarMapScreen(
                 factory = { viewContext ->
                     val assetLoader = WebViewAssetLoader.Builder()
                         .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(viewContext))
+                        .addPathHandler("/hips/", hipsCache.pathHandler())
                         .build()
                     WebView(viewContext).apply {
                         setBackgroundColor(Color.BLACK)
@@ -541,24 +721,32 @@ fun StarMapScreen(
                                     viewContext.getString(R.string.star_map_renderer_crashed)
                                 )
                                 overlaysVisible = true
-                                destroyWebView(view)
                                 if (webView === view) webView = null
+                                // Let Compose tear the view down; do not destroy here while
+                                // still attached — onRelease will finish cleanup.
                                 return true
                             }
                         }
                         webView = this
+                        // Load after the first real layout so the WASM canvas gets a
+                        // non-zero size; posting avoids racing AndroidView attach.
                         var pageLoaded = false
                         doOnLayout { laidOutView ->
-                            if (!pageLoaded && laidOutView.isAttachedToWindow) {
-                                pageLoaded = true
-                                laidOutView.post {
-                                    loadUrl(
+                            if (pageLoaded || !laidOutView.isAttachedToWindow) return@doOnLayout
+                            pageLoaded = true
+                            laidOutView.post {
+                                if (laidOutView.isAttachedToWindow) {
+                                    (laidOutView as WebView).loadUrl(
                                         "https://appassets.androidplatform.net/assets/stellarium/index.html"
                                     )
                                 }
                             }
                         }
                     }
+                },
+                onRelease = { released ->
+                    if (webView === released) webView = null
+                    destroyWebView(released)
                 },
                 modifier = Modifier.fillMaxSize()
             )
@@ -606,9 +794,29 @@ fun StarMapScreen(
                 }
                 StarMapEngineState.Ready -> {
                     Card(modifier = Modifier.padding(8.dp)) {
-                        Box {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
                             IconButton(
-                                onClick = { settingsExpanded = true },
+                                onClick = {
+                                    searchQuery = ""
+                                    searchDialogVisible = true
+                                    overlaysVisible = true
+                                },
+                                modifier = Modifier.semantics {
+                                    contentDescription =
+                                        context.getString(R.string.star_map_search)
+                                }
+                            ) {
+                                Icon(
+                                    Icons.Default.Search,
+                                    contentDescription = stringResource(R.string.star_map_search)
+                                )
+                            }
+                            Box {
+                            IconButton(
+                                onClick = {
+                                    refreshHipsCacheLabel()
+                                    settingsExpanded = true
+                                },
                                 modifier = Modifier.semantics {
                                     contentDescription =
                                         context.getString(R.string.star_map_settings)
@@ -637,6 +845,49 @@ fun StarMapScreen(
                                         }
                                     },
                                     onClick = { atmosphereVisible = !atmosphereVisible }
+                                )
+                                DropdownMenuItem(
+                                    text = {
+                                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                            ) {
+                                                Text(stringResource(R.string.online_dss_survey))
+                                                Switch(
+                                                    checked = onlineDssEnabled,
+                                                    onCheckedChange = ::setOnlineDssEnabled
+                                                )
+                                            }
+                                            Text(
+                                                stringResource(R.string.online_dss_survey_hint),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    },
+                                    onClick = { setOnlineDssEnabled(!onlineDssEnabled) }
+                                )
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            stringResource(
+                                                R.string.hips_cache_size,
+                                                hipsCacheSizeLabel
+                                            )
+                                        )
+                                    },
+                                    onClick = { refreshHipsCacheLabel() },
+                                    trailingIcon = {
+                                        TextButton(
+                                            onClick = {
+                                                hipsCache.clearCache()
+                                                refreshHipsCacheLabel()
+                                            }
+                                        ) {
+                                            Text(stringResource(R.string.clear_hips_cache))
+                                        }
+                                    }
                                 )
                                 DropdownMenuItem(
                                     text = {
@@ -701,6 +952,7 @@ fun StarMapScreen(
                                         Icon(Icons.Default.Refresh, contentDescription = null)
                                     }
                                 )
+                            }
                             }
                         }
                     }
@@ -1035,161 +1287,137 @@ fun StarMapScreen(
         )
     }
 
-    if (fovDialogVisible) {
+    if (searchDialogVisible) {
         AlertDialog(
-            onDismissRequest = { fovDialogVisible = false },
-            title = { Text(stringResource(R.string.star_map_fov)) },
+            onDismissRequest = { searchDialogVisible = false },
+            title = { Text(stringResource(R.string.star_map_search)) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        stringResource(R.string.fov_hint),
-                        style = MaterialTheme.typography.bodySmall
-                    )
                     OutlinedTextField(
-                        value = focalLengthText,
-                        onValueChange = { focalLengthText = it },
-                        label = { Text(stringResource(R.string.focal_length_mm)) },
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                        label = { Text(stringResource(R.string.star_map_search_hint)) }
                     )
-                    val computed = cameraComputedFov
-                    if (computed != null) {
+                    if (searchResults.isEmpty()) {
                         Text(
-                            stringResource(
-                                R.string.camera_fov_computed,
-                                computed.first,
-                                computed.second
-                            ),
+                            stringResource(R.string.star_map_search_empty),
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.primary
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     } else {
-                        Text(
-                            stringResource(R.string.camera_fov_need_params),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.outline
-                        )
-                    }
-                    OutlinedButton(
-                        onClick = {
-                            if (applyCameraFovToFields()) {
-                                applyFovOverlays(alsoZoom = true)
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 280.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            items(searchResults, key = { it.id }) { obj ->
+                                TextButton(
+                                    onClick = { gotoSearchResult(obj) },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalAlignment = Alignment.Start
+                                    ) {
+                                        Text(
+                                            obj.aliases.take(3).joinToString(" · "),
+                                            style = MaterialTheme.typography.bodyMedium
+                                        )
+                                        Text(
+                                            listOfNotNull(
+                                                obj.type.takeIf { it.isNotBlank() },
+                                                obj.magnitude?.let { "%.1f mag".format(Locale.US, it) }
+                                            ).joinToString(" · "),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
                             }
-                        },
-                        enabled = cameraComputedFov != null,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(stringResource(R.string.use_camera_fov))
-                    }
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Switch(
-                            checked = useCameraFov,
-                            onCheckedChange = {
-                                useCameraFov = it
-                                persistFovPrefs()
-                                if (it) applyCameraFovToFields()
-                            },
-                            enabled = cameraComputedFov != null
-                        )
-                        Text(stringResource(R.string.auto_camera_fov))
-                    }
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Switch(
-                            checked = showEyepieceFov,
-                            onCheckedChange = {
-                                showEyepieceFov = it
-                                persistFovPrefs()
-                            }
-                        )
-                        Text(stringResource(R.string.show_eyepiece_fov))
-                    }
-                    OutlinedTextField(
-                        value = eyepieceFovText,
-                        onValueChange = { eyepieceFovText = it },
-                        label = { Text(stringResource(R.string.eyepiece_fov_degrees)) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedButton(
-                        onClick = {
-                            showEyepieceFov = true
-                            persistFovPrefs()
-                            applyFovOverlays(alsoZoom = true)
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(stringResource(R.string.apply_eyepiece_fov))
-                    }
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Switch(
-                            checked = showSensorFov,
-                            onCheckedChange = {
-                                showSensorFov = it
-                                persistFovPrefs()
-                            }
-                        )
-                        Text(stringResource(R.string.show_sensor_fov))
-                    }
-                    OutlinedTextField(
-                        value = sensorFovWidthText,
-                        onValueChange = { sensorFovWidthText = it },
-                        label = { Text(stringResource(R.string.sensor_fov_width)) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = sensorFovHeightText,
-                        onValueChange = { sensorFovHeightText = it },
-                        label = { Text(stringResource(R.string.sensor_fov_height)) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedButton(
-                        onClick = {
-                            showSensorFov = true
-                            persistFovPrefs()
-                            applyFovOverlays(alsoZoom = true)
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(stringResource(R.string.apply_sensor_fov))
-                    }
-                    TextButton(
-                        onClick = {
-                            showSensorFov = false
-                            showEyepieceFov = false
-                            persistFovPrefs()
-                            evalStarMap(
-                                "window.MercStarMap && window.MercStarMap.clearSensorFovOverlay();"
-                            )
-                            evalStarMap(
-                                "window.MercStarMap && window.MercStarMap.clearEyepieceFovOverlay();"
-                            )
                         }
-                    ) {
-                        Text(stringResource(R.string.clear_sensor_fov))
                     }
                 }
             },
             confirmButton = {
-                TextButton(
-                    onClick = {
-                        persistFovPrefs()
-                        applyFovOverlays(alsoZoom = false)
-                        fovDialogVisible = false
-                    }
-                ) {
-                    Text(stringResource(R.string.close))
+                TextButton(onClick = { searchDialogVisible = false }) {
+                    Text(stringResource(R.string.cancel))
                 }
+            }
+        )
+    }
+
+    if (fovDialogVisible) {
+        StarMapFovSheet(
+            mode = fovMode,
+            telescopes = telescopes,
+            eyepieces = eyepieces,
+            sensors = sensors,
+            selectedTelescopeId = selectedTelescopeId,
+            selectedEyepieceId = selectedEyepieceId,
+            selectedSensorId = selectedSensorId,
+            customTelescopeFl = customTelescopeFl,
+            customEyepieceFl = customEyepieceFl,
+            customEyepieceAfov = customEyepieceAfov,
+            customSensorPixelUm = customSensorPixelUm,
+            customSensorWidth = customSensorWidth,
+            customSensorHeight = customSensorHeight,
+            showOverlay = showFovOverlay,
+            computation = fovComputation,
+            onModeChange = {
+                fovMode = it
+                showFovOverlay = true
+                persistFovPrefs()
+            },
+            onTelescopeSelected = {
+                selectedTelescopeId = it
+                showFovOverlay = true
+                persistFovPrefs()
+            },
+            onEyepieceSelected = {
+                selectedEyepieceId = it
+                showFovOverlay = true
+                persistFovPrefs()
+            },
+            onSensorSelected = {
+                selectedSensorId = it
+                showFovOverlay = true
+                persistFovPrefs()
+            },
+            onCustomTelescopeFl = {
+                customTelescopeFl = it
+                persistFovPrefs()
+            },
+            onCustomEyepieceFl = {
+                customEyepieceFl = it
+                persistFovPrefs()
+            },
+            onCustomEyepieceAfov = {
+                customEyepieceAfov = it
+                persistFovPrefs()
+            },
+            onCustomSensorPixelUm = {
+                customSensorPixelUm = it
+                persistFovPrefs()
+            },
+            onCustomSensorWidth = {
+                customSensorWidth = it
+                persistFovPrefs()
+            },
+            onCustomSensorHeight = {
+                customSensorHeight = it
+                persistFovPrefs()
+            },
+            onShowOverlayChange = {
+                showFovOverlay = it
+                persistFovPrefs()
+            },
+            onDismiss = {
+                persistFovPrefs()
+                applyFovOverlays(alsoZoom = false)
+                fovDialogVisible = false
             }
         )
     }
