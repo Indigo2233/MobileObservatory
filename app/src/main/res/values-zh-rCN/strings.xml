@@ -400,8 +400,15 @@
     <string name="sensor_fov_height">传感器视场高 (°)</string>
     <string name="apply_eyepiece_fov">应用圆形视场</string>
     <string name="apply_sensor_fov">应用传感器视场框</string>
-    <string name="clear_sensor_fov">清除传感器视场框</string>
-    <string name="fov_hint">目镜视场用于缩放；传感器视场会画框并缩放到适配。</string>
+    <string name="clear_sensor_fov">清除视场叠加</string>
+    <string name="fov_hint">开启「跟随赤道仪」后十字丝表示当前指向。相机视场由像元尺寸×ROI÷焦距计算（与板解相同）。目镜画圆框。</string>
+    <string name="follow_mount_pointing">跟随赤道仪指向</string>
+    <string name="show_eyepiece_fov">显示目镜视场</string>
+    <string name="show_sensor_fov">显示相机视场</string>
+    <string name="use_camera_fov">使用相机视场</string>
+    <string name="auto_camera_fov">视场跟随相机参数</string>
+    <string name="camera_fov_computed">由相机计算：%1$.3f° × %2$.3f°</string>
+    <string name="camera_fov_need_params">需要已连接相机的像元尺寸、ROI，以及焦距（mm）。</string>
     <string name="back_to_mount">返回赤道仪</string>
     <string name="toggle_atmosphere">切换大气显示</string>
     <string name="select_file">选择文件</string>

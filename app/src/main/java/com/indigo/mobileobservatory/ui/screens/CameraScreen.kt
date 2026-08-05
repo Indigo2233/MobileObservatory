@@ -322,6 +322,10 @@ fun CameraScreen(
                         mountBusy = mountBusy,
                         mountSlewRate = mountSlewRate,
                         precisionGotoProgress = precisionGotoProgress,
+                        cameraPixelSizeUm = (connectionState as? ConnectionState.Connected)
+                            ?.info?.pixelSizeUm,
+                        cameraFrameWidthPx = roi.width,
+                        cameraFrameHeightPx = roi.height,
                         onGoto = { target ->
                             viewModel.gotoMountTarget(
                                 name = target.name,

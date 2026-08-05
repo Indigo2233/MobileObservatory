@@ -41,16 +41,15 @@ body {
     display: none;
 }
 
-#fov-frame {
+#fov-frame,
+#eyepiece-fov {
     position: fixed;
     left: 50%;
     top: 50%;
     z-index: 1;
     display: none;
     transform: translate(-50%, -50%);
-    border: 2px solid rgba(255, 196, 72, 0.9);
     box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45) inset;
-    background: rgba(255, 196, 72, 0.05);
     color: rgba(255, 220, 140, 0.95);
     font-size: 12px;
     line-height: 1.2;
@@ -58,4 +57,62 @@ body {
     padding-top: 6px;
     pointer-events: none;
     box-sizing: border-box;
+}
+
+#fov-frame {
+    border: 2px solid rgba(255, 196, 72, 0.9);
+    background: rgba(255, 196, 72, 0.05);
+}
+
+#eyepiece-fov {
+    border: 2px solid rgba(120, 220, 255, 0.9);
+    background: rgba(120, 220, 255, 0.04);
+    border-radius: 50%;
+}
+
+#mount-reticle {
+    position: fixed;
+    left: 50%;
+    top: 50%;
+    z-index: 2;
+    width: 56px;
+    height: 56px;
+    display: none;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+}
+
+#mount-reticle .reticle-h,
+#mount-reticle .reticle-v {
+    position: absolute;
+    background: rgba(255, 120, 80, 0.95);
+    box-shadow: 0 0 2px rgba(0, 0, 0, 0.8);
+}
+
+#mount-reticle .reticle-h {
+    left: 0;
+    top: 50%;
+    width: 100%;
+    height: 2px;
+    margin-top: -1px;
+}
+
+#mount-reticle .reticle-v {
+    top: 0;
+    left: 50%;
+    width: 2px;
+    height: 100%;
+    margin-left: -1px;
+}
+
+#mount-reticle .reticle-ring {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 18px;
+    height: 18px;
+    margin: -9px 0 0 -9px;
+    border: 2px solid rgba(255, 120, 80, 0.95);
+    border-radius: 50%;
+    box-shadow: 0 0 2px rgba(0, 0, 0, 0.8);
 }

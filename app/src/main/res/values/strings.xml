@@ -400,8 +400,15 @@
     <string name="sensor_fov_height">Sensor FOV height (°)</string>
     <string name="apply_eyepiece_fov">Apply circular FOV</string>
     <string name="apply_sensor_fov">Apply sensor FOV frame</string>
-    <string name="clear_sensor_fov">Clear sensor FOV frame</string>
-    <string name="fov_hint">Eyepiece sets zoom. Sensor draws a centered frame and zooms to fit.</string>
+    <string name="clear_sensor_fov">Clear FOV overlays</string>
+    <string name="fov_hint">With follow-mount on, the reticle marks current pointing. Camera FOV is computed from pixel size × ROI and focal length (same formula as plate-solve). Eyepiece draws a circle.</string>
+    <string name="follow_mount_pointing">Follow mount pointing</string>
+    <string name="show_eyepiece_fov">Show eyepiece FOV</string>
+    <string name="show_sensor_fov">Show camera FOV</string>
+    <string name="use_camera_fov">Use camera FOV</string>
+    <string name="auto_camera_fov">Keep FOV synced to camera</string>
+    <string name="camera_fov_computed">From camera: %1$.3f° × %2$.3f°</string>
+    <string name="camera_fov_need_params">Need connected camera pixel size, ROI, and focal length (mm).</string>
     <string name="back_to_mount">Back to mount</string>
     <string name="toggle_atmosphere">Toggle atmosphere</string>
     <string name="select_file">Select file</string>

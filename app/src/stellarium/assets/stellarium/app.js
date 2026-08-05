@@ -4,6 +4,8 @@
     const statusElement = document.getElementById("engine-status");
     const mountPositionElement = document.getElementById("mount-position");
     const fovFrameElement = document.getElementById("fov-frame");
+    const eyepieceFovElement = document.getElementById("eyepiece-fov");
+    const mountReticleElement = document.getElementById("mount-reticle");
     const canvas = document.getElementById("stel-canvas");
     let stel = null;
     let lastSelectionKey = "";
@@ -12,6 +14,8 @@
     let pendingAtmosphereVisible = false;
     let pendingFovDegrees = null;
     let pendingSensorFov = null;
+    let pendingEyepieceFovDeg = null;
+    let followMount = false;
 
     function syncCanvasSize() {
         const width = Math.max(
@@ -27,6 +31,7 @@
         canvas.style.width = width + "px";
         canvas.style.height = height + "px";
         applySensorFovOverlay(pendingSensorFov);
+        applyEyepieceFovOverlay(pendingEyepieceFovDeg);
     }
 
     function notifyAndroid(method, value) {
@@ -71,15 +76,26 @@
         stel.observer.utc = stel.date2MJD(new Date(observer.epochMillis));
     }
 
+    function applyMountReticle(visible) {
+        if (!mountReticleElement) return;
+        mountReticleElement.style.display = visible ? "block" : "none";
+    }
+
     function applyMountCoordinates(coordinates) {
         if (!coordinates) {
             mountPositionElement.style.display = "none";
+            applyMountReticle(false);
             return;
         }
         mountPositionElement.textContent =
             "赤道仪  RA " + coordinates.raHours.toFixed(5) +
             " h  Dec " + coordinates.decDegrees.toFixed(4) + "°";
         mountPositionElement.style.display = "block";
+        // Reticle marks current pointing when the view is locked to the mount.
+        applyMountReticle(followMount);
+        if (followMount && stel) {
+            centerOnRaDec(coordinates.raHours, coordinates.decDegrees, 0);
+        }
     }
 
     function applyAtmosphereVisibility(visible) {
@@ -91,6 +107,16 @@
         if (!stel || fovDegrees == null || !(fovDegrees > 0)) return;
         const radians = Math.max(0.01, Number(fovDegrees)) * stel.D2R;
         stel.zoomTo(radians, duration === undefined ? 1 : duration);
+        pendingFovDegrees = Number(fovDegrees);
+        applySensorFovOverlay(pendingSensorFov);
+        applyEyepieceFovOverlay(pendingEyepieceFovDeg);
+    }
+
+    function viewFovDegrees() {
+        if (pendingFovDegrees != null && pendingFovDegrees > 0) {
+            return pendingFovDegrees;
+        }
+        return null;
     }
 
     function applySensorFovOverlay(sensorFov) {
@@ -101,18 +127,52 @@
         }
         const viewW = Math.max(window.innerWidth || 1, 1);
         const viewH = Math.max(window.innerHeight || 1, 1);
-        const aspect = sensorFov.widthDeg / sensorFov.heightDeg;
-        let boxW = viewW * 0.72;
-        let boxH = boxW / aspect;
-        if (boxH > viewH * 0.72) {
-            boxH = viewH * 0.72;
-            boxW = boxH * aspect;
+        const viewFov = viewFovDegrees();
+        let boxW;
+        let boxH;
+        if (viewFov != null && viewFov > 0) {
+            // Stellarium zoomTo FOV is treated as the vertical field of view.
+            boxH = viewH * (sensorFov.heightDeg / viewFov);
+            boxW = boxH * (sensorFov.widthDeg / sensorFov.heightDeg);
+        } else {
+            const aspect = sensorFov.widthDeg / sensorFov.heightDeg;
+            boxW = viewW * 0.72;
+            boxH = boxW / aspect;
+            if (boxH > viewH * 0.72) {
+                boxH = viewH * 0.72;
+                boxW = boxH * aspect;
+            }
         }
+        boxW = Math.max(24, Math.min(boxW, viewW * 0.98));
+        boxH = Math.max(24, Math.min(boxH, viewH * 0.98));
         fovFrameElement.style.width = boxW + "px";
         fovFrameElement.style.height = boxH + "px";
+        fovFrameElement.style.borderRadius = "2px";
         fovFrameElement.style.display = "block";
         fovFrameElement.textContent =
             sensorFov.widthDeg.toFixed(2) + "° × " + sensorFov.heightDeg.toFixed(2) + "°";
+    }
+
+    function applyEyepieceFovOverlay(fovDeg) {
+        if (!eyepieceFovElement) return;
+        if (fovDeg == null || !(fovDeg > 0)) {
+            eyepieceFovElement.style.display = "none";
+            return;
+        }
+        const viewW = Math.max(window.innerWidth || 1, 1);
+        const viewH = Math.max(window.innerHeight || 1, 1);
+        const viewFov = viewFovDegrees();
+        let diameter;
+        if (viewFov != null && viewFov > 0) {
+            diameter = Math.min(viewW, viewH) * (Number(fovDeg) / viewFov);
+        } else {
+            diameter = Math.min(viewW, viewH) * 0.72;
+        }
+        diameter = Math.max(24, Math.min(diameter, Math.min(viewW, viewH) * 0.98));
+        eyepieceFovElement.style.width = diameter + "px";
+        eyepieceFovElement.style.height = diameter + "px";
+        eyepieceFovElement.style.display = "block";
+        eyepieceFovElement.textContent = Number(fovDeg).toFixed(2) + "°";
     }
 
     function centerOnRaDec(raHours, decDegrees, duration) {
@@ -192,6 +252,17 @@
             pendingMountCoordinates = null;
             applyMountCoordinates(null);
         },
+        setFollowMount: function (enabled) {
+            followMount = Boolean(enabled);
+            applyMountReticle(followMount && pendingMountCoordinates != null);
+            if (followMount && pendingMountCoordinates) {
+                centerOnRaDec(
+                    pendingMountCoordinates.raHours,
+                    pendingMountCoordinates.decDegrees,
+                    0
+                );
+            }
+        },
         setAtmosphereVisible: function (visible) {
             pendingAtmosphereVisible = Boolean(visible);
             applyAtmosphereVisibility(pendingAtmosphereVisible);
@@ -211,18 +282,31 @@
             );
         },
         setFovDegrees: function (fovDegrees, duration) {
-            pendingFovDegrees = Number(fovDegrees);
-            applyFovDegrees(pendingFovDegrees, duration);
+            applyFovDegrees(Number(fovDegrees), duration);
         },
-        setSensorFovOverlay: function (widthDeg, heightDeg) {
+        setEyepieceFovOverlay: function (fovDegrees, alsoZoom) {
+            pendingEyepieceFovDeg = Number(fovDegrees);
+            if (alsoZoom) {
+                applyFovDegrees(pendingEyepieceFovDeg * 1.05, 1);
+            } else {
+                applyEyepieceFovOverlay(pendingEyepieceFovDeg);
+            }
+        },
+        clearEyepieceFovOverlay: function () {
+            pendingEyepieceFovDeg = null;
+            applyEyepieceFovOverlay(null);
+        },
+        setSensorFovOverlay: function (widthDeg, heightDeg, alsoZoom) {
             pendingSensorFov = {
                 widthDeg: Number(widthDeg),
                 heightDeg: Number(heightDeg)
             };
-            applySensorFovOverlay(pendingSensorFov);
-            const maxDim = Math.max(pendingSensorFov.widthDeg, pendingSensorFov.heightDeg);
-            pendingFovDegrees = maxDim * 1.15;
-            applyFovDegrees(pendingFovDegrees, 1);
+            if (alsoZoom !== false) {
+                const maxDim = Math.max(pendingSensorFov.widthDeg, pendingSensorFov.heightDeg);
+                applyFovDegrees(maxDim * 1.35, 1);
+            } else {
+                applySensorFovOverlay(pendingSensorFov);
+            }
         },
         clearSensorFovOverlay: function () {
             pendingSensorFov = null;
@@ -260,6 +344,8 @@
                 applyAtmosphereVisibility(pendingAtmosphereVisible);
                 applyFovDegrees(pendingFovDegrees, 0);
                 applySensorFovOverlay(pendingSensorFov);
+                applyEyepieceFovOverlay(pendingEyepieceFovDeg);
+                applyMountReticle(followMount && pendingMountCoordinates != null);
                 engine.change(function () {
                     window.requestAnimationFrame(publishSelection);
                 });

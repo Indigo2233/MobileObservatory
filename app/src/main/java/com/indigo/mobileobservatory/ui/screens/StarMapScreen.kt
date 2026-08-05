@@ -74,6 +74,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.doOnLayout
 import androidx.webkit.WebViewAssetLoader
 import com.indigo.mobileobservatory.R
+import com.indigo.mobileobservatory.astro.OpticsFov
 import com.indigo.mobileobservatory.mount.MountCoordinates
 import com.indigo.mobileobservatory.mount.MountDirection
 import com.indigo.mobileobservatory.mount.MountSite
@@ -176,6 +177,9 @@ fun StarMapScreen(
     mountBusy: Boolean,
     mountSlewRate: MountSlewRate = MountSlewRate.DEFAULT,
     precisionGotoProgress: PrecisionGotoProgress = PrecisionGotoProgress(),
+    cameraPixelSizeUm: Float? = null,
+    cameraFrameWidthPx: Int = 0,
+    cameraFrameHeightPx: Int = 0,
     onGoto: (StarMapTarget) -> Unit,
     onSync: (StarMapTarget) -> Unit = {},
     onPrecisionGoto: (StarMapTarget) -> Unit = {},
@@ -199,14 +203,113 @@ fun StarMapScreen(
     var settingsExpanded by remember { mutableStateOf(false) }
     var directionPadExpanded by remember { mutableStateOf(false) }
     var fovDialogVisible by remember { mutableStateOf(false) }
-    var eyepieceFovText by remember { mutableStateOf("1.0") }
-    var sensorFovWidthText by remember { mutableStateOf("1.2") }
-    var sensorFovHeightText by remember { mutableStateOf("0.8") }
     val context = LocalContext.current
+    val prefs = remember {
+        context.getSharedPreferences("mobile_observatory", android.content.Context.MODE_PRIVATE)
+    }
+    var followMount by remember {
+        mutableStateOf(prefs.getBoolean("star_map_follow_mount", true))
+    }
+    var eyepieceFovText by remember {
+        mutableStateOf(prefs.getString("star_map_eyepiece_fov", "1.0") ?: "1.0")
+    }
+    var sensorFovWidthText by remember {
+        mutableStateOf(prefs.getString("star_map_sensor_fov_w", "1.2") ?: "1.2")
+    }
+    var sensorFovHeightText by remember {
+        mutableStateOf(prefs.getString("star_map_sensor_fov_h", "0.8") ?: "0.8")
+    }
+    var showSensorFov by remember {
+        mutableStateOf(prefs.getBoolean("star_map_show_sensor_fov", true))
+    }
+    var showEyepieceFov by remember {
+        mutableStateOf(prefs.getBoolean("star_map_show_eyepiece_fov", false))
+    }
+    var focalLengthText by remember {
+        mutableStateOf(
+            prefs.getFloat("plate_focal_length_mm", 0f).takeIf { it > 0f }?.let {
+                "%.1f".format(Locale.US, it)
+            } ?: ""
+        )
+    }
+    var useCameraFov by remember {
+        mutableStateOf(prefs.getBoolean("star_map_use_camera_fov", true))
+    }
     val moveEnabled = mountConnected && !mountBusy
+
+    val cameraComputedFov = remember(
+        cameraPixelSizeUm,
+        cameraFrameWidthPx,
+        cameraFrameHeightPx,
+        focalLengthText
+    ) {
+        val px = cameraPixelSizeUm?.toDouble() ?: return@remember null
+        val fl = focalLengthText.toDoubleOrNull() ?: return@remember null
+        OpticsFov.rectangleDegrees(px, fl, cameraFrameWidthPx, cameraFrameHeightPx)
+    }
 
     fun evalStarMap(script: String) {
         webView?.evaluateJavascript(script, null)
+    }
+
+    fun persistFovPrefs() {
+        prefs.edit()
+            .putBoolean("star_map_follow_mount", followMount)
+            .putString("star_map_eyepiece_fov", eyepieceFovText)
+            .putString("star_map_sensor_fov_w", sensorFovWidthText)
+            .putString("star_map_sensor_fov_h", sensorFovHeightText)
+            .putBoolean("star_map_show_sensor_fov", showSensorFov)
+            .putBoolean("star_map_show_eyepiece_fov", showEyepieceFov)
+            .putBoolean("star_map_use_camera_fov", useCameraFov)
+            .apply()
+        focalLengthText.toFloatOrNull()?.takeIf { it > 0f }?.let {
+            prefs.edit().putFloat("plate_focal_length_mm", it).apply()
+        }
+    }
+
+    fun applyCameraFovToFields(): Boolean {
+        val fov = cameraComputedFov ?: return false
+        sensorFovWidthText = "%.3f".format(Locale.US, fov.first)
+        sensorFovHeightText = "%.3f".format(Locale.US, fov.second)
+        showSensorFov = true
+        useCameraFov = true
+        persistFovPrefs()
+        return true
+    }
+
+    fun applyFovOverlays(alsoZoom: Boolean) {
+        if (useCameraFov) {
+            applyCameraFovToFields()
+        }
+        if (showSensorFov) {
+            val w = sensorFovWidthText.toDoubleOrNull()
+            val h = sensorFovHeightText.toDoubleOrNull()
+            if (w != null && h != null && w > 0 && h > 0) {
+                evalStarMap(
+                    "window.MercStarMap && window.MercStarMap.setSensorFovOverlay($w,$h,$alsoZoom);"
+                )
+            }
+        } else {
+            evalStarMap("window.MercStarMap && window.MercStarMap.clearSensorFovOverlay();")
+        }
+        if (showEyepieceFov) {
+            eyepieceFovText.toDoubleOrNull()?.takeIf { it > 0 }?.let { fov ->
+                evalStarMap(
+                    "window.MercStarMap && window.MercStarMap.setEyepieceFovOverlay($fov,$alsoZoom);"
+                )
+            }
+        } else {
+            evalStarMap("window.MercStarMap && window.MercStarMap.clearEyepieceFovOverlay();")
+        }
+    }
+
+    fun setFollowMountEnabled(enabled: Boolean) {
+        followMount = enabled
+        persistFovPrefs()
+        evalStarMap(
+            "window.MercStarMap && window.MercStarMap.setFollowMount(${if (enabled) "true" else "false"});"
+        )
+        overlaysVisible = true
     }
 
     fun centerOnMount() {
@@ -334,6 +437,26 @@ fun StarMapScreen(
                 "${coordinates.raHours},${coordinates.decDeg});"
         }
         webView?.evaluateJavascript(script, null)
+    }
+
+    LaunchedEffect(
+        webView,
+        engineState,
+        followMount,
+        showSensorFov,
+        showEyepieceFov,
+        useCameraFov,
+        cameraComputedFov,
+        cameraPixelSizeUm,
+        cameraFrameWidthPx,
+        cameraFrameHeightPx,
+        focalLengthText
+    ) {
+        if (engineState !is StarMapEngineState.Ready) return@LaunchedEffect
+        evalStarMap(
+            "window.MercStarMap && window.MercStarMap.setFollowMount(${if (followMount) "true" else "false"});"
+        )
+        applyFovOverlays(alsoZoom = false)
     }
 
     LaunchedEffect(
@@ -535,6 +658,22 @@ fun StarMapScreen(
                                         overlaysLocked = !overlaysLocked
                                         if (overlaysLocked) overlaysVisible = true
                                     }
+                                )
+                                DropdownMenuItem(
+                                    text = {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                        ) {
+                                            Text(stringResource(R.string.follow_mount_pointing))
+                                            Switch(
+                                                checked = followMount,
+                                                onCheckedChange = { setFollowMountEnabled(it) }
+                                            )
+                                        }
+                                    },
+                                    onClick = { setFollowMountEnabled(!followMount) },
+                                    enabled = mountConnected
                                 )
                                 DropdownMenuItem(
                                     text = { Text(stringResource(R.string.star_map_fov)) },
@@ -907,6 +1046,70 @@ fun StarMapScreen(
                         style = MaterialTheme.typography.bodySmall
                     )
                     OutlinedTextField(
+                        value = focalLengthText,
+                        onValueChange = { focalLengthText = it },
+                        label = { Text(stringResource(R.string.focal_length_mm)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    val computed = cameraComputedFov
+                    if (computed != null) {
+                        Text(
+                            stringResource(
+                                R.string.camera_fov_computed,
+                                computed.first,
+                                computed.second
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    } else {
+                        Text(
+                            stringResource(R.string.camera_fov_need_params),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            if (applyCameraFovToFields()) {
+                                applyFovOverlays(alsoZoom = true)
+                            }
+                        },
+                        enabled = cameraComputedFov != null,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(stringResource(R.string.use_camera_fov))
+                    }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Switch(
+                            checked = useCameraFov,
+                            onCheckedChange = {
+                                useCameraFov = it
+                                persistFovPrefs()
+                                if (it) applyCameraFovToFields()
+                            },
+                            enabled = cameraComputedFov != null
+                        )
+                        Text(stringResource(R.string.auto_camera_fov))
+                    }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Switch(
+                            checked = showEyepieceFov,
+                            onCheckedChange = {
+                                showEyepieceFov = it
+                                persistFovPrefs()
+                            }
+                        )
+                        Text(stringResource(R.string.show_eyepiece_fov))
+                    }
+                    OutlinedTextField(
                         value = eyepieceFovText,
                         onValueChange = { eyepieceFovText = it },
                         label = { Text(stringResource(R.string.eyepiece_fov_degrees)) },
@@ -915,15 +1118,26 @@ fun StarMapScreen(
                     )
                     OutlinedButton(
                         onClick = {
-                            eyepieceFovText.toDoubleOrNull()?.takeIf { it > 0 }?.let { fov ->
-                                evalStarMap(
-                                    "window.MercStarMap && window.MercStarMap.setFovDegrees($fov,1);"
-                                )
-                            }
+                            showEyepieceFov = true
+                            persistFovPrefs()
+                            applyFovOverlays(alsoZoom = true)
                         },
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(stringResource(R.string.apply_eyepiece_fov))
+                    }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Switch(
+                            checked = showSensorFov,
+                            onCheckedChange = {
+                                showSensorFov = it
+                                persistFovPrefs()
+                            }
+                        )
+                        Text(stringResource(R.string.show_sensor_fov))
                     }
                     OutlinedTextField(
                         value = sensorFovWidthText,
@@ -941,14 +1155,9 @@ fun StarMapScreen(
                     )
                     OutlinedButton(
                         onClick = {
-                            val w = sensorFovWidthText.toDoubleOrNull()
-                            val h = sensorFovHeightText.toDoubleOrNull()
-                            if (w != null && h != null && w > 0 && h > 0) {
-                                evalStarMap(
-                                    "window.MercStarMap && " +
-                                        "window.MercStarMap.setSensorFovOverlay($w,$h);"
-                                )
-                            }
+                            showSensorFov = true
+                            persistFovPrefs()
+                            applyFovOverlays(alsoZoom = true)
                         },
                         modifier = Modifier.fillMaxWidth()
                     ) {
@@ -956,8 +1165,14 @@ fun StarMapScreen(
                     }
                     TextButton(
                         onClick = {
+                            showSensorFov = false
+                            showEyepieceFov = false
+                            persistFovPrefs()
                             evalStarMap(
                                 "window.MercStarMap && window.MercStarMap.clearSensorFovOverlay();"
+                            )
+                            evalStarMap(
+                                "window.MercStarMap && window.MercStarMap.clearEyepieceFovOverlay();"
                             )
                         }
                     ) {
@@ -966,7 +1181,13 @@ fun StarMapScreen(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { fovDialogVisible = false }) {
+                TextButton(
+                    onClick = {
+                        persistFovPrefs()
+                        applyFovOverlays(alsoZoom = false)
+                        fovDialogVisible = false
+                    }
+                ) {
                     Text(stringResource(R.string.close))
                 }
             }
