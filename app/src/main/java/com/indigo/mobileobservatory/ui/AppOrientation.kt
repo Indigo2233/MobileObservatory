@@ -9,23 +9,29 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.platform.LocalContext
 
 /**
- * App default is portrait. Only imaging surfaces stay landscape.
+ * Imaging and star-map stay landscape; other tabs prefer portrait.
+ * Manifest uses fullSensor so these runtime requests can take effect.
  */
 enum class AppOrientationMode {
     PORTRAIT,
-    LANDSCAPE
+    LANDSCAPE,
+    SENSOR
 }
 
 @Composable
 fun RememberAppOrientation(mode: AppOrientationMode) {
     val activity = LocalContext.current.findActivityOrNull()
     DisposableEffect(activity, mode) {
-        val orientation = when (mode) {
+        val previous = activity?.requestedOrientation
+            ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        activity?.requestedOrientation = when (mode) {
             AppOrientationMode.PORTRAIT -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
             AppOrientationMode.LANDSCAPE -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            AppOrientationMode.SENSOR -> ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
         }
-        activity?.requestedOrientation = orientation
-        onDispose { }
+        onDispose {
+            activity?.requestedOrientation = previous
+        }
     }
 }
 

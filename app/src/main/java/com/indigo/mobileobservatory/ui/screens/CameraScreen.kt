@@ -31,6 +31,8 @@ import com.indigo.mobileobservatory.ui.viewmodel.CaptureFormat
 import com.indigo.mobileobservatory.ui.viewmodel.RecordFormat
 import com.indigo.mobileobservatory.BuildConfig
 import com.indigo.mobileobservatory.R
+import com.indigo.mobileobservatory.ui.AppOrientationMode
+import com.indigo.mobileobservatory.ui.RememberAppOrientation
 
 private enum class MainControlTab {
     CAMERA,
@@ -52,6 +54,14 @@ fun CameraScreen(
     val phoneNav = rememberPhonePlateSolveNavState()
     var selectedTab by rememberSaveable { mutableStateOf(MainControlTab.CAMERA) }
     val globalMountMotionState by viewModel.mountMotionState.collectAsState()
+
+    val orientationMode = when {
+        showGuide || showPlayer -> AppOrientationMode.LANDSCAPE
+        selectedTab == MainControlTab.CAMERA || selectedTab == MainControlTab.STAR_MAP ->
+            AppOrientationMode.LANDSCAPE
+        else -> AppOrientationMode.PORTRAIT
+    }
+    RememberAppOrientation(orientationMode)
 
     MountMotionStopPopup(
         state = globalMountMotionState,
