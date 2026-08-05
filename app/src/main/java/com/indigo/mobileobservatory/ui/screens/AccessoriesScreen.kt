@@ -65,13 +65,11 @@ fun AccessoriesScreen(viewModel: CameraViewModel, modifier: Modifier = Modifier)
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(Modifier.weight(1f)) {
-                Text(stringResource(R.string.accessories_title), style = MaterialTheme.typography.titleLarge)
-                Text(stringResource(R.string.accessories_protocol_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.outline
-                )
-            }
+            Text(
+                stringResource(R.string.accessories_title),
+                style = MaterialTheme.typography.titleLarge,
+                modifier = Modifier.weight(1f)
+            )
             FilledTonalButton(onClick = viewModel::scanAccessories) {
                 Icon(Icons.Default.Refresh, contentDescription = null)
                 Text(stringResource(R.string.scan))
