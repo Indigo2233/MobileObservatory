@@ -294,7 +294,6 @@
     <string name="loading_star_map">正在加载星图…</string>
     <string name="atmosphere">大气</string>
     <string name="online_dss_survey">在线深空影像 (DSS)</string>
-    <string name="online_dss_survey_hint">放大后按需下载 DSS 瓦片并缓存。影像来源 STScI / CDS。</string>
     <string name="dss_attribution">DSS Color © STScI / CDS (ODbL)</string>
     <string name="hips_cache_size">影像缓存：%1$s</string>
     <string name="clear_hips_cache">清空缓存</string>
@@ -304,7 +303,7 @@
     <string name="star_map_renderer_crashed">星图渲染进程崩溃，请点击重新加载恢复。</string>
     <string name="star_map_settings">星图设置</string>
     <string name="star_map_search">搜索天体</string>
-    <string name="star_map_search_hint">名称或编号（自动忽略空格）</string>
+    <string name="star_map_search_hint">名称或编号</string>
     <string name="star_map_search_empty">无匹配天体</string>
     <string name="lock_star_map_overlays">锁定浮层</string>
     <string name="show_star_map_controls">显示星图控件</string>
@@ -398,12 +397,10 @@
     <string name="confirm_mount_sync">确认同步赤道仪坐标</string>
     <string name="mount_sync_warning">不会转动赤道仪。只是告诉赤道仪：当前指向就是这个天体（用于目视对准）。</string>
     <string name="execute_sync">同步到此处</string>
-    <string name="sync_hint">先目视对准，再点「同步」，把赤道仪坐标设为该天体。</string>
     <string name="center_on_target">视场居中</string>
     <string name="center_on_mount">居中到赤道仪</string>
     <string name="star_map_fov">视场设置</string>
     <string name="fov_simulator_title">视场模拟</string>
-    <string name="fov_simulator_hint">选择望远镜与目镜或传感器；搭配一变，星图上的视场框/圈会立即更新。</string>
     <string name="fov_mode_eyepiece">目镜</string>
     <string name="fov_mode_sensor">相机 / 传感器</string>
     <string name="fov_telescope">望远镜</string>
@@ -426,7 +423,6 @@
     <string name="apply_eyepiece_fov">应用圆形视场</string>
     <string name="apply_sensor_fov">应用传感器视场框</string>
     <string name="clear_sensor_fov">清除视场叠加</string>
-    <string name="fov_hint">开启「跟随赤道仪」后十字丝表示当前指向。相机视场由像元尺寸×ROI÷焦距计算（与板解相同）。目镜画圆框。</string>
     <string name="follow_mount_pointing">跟随赤道仪指向</string>
     <string name="show_eyepiece_fov">显示目镜视场</string>
     <string name="show_sensor_fov">显示相机视场</string>

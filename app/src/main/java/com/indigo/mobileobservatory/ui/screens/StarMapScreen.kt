@@ -848,21 +848,14 @@ fun StarMapScreen(
                                 )
                                 DropdownMenuItem(
                                     text = {
-                                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(12.dp)
-                                            ) {
-                                                Text(stringResource(R.string.online_dss_survey))
-                                                Switch(
-                                                    checked = onlineDssEnabled,
-                                                    onCheckedChange = ::setOnlineDssEnabled
-                                                )
-                                            }
-                                            Text(
-                                                stringResource(R.string.online_dss_survey_hint),
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                        ) {
+                                            Text(stringResource(R.string.online_dss_survey))
+                                            Switch(
+                                                checked = onlineDssEnabled,
+                                                onCheckedChange = ::setOnlineDssEnabled
                                             )
                                         }
                                     },
@@ -1234,12 +1227,6 @@ fun StarMapScreen(
                             if (!mountConnected) {
                                 Text(
                                     stringResource(R.string.connect_mount_for_goto),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.outline
-                                )
-                            } else {
-                                Text(
-                                    stringResource(R.string.sync_hint),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.outline
                                 )

@@ -89,11 +89,6 @@ fun StarMapFovSheet(
                 stringResource(R.string.fov_simulator_title),
                 style = MaterialTheme.typography.titleMedium
             )
-            Text(
-                stringResource(R.string.fov_simulator_hint),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(

@@ -294,7 +294,6 @@
     <string name="loading_star_map">Loading star map…</string>
     <string name="atmosphere">Atmosphere</string>
     <string name="online_dss_survey">Online deep-sky imagery (DSS)</string>
-    <string name="online_dss_survey_hint">Downloads DSS tiles on demand while zoomed in and caches them. Imagery: STScI / CDS.</string>
     <string name="dss_attribution">DSS Color © STScI / CDS (ODbL)</string>
     <string name="hips_cache_size">Imagery cache: %1$s</string>
     <string name="clear_hips_cache">Clear cache</string>
@@ -304,7 +303,7 @@
     <string name="star_map_renderer_crashed">Star map renderer crashed. Tap reload to recover.</string>
     <string name="star_map_settings">Star map settings</string>
     <string name="star_map_search">Search sky</string>
-    <string name="star_map_search_hint">Name or catalog id (spaces ignored)</string>
+    <string name="star_map_search_hint">Name or catalog id</string>
     <string name="star_map_search_empty">No matching objects</string>
     <string name="lock_star_map_overlays">Lock overlays</string>
     <string name="show_star_map_controls">Show star map controls</string>
@@ -398,12 +397,10 @@
     <string name="confirm_mount_sync">Confirm mount sync</string>
     <string name="mount_sync_warning">This does not move the mount. It tells the mount that its current pointing is this object (for visual alignment).</string>
     <string name="execute_sync">Sync here</string>
-    <string name="sync_hint">Aim visually first, then Sync so the mount matches this object.</string>
     <string name="center_on_target">Center view</string>
     <string name="center_on_mount">Center on mount</string>
     <string name="star_map_fov">Field of view</string>
     <string name="fov_simulator_title">Field of view simulator</string>
-    <string name="fov_simulator_hint">Pick a telescope and an eyepiece or sensor. The frame updates on the sky map as you change the setup.</string>
     <string name="fov_mode_eyepiece">Eyepiece</string>
     <string name="fov_mode_sensor">Camera / sensor</string>
     <string name="fov_telescope">Telescope</string>
@@ -426,7 +423,6 @@
     <string name="apply_eyepiece_fov">Apply circular FOV</string>
     <string name="apply_sensor_fov">Apply sensor FOV frame</string>
     <string name="clear_sensor_fov">Clear FOV overlays</string>
-    <string name="fov_hint">With follow-mount on, the reticle marks current pointing. Camera FOV is computed from pixel size × ROI and focal length (same formula as plate-solve). Eyepiece draws a circle.</string>
     <string name="follow_mount_pointing">Follow mount pointing</string>
     <string name="show_eyepiece_fov">Show eyepiece FOV</string>
     <string name="show_sensor_fov">Show camera FOV</string>
