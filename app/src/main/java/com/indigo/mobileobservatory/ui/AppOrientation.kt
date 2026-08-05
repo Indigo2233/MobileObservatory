@@ -9,8 +9,8 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.platform.LocalContext
 
 /**
- * Imaging and star-map stay landscape; other tabs prefer portrait.
- * Manifest uses fullSensor so these runtime requests can take effect.
+ * Imaging (camera / guide / player) stays landscape; star map and other tabs
+ * prefer portrait. Manifest uses fullSensor so these runtime requests can take effect.
  */
 enum class AppOrientationMode {
     PORTRAIT,

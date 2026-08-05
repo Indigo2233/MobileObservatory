@@ -57,8 +57,7 @@ fun CameraScreen(
 
     val orientationMode = when {
         showGuide || showPlayer -> AppOrientationMode.LANDSCAPE
-        selectedTab == MainControlTab.CAMERA || selectedTab == MainControlTab.STAR_MAP ->
-            AppOrientationMode.LANDSCAPE
+        selectedTab == MainControlTab.CAMERA -> AppOrientationMode.LANDSCAPE
         else -> AppOrientationMode.PORTRAIT
     }
     RememberAppOrientation(orientationMode)
