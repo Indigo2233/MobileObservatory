@@ -1,11 +1,8 @@
 package com.indigo.mobileobservatory.ui.screens
 
 import android.app.Activity
-import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Color as AndroidColor
-import android.net.Uri
-import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -64,6 +61,7 @@ import com.indigo.mobileobservatory.camera.PhoneCameraCapability
 import com.indigo.mobileobservatory.camera.PhoneLensRole
 import com.indigo.mobileobservatory.camera.PhoneSkyCapture
 import com.indigo.mobileobservatory.camera.PhoneSkyCaptureStore
+import com.indigo.mobileobservatory.permissions.AppSettingsNavigator
 import com.indigo.mobileobservatory.permissions.CameraPermissionPolicy
 import com.indigo.mobileobservatory.pointing.StarExtractionResult
 import com.indigo.mobileobservatory.pointing.WideFieldStarExtractor
@@ -172,11 +170,7 @@ fun PhoneCameraDebugScreen(onBack: () -> Unit) {
     }
 
     fun openAppSettings() {
-        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-            data = Uri.fromParts("package", context.packageName, null)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        context.startActivity(intent)
+        AppSettingsNavigator.openApplicationDetails(context)
     }
 
     fun withCameraPermission(action: () -> Unit) {
@@ -257,7 +251,7 @@ fun PhoneCameraDebugScreen(onBack: () -> Unit) {
                     onClick = { openAppSettings() },
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text(stringResource(R.string.phone_camera_open_settings))
+                    Text(stringResource(R.string.open_app_settings))
                 }
             }
 

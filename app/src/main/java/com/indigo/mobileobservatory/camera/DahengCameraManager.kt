@@ -9,6 +9,7 @@ import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
 import android.util.Log
+import androidx.core.content.ContextCompat
 import com.indigo.mobileobservatory.camera.qhyccd.QhyCamera
 import com.indigo.mobileobservatory.camera.qhyccd.QhyccdJni
 import com.indigo.mobileobservatory.camera.toupcam.EAFController
@@ -225,11 +226,12 @@ class DahengCameraManager(
             addAction(actionUsbPermissionQhyFw)
             addAction(actionUsbPermissionZwo)
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            context.registerReceiver(usbReceiver, filter, Context.RECEIVER_EXPORTED)
-        } else {
-            context.registerReceiver(usbReceiver, filter)
-        }
+        ContextCompat.registerReceiver(
+            context,
+            usbReceiver,
+            filter,
+            ContextCompat.RECEIVER_EXPORTED
+        )
     }
 
     fun unregister() {
@@ -456,7 +458,7 @@ class DahengCameraManager(
             val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
             else PendingIntent.FLAG_UPDATE_CURRENT
-            val pi = PendingIntent.getBroadcast(context, 0, Intent(actionUsbPermission), flags)
+            val pi = PendingIntent.getBroadcast(context, 0, Intent(actionUsbPermission).setPackage(context.packageName), flags)
             usbManager.requestPermission(usbDevice, pi)
         }
     }
@@ -519,7 +521,7 @@ class DahengCameraManager(
             val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
             else PendingIntent.FLAG_UPDATE_CURRENT
-            val pi = PendingIntent.getBroadcast(context, 4, Intent(actionUsbPermissionQhyFw), flags)
+            val pi = PendingIntent.getBroadcast(context, 4, Intent(actionUsbPermissionQhyFw).setPackage(context.packageName), flags)
             usbManager.requestPermission(usbDevice, pi)
         }
     }
@@ -629,7 +631,7 @@ class DahengCameraManager(
             val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
             else PendingIntent.FLAG_UPDATE_CURRENT
-            val pi = PendingIntent.getBroadcast(context, 3, Intent(actionUsbPermissionQhy), flags)
+            val pi = PendingIntent.getBroadcast(context, 3, Intent(actionUsbPermissionQhy).setPackage(context.packageName), flags)
             usbManager.requestPermission(usbDevice, pi)
         }
     }
@@ -751,7 +753,7 @@ class DahengCameraManager(
             val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
             else PendingIntent.FLAG_UPDATE_CURRENT
-            val pi = PendingIntent.getBroadcast(context, 6, Intent(actionUsbPermissionZwo), flags)
+            val pi = PendingIntent.getBroadcast(context, 6, Intent(actionUsbPermissionZwo).setPackage(context.packageName), flags)
             usbManager.requestPermission(usbDevice, pi)
         }
     }
@@ -857,7 +859,7 @@ class DahengCameraManager(
             val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
             else PendingIntent.FLAG_UPDATE_CURRENT
-            val pi = PendingIntent.getBroadcast(context, 1, Intent(actionUsbPermissionFw), flags)
+            val pi = PendingIntent.getBroadcast(context, 1, Intent(actionUsbPermissionFw).setPackage(context.packageName), flags)
             usbManager.requestPermission(usbDevice, pi)
         }
     }
@@ -875,7 +877,7 @@ class DahengCameraManager(
             val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
             else PendingIntent.FLAG_UPDATE_CURRENT
-            val pi = PendingIntent.getBroadcast(context, 2, Intent(actionUsbPermissionEaf), flags)
+            val pi = PendingIntent.getBroadcast(context, 2, Intent(actionUsbPermissionEaf).setPackage(context.packageName), flags)
             usbManager.requestPermission(usbDevice, pi)
         }
     }

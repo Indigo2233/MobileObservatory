@@ -1,6 +1,7 @@
 package com.indigo.mobileobservatory.ui.screens
 
 import android.Manifest
+import android.app.Activity
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -54,18 +55,20 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import com.indigo.mobileobservatory.BuildConfig
 import com.indigo.mobileobservatory.R
-import com.indigo.mobileobservatory.permissions.BluetoothPermissionPolicy
 import com.indigo.mobileobservatory.mount.MountConnectionState
 import com.indigo.mobileobservatory.mount.MountDirection
 import com.indigo.mobileobservatory.mount.MountProtocolType
 import com.indigo.mobileobservatory.mount.MountSlewRate
 import com.indigo.mobileobservatory.mount.MountTransportType
-import com.indigo.mobileobservatory.ui.viewmodel.CameraViewModel
+import com.indigo.mobileobservatory.permissions.AppSettingsNavigator
+import com.indigo.mobileobservatory.permissions.BluetoothPermissionPolicy
 import com.indigo.mobileobservatory.ui.MountConnectionAction
 import com.indigo.mobileobservatory.ui.MountConnectionUiState
-import androidx.core.content.ContextCompat
+import com.indigo.mobileobservatory.ui.viewmodel.CameraViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -105,14 +108,18 @@ fun MountControlScreen(
         busy = busy
     )
     val context = LocalContext.current
+    val activity = context as? Activity
     val requiredBluetoothPermissions = BluetoothPermissionPolicy.requiredPermissions(
         Build.VERSION.SDK_INT
     )
     var pendingBluetoothAction by remember { mutableStateOf<(() -> Unit)?>(null) }
     var bluetoothPermissionDenied by remember { mutableStateOf(false) }
+    var bluetoothPermissionDeniedForever by remember { mutableStateOf(false) }
+    var bluetoothPermissionAsked by remember { mutableStateOf(false) }
     val bluetoothPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { result ->
+        bluetoothPermissionAsked = true
         val granted = requiredBluetoothPermissions.all { permission ->
             result[permission] == true || ContextCompat.checkSelfPermission(
                 context,
@@ -122,6 +129,11 @@ fun MountControlScreen(
         val action = pendingBluetoothAction
         pendingBluetoothAction = null
         bluetoothPermissionDenied = !granted
+        bluetoothPermissionDeniedForever = !granted &&
+            activity != null &&
+            requiredBluetoothPermissions.any { permission ->
+                !ActivityCompat.shouldShowRequestPermissionRationale(activity, permission)
+            }
         if (granted) action?.invoke()
     }
 
@@ -132,6 +144,7 @@ fun MountControlScreen(
         }
         if (missing.isEmpty()) {
             bluetoothPermissionDenied = false
+            bluetoothPermissionDeniedForever = false
             action()
         } else {
             pendingBluetoothAction = action
@@ -310,9 +323,22 @@ fun MountControlScreen(
                         }
                         if (bluetoothPermissionDenied) {
                             Text(
-                                stringResource(R.string.nearby_devices_permission_required),
+                                stringResource(
+                                    if (bluetoothPermissionDeniedForever && bluetoothPermissionAsked) {
+                                        R.string.nearby_devices_permission_denied_forever
+                                    } else {
+                                        R.string.nearby_devices_permission_required
+                                    }
+                                ),
                                 color = MaterialTheme.colorScheme.error
                             )
+                            if (bluetoothPermissionDeniedForever && bluetoothPermissionAsked) {
+                                OutlinedButton(
+                                    onClick = { AppSettingsNavigator.openApplicationDetails(context) }
+                                ) {
+                                    Text(stringResource(R.string.open_app_settings))
+                                }
+                            }
                         }
                         if (bluetoothDevices.isEmpty()) {
                             Text(

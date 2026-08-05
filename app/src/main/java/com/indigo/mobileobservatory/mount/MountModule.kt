@@ -9,6 +9,7 @@ import android.content.IntentFilter
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -297,7 +298,12 @@ class MountModule(
             } else {
                 PendingIntent.FLAG_UPDATE_CURRENT
             }
-            val intent = PendingIntent.getBroadcast(context, selected.deviceId, Intent(ACTION_MOUNT_USB_PERMISSION), flags)
+            val intent = PendingIntent.getBroadcast(
+                context,
+                selected.deviceId,
+                Intent(ACTION_MOUNT_USB_PERMISSION).setPackage(context.packageName),
+                flags
+            )
             usbManager.requestPermission(usbDevice, intent)
             _statusMessage.value = "Requesting mount USB permission..."
             return
@@ -1080,11 +1086,12 @@ class MountModule(
     fun register() {
         if (receiverRegistered) return
         val filter = IntentFilter(ACTION_MOUNT_USB_PERMISSION)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            application.registerReceiver(mountUsbPermissionReceiver, filter, Context.RECEIVER_EXPORTED)
-        } else {
-            application.registerReceiver(mountUsbPermissionReceiver, filter)
-        }
+        ContextCompat.registerReceiver(
+            application,
+            mountUsbPermissionReceiver,
+            filter,
+            ContextCompat.RECEIVER_EXPORTED
+        )
         receiverRegistered = true
         scanMountUsbDevices()
     }

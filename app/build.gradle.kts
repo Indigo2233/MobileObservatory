@@ -15,7 +15,7 @@ android {
     defaultConfig {
         applicationId = "com.indigo.mobileobservatory"
         minSdk = 26
-        targetSdk = 28
+        targetSdk = 34
         versionCode = 1
         versionName = "1.0.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -79,10 +79,6 @@ android {
                 "**/libastap_cli.so"
             )
         }
-    }
-
-    lint {
-        disable += "ExpiredTargetSdkVersion"
     }
 
     sourceSets {

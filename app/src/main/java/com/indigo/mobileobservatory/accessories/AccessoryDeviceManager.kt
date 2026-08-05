@@ -9,6 +9,7 @@ import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
 import android.util.Log
+import androidx.core.content.ContextCompat
 import com.hoho.android.usbserial.driver.UsbSerialProber
 import com.indigo.mobileobservatory.accessories.cover.CoverCalibratorControllerRouter
 import com.indigo.mobileobservatory.accessories.cover.DlcSerialCoverCalibratorAdapter
@@ -230,11 +231,12 @@ class AccessoryDeviceManager(context: Context) {
             addAction(ACTION_ROTATOR_PERMISSION)
             addAction(ACTION_SERIAL_AUTO_PERMISSION)
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            appContext.registerReceiver(usbReceiver, filter, Context.RECEIVER_EXPORTED)
-        } else {
-            appContext.registerReceiver(usbReceiver, filter)
-        }
+        ContextCompat.registerReceiver(
+            appContext,
+            usbReceiver,
+            filter,
+            ContextCompat.RECEIVER_EXPORTED
+        )
         registered = true
         scan()
     }

@@ -6,6 +6,7 @@ import androidx.compose.ui.res.stringResource
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.app.Activity
 import android.content.Context
 import android.content.pm.PackageManager
 import android.location.Location
@@ -32,6 +33,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.indigo.mobileobservatory.astrometry.AstapRunner
 import com.indigo.mobileobservatory.astrometry.D50Manager
@@ -41,6 +43,7 @@ import com.indigo.mobileobservatory.astro.ObserverSite
 import com.indigo.mobileobservatory.astro.RefractionParameters
 import com.indigo.mobileobservatory.mount.MountCoordinates
 import com.indigo.mobileobservatory.mount.MountSite
+import com.indigo.mobileobservatory.permissions.AppSettingsNavigator
 import com.indigo.mobileobservatory.polar.ContinuousPolarErrorEstimator
 import com.indigo.mobileobservatory.polar.CorrectionFieldInfo
 import com.indigo.mobileobservatory.polar.PolarAlignmentCalculator
@@ -74,6 +77,7 @@ fun PolarAlignmentScreen(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
+    val activity = context as? Activity
     val scope = rememberCoroutineScope()
     val phoneLocationFailed = stringResource(R.string.phone_location_failed)
     val plateSolveFailed = stringResource(R.string.plate_solve_failed)
@@ -109,6 +113,7 @@ fun PolarAlignmentScreen(
     var runningAuto by remember { mutableStateOf(false) }
     var workflowStatus by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
+    var locationPermissionDeniedForever by remember { mutableStateOf(false) }
     var determination by remember { mutableStateOf<PolarErrorDetermination?>(null) }
     var currentResult by remember { mutableStateOf<PolarAlignmentResult?>(null) }
     var correctionField by remember { mutableStateOf<CorrectionFieldInfo?>(null) }
@@ -157,6 +162,7 @@ fun PolarAlignmentScreen(
         val granted = grants[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
             grants[Manifest.permission.ACCESS_COARSE_LOCATION] == true
         if (granted) {
+            locationPermissionDeniedForever = false
             scope.launch {
                 error = null
                 val site = runCatching { getPhoneSite(context.applicationContext) }.getOrElse {
@@ -174,7 +180,22 @@ fun PolarAlignmentScreen(
                 }
             }
         } else {
-            error = context.getString(R.string.location_permission_required)
+            locationPermissionDeniedForever = activity != null &&
+                !ActivityCompat.shouldShowRequestPermissionRationale(
+                    activity,
+                    Manifest.permission.ACCESS_FINE_LOCATION
+                ) &&
+                !ActivityCompat.shouldShowRequestPermissionRationale(
+                    activity,
+                    Manifest.permission.ACCESS_COARSE_LOCATION
+                )
+            error = context.getString(
+                if (locationPermissionDeniedForever) {
+                    R.string.location_permission_denied_forever
+                } else {
+                    R.string.location_permission_required
+                }
+            )
         }
     }
 
@@ -669,8 +690,17 @@ fun PolarAlignmentScreen(
                 Text(stringResource(R.string.calculate))
             }
 
-            error?.let {
-                Text(it, color = MaterialTheme.colorScheme.error)
+            error?.let { msg ->
+                Text(msg, color = MaterialTheme.colorScheme.error)
+                if (locationPermissionDeniedForever &&
+                    msg == stringResource(R.string.location_permission_denied_forever)
+                ) {
+                    OutlinedButton(
+                        onClick = { AppSettingsNavigator.openApplicationDetails(context) }
+                    ) {
+                        Text(stringResource(R.string.open_app_settings))
+                    }
+                }
             }
 
             determination?.let { solved ->
