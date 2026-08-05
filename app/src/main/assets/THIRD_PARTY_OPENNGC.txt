@@ -1,0 +1,9 @@
+OpenNGC
+Source: https://github.com/mattiaverga/OpenNGC
+License: Creative Commons Attribution-ShareAlike 4.0 International (CC-BY-SA-4.0)
+
+catalog/deepsky.csv is a trimmed subset of the OpenNGC database (NGC.csv and
+addendum.csv), keeping identifiers, object type, J2000 coordinates, magnitude
+and major axis for offline star map search. Chinese aliases for well-known
+objects are added by this project. Regenerate with
+scripts/generate_deepsky_catalog.py.

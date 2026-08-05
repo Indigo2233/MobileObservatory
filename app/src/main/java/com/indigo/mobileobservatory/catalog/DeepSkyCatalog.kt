@@ -1,7 +1,9 @@
 package com.indigo.mobileobservatory.catalog
 
+import java.util.Locale
+
 /**
- * Offline deep-sky catalog entry. OpenNGC import lands later; shell uses [DemoCatalog].
+ * Offline deep-sky catalog entry. Coordinates are J2000.
  */
 data class CatalogObject(
     val id: String,
@@ -11,14 +13,32 @@ data class CatalogObject(
     val decDeg: Double,
     /** Surface brightness proxy / V mag for ranking. */
     val magnitude: Double?,
-    val sizeArcmin: Double? = null
-)
+    val sizeArcmin: Double? = null,
+    /** Every searchable spelling, catalog ids first. */
+    val aliases: List<String> = listOf(id, name).filter { it.isNotBlank() }.distinct()
+) {
+    /**
+     * Names in the form the Stellarium engine's `core_search` expects: catalog
+     * ids verbatim, proper names prefixed with `NAME`.
+     */
+    fun engineDesignations(): List<String> = aliases.map { alias ->
+        if (CATALOG_ID_PATTERN.matches(alias)) alias else "NAME $alias"
+    }.distinct()
+
+    private companion object {
+        val CATALOG_ID_PATTERN = Regex("^[A-Za-z]+ ?\\d+[A-Za-z]?$")
+    }
+}
 
 interface DeepSkyCatalog {
     fun all(): List<CatalogObject>
     fun findById(id: String): CatalogObject?
     fun search(query: String): List<CatalogObject>
 }
+
+/** Strip whitespace so "M 42" / "m42" match the same catalog id. */
+fun normalizeCatalogQuery(query: String): String =
+    query.filterNot { it.isWhitespace() }.lowercase(Locale.ROOT)
 
 object DemoCatalog : DeepSkyCatalog {
     private val objects = listOf(
@@ -36,16 +56,18 @@ object DemoCatalog : DeepSkyCatalog {
 
     override fun all(): List<CatalogObject> = objects
 
-    override fun findById(id: String): CatalogObject? =
-        objects.firstOrNull { it.id.equals(id, ignoreCase = true) }
+    override fun findById(id: String): CatalogObject? {
+        val key = normalizeCatalogQuery(id)
+        return objects.firstOrNull { normalizeCatalogQuery(it.id) == key }
+    }
 
     override fun search(query: String): List<CatalogObject> {
-        val q = query.trim()
+        val q = normalizeCatalogQuery(query)
         if (q.isEmpty()) return objects
         return objects.filter {
-            it.id.contains(q, ignoreCase = true) ||
-                it.name.contains(q, ignoreCase = true) ||
-                it.type.contains(q, ignoreCase = true)
+            normalizeCatalogQuery(it.id).contains(q) ||
+                normalizeCatalogQuery(it.name).contains(q) ||
+                normalizeCatalogQuery(it.type).contains(q)
         }
     }
 }

@@ -70,6 +70,11 @@ android {
         kotlinCompilerExtensionVersion = "1.5.8"
     }
 
+    testOptions {
+        // Lets tests construct android.webkit/util stubs instead of hitting "Stub!".
+        unitTests.isReturnDefaultValues = true
+    }
+
     packaging {
         jniLibs {
             useLegacyPackaging = true
@@ -116,6 +121,8 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 
     testImplementation("junit:junit:4.13.2")
+    // Android ships org.json as a stub that throws in unit tests.
+    testImplementation("org.json:json:20240303")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
 
     androidTestImplementation(composeBom)
