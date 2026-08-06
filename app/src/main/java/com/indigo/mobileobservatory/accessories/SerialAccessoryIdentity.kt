@@ -4,7 +4,10 @@ package com.indigo.mobileobservatory.accessories
  * Shared USB-serial identity banners for Indigo DIY accessories.
  *
  * Both EFucoser and electric CAA answer `V#` with `V <n>#` in overlapping
- * numeric ranges, so role detection must use the `#` device banner instead.
+ * numeric ranges. The empty command `#` breaks the tie: EFucoser answers its
+ * device banner, while the CAA firmware answers `ERR:empty#` (its own banner
+ * is only printed once at boot, because the serial reader consumes every `#`
+ * as a terminator and never passes one into the command dispatcher).
  *
  * Gemini EAF (繁星电调) uses `:03#` → `F<ver>#` (INDI MyFocuserPro2 wire protocol).
  * Gemini flat panels use `>H#` / `>P000#` handshakes (INDI gemini_flatpanel).
@@ -18,6 +21,15 @@ object SerialAccessoryIdentity {
     /** ESP8266 CAA and legacy Arduino "scopfocus" rotator banners. */
     val ROTATOR_BANNER = Regex(
         "^(?:CAA .+ |scopfocus )Rotator ver (\\d+)$",
+        RegexOption.IGNORE_CASE
+    )
+
+    /** `V#` reply shared by EFucoser and electric CAA firmware. */
+    val VERSION_REPLY = Regex("^V\\s+(\\d+)$", RegexOption.IGNORE_CASE)
+
+    /** `G#` reply of both CAA firmwares: `P <steps>;M <moving>`. */
+    val ROTATOR_STATUS = Regex(
+        "^P\\s+(-?\\d+)\\s*;\\s*M\\s+(true|false)$",
         RegexOption.IGNORE_CASE
     )
 
@@ -42,6 +54,16 @@ object SerialAccessoryIdentity {
 
     fun isRotatorBanner(response: String): Boolean =
         ROTATOR_BANNER.matches(response.trim())
+
+    /**
+     * `G#` status shape. Only conclusive once EFucoser has been ruled out with
+     * the empty command, because the focuser answers `G#` the same way.
+     */
+    fun isRotatorStatus(response: String): Boolean =
+        ROTATOR_STATUS.matches(response.trim())
+
+    fun versionReply(response: String): Int? =
+        VERSION_REPLY.matchEntire(response.trim())?.groupValues?.getOrNull(1)?.toIntOrNull()
 
     fun isGeminiEafFirmware(response: String): Boolean =
         GEMINI_EAF_FIRMWARE.matches(response.trim())

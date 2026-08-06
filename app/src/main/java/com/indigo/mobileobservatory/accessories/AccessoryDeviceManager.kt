@@ -689,18 +689,23 @@ class AccessoryDeviceManager(context: Context) {
                 efucoserFocuser.close()
                 geminiEafFocuser.close()
                 when {
-                    geminiEafFocuser.open(appContext, device) -> {
-                        focuserController.useGeminiEaf()
-                        _activeFocuserDeviceId.value = device.deviceId
-                    }
+                    // EFucoser first: its empty-command banner is unambiguous,
+                    // whereas trying Gemini first makes its handshake failure the
+                    // reported error even when the device is an EFucoser.
                     efucoserFocuser.open(appContext, device) -> {
                         focuserController.useEfucoser()
                         _activeFocuserDeviceId.value = device.deviceId
                     }
+                    geminiEafFocuser.open(appContext, device) -> {
+                        focuserController.useGeminiEaf()
+                        _activeFocuserDeviceId.value = device.deviceId
+                    }
                     else -> {
-                        _scanError.value = geminiEafFocuser.lastError.value
-                            ?: efucoserFocuser.lastError.value
-                            ?: "Serial focuser identification failed"
+                        _scanError.value = listOfNotNull(
+                            efucoserFocuser.lastError.value,
+                            geminiEafFocuser.lastError.value
+                        ).joinToString(" / ")
+                            .ifEmpty { "Serial focuser identification failed" }
                     }
                 }
             } finally {

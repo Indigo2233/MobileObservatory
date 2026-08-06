@@ -30,6 +30,8 @@ class EFucoserSerialFocuserController : FocuserController {
         private const val BAUD_RATE = 9600
         private const val COMMAND_TIMEOUT_MS = 3000
         private const val MAX_RESPONSE_BYTES = 8192
+        private const val DRAIN_LIMIT_MS = 2000L
+        private const val DRAIN_QUIET_READS = 3
         private val MOTION_PATTERN = Regex(
             "^P\\s+(-?\\d+)\\s*;\\s*M\\s+(true|false)$",
             RegexOption.IGNORE_CASE
@@ -96,10 +98,10 @@ class EFucoserSerialFocuserController : FocuserController {
             delay(2200)
             drainInput(port)
 
-            // Prefer "##" (command '#') so CAA ESP does not treat a lone '#' as empty.
-            val identity = runCatching { command("##") }.getOrNull()
-                ?.takeIf { SerialAccessoryIdentity.isFocuserBanner(it) }
-                ?: command("#")
+            // The empty command is the EFucoser banner request. Sending "##"
+            // instead queues two of them and leaves one reply in the buffer,
+            // which then desynchronises every following exchange.
+            val identity = command("#")
             val version = SerialAccessoryIdentity.focuserVersion(identity)
                 ?: error("Device did not identify as EFucoser: $identity")
             require(
@@ -259,12 +261,20 @@ class EFucoserSerialFocuserController : FocuserController {
             if (count <= 0) continue
             for (index in 0 until count) {
                 val byte = buffer[index]
-                if ((byte.toInt() and 0xff) == '#'.code) {
-                    val text = response.toByteArray().toString(Charsets.US_ASCII).trim()
-                    if (text.startsWith("ERR:", ignoreCase = true)) {
-                        error(text)
+                when (byte.toInt() and 0xff) {
+                    '#'.code -> {
+                        val text = response.toByteArray().toString(Charsets.US_ASCII).trim()
+                        if (text.startsWith("ERR:", ignoreCase = true)) {
+                            error(text)
+                        }
+                        return text
                     }
-                    return text
+                    // Replies never span lines, so a newline can only precede
+                    // leftover boot chatter. Drop whatever came before it.
+                    '\r'.code, '\n'.code -> {
+                        response.clear()
+                        continue
+                    }
                 }
                 response += byte
                 if (response.size > MAX_RESPONSE_BYTES) {
@@ -282,11 +292,13 @@ class EFucoserSerialFocuserController : FocuserController {
         _isMoving.value = match.groupValues[2].toBooleanStrict()
     }
 
+    /** Reads until the line stays quiet, so slow boot chatter cannot leak into a reply. */
     private fun drainInput(port: UsbSerialPort) {
         val buffer = ByteArray(256)
-        repeat(8) {
-            val count = runCatching { port.read(buffer, 100) }.getOrDefault(0)
-            if (count <= 0) return
+        var quiet = 0
+        val deadline = System.currentTimeMillis() + DRAIN_LIMIT_MS
+        while (quiet < DRAIN_QUIET_READS && System.currentTimeMillis() < deadline) {
+            if (runCatching { port.read(buffer, 100) }.getOrDefault(0) <= 0) quiet++ else quiet = 0
         }
     }
 

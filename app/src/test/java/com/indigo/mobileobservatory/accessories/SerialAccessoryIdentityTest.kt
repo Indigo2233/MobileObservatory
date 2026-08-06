@@ -2,6 +2,7 @@ package com.indigo.mobileobservatory.accessories
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -36,10 +37,36 @@ class SerialAccessoryIdentityTest {
 
     @Test
     fun versionOnlyReplyIsNotEnoughToClassifyRole() {
-        // Both firmwares answer V# this way ó must not be treated as identity.
+        // Both firmwares answer V# this way ù must not be treated as identity.
         assertFalse(SerialAccessoryIdentity.isFocuserBanner("V 1103"))
         assertFalse(SerialAccessoryIdentity.isRotatorBanner("V 2007"))
         assertFalse(SerialAccessoryIdentity.isRotatorBanner("V 1103"))
+    }
+
+    @Test
+    fun versionRepliesParseForBothFamilies() {
+        assertEquals(2007, SerialAccessoryIdentity.versionReply("V 2007"))
+        assertEquals(1013, SerialAccessoryIdentity.versionReply("V 1013"))
+        assertEquals(1103, SerialAccessoryIdentity.versionReply("V 1103"))
+        assertNull(SerialAccessoryIdentity.versionReply("ERR:empty"))
+        assertNull(SerialAccessoryIdentity.versionReply("F291"))
+    }
+
+    @Test
+    fun rotatorStatusReplyIsRecognised() {
+        assertTrue(SerialAccessoryIdentity.isRotatorStatus("P 20000;M false"))
+        assertTrue(SerialAccessoryIdentity.isRotatorStatus("P -120 ; M true"))
+        assertFalse(SerialAccessoryIdentity.isRotatorStatus("ERR:empty"))
+        assertFalse(SerialAccessoryIdentity.isRotatorStatus("V 2007"))
+    }
+
+    @Test
+    fun emptyCommandReplySeparatesFocuserFromRotator() {
+        // EFucoser answers the empty command with its banner, the CAA errors out.
+        assertTrue(
+            SerialAccessoryIdentity.isFocuserBanner("EFucoser ESP8266 ULN2003 Focuser ver 1103")
+        )
+        assertFalse(SerialAccessoryIdentity.isFocuserBanner("ERR:empty"))
     }
 
     @Test

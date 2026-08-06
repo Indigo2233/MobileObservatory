@@ -22,6 +22,8 @@ object SerialAccessoryProbe {
     private const val GEMINI_EAF_SETTLE_MS = 1000L
     private const val COVER_SETTLE_MS = 2200L
     private const val READ_TIMEOUT_MS = 2500
+    private const val DRAIN_LIMIT_MS = 1500L
+    private const val DRAIN_QUIET_READS = 3
 
     suspend fun probe(context: Context, device: UsbDevice): Set<SerialAccessoryRole> {
         val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
@@ -44,14 +46,24 @@ object SerialAccessoryProbe {
             runCatching { port.setRTS(true) }
             delay(CAA_SETTLE_MS)
             drain(port)
-            val rotatorBanner = exchangeHashTerminated(port, "##")
-            if (SerialAccessoryIdentity.isRotatorBanner(rotatorBanner)) {
-                SerialAccessoryIdentity.rotatorVersion(rotatorBanner)
-                    ?.takeIf { it in 1000..2999 }
-                    ?.let {
-                        Log.i(TAG, "Probed CAA banner V$it on ${device.deviceName}")
-                        return setOf(SerialAccessoryRole.ROTATOR)
-                    }
+            // The empty command separates the two families: EFucoser answers its
+            // banner, the CAA answers an error. Rule the focuser out first so the
+            // shared `V#` / `G#` replies below can only come from a CAA.
+            val emptyReply = exchangeHashTerminated(port, "#")
+            if (SerialAccessoryIdentity.isFocuserBanner(emptyReply)) {
+                Log.i(TAG, "Probed EFucoser on ${device.deviceName}")
+                return setOf(SerialAccessoryRole.FOCUSER)
+            }
+            drain(port)
+            val rotatorVersion = SerialAccessoryIdentity.versionReply(
+                exchangeHashTerminated(port, "V#")
+            )
+            if (rotatorVersion != null && rotatorVersion in 1000..2999) {
+                drain(port)
+                if (SerialAccessoryIdentity.isRotatorStatus(exchangeHashTerminated(port, "G#"))) {
+                    Log.i(TAG, "Probed CAA V$rotatorVersion on ${device.deviceName}")
+                    return setOf(SerialAccessoryRole.ROTATOR)
+                }
             }
 
             // EFucoser uses DTR/RTS low after boot.
@@ -59,7 +71,7 @@ object SerialAccessoryProbe {
             runCatching { port.setRTS(false) }
             delay(FOCUSER_SETTLE_MS)
             drain(port)
-            val focuserBanner = exchangeHashTerminated(port, "##")
+            val focuserBanner = exchangeHashTerminated(port, "#")
             if (SerialAccessoryIdentity.isFocuserBanner(focuserBanner)) {
                 Log.i(TAG, "Probed EFucoser on ${device.deviceName}")
                 return setOf(SerialAccessoryRole.FOCUSER)
@@ -117,13 +129,16 @@ object SerialAccessoryProbe {
         while (System.currentTimeMillis() < deadline) {
             val count = port.read(buffer, 200)
             for (i in 0 until count) {
-                val b = buffer[i].toInt() and 0xff
-                if (b == '#'.code) {
-                    val text = response.toByteArray().toString(Charsets.US_ASCII).trim()
-                    if (text.isNotEmpty()) return text
-                    response.clear()
-                } else {
-                    response += b.toByte()
+                when (val b = buffer[i].toInt() and 0xff) {
+                    '#'.code -> {
+                        val text = response.toByteArray().toString(Charsets.US_ASCII).trim()
+                        if (text.isNotEmpty()) return text
+                        response.clear()
+                    }
+                    // Replies never span lines, so a newline can only precede
+                    // leftover boot chatter. Drop whatever came before it.
+                    '\r'.code, '\n'.code -> response.clear()
+                    else -> response += b.toByte()
                 }
             }
         }
@@ -175,10 +190,13 @@ object SerialAccessoryProbe {
         return ""
     }
 
+    /** Reads until the line stays quiet, so slow boot chatter cannot leak into a reply. */
     private fun drain(port: UsbSerialPort) {
         val buffer = ByteArray(256)
-        repeat(12) {
-            if (runCatching { port.read(buffer, 80) }.getOrDefault(0) <= 0) return
+        var quiet = 0
+        val deadline = System.currentTimeMillis() + DRAIN_LIMIT_MS
+        while (quiet < DRAIN_QUIET_READS && System.currentTimeMillis() < deadline) {
+            if (runCatching { port.read(buffer, 80) }.getOrDefault(0) <= 0) quiet++ else quiet = 0
         }
     }
 }

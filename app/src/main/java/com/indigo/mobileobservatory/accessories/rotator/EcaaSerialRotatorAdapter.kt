@@ -27,8 +27,10 @@ class EcaaSerialRotatorAdapter : RotatorController {
     companion object {
         private const val TAG = "EcaaRotatorSerial"
         private const val TIMEOUT_MS = 3000
+        private const val DRAIN_LIMIT_MS = 2000L
+        private const val DRAIN_QUIET_READS = 3
         private const val DEFAULT_STEPS_PER_DEGREE = 100
-        private val STATUS = Regex("^P\\s+(-?\\d+)\\s*;\\s*M\\s+(true|false)$", RegexOption.IGNORE_CASE)
+        private val STATUS = SerialAccessoryIdentity.ROTATOR_STATUS
     }
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -83,9 +85,16 @@ class EcaaSerialRotatorAdapter : RotatorController {
             connectedDeviceId = device.deviceId
             delay(4000)
             drain(serialPort)
-            val banner = command("##")
-            firmwareVersion = SerialAccessoryIdentity.rotatorVersion(banner)
-                ?: error("Device did not identify as electric CAA: $banner")
+            // EFucoser answers the empty command with its banner; the CAA errors
+            // out. Rule the focuser out before trusting the shared `V#` reply.
+            val emptyReply = runCatching { command("#") }.getOrNull()
+            if (emptyReply != null && SerialAccessoryIdentity.isFocuserBanner(emptyReply)) {
+                error("Device identified as a focuser, not an electric CAA: $emptyReply")
+            }
+            drain(serialPort)
+            val versionReply = command("V#")
+            firmwareVersion = SerialAccessoryIdentity.versionReply(versionReply)
+                ?: error("Device did not identify as electric CAA: $versionReply")
             require(firmwareVersion in 1000..2999) {
                 "Unsupported electric CAA firmware: $firmwareVersion"
             }
@@ -136,6 +145,9 @@ class EcaaSerialRotatorAdapter : RotatorController {
         _hold.value = true
         // Prefer board JSON status (ESP8266 / firmware 2000+). Older Nano has no I#.
         val status = runCatching { JSONObject(command("I#")) }.getOrNull()
+        // Firmware without `I#` replies without a `#` terminator; flush the
+        // leftover bytes so they cannot be mistaken for the next reply.
+        if (status == null) port?.let { drain(it) }
         if (status != null) {
             if (status.has("stepsPerDegree")) {
                 val spd = status.optInt("stepsPerDegree", DEFAULT_STEPS_PER_DEGREE).coerceAtLeast(1)
@@ -201,14 +213,17 @@ class EcaaSerialRotatorAdapter : RotatorController {
         while (System.currentTimeMillis() < deadline) {
             val count = serialPort.read(buffer, 200)
             for (i in 0 until count) {
-                val b = buffer[i].toInt() and 0xff
-                if (b == '#'.code) {
-                    val text = response.toByteArray().toString(Charsets.US_ASCII).trim()
-                    if (text.startsWith("ERR:", true)) error(text)
-                    if (text.isNotEmpty()) return text
-                    response.clear()
-                } else {
-                    response += b.toByte()
+                when (val b = buffer[i].toInt() and 0xff) {
+                    '#'.code -> {
+                        val text = response.toByteArray().toString(Charsets.US_ASCII).trim()
+                        if (text.startsWith("ERR:", true)) error(text)
+                        if (text.isNotEmpty()) return text
+                        response.clear()
+                    }
+                    // Replies never span lines, so a newline can only precede
+                    // leftover boot chatter. Drop whatever came before it.
+                    '\r'.code, '\n'.code -> response.clear()
+                    else -> response += b.toByte()
                 }
             }
         }
@@ -238,10 +253,14 @@ class EcaaSerialRotatorAdapter : RotatorController {
         scope.cancel()
     }
 
+    /** Reads until the line stays quiet, so slow boot chatter cannot leak into a reply. */
     private fun drain(serialPort: UsbSerialPort) {
         val buffer = ByteArray(256)
-        repeat(20) {
-            if (runCatching { serialPort.read(buffer, 100) }.getOrDefault(0) <= 0) return
+        var quiet = 0
+        val deadline = System.currentTimeMillis() + DRAIN_LIMIT_MS
+        while (quiet < DRAIN_QUIET_READS && System.currentTimeMillis() < deadline) {
+            if (runCatching { serialPort.read(buffer, 100) }.getOrDefault(0) <= 0) quiet++
+            else quiet = 0
         }
     }
 
