@@ -116,6 +116,7 @@ dependencies {
     implementation("com.github.mik3y:usb-serial-for-android:3.9.0")
 
     implementation(files("libs/zwocamera.jar"))
+    implementation(files("libs/playerOne_AndroidSdk/playerone-camera-sdk-release.aar"))
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

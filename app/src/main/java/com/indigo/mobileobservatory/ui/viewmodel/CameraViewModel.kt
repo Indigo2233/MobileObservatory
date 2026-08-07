@@ -10,11 +10,8 @@ import androidx.lifecycle.viewModelScope
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.accessories.AccessoryDeviceManager
 import com.indigo.mobileobservatory.camera.*
-import com.indigo.mobileobservatory.camera.toupcam.CoolingInfo
 import com.indigo.mobileobservatory.camera.toupcam.EAFInfo
 import com.indigo.mobileobservatory.camera.toupcam.FilterWheelInfo
-import com.indigo.mobileobservatory.camera.toupcam.TempHistoryPoint
-import com.indigo.mobileobservatory.camera.toupcam.ToupcamCamera
 import com.indigo.mobileobservatory.license.License
 import com.indigo.mobileobservatory.astrometry.AstapRunner
 import com.indigo.mobileobservatory.astrometry.D50Manager
@@ -157,7 +154,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val rotatorHold = accessoryManager.rotatorController.hold
     val rotatorDeviceInfo = accessoryManager.rotatorController.deviceInfo
 
-    // Cooling / TEC state (only active for ToupcamCamera)
+    // Cooling / TEC state (active for any CoolingCapable camera)
     private val _coolingInfo = MutableStateFlow<CoolingInfo?>(null)
     val coolingInfo: StateFlow<CoolingInfo?> = _coolingInfo.asStateFlow()
     private val _coolerOn = MutableStateFlow(false)
@@ -1544,18 +1541,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun bindCoolingFlows(cam: Camera) {
         unbindCoolingFlows()
-        val tc = cam as? ToupcamCamera ?: run {
+        val cooler = cam as? CoolingCapable ?: run {
             _coolingInfo.value = null
             return
         }
-        coolingJobs += viewModelScope.launch { tc.coolingInfo.collect { _coolingInfo.value = it } }
-        coolingJobs += viewModelScope.launch { tc.coolerOn.collect { _coolerOn.value = it } }
-        coolingJobs += viewModelScope.launch { tc.targetTempTenths.collect { _targetTempTenths.value = it } }
-        coolingJobs += viewModelScope.launch { tc.sensorTempTenths.collect { _sensorTempTenths.value = it } }
-        coolingJobs += viewModelScope.launch { tc.tecVoltageTenths.collect { _tecVoltageTenths.value = it } }
-        coolingJobs += viewModelScope.launch { tc.coolingPowerPct.collect { _coolingPowerPct.value = it } }
-        coolingJobs += viewModelScope.launch { tc.tempHistory.collect { _tempHistory.value = it } }
-        coolingJobs += viewModelScope.launch { tc.rampStatus.collect { _rampStatus.value = it } }
+        coolingJobs += viewModelScope.launch { cooler.coolingInfo.collect { _coolingInfo.value = it } }
+        coolingJobs += viewModelScope.launch { cooler.coolerOn.collect { _coolerOn.value = it } }
+        coolingJobs += viewModelScope.launch { cooler.targetTempTenths.collect { _targetTempTenths.value = it } }
+        coolingJobs += viewModelScope.launch { cooler.sensorTempTenths.collect { _sensorTempTenths.value = it } }
+        coolingJobs += viewModelScope.launch { cooler.tecVoltageTenths.collect { _tecVoltageTenths.value = it } }
+        coolingJobs += viewModelScope.launch { cooler.coolingPowerPct.collect { _coolingPowerPct.value = it } }
+        coolingJobs += viewModelScope.launch { cooler.tempHistory.collect { _tempHistory.value = it } }
+        coolingJobs += viewModelScope.launch { cooler.rampStatus.collect { _rampStatus.value = it } }
     }
 
     private fun unbindCoolingFlows() {
@@ -1567,23 +1564,23 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setCoolerOn(on: Boolean) {
-        (cameraManager.activeCamera as? ToupcamCamera)?.setCoolerOn(on)
+        (cameraManager.activeCamera as? CoolingCapable)?.setCoolerOn(on)
     }
 
     fun setTargetTemperature(tenthsDegC: Int) {
-        (cameraManager.activeCamera as? ToupcamCamera)?.setTargetTemperature(tenthsDegC)
+        (cameraManager.activeCamera as? CoolingCapable)?.setTargetTemperature(tenthsDegC)
     }
 
     fun startCoolDown(targetTenths: Int, durationMinutes: Int) {
-        (cameraManager.activeCamera as? ToupcamCamera)?.startCoolDown(targetTenths, durationMinutes)
+        (cameraManager.activeCamera as? CoolingCapable)?.startCoolDown(targetTenths, durationMinutes)
     }
 
     fun startWarmUp(durationMinutes: Int) {
-        (cameraManager.activeCamera as? ToupcamCamera)?.startWarmUp(durationMinutes)
+        (cameraManager.activeCamera as? CoolingCapable)?.startWarmUp(durationMinutes)
     }
 
     fun stopRamp() {
-        (cameraManager.activeCamera as? ToupcamCamera)?.stopRamp()
+        (cameraManager.activeCamera as? CoolingCapable)?.stopRamp()
     }
 
     fun setAutoExposureMode(mode: AutoExposureMode) {

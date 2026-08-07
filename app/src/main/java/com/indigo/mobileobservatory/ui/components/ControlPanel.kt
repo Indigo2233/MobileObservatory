@@ -23,9 +23,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.gestures.detectTapGestures
 import com.indigo.mobileobservatory.camera.*
-import com.indigo.mobileobservatory.camera.toupcam.CoolingInfo
 import com.indigo.mobileobservatory.camera.toupcam.EAFInfo
-import com.indigo.mobileobservatory.camera.toupcam.TempHistoryPoint
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics

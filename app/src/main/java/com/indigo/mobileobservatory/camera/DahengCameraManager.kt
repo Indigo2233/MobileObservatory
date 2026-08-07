@@ -10,6 +10,8 @@ import android.hardware.usb.UsbManager
 import android.os.Build
 import android.util.Log
 import androidx.core.content.ContextCompat
+import com.indigo.mobileobservatory.camera.playerone.PlayerOneCamera
+import com.indigo.mobileobservatory.camera.playerone.PlayerOneSdkHost
 import com.indigo.mobileobservatory.camera.qhyccd.QhyCamera
 import com.indigo.mobileobservatory.camera.qhyccd.QhyccdJni
 import com.indigo.mobileobservatory.camera.toupcam.EAFController
@@ -22,7 +24,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-enum class CameraBrand { TOUPCAM, QHY, ZWO }
+enum class CameraBrand { TOUPCAM, QHY, ZWO, PLAYERONE }
 
 enum class AccessoryType { FILTER_WHEEL, FOCUSER, EFUCOSER_FOCUSER, SERIAL_DEVICE }
 
@@ -54,6 +56,7 @@ class DahengCameraManager(
         private const val TOUPCAM_VENDOR_ID = 1351  // 0x0547
         private const val QHY_VENDOR_ID = 0x1618    // 5656 decimal
         private const val ZWO_VENDOR_ID = 0x03C3        // 963 decimal
+        private const val PLAYERONE_VENDOR_ID = 0xA0A0  // 41120 decimal
     }
 
     private val actionUsbPermission = "com.indigo.mobileobservatory.USB_PERMISSION.$sessionName"
@@ -96,12 +99,14 @@ class DahengCameraManager(
                         }.getOrDefault(false)
                         if (isAccessory) return
                     }
-                    if (usbDevice.vendorId == TOUPCAM_VENDOR_ID || usbDevice.vendorId == QHY_VENDOR_ID || usbDevice.vendorId == ZWO_VENDOR_ID)
+                    if (usbDevice.vendorId == TOUPCAM_VENDOR_ID || usbDevice.vendorId == QHY_VENDOR_ID ||
+                        usbDevice.vendorId == ZWO_VENDOR_ID || usbDevice.vendorId == PLAYERONE_VENDOR_ID)
                         enumerateDevices()
                 }
                 UsbManager.ACTION_USB_DEVICE_DETACHED -> {
                     val usbDevice = intent.getParcelableExtra<UsbDevice>("device") ?: return
-                    if (usbDevice.vendorId == TOUPCAM_VENDOR_ID || usbDevice.vendorId == QHY_VENDOR_ID || usbDevice.vendorId == ZWO_VENDOR_ID) {
+                    if (usbDevice.vendorId == TOUPCAM_VENDOR_ID || usbDevice.vendorId == QHY_VENDOR_ID ||
+                        usbDevice.vendorId == ZWO_VENDOR_ID || usbDevice.vendorId == PLAYERONE_VENDOR_ID) {
                         Log.i(TAG, "USB detached: VID=0x${usbDevice.vendorId.toString(16)}")
                         if (usbDevice.vendorId == TOUPCAM_VENDOR_ID &&
                             ToupcamJni.isFilterWheel(usbDevice.vendorId, usbDevice.productId)) {
@@ -127,6 +132,17 @@ class DahengCameraManager(
                                 closeCamera()
                             }
                             closeQhyUsbConnection()
+                            _connectionState.value = ConnectionState.Disconnected
+                        } else if (usbDevice.vendorId == PLAYERONE_VENDOR_ID) {
+                            // SDK already coordinates native cleanup on its own detach receiver.
+                            // Only clear UI / claim state — do not issue further USB I/O.
+                            val po = activeCamera as? PlayerOneCamera
+                            if (po != null) {
+                                po.markDisconnected()
+                                activeCamera = null
+                            } else {
+                                activeCamera = null
+                            }
                             _connectionState.value = ConnectionState.Disconnected
                         } else {
                             closeCamera()
@@ -343,6 +359,30 @@ class DahengCameraManager(
             Log.w(TAG, "ZWO USB enumeration failed: ${e.message}")
         }
 
+        // Enumerate Player One cameras via process-wide SdkHost (includes unauthorized)
+        try {
+            val enumerated = PlayerOneSdkHost.enumerate(context)
+            for (entry in enumerated) {
+                val props = entry.properties
+                val sn = props.serialNumber?.takeIf { it.isNotBlank() }
+                    ?: "PO-${props.cameraId}"
+                allDevices.add(DeviceEntry(
+                    index = allDevices.size,
+                    name = props.cameraModelName ?: "Player One Camera",
+                    serialNumber = sn,
+                    brand = CameraBrand.PLAYERONE,
+                    usbDevice = entry.androidDevice
+                ))
+                Log.i(
+                    TAG,
+                    "Found Player One: ${props.cameraModelName} SN=$sn " +
+                        "id=${props.cameraId} authorized=${entry.usb?.isAuthorized}"
+                )
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Player One enumeration failed: ${e.message}")
+        }
+
         if (allDevices.isNotEmpty()) {
             _devices.value = allDevices
         }
@@ -418,6 +458,10 @@ class DahengCameraManager(
                 requestZwoPermission(usbDev)
                 true
             }
+            CameraBrand.PLAYERONE -> {
+                requestPlayerOnePermission(entry.serialNumber)
+                true
+            }
         }
     }
 
@@ -441,6 +485,10 @@ class DahengCameraManager(
             CameraBrand.ZWO -> {
                 val usbDev = entry.usbDevice ?: return openZwoCamera(entry)
                 requestZwoPermission(usbDev)
+                true
+            }
+            CameraBrand.PLAYERONE -> {
+                requestPlayerOnePermission(sn)
                 true
             }
         }
@@ -840,6 +888,65 @@ class DahengCameraManager(
         try { zwoUsbConnection?.close() } catch (_: Throwable) {}
         zwoUsbConnection = null
         UsbHelper.clearUsbFds()
+    }
+
+    private fun requestPlayerOnePermission(serialNumber: String) {
+        if (activeCamera != null) closeCamera()
+        _connectionState.value = ConnectionState.Connecting
+
+        try {
+            PlayerOneSdkHost.ensureStarted(context)
+            val found = PlayerOneSdkHost.findDeviceBySerial(context, serialNumber)
+            if (found == null) {
+                _connectionState.value = ConnectionState.Error("Player One camera $serialNumber not found")
+                return
+            }
+            val usbDevice = found.usb
+            if (usbDevice == null) {
+                _connectionState.value = ConnectionState.Error(
+                    "Player One camera $serialNumber has no USB device to authorize"
+                )
+                return
+            }
+            val cameraId = found.properties.cameraId
+            PlayerOneSdkHost.requestPermission(usbDevice) { granted ->
+                if (!granted) {
+                    Log.w(TAG, "Player One USB permission denied for $serialNumber")
+                    _connectionState.value = ConnectionState.Error("USB permission denied")
+                    return@requestPermission
+                }
+                openPlayerOneDevice(cameraId, serialNumber)
+            }
+        } catch (e: Throwable) {
+            Log.e(TAG, "requestPlayerOnePermission failed: ${e.message}", e)
+            _connectionState.value = ConnectionState.Error("Player One open failed: ${e.message}")
+        }
+    }
+
+    private fun openPlayerOneDevice(cameraId: Int, serialNumber: String) {
+        // open/initialize must not run on main thread
+        Thread({
+            try {
+                val camera = PlayerOneCamera()
+                if (camera.open(cameraId)) {
+                    activeCamera = camera
+                    val info = camera.cameraInfo
+                    if (info != null) {
+                        _connectionState.value = ConnectionState.Connected(info)
+                        Log.i(TAG, "Player One connected: ${info.name} SN=${info.serialNumber}")
+                    } else {
+                        _connectionState.value = ConnectionState.Error("Player One opened without camera info")
+                    }
+                } else {
+                    _connectionState.value = ConnectionState.Error(
+                        "Failed to open Player One camera (SN=$serialNumber id=$cameraId)"
+                    )
+                }
+            } catch (e: Throwable) {
+                Log.e(TAG, "openPlayerOneDevice failed: ${e.message}", e)
+                _connectionState.value = ConnectionState.Error("Player One open failed: ${e.message}")
+            }
+        }, "PlayerOne-Open").start()
     }
 
     fun closeCamera() {

@@ -1,0 +1,899 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Player One Camera Android SDK API 文档</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #18212b;
+      --muted: #5b6672;
+      --line: #d7dde3;
+      --soft: #f5f7f8;
+      --code: #17212b;
+      --blue: #155f9a;
+      --green: #177245;
+      --amber-bg: #fff8e5;
+      --amber-line: #d99b19;
+      --red-bg: #fff1f0;
+      --red-line: #bc4b42;
+      --white: #ffffff;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--white);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC",
+        "Microsoft YaHei", sans-serif;
+      font-size: 15px;
+      line-height: 1.65;
+      letter-spacing: 0;
+    }
+
+    a { color: var(--blue); }
+
+    code, pre {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      letter-spacing: 0;
+    }
+
+    code {
+      padding: 0.12rem 0.32rem;
+      border-radius: 3px;
+      background: var(--soft);
+      font-size: 0.92em;
+    }
+
+    pre {
+      margin: 0.9rem 0 1.3rem;
+      padding: 1rem 1.1rem;
+      overflow-x: auto;
+      border-radius: 6px;
+      color: #f2f5f7;
+      background: var(--code);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    pre code {
+      padding: 0;
+      color: inherit;
+      background: transparent;
+      font-size: inherit;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 250px minmax(0, 920px);
+      justify-content: center;
+      min-height: 100vh;
+    }
+
+    .sidebar {
+      position: sticky;
+      top: 0;
+      align-self: start;
+      height: 100vh;
+      padding: 2rem 1.5rem;
+      overflow-y: auto;
+      border-right: 1px solid var(--line);
+      background: var(--soft);
+    }
+
+    .product {
+      margin: 0 0 0.35rem;
+      font-size: 17px;
+      font-weight: 700;
+    }
+
+    .release {
+      margin-bottom: 1.5rem;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    nav a {
+      display: block;
+      padding: 0.34rem 0;
+      color: #34404c;
+      text-decoration: none;
+    }
+
+    nav a:hover { color: var(--blue); }
+
+    main {
+      min-width: 0;
+      padding: 2.8rem 3.2rem 5rem;
+    }
+
+    h1, h2, h3 { line-height: 1.3; }
+
+    h1 {
+      margin: 0 0 0.75rem;
+      font-size: 32px;
+      font-weight: 720;
+    }
+
+    h2 {
+      margin: 3.2rem 0 1rem;
+      padding-bottom: 0.45rem;
+      border-bottom: 1px solid var(--line);
+      font-size: 23px;
+    }
+
+    h3 {
+      margin: 2rem 0 0.7rem;
+      font-size: 18px;
+    }
+
+    h4 {
+      margin: 1.4rem 0 0.45rem;
+      font-size: 15px;
+    }
+
+    p { margin: 0.55rem 0 1rem; }
+
+    ul, ol { padding-left: 1.35rem; }
+
+    li { margin: 0.3rem 0; }
+
+    .lede {
+      max-width: 760px;
+      margin-bottom: 1.25rem;
+      color: var(--muted);
+      font-size: 17px;
+    }
+
+    .badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin: 1rem 0 1.8rem;
+    }
+
+    .badge {
+      padding: 0.22rem 0.55rem;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      color: #34404c;
+      background: var(--soft);
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .note, .warning {
+      margin: 1.2rem 0;
+      padding: 0.85rem 1rem;
+      border-left: 4px solid var(--amber-line);
+      background: var(--amber-bg);
+    }
+
+    .warning {
+      border-left-color: var(--red-line);
+      background: var(--red-bg);
+    }
+
+    .note strong, .warning strong { display: block; }
+
+    .facts {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0;
+      margin: 1.2rem 0;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    .fact {
+      min-width: 0;
+      padding: 0.8rem 1rem;
+      border-right: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .fact:nth-child(2n) { border-right: 0; }
+    .fact:nth-last-child(-n + 2) { border-bottom: 0; }
+
+    .fact span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .signature {
+      margin-top: 1rem;
+      border-left: 3px solid var(--blue);
+    }
+
+    .api-block {
+      margin: 1.1rem 0 1.8rem;
+      padding-bottom: 1.35rem;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .api-block:last-child { border-bottom: 0; }
+
+    .meta {
+      margin: 0.65rem 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    table {
+      width: 100%;
+      margin: 1rem 0 1.4rem;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+
+    th, td {
+      padding: 0.65rem 0.75rem;
+      border: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th { background: var(--soft); }
+
+    .flow {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.45rem;
+      margin: 1.2rem 0;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 13px;
+    }
+
+    .flow-step {
+      padding: 0.45rem 0.6rem;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: var(--soft);
+    }
+
+    .flow-arrow { color: var(--muted); }
+
+    .ok { color: var(--green); font-weight: 650; }
+
+    footer {
+      margin-top: 4rem;
+      padding-top: 1.2rem;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    @media (max-width: 820px) {
+      .layout { display: block; }
+      .sidebar {
+        position: static;
+        width: 100%;
+        height: auto;
+        padding: 1.25rem 1.4rem;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+      nav {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        column-gap: 1rem;
+      }
+      main { padding: 2rem 1.3rem 4rem; }
+      h1 { font-size: 27px; }
+      .facts { grid-template-columns: 1fr; }
+      .fact, .fact:nth-child(2n), .fact:nth-last-child(-n + 2) {
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .fact:last-child { border-bottom: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="product">Player One Camera SDK</div>
+      <div class="release">Android Phase 3 API · 2026-08-06</div>
+      <nav aria-label="文档导航">
+        <a href="#overview">概览</a>
+        <a href="#integration">集成 AAR</a>
+        <a href="#lifecycle">生命周期</a>
+        <a href="#quickstart">Kotlin 快速开始</a>
+        <a href="#camera-sdk">完整相机接口</a>
+        <a href="#models">类型与模型</a>
+        <a href="#image-buffer">DirectByteBuffer</a>
+        <a href="#manager">PlayerOneUsbManager</a>
+        <a href="#device">UsbCameraDevice</a>
+        <a href="#exception">PoaException</a>
+        <a href="#errors">错误码</a>
+        <a href="#threading">线程与断开处理</a>
+        <a href="#troubleshooting">常见问题</a>
+        <a href="#distribution">交付文件</a>
+      </nav>
+    </aside>
+
+    <main>
+      <header>
+        <h1>Player One Camera Android SDK API</h1>
+        <p class="lede">
+          <code>playerone-camera-sdk-release.aar</code> 的应用层集成与公共 Java API 文档。
+          本文档对应 Android 移植 Phase 3，覆盖 USB 生命周期和现有 37 个 Player One Camera C 接口的类型化 Java 封装。
+        </p>
+        <div class="badges">
+          <span class="badge">minSdk 24</span>
+          <span class="badge">compileSdk 34</span>
+          <span class="badge">arm64-v8a</span>
+          <span class="badge">armeabi-v7a</span>
+          <span class="badge">USB Host</span>
+          <span class="badge">Phase 3</span>
+        </div>
+      </header>
+
+      <section id="overview">
+        <h2>概览</h2>
+        <div class="warning">
+          <strong>真机验证</strong>
+          当前 AAR 已包含现有 37 个 Player One Camera C 接口的 Java/JNI 等价入口、固定宽度 V2 配置接口和 DirectByteBuffer 图像读取。
+          Samsung Galaxy Tab S7+ / Android 10 和 Xiaomi 15 / Android 16 已使用多个相机通过 Phase 3 流程。Xiaomi 首次测试退出是 USB 供电不足所致，改用独立供电 USB Hub 后通过。
+        </div>
+
+        <div class="facts">
+          <div class="fact"><span>AAR 文件</span>playerone-camera-sdk-release.aar</div>
+          <div class="fact"><span>Java 包</span>com.playeroneastronomy.camera</div>
+          <div class="fact"><span>最低系统</span>Android 7.0 / API 24</div>
+          <div class="fact"><span>当前 ABI</span>arm64-v8a + armeabi-v7a</div>
+          <div class="fact"><span>USB Vendor ID</span>0xA0A0</div>
+          <div class="fact"><span>最大活动设备数</span>16</div>
+        </div>
+
+        <p>AAR 内已经包含：</p>
+        <ul>
+          <li><code>jni/arm64-v8a/libPlayerOneCamera.so</code></li>
+          <li><code>jni/arm64-v8a/libusb-1.0-po.so</code></li>
+          <li><code>jni/armeabi-v7a/libPlayerOneCamera.so</code></li>
+          <li><code>jni/armeabi-v7a/libusb-1.0-po.so</code></li>
+          <li>公共 Java 类和内部 JNI bridge</li>
+          <li>JNI 方法所需的 consumer ProGuard keep 规则</li>
+          <li><code>android.hardware.usb.host</code> manifest feature 声明</li>
+        </ul>
+        <p>
+          应用不需要单独打包上述 <code>.so</code>，也不需要直接调用 JNI 或管理 USB fd。
+          <code>libusb-1.0-po.so</code> 使用 Player One 专用 ELF SONAME，可与其他名称的 libusb 共存；不要使用 Gradle
+          <code>pickFirst</code> 覆盖任一厂商的 native library。
+        </p>
+      </section>
+
+      <section id="integration">
+        <h2>集成 AAR</h2>
+        <ol>
+          <li>将 <code>playerone-camera-sdk-release.aar</code> 放入应用模块的 <code>app/libs/</code>。</li>
+          <li>在应用模块的 Gradle 配置中添加本地 AAR 依赖。</li>
+          <li>宿主工程必须使用 <code>compileSdk 34</code> 或更高版本。</li>
+          <li>确保测试设备支持 USB Host，并且应用进程 ABI 为 <code>arm64-v8a</code> 或 <code>armeabi-v7a</code>。</li>
+        </ol>
+
+        <h3>Kotlin DSL</h3>
+        <pre><code>dependencies {
+    implementation(files("libs/playerone-camera-sdk-release.aar"))
+}</code></pre>
+
+        <h3>Groovy DSL</h3>
+        <pre><code>dependencies {
+    implementation files('libs/playerone-camera-sdk-release.aar')
+}</code></pre>
+
+        <div class="note">
+          <strong>USB 权限</strong>
+          不需要在 manifest 中声明普通运行时 USB 权限。应用通过 <code>UsbManager.requestPermission()</code>
+          触发系统 USB 授权对话框；该过程由 <code>PlayerOneUsbManager</code> 封装。
+        </div>
+      </section>
+
+      <section id="lifecycle">
+        <h2>生命周期</h2>
+        <div class="flow" aria-label="SDK 生命周期">
+          <span class="flow-step">创建 manager</span>
+          <span class="flow-arrow">→</span>
+          <span class="flow-step">refreshDevices</span>
+          <span class="flow-arrow">→</span>
+          <span class="flow-step">requestPermission</span>
+          <span class="flow-arrow">→</span>
+          <span class="flow-step">authorized</span>
+          <span class="flow-arrow">→</span>
+          <span class="flow-step">diagnostic</span>
+          <span class="flow-arrow">→</span>
+          <span class="flow-step">close</span>
+        </div>
+
+        <ol>
+          <li>通常在 Activity、Fragment 或业务组件启动时创建一个 <code>PlayerOneUsbManager</code>。</li>
+          <li>显式调用 <code>refreshDevices()</code> 建立当前 USB 设备快照。未授权的支持设备也会出现在结果中。</li>
+          <li>对目标设备调用 <code>requestPermission()</code>。只有 callback 的 <code>granted == true</code> 才表示系统授权和 native fd bind 都成功。</li>
+          <li>授权成功后，可在后台线程调用 <code>runSingleFrameDiagnostic()</code>。</li>
+          <li>组件销毁时调用 <code>close()</code>。关闭后不能再调用其他 manager 方法。</li>
+        </ol>
+
+        <p>
+          拔出设备时，SDK 接收 Android detach 广播，先注销 native registration、停止并关闭 native 相机状态，
+          然后关闭 Java 持有的 <code>UsbDeviceConnection</code>。重复 detach 和重复 <code>close()</code> 是幂等的。
+        </p>
+      </section>
+
+      <section id="quickstart">
+        <h2>Kotlin 快速开始</h2>
+        <pre><code>import android.app.Activity
+import android.os.Bundle
+import com.playeroneastronomy.camera.PlayerOneUsbManager
+import com.playeroneastronomy.camera.PoaException
+import com.playeroneastronomy.camera.UsbCameraDevice
+import java.util.concurrent.Executors
+
+class CameraActivity : Activity() {
+    private lateinit var usbManager: PlayerOneUsbManager
+    private val cameraExecutor = Executors.newSingleThreadExecutor()
+    private var cameras: List&lt;UsbCameraDevice&gt; = emptyList()
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        usbManager = PlayerOneUsbManager(this)
+        refreshCameras()
+    }
+
+    private fun refreshCameras() {
+        try {
+            cameras = usbManager.refreshDevices()
+            val camera = cameras.firstOrNull() ?: return
+
+            if (camera.isAuthorized) {
+                runDiagnostic(camera)
+            } else {
+                usbManager.requestPermission(camera) { authorizedCamera, granted -&gt;
+                    if (granted) {
+                        runDiagnostic(authorizedCamera)
+                    } else {
+                        // 用户拒绝，或 UsbDeviceConnection/native fd bind 失败。
+                    }
+                }
+            }
+        } catch (error: PoaException) {
+            handleSdkError(error.errorCode, error.message)
+        }
+    }
+
+    private fun runDiagnostic(camera: UsbCameraDevice) {
+        cameraExecutor.execute {
+            try {
+                usbManager.runSingleFrameDiagnostic(camera)
+                runOnUiThread {
+                    // open/init/control/bulk/stop/close 全部成功。
+                }
+            } catch (error: PoaException) {
+                runOnUiThread {
+                    handleSdkError(error.errorCode, error.message)
+                }
+            }
+        }
+    }
+
+    private fun handleSdkError(code: Int, message: String?) {
+        // 记录 code 和 message；不要只根据 message 做业务判断。
+    }
+
+    override fun onDestroy() {
+        usbManager.close()
+        cameraExecutor.shutdown()
+        super.onDestroy()
+    }
+}</code></pre>
+
+        <div class="note">
+          <strong>不要阻塞主线程</strong>
+          <code>runSingleFrameDiagnostic()</code> 是同步阻塞调用，包含曝光等待和 bulk image read，必须放在工作线程执行。
+          <code>refreshDevices()</code> 和权限请求建议从主线程发起。
+        </div>
+      </section>
+
+      <section id="camera-sdk">
+        <h2>完整相机接口</h2>
+        <p>
+          USB 授权成功后，通过 <code>PlayerOneCameraSdk</code> 枚举相机，再用
+          <code>PlayerOneCamera</code> 完成控制。Java 层不复制 native 状态机；所有返回码统一转换为
+          <code>PoaException</code>，其 <code>getError()</code> 返回类型化 <code>PoaError</code>。
+        </p>
+
+        <h3>完整单帧示例</h3>
+        <pre><code>val camera = PlayerOneCameraSdk.getCamera(0)
+camera.open()
+try {
+    camera.initialize()
+    camera.imageFormat = PoaImageFormat.RAW8
+
+    val size = camera.imageSize
+    val bytes = size.requiredBytes(PoaImageFormat.RAW8)
+    require(bytes &lt;= Int.MAX_VALUE)
+    val image = ByteBuffer.allocateDirect(bytes.toInt())
+
+    camera.startExposure(true)
+    try {
+        while (!camera.isImageReady) Thread.sleep(10)
+        camera.getImageData(image, 5000)
+    } finally {
+        camera.stopExposure()
+    }
+} catch (error: PoaException) {
+    Log.e("Camera", "${error.error}: ${error.message}", error)
+} finally {
+    camera.close()
+}</code></pre>
+        <div class="warning">
+          <strong>工作线程要求</strong>
+          <code>getImageData()</code> 会阻塞，曝光轮询和取图必须在工作线程执行。不要在主线程执行上述单帧流程。
+        </div>
+
+        <h3>PlayerOneCameraSdk</h3>
+        <table>
+          <thead><tr><th>方法</th><th>说明</th><th>C 等价入口</th></tr></thead>
+          <tbody>
+            <tr><td><code>static int getCameraCount()</code></td><td>返回当前 native registry 中的相机数。</td><td><code>POAGetCameraCount</code></td></tr>
+            <tr><td><code>static CameraProperties getCameraProperties(int index)</code></td><td>按枚举索引读取完整属性。</td><td><code>POAGetCameraProperties</code></td></tr>
+            <tr><td><code>static PlayerOneCamera getCamera(int index)</code></td><td>按枚举索引创建相机句柄。</td><td>属性中的 camera ID</td></tr>
+            <tr><td><code>static PlayerOneCamera getCameraById(int cameraId)</code></td><td>验证 ID 后创建相机句柄。</td><td><code>POAGetCameraPropertiesByID</code></td></tr>
+            <tr><td><code>static List&lt;PlayerOneCamera&gt; getCameras()</code></td><td>返回不可修改的当前相机列表。</td><td>count + properties</td></tr>
+            <tr><td><code>static int getApiVersion()</code></td><td>返回可比较的 native API 版本整数。</td><td><code>POAGetAPIVersion</code></td></tr>
+            <tr><td><code>static String getSdkVersion()</code></td><td>返回 native SDK 版本字符串。</td><td><code>POAGetSDKVersion</code></td></tr>
+            <tr><td><code>static String getErrorDescription(PoaError error)</code></td><td>返回 native 错误说明。</td><td><code>POAGetErrorString</code></td></tr>
+          </tbody>
+        </table>
+
+        <h3>PlayerOneCamera</h3>
+        <p>对象保存 camera ID，不拥有 USB fd。USB connection 生命周期仍由 <code>PlayerOneUsbManager</code> 管理。</p>
+        <table>
+          <thead><tr><th>方法</th><th>返回/行为</th><th>C 等价入口</th></tr></thead>
+          <tbody>
+            <tr><td><code>int getCameraId()</code></td><td>本次 attach 会话中的 camera ID。</td><td>属性字段</td></tr>
+            <tr><td><code>CameraProperties getProperties()</code></td><td>按 ID 读取属性。</td><td><code>POAGetCameraPropertiesByID</code></td></tr>
+            <tr><td><code>void open()</code></td><td>打开已授权相机。</td><td><code>POAOpenCamera</code></td></tr>
+            <tr><td><code>void initialize()</code></td><td>初始化硬件和图像缓冲。</td><td><code>POAInitCamera</code></td></tr>
+            <tr><td><code>void close()</code></td><td>关闭 native 相机；实现 <code>AutoCloseable</code>。</td><td><code>POACloseCamera</code></td></tr>
+            <tr><td><code>int getConfigCount()</code></td><td>返回当前相机支持的配置数量。</td><td><code>POAGetConfigsCount</code></td></tr>
+            <tr><td><code>ConfigAttributes getConfigAttributes(int index)</code></td><td>按索引读取配置元数据。</td><td><code>POAGetConfigAttributesV2</code></td></tr>
+            <tr><td><code>ConfigAttributes getConfigAttributes(PoaConfig config)</code></td><td>按类型化配置 ID 读取元数据。</td><td><code>POAGetConfigAttributesByConfigIDV2</code></td></tr>
+            <tr><td><code>void setConfig(PoaConfig, ConfigValue, boolean auto)</code></td><td>值类型必须与配置匹配。</td><td><code>POASetConfigV2</code>；同时覆盖 <code>POASetConfig_M</code></td></tr>
+            <tr><td><code>ConfigResult getConfig(PoaConfig)</code></td><td>返回类型化值和 auto 标志。</td><td><code>POAGetConfigV2</code></td></tr>
+            <tr><td><code>ImagePosition getImageStartPosition()</code></td><td>读取 ROI 原点。</td><td><code>POAGetImageStartPos</code></td></tr>
+            <tr><td><code>void setImageStartPosition(int x, int y)</code></td><td>设置 ROI 原点。</td><td><code>POASetImageStartPos</code></td></tr>
+            <tr><td><code>ImageSize getImageSize()</code></td><td>读取 ROI 尺寸。</td><td><code>POAGetImageSize</code></td></tr>
+            <tr><td><code>void setImageSize(int width, int height)</code></td><td>设置 ROI 尺寸。</td><td><code>POASetImageSize</code></td></tr>
+            <tr><td><code>int getImageBin()</code> / <code>setImageBin(int)</code></td><td>读取或设置 bin。</td><td><code>POAGetImageBin</code> / <code>POASetImageBin</code></td></tr>
+            <tr><td><code>PoaImageFormat getImageFormat()</code> / <code>setImageFormat(...)</code></td><td>读取或设置像素格式。</td><td><code>POAGetImageFormat</code> / <code>POASetImageFormat</code></td></tr>
+            <tr><td><code>void startExposure(boolean singleFrame)</code></td><td><code>true</code> 单帧，<code>false</code> 连续。</td><td><code>POAStartExposure</code></td></tr>
+            <tr><td><code>void stopExposure()</code></td><td>停止曝光和传输。</td><td><code>POAStopExposure</code></td></tr>
+            <tr><td><code>PoaCameraState getState()</code></td><td>关闭、已打开或曝光中。</td><td><code>POAGetCameraState</code></td></tr>
+            <tr><td><code>boolean isImageReady()</code></td><td>完整一帧是否可读。</td><td><code>POAImageReady</code></td></tr>
+            <tr><td><code>void getImageData(ByteBuffer direct, int timeoutMs)</code></td><td>零 Java 数组复制地写入 direct buffer。</td><td><code>POAGetImageDataV2</code></td></tr>
+            <tr><td><code>int getDroppedImageCount()</code></td><td>读取丢帧计数。</td><td><code>POAGetDroppedImagesCount</code></td></tr>
+            <tr><td><code>int getSensorModeCount()</code></td><td>读取 Sensor Mode 数量。</td><td><code>POAGetSensorModeCount</code></td></tr>
+            <tr><td><code>SensorModeInfo getSensorModeInfo(int)</code></td><td>读取名称和说明。</td><td><code>POAGetSensorModeInfo</code></td></tr>
+            <tr><td><code>void setSensorMode(int)</code> / <code>int getSensorMode()</code></td><td>设置或读取 Sensor Mode。</td><td><code>POASetSensorMode</code> / <code>POAGetSensorMode</code></td></tr>
+            <tr><td><code>void setUserCustomId(String)</code></td><td>写入自定义 ID；native 最多使用 16 bytes，null/空字符串清除。</td><td><code>POASetUserCustomID</code></td></tr>
+            <tr><td><code>@Deprecated LegacyGainOffset getGainOffset()</code></td><td>旧版 gain/offset 预设。</td><td><code>POAGetGainOffset</code></td></tr>
+            <tr><td><code>GainOffsetPreset getGainsAndOffsets()</code></td><td>完整 gain/offset 预设。</td><td><code>POAGetGainsAndOffsets</code></td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="models">
+        <h2>类型与模型</h2>
+        <table>
+          <thead><tr><th>类型</th><th>用途</th></tr></thead>
+          <tbody>
+            <tr><td><code>PoaConfig</code></td><td>32 个原生配置 ID；<code>getValueType()</code> 返回 INTEGER、FLOAT 或 BOOLEAN。</td></tr>
+            <tr><td><code>ConfigValue</code></td><td>不可变 tagged value。使用 <code>ofInteger</code>、<code>ofFloat</code>、<code>ofBoolean</code> 创建；错误类型访问抛出 <code>IllegalStateException</code>。</td></tr>
+            <tr><td><code>ConfigResult</code></td><td>一次配置读取的 <code>ConfigValue</code> 和 auto 标志。</td></tr>
+            <tr><td><code>ConfigAttributes</code></td><td>读写/auto 能力、范围、默认值、名称和说明。</td></tr>
+            <tr><td><code>CameraProperties</code></td><td>型号、SN、sensor、尺寸、bit depth、pixel size、bin、格式、Bayer、冷却/ST4/USB3 能力及 PID。</td></tr>
+            <tr><td><code>PoaImageFormat</code></td><td><code>RAW8</code>、<code>RAW16</code>、<code>RGB24</code>、<code>MONO8</code>；提供每像素字节数。</td></tr>
+            <tr><td><code>ImageSize</code></td><td>宽高及 <code>requiredBytes(format)</code> 溢出检查。</td></tr>
+            <tr><td><code>ImagePosition</code></td><td>ROI 的 x/y 原点。</td></tr>
+            <tr><td><code>PoaCameraState</code></td><td><code>CLOSED</code>、<code>OPENED</code>、<code>EXPOSING</code>。</td></tr>
+            <tr><td><code>PoaBayerPattern</code></td><td><code>RG</code>、<code>BG</code>、<code>GR</code>、<code>GB</code>、<code>MONO</code>。</td></tr>
+            <tr><td><code>SensorModeInfo</code></td><td>Sensor Mode 名称和说明。</td></tr>
+            <tr><td><code>LegacyGainOffset</code> / <code>GainOffsetPreset</code></td><td>旧版与完整 gain/offset 预设模型。</td></tr>
+          </tbody>
+        </table>
+
+        <h3>PoaError 与 PoaException</h3>
+        <p>
+          <code>PoaError</code> 完整覆盖 0 到 17：OK、INVALID_INDEX、INVALID_ID、INVALID_CONFIG、
+          INVALID_ARGUMENT、NOT_OPENED、DEVICE_NOT_FOUND、OUT_OF_LIMIT、EXPOSURE_FAILED、TIMEOUT、
+          SIZE_LESS、EXPOSING、POINTER、CONFIG_CANNOT_WRITE、CONFIG_CANNOT_READ、ACCESS_DENIED、
+          OPERATION_FAILED、MEMORY_FAILED。捕获异常后优先判断 <code>error.getError()</code>，不要解析消息文本。
+        </p>
+      </section>
+
+      <section id="image-buffer">
+        <h2>DirectByteBuffer 约束</h2>
+        <ul>
+          <li>必须使用 <code>ByteBuffer.allocateDirect(requiredBytes)</code>；heap buffer 立即抛出 <code>IllegalArgumentException</code>。</li>
+          <li>所需容量为 <code>width * height * bytesPerPixel</code>；容量不足返回 <code>PoaError.SIZE_LESS</code>。</li>
+          <li><code>timeoutMs == -1</code> 表示无限等待，其他值必须非负。</li>
+          <li>native 调用期间保留 buffer 强引用，不要在另一线程并发读写或复用同一 buffer。</li>
+          <li>连续采集建议复用 2 到 3 个 direct buffer，避免每帧分配和 GC 抖动。</li>
+          <li>JNI 写入从 buffer 基地址开始；调用前请按完整容量分配，不依赖 position/limit 作为 native 偏移。</li>
+        </ul>
+      </section>
+
+      <section id="manager">
+        <h2>PlayerOneUsbManager</h2>
+        <p><code>com.playeroneastronomy.camera.PlayerOneUsbManager</code></p>
+        <p>
+          Android USB Host 生命周期入口。负责扫描支持的 Player One 设备、申请权限、保持
+          <code>UsbDeviceConnection</code> 强引用、绑定 fd、响应 detach，并按正确顺序释放 native 与 Java 资源。
+        </p>
+
+        <div class="api-block">
+          <h3>构造函数</h3>
+          <pre class="signature"><code>public PlayerOneUsbManager(Context context)</code></pre>
+          <p>使用 application context 获取系统 <code>UsbManager</code>，并注册权限结果与 USB detach receiver。</p>
+          <table>
+            <tr><th>参数</th><th>说明</th></tr>
+            <tr><td><code>context</code></td><td>任意有效 Android Context；SDK 内部保存其 application context。</td></tr>
+          </table>
+          <p class="meta">异常：USB Host service 不可用时抛出 <code>IllegalStateException</code>。</p>
+        </div>
+
+        <div class="api-block">
+          <h3>refreshDevices</h3>
+          <pre class="signature"><code>public synchronized List&lt;UsbCameraDevice&gt; refreshDevices()</code></pre>
+          <p>
+            读取 <code>UsbManager.getDeviceList()</code>，注册所有 VID/PID 受支持的 Player One 相机，
+            清理已经断开的记录，并刷新 native camera count。
+          </p>
+          <ul>
+            <li>返回不可修改的列表快照。</li>
+            <li>未授权设备也包含在列表及 native count 中。</li>
+            <li>同一次连接重复 refresh 保持相同 registration ID。</li>
+            <li>非 Player One VID 或不支持的 PID 被忽略。</li>
+            <li>建议在第一次查询 count 或请求权限前调用。</li>
+          </ul>
+          <p class="meta">关闭 manager 后调用会抛出 <code>IllegalStateException</code>。</p>
+        </div>
+
+        <div class="api-block">
+          <h3>requestPermission</h3>
+          <pre class="signature"><code>public synchronized void requestPermission(
+    UsbCameraDevice device,
+    PlayerOneUsbManager.PermissionCallback callback)</code></pre>
+          <p>请求 Android USB 权限；授权后打开 <code>UsbDeviceConnection</code> 并将 fd 绑定到 native registration。</p>
+          <table>
+            <tr><th>参数</th><th>说明</th></tr>
+            <tr><td><code>device</code></td><td>当前 manager 的最近一次 <code>refreshDevices()</code> 返回的设备。</td></tr>
+            <tr><td><code>callback</code></td><td>权限与 fd bind 的最终结果。必须传入非 null callback。</td></tr>
+          </table>
+          <div class="note">
+            <strong>Callback 可能同步执行</strong>
+            如果 Android 已经授予该设备权限，callback 会在 <code>requestPermission()</code> 返回前执行；否则在系统权限广播到达后执行。
+            调用方必须兼容两种情况。
+          </div>
+          <p>
+            <code>granted == true</code> 表示系统权限、<code>UsbDeviceConnection</code> 打开和 native fd bind 均成功。
+            <code>false</code> 表示用户拒绝或授权后的打开/bind 失败。
+          </p>
+          <p class="meta">
+            设备已失效时抛出 <code>IllegalArgumentException</code>；manager 已关闭时抛出 <code>IllegalStateException</code>。
+          </p>
+        </div>
+
+        <div class="api-block">
+          <h3>PermissionCallback</h3>
+          <pre class="signature"><code>public interface PermissionCallback {
+    void onResult(UsbCameraDevice device, boolean granted);
+}</code></pre>
+          <p>单方法接口，可直接使用 Kotlin lambda 或 Java lambda。</p>
+        </div>
+
+        <div class="api-block">
+          <h3>getCameraCount</h3>
+          <pre class="signature"><code>public synchronized int getCameraCount()</code></pre>
+          <p>返回 native registry 当前可见的 Player One 相机数量。计数包含尚未授权的相机。</p>
+          <p class="meta">建议先调用 <code>refreshDevices()</code>；manager 已关闭时抛出 <code>IllegalStateException</code>。</p>
+        </div>
+
+        <div class="api-block">
+          <h3>runSingleFrameDiagnostic</h3>
+          <pre class="signature"><code>public void runSingleFrameDiagnostic(UsbCameraDevice device)</code></pre>
+          <p>执行同步单帧诊断：</p>
+          <ol>
+            <li>刷新并解析 camera ID；</li>
+            <li>open 和 init；</li>
+            <li>设置 RAW8；</li>
+            <li>启动单次曝光并等待图像就绪；</li>
+            <li>读取完整单帧 bulk 数据；</li>
+            <li>stop 和 close。</li>
+          </ol>
+          <p>成功时无返回值；任一步失败时抛出 <code>PoaException</code>。</p>
+          <p class="meta">阻塞调用，必须在工作线程执行。未授权时抛出错误码 15。</p>
+        </div>
+
+        <div class="api-block">
+          <h3>close</h3>
+          <pre class="signature"><code>@Override
+public synchronized void close()</code></pre>
+          <p>
+            注销 receiver 和所有 native registration，并在 native 清理完成后关闭 Java
+            <code>UsbDeviceConnection</code>。重复调用安全且无效果。
+          </p>
+          <p class="meta">关闭后，除重复 <code>close()</code> 外，其他 manager 方法不可再调用。</p>
+        </div>
+      </section>
+
+      <section id="device">
+        <h2>UsbCameraDevice</h2>
+        <p><code>com.playeroneastronomy.camera.UsbCameraDevice</code></p>
+        <p>一个已连接且受支持的 Player One USB 设备。对象由 <code>PlayerOneUsbManager</code> 创建，应用不能直接构造。</p>
+
+        <table>
+          <thead>
+            <tr><th>方法</th><th>返回值与语义</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>String getDeviceName()</code></td>
+              <td>Android USB device path，例如 <code>/dev/bus/usb/001/002</code>。只用于本次连接。</td>
+            </tr>
+            <tr>
+              <td><code>int getVendorId()</code></td>
+              <td>USB Vendor ID；Player One 设备通常为 <code>0xA0A0</code>。</td>
+            </tr>
+            <tr>
+              <td><code>int getProductId()</code></td>
+              <td>USB Product ID；例如 Uranus-C 为 <code>0x5850</code>。</td>
+            </tr>
+            <tr>
+              <td><code>int getRegistrationId()</code></td>
+              <td>native registry 为本次连接分配的正整数身份。授权前后保持不变；detach/reconnect 后会变化。</td>
+            </tr>
+            <tr>
+              <td><code>boolean isAuthorized()</code></td>
+              <td>只有 Android 权限和 native fd bind 都成功时才为 <code>true</code>。</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="warning">
+          <strong>不要持久化设备身份</strong>
+          <code>deviceName</code>、Android device ID 和 <code>registrationId</code> 都不是相机序列号。
+          它们只能标识当前 USB attach 会话，不能写入数据库作为永久相机身份。
+        </div>
+      </section>
+
+      <section id="exception">
+        <h2>PoaException</h2>
+        <p><code>com.playeroneastronomy.camera.PoaException</code></p>
+        <pre class="signature"><code>public final class PoaException extends RuntimeException</code></pre>
+
+        <div class="api-block">
+          <h3>构造函数</h3>
+          <pre class="signature"><code>public PoaException(int errorCode, String operation)</code></pre>
+          <p>主要供 SDK 内部将 native 错误转换为 Java runtime exception；应用通常只需要捕获它。</p>
+        </div>
+
+        <div class="api-block">
+          <h3>getErrorCode</h3>
+          <pre class="signature"><code>public int getErrorCode()</code></pre>
+          <p>返回稳定的 Player One SDK 数字错误码。业务逻辑应判断错误码，不应解析 exception message。</p>
+        </div>
+      </section>
+
+      <section id="errors">
+        <h2>相关错误码</h2>
+        <table>
+          <thead>
+            <tr><th>代码</th><th>C 枚举</th><th>应用层含义</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>0</td><td><code>POA_OK</code></td><td>操作成功；不会抛出异常。</td></tr>
+            <tr><td>4</td><td><code>POA_ERROR_INVALID_ARGU</code></td><td>参数或 USB VID/PID 无效。扫描时不支持的设备会被忽略。</td></tr>
+            <tr><td>6</td><td><code>POA_ERROR_DEVICE_NOT_FOUND</code></td><td>registration 或相机已失效，通常表示设备已经断开。</td></tr>
+            <tr><td>7</td><td><code>POA_ERROR_OUT_OF_LIMIT</code></td><td>超过 16 个活动 registration，或诊断图像尺寸超出限制。</td></tr>
+            <tr><td>9</td><td><code>POA_ERROR_TIMEOUT</code></td><td>曝光等待或图像读取超时。</td></tr>
+            <tr><td>15</td><td><code>POA_ERROR_ACCESS_DENIED</code></td><td>设备尚未授权，或尝试为同一 registration 替换不同 fd。</td></tr>
+            <tr><td>16</td><td><code>POA_ERROR_OPERATION_FAILED</code></td><td>USB 打开、初始化或相机操作失败。</td></tr>
+            <tr><td>17</td><td><code>POA_ERROR_MEMORY_FAILED</code></td><td>native 或 JNI 内存分配失败。</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="threading">
+        <h2>线程与断开处理</h2>
+        <ul>
+          <li>在主线程创建和关闭 <code>PlayerOneUsbManager</code>，并从主线程发起 refresh 与权限申请。</li>
+          <li>权限 callback 通常由 Android 广播线程（主线程）调用；已有权限时可能在调用线程同步执行。</li>
+          <li><code>runSingleFrameDiagnostic()</code> 必须在专用工作线程执行。</li>
+          <li>不要在 diagnostic 进行中主动调用 <code>close()</code>；真机 detach 会由 SDK 协调清理。</li>
+          <li>detach 后旧 <code>UsbCameraDevice</code> 立即失效。重新连接后必须再次 refresh，并使用返回的新对象。</li>
+          <li>不要自行关闭或复制 SDK 内部持有的 USB fd。</li>
+        </ul>
+      </section>
+
+      <section id="troubleshooting">
+        <h2>常见问题</h2>
+        <table>
+          <thead>
+            <tr><th>现象</th><th>检查项</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>PlayerOneUsbManager</code> 是否必须全进程单例？主相机和导星相机是否需要各自的 manager？</td>
+              <td>
+                API 不强制使用静态单例，但当前 native registry 是进程级全局状态，而每个 manager 分别持有自己的
+                USB connection、权限 callback 和广播接收器。因此同一进程应共享一个长期存在的
+                <code>PlayerOneUsbManager</code>，不要为每台相机、Activity 或 Fragment 分别创建实例。一个 manager
+                可以同时枚举、授权并维护主相机和导星相机；不同 USB 设备会使用不同 registration ID 和 fd。多个
+                manager 操作同一设备时会获得相同 registration ID，但可能尝试绑定不同 fd，或者在其中一个 manager
+                关闭时注销另一个仍在使用的全局 registration。
+              </td>
+            </tr>
+            <tr>
+              <td><code>refreshDevices()</code> 返回空列表</td>
+              <td>确认手机支持 USB Host、Hub 已独立供电、VID 为 0xA0A0、PID 受支持，并重新插拔后 refresh。</td>
+            </tr>
+            <tr>
+              <td>权限 callback 返回 <code>false</code></td>
+              <td>用户可能拒绝授权；也可能是 <code>UsbManager.openDevice()</code> 或 native fd bind 失败。</td>
+            </tr>
+            <tr>
+              <td>错误码 15</td>
+              <td>
+                错误码 15 是 <code>ACCESS_DENIED</code>。未授权设备执行 diagnostic 会返回该错误；同一 registration ID
+                已绑定一个 fd 后，再绑定另一个 fd 也会返回该错误。重复注册同一设备会返回原 registration ID，重复绑定
+                同一个 fd 则是幂等成功。请确认只在权限 callback 返回 <code>true</code> 后操作设备，并确保进程内共享同一个
+                <code>PlayerOneUsbManager</code>。
+              </td>
+            </tr>
+            <tr>
+              <td>运行 diagnostic 时 APP 退出或 USB 连接中断</td>
+              <td>优先检查 USB 供电和线材；使用独立供电 USB 3 Hub 后复测。Xiaomi 15 / Android 16 的首次退出由供电环境导致。</td>
+            </tr>
+            <tr>
+              <td><code>UnsatisfiedLinkError</code></td>
+              <td>确认 APP 进程 ABI 为 arm64-v8a 或 armeabi-v7a，AAR 未被错误解包，并且对应 ABI 目录内同时包含两个 native library。</td>
+            </tr>
+            <tr>
+              <td><code>PlayerOneUsbManager is closed</code></td>
+              <td>不要复用已经 close 的 manager。由应用级 USB owner 创建并共享新的 manager，不要由每个 UI 组件分别持有实例。</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="distribution">
+        <h2>建议交付文件</h2>
+        <table>
+          <thead>
+            <tr><th>文件</th><th>用途</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>playerone-camera-sdk-release.aar</code></td><td>集成到 Android App。</td></tr>
+            <tr><td><code>PLAYERONE_CAMERA_SDK_API.html</code></td><td>本文档，可直接在浏览器打开。</td></tr>
+            <tr><td><code>sample-debug.apk</code></td><td>无需集成即可执行 Phase 3 公开接口真机诊断。</td></tr>
+            <tr><td><code>MainActivity.kt</code></td><td>仓库中的完整调用参考，可选。</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <footer>
+        Player One Camera Android SDK · Phase 3 API documentation · Generated from the public API source on 2026-08-06.
+      </footer>
+    </main>
+  </div>
+</body>
+</html>

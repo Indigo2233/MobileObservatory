@@ -10,17 +10,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.log10
 import kotlin.math.pow
 
-data class CoolingInfo(
-    val hasTec: Boolean,
-    val canSetTarget: Boolean,
-    val targetMinTenths: Int,
-    val targetMaxTenths: Int,
-    val tecVoltageMaxTenths: Int = 0
-)
-
-data class TempHistoryPoint(val timestampMs: Long, val sensorTenths: Int, val powerPct: Float)
-
-class ToupcamCamera : Camera, NativeEventCallback {
+class ToupcamCamera : Camera, NativeEventCallback, CoolingCapable {
 
     companion object {
         private const val TAG = "ToupcamCamera"
@@ -85,28 +75,28 @@ class ToupcamCamera : Camera, NativeEventCallback {
 
     // Cooling / TEC
     private val _coolingInfo = MutableStateFlow<CoolingInfo?>(null)
-    val coolingInfo: StateFlow<CoolingInfo?> = _coolingInfo.asStateFlow()
+    override val coolingInfo: StateFlow<CoolingInfo?> = _coolingInfo.asStateFlow()
 
     private val _coolerOn = MutableStateFlow(false)
-    val coolerOn: StateFlow<Boolean> = _coolerOn.asStateFlow()
+    override val coolerOn: StateFlow<Boolean> = _coolerOn.asStateFlow()
 
     private val _targetTempTenths = MutableStateFlow(0)
-    val targetTempTenths: StateFlow<Int> = _targetTempTenths.asStateFlow()
+    override val targetTempTenths: StateFlow<Int> = _targetTempTenths.asStateFlow()
 
     private val _sensorTempTenths = MutableStateFlow(0)
-    val sensorTempTenths: StateFlow<Int> = _sensorTempTenths.asStateFlow()
+    override val sensorTempTenths: StateFlow<Int> = _sensorTempTenths.asStateFlow()
 
     private val _tecVoltageTenths = MutableStateFlow(0)
-    val tecVoltageTenths: StateFlow<Int> = _tecVoltageTenths.asStateFlow()
+    override val tecVoltageTenths: StateFlow<Int> = _tecVoltageTenths.asStateFlow()
 
     private val _coolingPowerPct = MutableStateFlow(0f)
-    val coolingPowerPct: StateFlow<Float> = _coolingPowerPct.asStateFlow()
+    override val coolingPowerPct: StateFlow<Float> = _coolingPowerPct.asStateFlow()
 
     private val _tempHistory = MutableStateFlow<List<TempHistoryPoint>>(emptyList())
-    val tempHistory: StateFlow<List<TempHistoryPoint>> = _tempHistory.asStateFlow()
+    override val tempHistory: StateFlow<List<TempHistoryPoint>> = _tempHistory.asStateFlow()
 
     private val _rampStatus = MutableStateFlow("")
-    val rampStatus: StateFlow<String> = _rampStatus.asStateFlow()
+    override val rampStatus: StateFlow<String> = _rampStatus.asStateFlow()
 
     private var tempPollThread: Thread? = null
     private val tempPollRunning = AtomicBoolean(false)
@@ -686,7 +676,7 @@ class ToupcamCamera : Camera, NativeEventCallback {
         Log.i(TAG, "Cooling init done: hasTec=$hasTec canSetTarget=$canSetTarget range=[${targetMin/10.0}..${targetMax/10.0}]C tecVMax=${tecVoltageMax/10.0}V")
     }
 
-    fun setCoolerOn(on: Boolean) {
+    override fun setCoolerOn(on: Boolean) {
         val ci = _coolingInfo.value ?: return
         if (!ci.canSetTarget) return
         if (ToupcamJni.putOption(ToupcamJni.OPTION_TEC, if (on) 1 else 0)) {
@@ -695,7 +685,7 @@ class ToupcamCamera : Camera, NativeEventCallback {
         }
     }
 
-    fun setTargetTemperature(tenthsDegC: Int) {
+    override fun setTargetTemperature(tenthsDegC: Int) {
         val ci = _coolingInfo.value ?: return
         if (!ci.canSetTarget) return
         val clamped = tenthsDegC.coerceIn(ci.targetMinTenths, ci.targetMaxTenths)
@@ -709,7 +699,7 @@ class ToupcamCamera : Camera, NativeEventCallback {
      * Gradually cool down from current sensor temp to [targetTenths] over [durationMinutes].
      * Steps linearly, updating the TEC target every few seconds.
      */
-    fun startCoolDown(targetTenths: Int, durationMinutes: Int) {
+    override fun startCoolDown(targetTenths: Int, durationMinutes: Int) {
         stopRamp()
         val ci = _coolingInfo.value ?: return
         if (!ci.canSetTarget) return
@@ -756,7 +746,7 @@ class ToupcamCamera : Camera, NativeEventCallback {
      * Gradually warm up from current sensor temp to ambient over [durationMinutes],
      * then turn off TEC.
      */
-    fun startWarmUp(durationMinutes: Int) {
+    override fun startWarmUp(durationMinutes: Int) {
         stopRamp()
         val ci = _coolingInfo.value ?: return
         if (!ci.canSetTarget) return
@@ -795,7 +785,7 @@ class ToupcamCamera : Camera, NativeEventCallback {
         }, "TEC-Warmup").apply { isDaemon = true; start() }
     }
 
-    fun stopRamp() {
+    override fun stopRamp() {
         rampRunning.set(false)
         rampThread?.interrupt()
         rampThread?.join(3000)

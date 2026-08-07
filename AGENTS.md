@@ -31,6 +31,19 @@ workaround (`libusb_set_android_fd`) lives in
 `git apply`, so Linux CI works without PowerShell) before native builds.
 After a clean `git submodule update`, the first build re-applies the patch.
 
+### Frozen prebuilt libraries
+
+`app/src/main/jniLibs/arm64-v8a/libusb-1.0.so` is a community-built custom libusb
+carrying private APIs (`libusb_wrap_fd`) that ZWO's `libASICamera2.so` links
+against. ZWO no longer updates its Android SDK, so **never upgrade, replace or
+rebuild that file** — there is no upstream equivalent and no way back.
+
+Three libusb copies coexist in the APK, isolated only by distinct SONAMEs
+(`libusb-1.0.so` for ZWO, `libusb1.0.so` for QHY, `libusb-1.0-po.so` for Player
+One). After upgrading any vendor SDK, re-verify the SONAMEs do not collide
+(`llvm-readelf -d`). Never paper over such a collision with
+`packaging.jniLibs.pickFirsts`. See `app/src/main/jniLibs/README.md`.
+
 ## Native package changes
 
 The camera JNI functions use package-qualified exported names. Any future Android
