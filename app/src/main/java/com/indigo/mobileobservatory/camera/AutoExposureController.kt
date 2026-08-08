@@ -19,7 +19,7 @@ class AutoExposureController {
         settleCount = 0
     }
 
-    fun processFrame(frame: FrameData, camera: Camera) {
+    fun processFrame(frame: FrameData, camera: Camera, exposureMaxUs: Float = camera.exposureRange.max) {
         if (mode == AutoExposureMode.OFF) return
         if (mode == AutoExposureMode.SINGLE_SHOT && singleShotDone) return
 
@@ -47,14 +47,15 @@ class AutoExposureController {
 
         if (adjustExposure) {
             val currentExp = camera.currentExposureUs
+            val maxUs = exposureMaxUs.coerceAtLeast(camera.exposureRange.min)
             val newExp = (currentExp * dampedRatio)
-                .coerceIn(camera.exposureRange.min, camera.exposureRange.max)
+                .coerceIn(camera.exposureRange.min, maxUs)
 
             if (newExp != currentExp) {
                 camera.setExposureTime(newExp)
 
                 val atExpLimit = (newExp <= camera.exposureRange.min * 1.01f && ratio < 1f) ||
-                        (newExp >= camera.exposureRange.max * 0.99f && ratio > 1f)
+                        (newExp >= maxUs * 0.99f && ratio > 1f)
                 if (adjustGain && atExpLimit) {
                     adjustGainStep(camera, ratio)
                 }

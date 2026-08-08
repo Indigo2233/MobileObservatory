@@ -51,6 +51,7 @@ fun CameraScreen(
     var showPlateSolve by remember { mutableStateOf(false) }
     var showPolarAlign by remember { mutableStateOf(false) }
     var showGuide by remember { mutableStateOf(false) }
+    var showSettings by remember { mutableStateOf(false) }
     val phoneNav = rememberPhonePlateSolveNavState()
     var selectedTab by rememberSaveable { mutableStateOf(MainControlTab.CAMERA) }
     val globalMountMotionState by viewModel.mountMotionState.collectAsState()
@@ -117,6 +118,11 @@ fun CameraScreen(
             mountCoordinates = mountCoordinates,
             onBack = { viewModel.closePlayer() }
         )
+        return
+    }
+
+    if (showSettings) {
+        SettingsScreen(onBack = { showSettings = false })
         return
     }
 
@@ -290,6 +296,16 @@ fun CameraScreen(
                     text = {
                         Text(
                             stringResource(R.string.tab_accessories),
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                    }
+                )
+                Tab(
+                    selected = false,
+                    onClick = { showSettings = true },
+                    text = {
+                        Text(
+                            stringResource(R.string.settings),
                             style = MaterialTheme.typography.labelLarge
                         )
                     }
@@ -715,7 +731,8 @@ fun CameraScreen(
                         flipV = flipV,
                         rotation = rotation,
                         longExposureEnabled = longExposureEnabled,
-                        exposureMax = viewModel.getExposureMax(),
+                        exposureMinFlow = viewModel.exposureUiMinUs,
+                        exposureMaxFlow = viewModel.exposureUiMaxUs,
                         gainMax = viewModel.getGainMax(),
                         longExposureProgress = longExposureProgress,
                         cameraInfo = camInfo,

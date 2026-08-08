@@ -138,6 +138,8 @@
 
     <!-- ExposureSlider -->
     <string name="exposure">Exposure</string>
+    <string name="exposure_clamped">Exposure clamped to %1$s</string>
+    <string name="exposure_locked_by_ae">Manual exposure locked while auto exposure is on</string>
 
     <!-- GainSlider -->
     <string name="gain">Gain</string>

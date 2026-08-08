@@ -190,6 +190,47 @@ class PoaDeviceMatcherTest {
     }
 }
 
+class PlayerOneIdentityTest {
+
+    @Test
+    fun nullSerialUsesCameraIdFallbackThatCanBeLookedUp() {
+        val enumeratedIdentity = stablePlayerOneIdentity(serialNumber = null, cameraId = 0)
+
+        assertEquals("PO-0", enumeratedIdentity)
+        assertTrue(
+            playerOneIdentityMatches(
+                serialNumber = null,
+                cameraId = 0,
+                requestedIdentity = enumeratedIdentity
+            )
+        )
+    }
+}
+
+class AndroidUsbLinkEvidenceTest {
+
+    @Test
+    fun bulkPacket1024ConfirmsSuperSpeedDescriptor() {
+        assertEquals(
+            AndroidUsbLinkEvidence.SUPER_SPEED,
+            classifyAndroidUsbLink(listOf(1024, 1024))
+        )
+    }
+
+    @Test
+    fun bulkPacket512ConfirmsHighSpeedDescriptor() {
+        assertEquals(
+            AndroidUsbLinkEvidence.HIGH_SPEED,
+            classifyAndroidUsbLink(listOf(512, 512))
+        )
+    }
+
+    @Test
+    fun missingBulkEndpointsIsUnknown() {
+        assertEquals(AndroidUsbLinkEvidence.UNKNOWN, classifyAndroidUsbLink(emptyList()))
+    }
+}
+
 class PlayerOneClaimRegistryTest {
 
     @Before

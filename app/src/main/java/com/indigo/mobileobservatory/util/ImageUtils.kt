@@ -33,11 +33,37 @@ object ImageUtils {
 
     fun formatExposure(us: Float): String {
         return when {
+            us >= 100_000_000f -> "%.0fs".format(us / 1_000_000f)
             us >= 1_000_000f -> "%.2fs".format(us / 1_000_000f)
             us >= 1000f -> "%.1fms".format(us / 1000f)
             else -> "%.0fμs".format(us)
         }
     }
+
+    /** Parse SharpCap-style exposure text: `10.5s`, `30ms`, `500us`/`500μs`, `5m`, or plain number. */
+    fun parseExposureUs(text: String, defaultUnit: ExposureUnit = ExposureUnit.SECONDS): Float? {
+        val trimmed = text.trim().lowercase().replace(',', '.')
+        if (trimmed.isEmpty()) return null
+        val match = Regex("""^\s*([+-]?\d+(?:\.\d+)?)\s*(us|μs|ms|s|m)?\s*$""").matchEntire(trimmed)
+            ?: return null
+        val value = match.groupValues[1].toFloatOrNull() ?: return null
+        if (!value.isFinite() || value < 0f) return null
+        val unit = when (match.groupValues[2]) {
+            "us", "μs" -> ExposureUnit.MICROSECONDS
+            "ms" -> ExposureUnit.MILLISECONDS
+            "s" -> ExposureUnit.SECONDS
+            "m" -> ExposureUnit.MINUTES
+            else -> defaultUnit
+        }
+        return when (unit) {
+            ExposureUnit.MICROSECONDS -> value
+            ExposureUnit.MILLISECONDS -> value * 1_000f
+            ExposureUnit.SECONDS -> value * 1_000_000f
+            ExposureUnit.MINUTES -> value * 60_000_000f
+        }
+    }
+
+    enum class ExposureUnit { MICROSECONDS, MILLISECONDS, SECONDS, MINUTES }
 
     fun formatFileSize(bytes: Long): String {
         return when {

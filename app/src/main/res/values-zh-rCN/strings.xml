@@ -136,6 +136,8 @@
 
     <!-- ExposureSlider -->
     <string name="exposure">曝光</string>
+    <string name="exposure_clamped">曝光已限制为 %1$s</string>
+    <string name="exposure_locked_by_ae">自动曝光开启时不可手动调节</string>
 
     <!-- GainSlider -->
     <string name="gain">增益</string>

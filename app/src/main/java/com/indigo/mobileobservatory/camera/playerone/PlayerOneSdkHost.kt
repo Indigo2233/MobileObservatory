@@ -2,6 +2,7 @@ package com.indigo.mobileobservatory.camera.playerone
 
 import android.content.Context
 import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbConstants
 import android.hardware.usb.UsbManager
 import com.indigo.mobileobservatory.util.FileLogger
 import com.playeroneastronomy.camera.CameraProperties
@@ -98,8 +99,33 @@ object PlayerOneSdkHost {
             if (usb == null) {
                 FileLogger.w(TAG, "Camera ${props.cameraModelName} id=${props.cameraId} has no matching USB device")
             }
-            EnumeratedCamera(usb, props, usb?.deviceName?.let(androidByPath::get))
+            val androidDevice = usb?.deviceName?.let(androidByPath::get)
+            logAndroidUsbDescriptor(props.cameraModelName, androidDevice)
+            EnumeratedCamera(usb, props, androidDevice)
         }
+    }
+
+    private fun logAndroidUsbDescriptor(modelName: String?, device: UsbDevice?) {
+        if (device == null) {
+            FileLogger.w(TAG, "Android USB descriptor unavailable for $modelName")
+            return
+        }
+        val bulkPackets = mutableListOf<Int>()
+        for (interfaceIndex in 0 until device.interfaceCount) {
+            val usbInterface = device.getInterface(interfaceIndex)
+            for (endpointIndex in 0 until usbInterface.endpointCount) {
+                val endpoint = usbInterface.getEndpoint(endpointIndex)
+                if (endpoint.type == UsbConstants.USB_ENDPOINT_XFER_BULK) {
+                    bulkPackets += endpoint.maxPacketSize
+                }
+            }
+        }
+        FileLogger.i(
+            TAG,
+            "Android USB model=$modelName version=${device.version} " +
+                "interfaces=${device.interfaceCount} bulkMaxPackets=$bulkPackets " +
+                "linkEvidence=${classifyAndroidUsbLink(bulkPackets)}"
+        )
     }
 
     fun requestPermission(device: UsbCameraDevice, onResult: (Boolean) -> Unit) {
@@ -125,7 +151,11 @@ object PlayerOneSdkHost {
 
     fun findDeviceBySerial(context: Context, serialNumber: String): EnumeratedCamera? {
         return enumerate(context).firstOrNull {
-            it.properties.serialNumber == serialNumber
+            playerOneIdentityMatches(
+                serialNumber = it.properties.serialNumber,
+                cameraId = it.properties.cameraId,
+                requestedIdentity = serialNumber
+            )
         }
     }
 

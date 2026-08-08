@@ -27,6 +27,7 @@ import com.indigo.mobileobservatory.mount.PrecisionGotoProgress
 import com.indigo.mobileobservatory.ui.components.RecordLimit
 import com.indigo.mobileobservatory.ui.components.RecordLimitType
 import com.indigo.mobileobservatory.util.DeterministicResourceCleaner
+import com.indigo.mobileobservatory.util.ImageUtils
 import com.indigo.mobileobservatory.recording.FITSWriter
 import com.indigo.mobileobservatory.recording.Mp4Writer
 import com.indigo.mobileobservatory.recording.PSERWriter
@@ -216,6 +217,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _longExposureProgress = MutableStateFlow("")
     val longExposureProgress: StateFlow<String> = _longExposureProgress.asStateFlow()
+
+    private val _exposureUiMinUs = MutableStateFlow(1f)
+    val exposureUiMinUs: StateFlow<Float> = _exposureUiMinUs.asStateFlow()
+
+    private val _exposureUiMaxUs = MutableStateFlow(ExposureLimits.SHORT_MAX_US)
+    val exposureUiMaxUs: StateFlow<Float> = _exposureUiMaxUs.asStateFlow()
 
     private val _exposureCountdown = MutableStateFlow(0f)
     val exposureCountdown: StateFlow<Float> = _exposureCountdown.asStateFlow()
@@ -497,6 +504,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         _readoutMode.value = cam.currentReadoutMode
                         _supportedReadoutModes.value = cam.supportedReadoutModes
                         _roi.value = cam.currentRoi
+                        _longExposureEnabled.value = cam.longExposureEnabled
+                        refreshExposureUiLimits()
                         _statusMessage.value = app.getString(R.string.camera_connected_status, cam.cameraInfo?.name.orEmpty(), cam.cameraInfo?.serialNumber.orEmpty())
                         bindCoolingFlows(cam)
                         startPreview()
@@ -1213,12 +1222,19 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 previewPipeline.submit(frame)
 
                 if (autoExpFrameSkip++ % 10 == 0) {
-                    autoExposureController.processFrame(frame, cam)
+                    val aeMax = if (_longExposureEnabled.value) {
+                        ExposureLimits.absoluteMaxUs(cam)
+                    } else {
+                        ExposureLimits.uiMaxUs(cam, false)
+                    }
+                    autoExposureController.processFrame(frame, cam, exposureMaxUs = aeMax)
                     if (autoExposureController.mode != AutoExposureMode.OFF) {
                         _exposureUs.value = cam.currentExposureUs
                         _gain.value = cam.currentGain
                     }
                 }
+
+                updateSoftwareStackingProgress(cam)
 
                 if (_isRecording.value) {
                     val bpp = frame.pixelFormat.bytesPerPixel
@@ -1316,13 +1332,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setExposure(us: Float) {
         val cam = cameraManager.activeCamera ?: return
-        cam.setExposureTime(us)
-        _exposureUs.value = cam.currentExposureUs
-        if (cam.longExposureEnabled && cam.currentExposureUs > cam.hwExposureMaxUs) {
-            _longExposureProgress.value = app.getString(R.string.long_exp)
-        } else {
-            _longExposureProgress.value = ""
+        val uiMax = ExposureLimits.uiMaxUs(cam, _longExposureEnabled.value)
+        val uiMin = cam.exposureRange.min
+        val clamped = us.coerceIn(uiMin, uiMax)
+        if (clamped != us) {
+            _statusMessage.value = app.getString(
+                R.string.exposure_clamped,
+                ImageUtils.formatExposure(clamped)
+            )
         }
+        cam.setExposureTime(clamped)
+        _exposureUs.value = cam.currentExposureUs
+        updateSoftwareStackingProgress(cam)
     }
 
     fun toggleLongExposure() {
@@ -1330,22 +1351,50 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val newState = !_longExposureEnabled.value
         _longExposureEnabled.value = newState
         cam.longExposureEnabled = newState
-        if (!newState && cam.currentExposureUs > cam.hwExposureMaxUs) {
-            cam.setExposureTime(cam.hwExposureMaxUs)
-            _exposureUs.value = cam.currentExposureUs
+        refreshExposureUiLimits()
+        if (!newState) {
+            val shortMax = ExposureLimits.uiMaxUs(cam, false)
+            if (cam.currentExposureUs > shortMax) {
+                cam.setExposureTime(shortMax)
+                _exposureUs.value = cam.currentExposureUs
+            }
+            _longExposureProgress.value = ""
         }
-        _longExposureProgress.value = ""
-        _statusMessage.value = app.getString(if (newState) R.string.long_exposure_enabled else R.string.long_exposure_disabled)
+        _statusMessage.value = app.getString(
+            if (newState) R.string.long_exposure_enabled else R.string.long_exposure_disabled
+        )
     }
 
-    fun getExposureMax(): Float {
-        val cam = cameraManager.activeCamera ?: return 1_000_000f
-        return if (_longExposureEnabled.value) 300_000_000f else cam.hwExposureMaxUs
-    }
+    fun getExposureMax(): Float = _exposureUiMaxUs.value
 
     fun getGainMax(): Float {
         val cam = cameraManager.activeCamera ?: return 24f
         return cam.gainRange.max
+    }
+
+    private fun refreshExposureUiLimits() {
+        val cam = cameraManager.activeCamera
+        if (cam == null) {
+            _exposureUiMinUs.value = 1f
+            _exposureUiMaxUs.value = ExposureLimits.SHORT_MAX_US
+            return
+        }
+        val long = _longExposureEnabled.value
+        _exposureUiMinUs.value = ExposureLimits.uiMinUs(cam, long)
+        _exposureUiMaxUs.value = ExposureLimits.uiMaxUs(cam, long)
+    }
+
+    private fun updateSoftwareStackingProgress(cam: Camera) {
+        if (!cam.supportsSoftwareStacking) {
+            if (_longExposureProgress.value.isNotEmpty()) _longExposureProgress.value = ""
+            return
+        }
+        val progress = cam.softwareStackingProgress
+        _longExposureProgress.value = if (progress != null && progress.second > 1) {
+            "${progress.first}/${progress.second}"
+        } else {
+            ""
+        }
     }
 
     fun setGain(db: Float) {

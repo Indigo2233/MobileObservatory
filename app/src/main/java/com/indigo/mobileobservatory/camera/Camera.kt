@@ -28,6 +28,10 @@ interface Camera {
     val roiMinWidth: Int get() = 8
     val roiMinHeight: Int get() = 8
     var longExposureEnabled: Boolean
+    /** Industrial cameras only: multi-frame average beyond hardware exposure max. */
+    val supportsSoftwareStacking: Boolean get() = false
+    /** Sub-frame progress while software-stacking; null when idle. Pair(done, total). */
+    val softwareStackingProgress: Pair<Int, Int>? get() = null
 
     fun close()
     fun startCapture(callback: FrameCallback)

@@ -36,6 +36,7 @@ class PlayerOneCamera : Camera, CoolingCapable {
         private const val TAG = "PlayerOneCam"
         private const val GRAB_TIMEOUT_MS = 5000
         private const val DIRECT_BUF_COUNT = 3
+        private const val STREAM_STATS_INTERVAL_NS = 5_000_000_000L
     }
 
     private var poa: PoaCamera? = null
@@ -129,7 +130,7 @@ class PlayerOneCamera : Camera, CoolingCapable {
 
             cameraInfo = CameraInfo(
                 name = props.cameraModelName ?: "Player One Camera",
-                serialNumber = props.serialNumber ?: "PO-$cameraId",
+                serialNumber = props.stableIdentity(),
                 sensorWidth = sensorW,
                 sensorHeight = sensorH,
                 maxBitDepth = props.bitDepth,
@@ -140,6 +141,7 @@ class PlayerOneCamera : Camera, CoolingCapable {
             readExposureRange(cam)
             readGainRange(cam)
             configureFormats(cam, props.imageFormats)
+            logTransportSettings(cam, props.isUsb3Speed)
             readSensorModes(cam)
             readGainOffsetPresets(cam)
 
@@ -289,7 +291,7 @@ class PlayerOneCamera : Camera, CoolingCapable {
     override fun setExposureTime(us: Float) {
         val cam = poa ?: return
         if (disconnected) return
-        val clamped = us.coerceIn(exposureRange.min, if (longExposureEnabled) 300_000_000f else hwExposureMaxUs)
+        val clamped = us.coerceIn(exposureRange.min, hwExposureMaxUs)
         currentExposureUs = clamped
         try {
             cam.setConfig(PoaConfig.EXPOSURE_MICROSECONDS, ConfigValue.ofInteger(clamped.toLong()), false)
@@ -535,6 +537,8 @@ class PlayerOneCamera : Camera, CoolingCapable {
     private fun captureLoop() {
         val cam = poa ?: return
         var frameSeq = 0L
+        var statsFrameCount = 0L
+        var statsStartedNs = System.nanoTime()
         while (running.get() && !disconnected) {
             try {
                 if (!cam.isImageReady) {
@@ -565,6 +569,25 @@ class PlayerOneCamera : Camera, CoolingCapable {
                         timestamp = System.currentTimeMillis()
                     )
                 )
+                statsFrameCount++
+                val statsNowNs = System.nanoTime()
+                val statsElapsedNs = statsNowNs - statsStartedNs
+                if (statsElapsedNs >= STREAM_STATS_INTERVAL_NS) {
+                    val sourceFps = statsFrameCount * 1_000_000_000.0 / statsElapsedNs
+                    val dropped = try {
+                        cam.droppedImageCount
+                    } catch (_: PoaException) {
+                        -1
+                    }
+                    FileLogger.i(
+                        TAG,
+                        "Stream sourceFps=${"%.1f".format(java.util.Locale.US, sourceFps)} " +
+                            "dropped=$dropped exposureUs=${currentExposureUs.toInt()} " +
+                            "roi=${w}x$h format=${currentPixelFormat.name}"
+                    )
+                    statsFrameCount = 0
+                    statsStartedNs = statsNowNs
+                }
             } catch (e: PoaException) {
                 if (e.error == com.playeroneastronomy.camera.PoaError.TIMEOUT) continue
                 FileLogger.w(TAG, "capture ${e.error}: ${e.message}")
@@ -670,6 +693,37 @@ class PlayerOneCamera : Camera, CoolingCapable {
             currentPixelFormat = supportedPixelFormats.first()
         }
         FileLogger.i(TAG, "Formats: ${supportedPixelFormats.joinToString { it.name }}, current=${currentPixelFormat.name}")
+    }
+
+    private fun logTransportSettings(cam: PoaCamera, usb3Speed: Boolean) {
+        FileLogger.i(
+            TAG,
+            "Transport usb3=$usb3Speed " +
+                "frameLimit=${readIntegerSetting(cam, PoaConfig.FRAME_LIMIT)} " +
+                "usbBandwidth=${readIntegerSetting(cam, PoaConfig.USB_BANDWIDTH_LIMIT)} " +
+                "highQuality=${readBooleanSetting(cam, PoaConfig.HIGH_QUALITY_IMAGE)}"
+        )
+    }
+
+    private fun readIntegerSetting(cam: PoaCamera, config: PoaConfig): String {
+        return try {
+            val attrs = cam.getConfigAttributes(config)
+            val current = cam.getConfig(config).value.asInteger()
+            "$current range=${attrs.minimum.asInteger()}..${attrs.maximum.asInteger()} " +
+                "default=${attrs.defaultValue.asInteger()} writable=${attrs.isWritable}"
+        } catch (e: PoaException) {
+            "unavailable(${e.error})"
+        }
+    }
+
+    private fun readBooleanSetting(cam: PoaCamera, config: PoaConfig): String {
+        return try {
+            val attrs = cam.getConfigAttributes(config)
+            "${cam.getConfig(config).value.asBoolean()} " +
+                "default=${attrs.defaultValue.asBoolean()} writable=${attrs.isWritable}"
+        } catch (e: PoaException) {
+            "unavailable(${e.error})"
+        }
     }
 
     private fun readSensorModes(cam: PoaCamera) {

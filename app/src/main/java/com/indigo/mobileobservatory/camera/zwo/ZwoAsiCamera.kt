@@ -11,7 +11,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
 
 class ZwoAsiCamera : Camera {
 
@@ -95,13 +94,6 @@ class ZwoAsiCamera : Camera {
     override var roiMinWidth = 8; private set
     override var roiMinHeight = 2; private set
     @Volatile override var longExposureEnabled: Boolean = false
-
-    private val longExpoSubCount = AtomicInteger(1)
-    private val longExpoSubsDone = AtomicInteger(0)
-    @Volatile private var longExposureMode = false
-    private var accumBuffer: IntArray? = null
-    private var accumWidth = 0
-    private var accumHeight = 0
 
     private var frameCallback: FrameCallback? = null
     private var isColor = false
@@ -227,24 +219,10 @@ class ZwoAsiCamera : Camera {
 
     override fun setExposureTime(us: Float) {
         val cam = zwoCamera ?: return
-        val hwMax = hwExposureMaxUs
-        val softMax = if (longExposureEnabled) 300_000_000f else hwMax
-        val clamped = us.coerceIn(exposureRange.min, softMax)
+        val clamped = us.coerceIn(exposureRange.min, hwExposureMaxUs)
         currentExposureUs = clamped
-
-        if (longExposureEnabled && clamped > hwMax) {
-            val subCount = ((clamped + hwMax - 1) / hwMax).toInt().coerceAtLeast(2)
-            val subUs = (clamped / subCount).coerceIn(exposureRange.min, hwMax)
-            longExpoSubCount.set(subCount)
-            longExpoSubsDone.set(0)
-            longExposureMode = true
-            cam.setControlValue(ASI_EXPOSURE, subUs.toLong(), 0)
-            FileLogger.i(TAG, "SetExposure: ${clamped.toInt()} us (long: $subCount subs x ${subUs.toInt()} us)")
-        } else {
-            longExposureMode = false
-            longExpoSubsDone.set(0)
-            cam.setControlValue(ASI_EXPOSURE, clamped.toLong(), 0)
-        }
+        cam.setControlValue(ASI_EXPOSURE, clamped.toLong(), 0)
+        FileLogger.i(TAG, "SetExposure: ${clamped.toInt()} us")
     }
 
     override fun setGain(db: Float) {
@@ -354,23 +332,16 @@ class ZwoAsiCamera : Camera {
                     FileLogger.i(TAG, "First frame: ${w}x${h} imgType=$currentImgType fmt=${pixFmt.name} bpp=$frameBpp")
                 }
 
-                if (longExposureMode) {
-                    handleLongExposureFrame(outData, w, h, frameBpp, pixFmt, frameSeq)
-                    if (longExpoSubsDone.get() >= longExpoSubCount.get()) {
-                        frameSeq++
-                    }
-                } else {
-                    frameSeq++
-                    val frame = FrameData(
-                        data = outData,
-                        width = w,
-                        height = h,
-                        pixelFormat = pixFmt,
-                        frameId = frameSeq,
-                        timestamp = System.currentTimeMillis()
-                    )
-                    frameCallback?.onFrame(frame)
-                }
+                frameSeq++
+                val frame = FrameData(
+                    data = outData,
+                    width = w,
+                    height = h,
+                    pixelFormat = pixFmt,
+                    frameId = frameSeq,
+                    timestamp = System.currentTimeMillis()
+                )
+                frameCallback?.onFrame(frame)
 
             } catch (e: Exception) {
                 FileLogger.e(TAG, "Capture error: ${e.message}")
@@ -379,67 +350,6 @@ class ZwoAsiCamera : Camera {
             }
         }
         FileLogger.i(TAG, "Capture loop ended, $frameSeq frames captured")
-    }
-
-    private fun handleLongExposureFrame(
-        data: ByteArray, w: Int, h: Int, bpp: Int, pixFmt: PixelFormat, baseFrameSeq: Long
-    ) {
-        val pixelCount = w * h
-        val subsDone = longExpoSubsDone.get()
-
-        if (subsDone == 0 || accumBuffer == null
-            || accumBuffer!!.size != pixelCount
-            || accumWidth != w || accumHeight != h) {
-            accumBuffer = IntArray(pixelCount)
-            accumWidth = w
-            accumHeight = h
-            longExpoSubsDone.set(0)
-        }
-
-        val buf = accumBuffer!!
-        if (bpp >= 2) {
-            for (i in 0 until pixelCount) {
-                val lo = data[i * 2].toInt() and 0xFF
-                val hi = data[i * 2 + 1].toInt() and 0xFF
-                buf[i] += (lo or (hi shl 8))
-            }
-        } else {
-            for (i in 0 until pixelCount) {
-                buf[i] += data[i].toInt() and 0xFF
-            }
-        }
-
-        val newDone = longExpoSubsDone.incrementAndGet()
-        val subCount = longExpoSubCount.get()
-
-        if (newDone >= subCount) {
-            val avgData: ByteArray
-            if (bpp >= 2) {
-                avgData = ByteArray(pixelCount * 2)
-                for (i in 0 until pixelCount) {
-                    val avg = buf[i] / subCount
-                    avgData[i * 2] = (avg and 0xFF).toByte()
-                    avgData[i * 2 + 1] = ((avg shr 8) and 0xFF).toByte()
-                }
-            } else {
-                avgData = ByteArray(pixelCount)
-                for (i in 0 until pixelCount) {
-                    avgData[i] = (buf[i] / subCount).coerceAtMost(255).toByte()
-                }
-            }
-
-            val frame = FrameData(
-                data = avgData,
-                width = w,
-                height = h,
-                pixelFormat = pixFmt,
-                frameId = baseFrameSeq + 1,
-                timestamp = System.currentTimeMillis()
-            )
-            frameCallback?.onFrame(frame)
-            longExpoSubsDone.set(0)
-            FileLogger.d(TAG, "LongExposure: $subCount subs averaged, frame ${w}x${h}")
-        }
     }
 
     private fun readExposureRange(cam: ZwoCamera) {

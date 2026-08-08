@@ -34,6 +34,7 @@ import com.indigo.mobileobservatory.mount.MountDirection
 import com.indigo.mobileobservatory.mount.MountSlewRate
 import com.indigo.mobileobservatory.mount.MountTransportType
 import com.indigo.mobileobservatory.mount.MountUsbDevice
+import kotlinx.coroutines.flow.StateFlow
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -53,7 +54,8 @@ fun ControlPanel(
     flipV: Boolean,
     rotation: Int,
     longExposureEnabled: Boolean,
-    exposureMax: Float,
+    exposureMinFlow: StateFlow<Float>,
+    exposureMaxFlow: StateFlow<Float>,
     gainMax: Float = 24f,
     longExposureProgress: String,
     // Device section params
@@ -149,6 +151,8 @@ fun ControlPanel(
     onMountSetHome: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val exposureMin by exposureMinFlow.collectAsState()
+    val exposureMax by exposureMaxFlow.collectAsState()
     var deviceExpanded by remember { mutableStateOf(true) }
     var captureExpanded by remember { mutableStateOf(true) }
     var imageExpanded by remember { mutableStateOf(true) }
@@ -898,9 +902,19 @@ fun ControlPanel(
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 ExposureSlider(
                     exposureUs = exposureUs,
+                    minUs = exposureMin,
                     maxUs = exposureMax,
+                    longExposure = longExposureEnabled,
+                    enabled = autoExposureMode == AutoExposureMode.OFF,
                     onExposureChange = onExposureChange
                 )
+                if (autoExposureMode != AutoExposureMode.OFF) {
+                    Text(
+                        stringResource(R.string.exposure_locked_by_ae),
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
