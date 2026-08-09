@@ -248,7 +248,6 @@ private fun FocuserControls(viewModel: CameraViewModel) {
             onMoveTo = viewModel::eafMoveTo,
             onMoveRelative = viewModel::eafMoveRelative,
             onHalt = viewModel::eafHalt,
-            onSetZero = viewModel::eafSetZero,
             modifier = Modifier.fillMaxWidth()
         )
     }

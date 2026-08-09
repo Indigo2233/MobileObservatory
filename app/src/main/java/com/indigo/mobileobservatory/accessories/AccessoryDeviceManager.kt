@@ -14,16 +14,21 @@ import com.hoho.android.usbserial.driver.UsbSerialProber
 import com.indigo.mobileobservatory.accessories.cover.CoverCalibratorControllerRouter
 import com.indigo.mobileobservatory.accessories.cover.DlcSerialCoverCalibratorAdapter
 import com.indigo.mobileobservatory.accessories.cover.GeminiFlatpanelSerialAdapter
+import com.indigo.mobileobservatory.accessories.filterwheel.FilterWheelControllerRouter
+import com.indigo.mobileobservatory.accessories.filterwheel.OasisHidFilterWheelController
+import com.indigo.mobileobservatory.accessories.filterwheel.ToupTekFilterWheelAdapter
 import com.indigo.mobileobservatory.accessories.focuser.EFucoserSerialFocuserController
 import com.indigo.mobileobservatory.accessories.focuser.FocuserControllerRouter
 import com.indigo.mobileobservatory.accessories.focuser.GeminiEafSerialFocuserController
+import com.indigo.mobileobservatory.accessories.focuser.OasisHidFocuserController
 import com.indigo.mobileobservatory.accessories.focuser.ToupTekFocuserAdapter
+import com.indigo.mobileobservatory.accessories.oasis.OasisUsbIds
 import com.indigo.mobileobservatory.accessories.rotator.EcaaSerialRotatorAdapter
 import com.indigo.mobileobservatory.camera.AccessoryDeviceEntry
 import com.indigo.mobileobservatory.camera.AccessoryType
 import com.indigo.mobileobservatory.camera.toupcam.EAFController
-import com.indigo.mobileobservatory.camera.toupcam.FilterWheelController
 import com.indigo.mobileobservatory.camera.toupcam.ToupcamJni
+import com.indigo.mobileobservatory.util.FileLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -34,6 +39,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -67,15 +73,23 @@ class AccessoryDeviceManager(context: Context) {
     @Volatile
     private var excludedUsbDeviceIds: Set<Int> = emptySet()
 
-    val filterWheelController = FilterWheelController()
+    private val toupTekFilterWheel = com.indigo.mobileobservatory.camera.toupcam.FilterWheelController()
+    private val oasisFilterWheel = OasisHidFilterWheelController()
+    val filterWheelController = FilterWheelControllerRouter(
+        scope = scope,
+        toupTek = ToupTekFilterWheelAdapter(toupTekFilterWheel),
+        oasis = oasisFilterWheel
+    )
     private val toupTekFocuser = EAFController()
     private val efucoserFocuser = EFucoserSerialFocuserController()
     private val geminiEafFocuser = GeminiEafSerialFocuserController()
+    private val oasisFocuser = OasisHidFocuserController()
     val focuserController = FocuserControllerRouter(
         scope = scope,
         toupTek = ToupTekFocuserAdapter(toupTekFocuser),
         efucoser = efucoserFocuser,
-        geminiEaf = geminiEafFocuser
+        geminiEaf = geminiEafFocuser,
+        oasis = oasisFocuser
     )
     private val dlcCover = DlcSerialCoverCalibratorAdapter()
     private val geminiFlat = GeminiFlatpanelSerialAdapter()
@@ -131,6 +145,7 @@ class AccessoryDeviceManager(context: Context) {
                                 connectingFocuserDeviceId = null
                                 efucoserFocuser.close()
                                 geminiEafFocuser.close()
+                                oasisFocuser.close()
                             }
                             if (_activeFocuserDeviceId.value == device.deviceId) {
                                 focuserController.close()
@@ -152,7 +167,7 @@ class AccessoryDeviceManager(context: Context) {
                     val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
                     if (granted && device != null &&
                         pendingFilterWheelDeviceId == device.deviceId) {
-                        filterWheelController.open(appContext, device)
+                        connectFilterWheelGranted(device)
                     } else {
                         _scanError.value = "Filter wheel USB permission denied"
                     }
@@ -163,10 +178,7 @@ class AccessoryDeviceManager(context: Context) {
                     val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
                     if (granted && device != null &&
                         pendingFocuserDeviceId == device.deviceId) {
-                        if (toupTekFocuser.open(appContext, device)) {
-                            focuserController.useToupTek()
-                            _activeFocuserDeviceId.value = device.deviceId
-                        }
+                        connectFocuserGranted(device)
                     } else {
                         _scanError.value = "Focuser USB permission denied"
                     }
@@ -254,6 +266,17 @@ class AccessoryDeviceManager(context: Context) {
         try {
             usbManager.deviceList.values.forEach { device ->
                 if (device.deviceId in excluded) return@forEach
+                if (device.vendorId == OasisUsbIds.vendorId) {
+                    val entry = when {
+                        OasisUsbIds.isFilterWheel(device.productId) ->
+                            AccessoryDeviceEntry("Oasis Filter Wheel", AccessoryType.FILTER_WHEEL, device)
+                        OasisUsbIds.isFocuser(device.productId) ->
+                            AccessoryDeviceEntry("Oasis Focuser", AccessoryType.FOCUSER, device)
+                        else -> null
+                    }
+                    if (entry != null) discovered += entry
+                    return@forEach
+                }
                 if (device.vendorId == TOUPCAM_VENDOR_ID) {
                     val type = when {
                         runCatching {
@@ -280,6 +303,7 @@ class AccessoryDeviceManager(context: Context) {
                 val device = driver.device
                 if (device.deviceId in excluded ||
                     device.vendorId == TOUPCAM_VENDOR_ID ||
+                    device.vendorId == OasisUsbIds.vendorId ||
                     discovered.any { it.usbDevice.deviceId == device.deviceId }) {
                     return@forEach
                 }
@@ -319,7 +343,7 @@ class AccessoryDeviceManager(context: Context) {
                     20
                 ) {
                     pendingFilterWheelDeviceId = null
-                    filterWheelController.open(appContext, device.usbDevice)
+                    connectFilterWheelGranted(device.usbDevice)
                 }
             }
             AccessoryType.FOCUSER -> {
@@ -330,10 +354,7 @@ class AccessoryDeviceManager(context: Context) {
                     21
                 ) {
                     pendingFocuserDeviceId = null
-                    if (toupTekFocuser.open(appContext, device.usbDevice)) {
-                        focuserController.useToupTek()
-                        _activeFocuserDeviceId.value = device.usbDevice.deviceId
-                    }
+                    connectFocuserGranted(device.usbDevice)
                 }
             }
             AccessoryType.EFUCOSER_FOCUSER -> {
@@ -398,6 +419,70 @@ class AccessoryDeviceManager(context: Context) {
         }
     }
 
+    private fun connectFilterWheelGranted(device: UsbDevice) {
+        if (device.vendorId == OasisUsbIds.vendorId && OasisUsbIds.isFilterWheel(device.productId)) {
+            if (oasisFilterWheel.open(appContext, device)) {
+                filterWheelController.useOasis()
+            } else {
+                _scanError.value = "Failed to connect Oasis filter wheel"
+            }
+            return
+        }
+        if (toupTekFilterWheel.open(appContext, device)) {
+            filterWheelController.useToupTek()
+        } else {
+            _scanError.value = "Failed to connect ToupTek filter wheel"
+        }
+    }
+
+    private fun connectFocuserGranted(device: UsbDevice) {
+        if (device.vendorId == OasisUsbIds.vendorId && OasisUsbIds.isFocuser(device.productId)) {
+            connectOasisFocuser(device)
+            return
+        }
+        val connected = toupTekFocuser.open(appContext, device).also { opened ->
+            if (opened) focuserController.useToupTek()
+        }
+        if (connected) {
+            _activeFocuserDeviceId.value = device.deviceId
+        } else {
+            _scanError.value = "Failed to connect focuser"
+        }
+    }
+
+    private fun connectOasisFocuser(device: UsbDevice) {
+        focuserConnectJob?.cancel()
+        val generation = ++focuserConnectGeneration
+        connectingFocuserDeviceId = device.deviceId
+        focuserConnectJob = scope.launch {
+            try {
+                val connected = try {
+                    oasisFocuser.open(appContext, device)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Throwable) {
+                    FileLogger.e(TAG, "Oasis focuser connection crashed", error)
+                    false
+                }
+                if (!isActive || focuserConnectGeneration != generation) {
+                    if (connected) oasisFocuser.close()
+                    return@launch
+                }
+                if (connected) {
+                    focuserController.useOasis()
+                    _activeFocuserDeviceId.value = device.deviceId
+                } else {
+                    _scanError.value = "Failed to connect Oasis focuser"
+                }
+            } finally {
+                if (focuserConnectGeneration == generation) {
+                    connectingFocuserDeviceId = null
+                    focuserConnectJob = null
+                }
+            }
+        }
+    }
+
     fun disconnectFilterWheel() = filterWheelController.close()
 
     fun disconnectFocuser() {
@@ -408,6 +493,7 @@ class AccessoryDeviceManager(context: Context) {
         focuserController.close()
         efucoserFocuser.close()
         geminiEafFocuser.close()
+        oasisFocuser.close()
         _activeFocuserDeviceId.value = null
     }
 
@@ -436,6 +522,10 @@ class AccessoryDeviceManager(context: Context) {
         probeGeneration++
         serialAutoJob?.cancel()
         serialAutoJob = null
+        focuserConnectJob?.cancel()
+        focuserConnectGeneration++
+        focuserConnectJob = null
+        connectingFocuserDeviceId = null
         filterWheelController.destroy()
         focuserController.destroy()
         coverController.destroy()

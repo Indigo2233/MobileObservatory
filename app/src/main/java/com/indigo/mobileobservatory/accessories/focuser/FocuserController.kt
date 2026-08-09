@@ -55,7 +55,8 @@ class FocuserControllerRouter(
     scope: CoroutineScope,
     private val toupTek: ToupTekFocuserAdapter,
     private val efucoser: EFucoserSerialFocuserController,
-    private val geminiEaf: GeminiEafSerialFocuserController
+    private val geminiEaf: GeminiEafSerialFocuserController,
+    private val oasis: OasisHidFocuserController
 ) : FocuserController {
     private val active = MutableStateFlow<FocuserController?>(null)
 
@@ -105,6 +106,13 @@ class FocuserControllerRouter(
         }
     }
 
+    fun useOasis() {
+        if (active.value !== oasis) {
+            active.value?.close()
+            active.value = oasis
+        }
+    }
+
     override fun moveTo(position: Int) = active.value?.moveTo(position) ?: Unit
     override fun moveRelative(steps: Int) = active.value?.moveRelative(steps) ?: Unit
     override fun halt() = active.value?.halt() ?: Unit
@@ -125,5 +133,6 @@ class FocuserControllerRouter(
         toupTek.destroy()
         efucoser.destroy()
         geminiEaf.destroy()
+        oasis.destroy()
     }
 }

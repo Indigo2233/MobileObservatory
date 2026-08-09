@@ -29,7 +29,6 @@ fun EAFPanel(
     onMoveTo: (Int) -> Unit,
     onMoveRelative: (Int) -> Unit,
     onHalt: () -> Unit,
-    onSetZero: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     if (!isConnected || eafInfo == null) return
@@ -105,12 +104,7 @@ fun EAFPanel(
         ) {
             StepButton("<<", Color(0xFF333333)) { onMoveRelative(-eafInfo.coarseStep) }
             StepButton("<", Color(0xFF333333)) { onMoveRelative(-eafInfo.fineStep) }
-            StepButton(
-                if (isMoving) "■" else "0",
-                if (isMoving) Color(0xFFCC3333) else Color(0xFF333333)
-            ) {
-                if (isMoving) onHalt() else onSetZero()
-            }
+            StepButton("■", Color(0xFFCC3333), onHalt)
             StepButton(">", Color(0xFF333333)) { onMoveRelative(eafInfo.fineStep) }
             StepButton(">>", Color(0xFF333333)) { onMoveRelative(eafInfo.coarseStep) }
         }
