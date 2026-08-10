@@ -642,4 +642,34 @@
     <string name="calibration_next">Next</string>
     <string name="calibration_capture_sample">Capture sample</string>
     <string name="calibration_done_shell">Shell flow complete — real solving is not wired yet.</string>
+    <!-- Device hub and device settings -->
+    <string name="device_connections">Connections</string>
+    <string name="open_device_control">Open control</string>
+    <string name="device_connect_from_connections">Connect this device from the Connections page.</string>
+    <string name="settings_general">General</string>
+    <string name="settings_camera">Camera</string>
+    <string name="settings_filter_wheel">Filter wheel</string>
+    <string name="settings_focuser">Focuser</string>
+    <string name="settings_cover">Flat panel / cover</string>
+    <string name="settings_rotator">CAA</string>
+    <string name="settings_diagnostics">Diagnostics</string>
+    <string name="no_active_camera">Connect a camera to configure camera-specific defaults.</string>
+    <string name="no_active_filter_wheel">Connect a filter wheel to configure slots.</string>
+    <string name="no_active_focuser">Connect a focuser to configure movement defaults.</string>
+    <string name="no_active_cover">Connect a flat panel or cover to configure defaults.</string>
+    <string name="no_active_rotator">Connect a CAA to configure defaults.</string>
+    <string name="default_readout_mode">Default readout mode</string>
+    <string name="default_gain">Default gain</string>
+    <string name="default_pixel_format">Default pixel format</string>
+    <string name="offset_unavailable">Offset is shown when the connected camera SDK exposes it.</string>
+    <string name="coarse_step">Coarse step</string>
+    <string name="focuser_reverse_direction">Reverse direction</string>
+    <string name="backlash_direction">Backlash direction</string>
+    <string name="cover_open_angle">Open angle</string>
+    <string name="cover_closed_angle">Closed angle</string>
+    <string name="cover_working_angle">Working angle</string>
+    <string name="default_brightness">Default brightness</string>
+    <string name="cover_angle_capability_hint">These angle presets are retained for devices with angle control. Current Gemini and DLC adapters use open and close commands.</string>
+    <string name="settings_saved">Settings saved</string>
+    <string name="device_settings_apply">Save and apply</string>
 </resources>

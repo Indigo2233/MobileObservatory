@@ -44,3 +44,25 @@ interface Camera {
     fun resetRoi()
     fun recycleBuffer(buf: ByteArray)
 }
+
+interface CameraOffsetCapable {
+    val offsetSupported: Boolean
+    val offsetLabel: String get() = "Offset"
+    val offsetRange: FloatRange
+    val offsetStep: Float get() = 1f
+    val currentOffset: Float
+
+    fun setOffset(value: Float)
+}
+
+data class CameraNativeReadoutMode(
+    val id: String,
+    val displayName: String
+)
+
+interface CameraNativeReadoutModeCapable {
+    val supportedNativeReadoutModes: List<CameraNativeReadoutMode>
+    val currentNativeReadoutModeId: String
+
+    fun setNativeReadoutMode(id: String): Boolean
+}

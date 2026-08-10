@@ -92,7 +92,15 @@ class OasisHidFocuserController : FocuserController {
     }
 
     override fun moveRelative(steps: Int) {
-        moveTo((_currentPosition.value + steps).coerceAtLeast(0))
+        if (steps == 0) return
+        FileLogger.d(tag, "Relative move steps=$steps position=${_currentPosition.value}")
+        execute {
+            transport.command(
+                OasisFocuserProtocol.commandMoveRelative,
+                OasisFocuserProtocol.relativeMovePayload(steps)
+            )
+        }
+        _isMoving.value = true
     }
 
     override fun halt() {
@@ -111,7 +119,16 @@ class OasisHidFocuserController : FocuserController {
     }
 
     override fun setFineStep(step: Int) {
-        _eafInfo.value = _eafInfo.value?.copy(fineStep = step.coerceAtLeast(1))
+        val fineStep = step.coerceAtLeast(1)
+        _eafInfo.value = _eafInfo.value?.copy(
+            fineStep = fineStep,
+            coarseStep = fineStep * 5
+        )
+    }
+
+    override fun setCoarseStep(step: Int) {
+        val coarseStep = step.coerceAtLeast(1)
+        _eafInfo.value = _eafInfo.value?.copy(coarseStep = coarseStep)
     }
 
     override fun setMaxStep(maxStep: Int) {
@@ -216,8 +233,8 @@ class OasisHidFocuserController : FocuserController {
             maxPosition = config.maxStep.coerceAtLeast(1),
             maxStep = config.maxStep.coerceAtLeast(1),
             stepSize = 1,
-            fineStep = existing?.fineStep ?: 1,
-            coarseStep = existing?.coarseStep ?: 5,
+            fineStep = existing?.fineStep ?: OasisFocuserProtocol.defaultFineStep,
+            coarseStep = existing?.coarseStep ?: OasisFocuserProtocol.defaultCoarseStep,
             direction = config.reverseDirection,
             backlashSteps = config.backlash,
             backlashDirection = config.backlashDirection

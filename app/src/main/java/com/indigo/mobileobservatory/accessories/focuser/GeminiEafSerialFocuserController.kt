@@ -192,6 +192,10 @@ class GeminiEafSerialFocuserController : FocuserController {
         )
     }
 
+    override fun setCoarseStep(step: Int) {
+        _eafInfo.value = _eafInfo.value?.copy(coarseStep = step.coerceAtLeast(1))
+    }
+
     override fun setMaxStep(maxStep: Int) {
         val value = maxStep.coerceAtLeast(100)
         launchFireAndForget(":07%06d#".format(value)) {

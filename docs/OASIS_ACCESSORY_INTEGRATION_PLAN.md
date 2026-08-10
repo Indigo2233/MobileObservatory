@@ -14,7 +14,7 @@
 
 | 设备 | USB VID:PID | 报文 | 核心命令 |
 | --- | --- | --- | --- |
-| Oasis Focuser | `338F:A0F0` | 65 字节 HID Report | 绝对移动 `0x36`、停止 `0x37`、同步 `0x38`、置零 `0x34` |
+| Oasis Focuser | `338F:A0F0` | 65 字节 HID Report | 相对移动 `0x35`、绝对移动 `0x36`、停止 `0x37`、同步 `0x38`、置零 `0x34` |
 | Focuser 一代 | `338F:A0F0` | 配置 18 字节，状态 14 字节 | 配置 `0x30/0x31`，状态 `0x32` |
 | Focuser Rose 二代 | `338F:A0F0` | 配置 40 字节，状态 40 字节 | 配置 `0x3A/0x3B`，状态 `0x3C` |
 | Oasis Filter Wheel | `338F:0FE0` | 65 字节 HID Report | 槽位数 `0x50`、名称 `0x51/0x52`、位置 `0x57`、校准 `0x58` |

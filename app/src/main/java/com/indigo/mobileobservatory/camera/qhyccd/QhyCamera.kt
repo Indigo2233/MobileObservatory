@@ -11,8 +11,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.math.round
 
-class QhyCamera : Camera {
+class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable {
 
     companion object {
         private const val TAG = "QhyCamera"
@@ -32,6 +33,12 @@ class QhyCamera : Camera {
     override var gainRange = FloatRange(0f, 80f, 0f); private set
     override var currentExposureUs = 20_000f; private set
     override var currentGain = 0f; private set
+    override var offsetSupported = false; private set
+    override var offsetRange = FloatRange(0f, 0f, 0f); private set
+    override var offsetStep = 1f; private set
+    override var currentOffset = 0f; private set
+    override var supportedNativeReadoutModes: List<CameraNativeReadoutMode> = emptyList(); private set
+    override var currentNativeReadoutModeId: String = "0"; private set
     override var currentPixelFormat = PixelFormat.MONO16; private set
     override var supportedPixelFormats = listOf(PixelFormat.MONO16, PixelFormat.MONO8); private set
     override var currentRoi = Roi(0, 0, 1, 1); private set
@@ -106,6 +113,7 @@ class QhyCamera : Camera {
             savedCameraId = resolvedId
             val streamMode = if (singleFrame) 0 else 1
             QhyccdJni.setReadMode(0)
+            initNativeReadoutModes()
             val smRet = QhyccdJni.setStreamMode(streamMode)
             FileLogger.i(TAG, "StreamMode=$streamMode ret=$smRet (${if (singleFrame) "single-frame" else "live"})")
 
@@ -161,6 +169,7 @@ class QhyCamera : Camera {
             )
             initExposureRange()
             initGainRange()
+            initOffsetRange()
 
             QhyccdJni.setParam(QhyccdJni.CONTROL_USBTRAFFIC, 0.0)
             val usbTrafficRange = QhyccdJni.getParamRange(QhyccdJni.CONTROL_USBTRAFFIC)
@@ -267,6 +276,32 @@ class QhyCamera : Camera {
         if (range != null) {
             gainRange = FloatRange(range[0].toFloat(), range[1].toFloat(), currentGain)
         }
+    }
+
+    private fun initOffsetRange() {
+        offsetSupported = false
+        offsetRange = FloatRange(0f, 0f, 0f)
+        val range = QhyccdJni.getParamRange(QhyccdJni.CONTROL_OFFSET) ?: return
+        if (range.size < 2 || range[1] < range[0]) return
+        val current = QhyccdJni.getParam(QhyccdJni.CONTROL_OFFSET).toFloat()
+        offsetSupported = true
+        currentOffset = current.coerceIn(range[0].toFloat(), range[1].toFloat())
+        offsetStep = range.getOrNull(2)?.toFloat()?.takeIf { it > 0f } ?: 1f
+        offsetRange = FloatRange(range[0].toFloat(), range[1].toFloat(), currentOffset)
+    }
+
+    private fun initNativeReadoutModes() {
+        val count = QhyccdJni.getNumberOfReadModes().coerceIn(0, 32)
+        supportedNativeReadoutModes = if (count > 0) {
+            (0 until count).map { index ->
+                val name = QhyccdJni.getReadModeName(index).trim()
+                CameraNativeReadoutMode(index.toString(), name.ifBlank { "Read mode ${index + 1}" })
+            }
+        } else {
+            listOf(CameraNativeReadoutMode("0", "Read mode 1"))
+        }
+        currentNativeReadoutModeId = "0"
+        FileLogger.i(TAG, "QHY readout modes: ${supportedNativeReadoutModes.joinToString { it.displayName }}")
     }
 
     override fun close() {
@@ -555,6 +590,59 @@ class QhyCamera : Camera {
     override fun setGain(db: Float) {
         currentGain = db.coerceIn(gainRange.min, gainRange.max)
         QhyccdJni.setParam(QhyccdJni.CONTROL_GAIN, currentGain.toDouble())
+    }
+
+    override fun setOffset(value: Float) {
+        if (!offsetSupported || offsetRange.max < offsetRange.min) return
+        val clamped = value.coerceIn(offsetRange.min, offsetRange.max)
+        currentOffset = if (offsetStep > 0f) {
+            (offsetRange.min + round((clamped - offsetRange.min) / offsetStep) * offsetStep)
+                .coerceIn(offsetRange.min, offsetRange.max)
+        } else {
+            clamped
+        }
+        QhyccdJni.setParam(QhyccdJni.CONTROL_OFFSET, currentOffset.toDouble())
+    }
+
+    override fun setNativeReadoutMode(id: String): Boolean {
+        val mode = id.toIntOrNull() ?: return false
+        if (supportedNativeReadoutModes.none { it.id == id }) return false
+        if (id == currentNativeReadoutModeId) return true
+
+        val wasCapturing = _isCapturing.value
+        val callback = frameCallback
+        if (wasCapturing) stopCapture()
+
+        val previousExposure = currentExposureUs
+        val previousGain = currentGain
+        val previousOffset = currentOffset
+        return try {
+            if (QhyccdJni.setReadMode(mode) != QhyccdJni.QHYCCD_SUCCESS) return false
+            if (QhyccdJni.initCamera() != QhyccdJni.QHYCCD_SUCCESS) return false
+
+            val chipInfo = QhyccdJni.getChipInfo() ?: return false
+            sensorWidth = chipInfo[0]
+            sensorHeight = chipInfo[1]
+            maxBpp = chipInfo[2]
+            QhyccdJni.setBinMode(1, 1)
+            QhyccdJni.setResolution(0, 0, sensorWidth, sensorHeight)
+            currentRoi = Roi(0, 0, sensorWidth, sensorHeight)
+            cropInfo = CropInfo(0, 0, sensorWidth, sensorHeight)
+            initPixelFormats(currentPixelFormat.nativeBits)
+            initExposureRange()
+            initGainRange()
+            initOffsetRange()
+            setExposureTime(previousExposure)
+            setGain(previousGain)
+            setOffset(previousOffset)
+            currentNativeReadoutModeId = id
+            true
+        } catch (error: Throwable) {
+            FileLogger.e(TAG, "QHY readout mode switch failed: ${error.message}", error)
+            false
+        } finally {
+            if (wasCapturing && callback != null) startCapture(callback)
+        }
     }
 
     private val formatLock = Any()

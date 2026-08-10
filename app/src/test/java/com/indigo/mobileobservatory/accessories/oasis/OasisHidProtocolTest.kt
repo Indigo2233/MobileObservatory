@@ -55,6 +55,24 @@ class OasisHidProtocolTest {
     }
 
     @Test
+    fun encodesNativeRelativeFocuserMoves() {
+        assertArrayEquals(
+            byteArrayOf(1, 0, 0, 0, 50),
+            OasisFocuserProtocol.relativeMovePayload(50)
+        )
+        assertArrayEquals(
+            byteArrayOf(0, 0, 0, 0, 10),
+            OasisFocuserProtocol.relativeMovePayload(-10)
+        )
+    }
+
+    @Test
+    fun usesVisibleFocuserButtonSteps() {
+        assertEquals(10, OasisFocuserProtocol.defaultFineStep)
+        assertEquals(50, OasisFocuserProtocol.defaultCoarseStep)
+    }
+
+    @Test
     fun parsesFilterWheelStateAndOneBasedPosition() {
         val payload = ByteArray(38)
         OasisHidProtocol.int32(2_000).copyInto(payload, 0)

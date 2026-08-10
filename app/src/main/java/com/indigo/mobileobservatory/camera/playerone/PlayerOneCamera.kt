@@ -2,6 +2,7 @@ package com.indigo.mobileobservatory.camera.playerone
 
 import com.indigo.mobileobservatory.camera.Camera
 import com.indigo.mobileobservatory.camera.CameraInfo
+import com.indigo.mobileobservatory.camera.CameraOffsetCapable
 import com.indigo.mobileobservatory.camera.CoolingCapable
 import com.indigo.mobileobservatory.camera.CoolingInfo
 import com.indigo.mobileobservatory.camera.CropInfo
@@ -30,7 +31,7 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToInt
 
-class PlayerOneCamera : Camera, CoolingCapable {
+class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable {
 
     companion object {
         private const val TAG = "PlayerOneCam"
@@ -62,6 +63,11 @@ class PlayerOneCamera : Camera, CoolingCapable {
     override var gainRange: FloatRange = FloatRange(0f, 50f, 0f); private set
     override var currentExposureUs: Float = 10_000f; private set
     override var currentGain: Float = 0f; private set
+    override var offsetSupported: Boolean = false; private set
+    override val offsetLabel: String = "Offset"
+    override var offsetRange: FloatRange = FloatRange(0f, 0f, 0f); private set
+    override val offsetStep: Float = 1f
+    override var currentOffset: Float = 0f; private set
     override var currentPixelFormat: PixelFormat = PixelFormat.MONO8; private set
     override var supportedPixelFormats: List<PixelFormat> = listOf(PixelFormat.MONO8); private set
     override var currentReadoutMode: ReadoutMode = ReadoutMode.NORMAL; private set
@@ -140,6 +146,7 @@ class PlayerOneCamera : Camera, CoolingCapable {
 
             readExposureRange(cam)
             readGainRange(cam)
+            readOffsetRange(cam)
             configureFormats(cam, props.imageFormats)
             logTransportSettings(cam, props.isUsb3Speed)
             readSensorModes(cam)
@@ -310,6 +317,18 @@ class PlayerOneCamera : Camera, CoolingCapable {
             currentGain = PoaMapping.gainToDb(gain)
         } catch (e: PoaException) {
             FileLogger.w(TAG, "setGain ${e.error}: ${e.message}")
+        }
+    }
+
+    override fun setOffset(value: Float) {
+        val cam = poa ?: return
+        if (disconnected || !offsetSupported) return
+        val clamped = value.roundToInt().coerceIn(offsetRange.min.toInt(), offsetRange.max.toInt())
+        try {
+            cam.setConfig(PoaConfig.OFFSET, ConfigValue.ofInteger(clamped.toLong()), false)
+            currentOffset = clamped.toFloat()
+        } catch (e: PoaException) {
+            FileLogger.w(TAG, "setOffset ${e.error}: ${e.message}")
         }
     }
 
@@ -674,6 +693,22 @@ class PlayerOneCamera : Camera, CoolingCapable {
         }
     }
 
+    private fun readOffsetRange(cam: PoaCamera) {
+        try {
+            val attrs = cam.getConfigAttributes(PoaConfig.OFFSET)
+            if (!attrs.isWritable || !attrs.isReadable) return
+            val min = attrs.minimum.asInteger().toFloat()
+            val max = attrs.maximum.asInteger().toFloat()
+            val current = cam.getConfig(PoaConfig.OFFSET).value.asInteger().toFloat().coerceIn(min, max)
+            offsetSupported = true
+            currentOffset = current
+            offsetRange = FloatRange(min, max, current)
+            FileLogger.i(TAG, "Offset $min-$max (current=$current)")
+        } catch (e: PoaException) {
+            FileLogger.w(TAG, "OFFSET attrs ${e.error}")
+        }
+    }
+
     private fun configureFormats(cam: PoaCamera, formats: List<PoaImageFormat>) {
         val mapped = formats.mapNotNull { PoaMapping.toPixelFormat(it, bayer) }.distinct()
         supportedPixelFormats = mapped.ifEmpty {
@@ -782,8 +817,9 @@ class PlayerOneCamera : Camera, CoolingCapable {
         try {
             cam.setConfig(PoaConfig.GAIN, ConfigValue.ofInteger(gain.toLong()), false)
             currentGain = PoaMapping.gainToDb(gain)
-            if (offset >= 0) {
+            if (offset >= 0 && offsetSupported) {
                 cam.setConfig(PoaConfig.OFFSET, ConfigValue.ofInteger(offset.toLong()), false)
+                currentOffset = offset.toFloat().coerceIn(offsetRange.min, offsetRange.max)
             }
             FileLogger.i(TAG, "Applied gain preset for $mode: gain=$gain offset=$offset")
         } catch (e: PoaException) {

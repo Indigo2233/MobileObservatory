@@ -23,6 +23,7 @@ interface FocuserController {
     fun setZero()
     fun setDirection(direction: Int)
     fun setFineStep(step: Int)
+    fun setCoarseStep(step: Int)
     fun setMaxStep(maxStep: Int)
     fun setBacklash(steps: Int, direction: Int)
     fun close()
@@ -44,6 +45,7 @@ class ToupTekFocuserAdapter(
     override fun setZero() = controller.setZero()
     override fun setDirection(direction: Int) = controller.setDirection(direction)
     override fun setFineStep(step: Int) = controller.setFineStep(step)
+    override fun setCoarseStep(step: Int) = controller.setCoarseStep(step)
     override fun setMaxStep(maxStep: Int) = controller.setMaxStep(maxStep)
     override fun setBacklash(steps: Int, direction: Int) =
         controller.setBacklash(steps, direction)
@@ -119,6 +121,7 @@ class FocuserControllerRouter(
     override fun setZero() = active.value?.setZero() ?: Unit
     override fun setDirection(direction: Int) = active.value?.setDirection(direction) ?: Unit
     override fun setFineStep(step: Int) = active.value?.setFineStep(step) ?: Unit
+    override fun setCoarseStep(step: Int) = active.value?.setCoarseStep(step) ?: Unit
     override fun setMaxStep(maxStep: Int) = active.value?.setMaxStep(maxStep) ?: Unit
     override fun setBacklash(steps: Int, direction: Int) =
         active.value?.setBacklash(steps, direction) ?: Unit

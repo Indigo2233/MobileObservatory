@@ -8,6 +8,7 @@ object ToupcamJni {
 
     const val OPTION_RAW = 0x04
     const val OPTION_BITDEPTH = 0x06
+    const val OPTION_BLACKLEVEL = 0x15
     const val OPTION_FRAMERATE = 0x11
     const val OPTION_BINNING = 0x17
     const val OPTION_PIXEL_FORMAT = 0x1a
@@ -40,6 +41,7 @@ object ToupcamJni {
     const val FLAG_RAW12 = 0x00002000L
     const val FLAG_RAW14 = 0x00004000L
     const val FLAG_RAW16 = 0x00008000L
+    const val FLAG_BLACKLEVEL = 0x00400000L
     const val FLAG_RAW8 = 0x80000000L
     const val FLAG_TEC = 0x00000080L
     const val FLAG_GETTEMPERATURE = 0x00000400L

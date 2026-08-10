@@ -9,8 +9,9 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.log10
 import kotlin.math.pow
+import kotlin.math.roundToInt
 
-class ToupcamCamera : Camera, NativeEventCallback, CoolingCapable {
+class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingCapable {
 
     companion object {
         private const val TAG = "ToupcamCamera"
@@ -41,6 +42,19 @@ class ToupcamCamera : Camera, NativeEventCallback, CoolingCapable {
         private set
 
     override var currentGain: Float = 0f
+        private set
+
+    override var offsetSupported: Boolean = false
+        private set
+
+    override val offsetLabel: String = "Black Level"
+
+    override var offsetRange: FloatRange = FloatRange(0f, 0f, 0f)
+        private set
+
+    override val offsetStep: Float = 1f
+
+    override var currentOffset: Float = 0f
         private set
 
     override var currentPixelFormat: PixelFormat = PixelFormat.MONO8
@@ -172,6 +186,7 @@ class ToupcamCamera : Camera, NativeEventCallback, CoolingCapable {
 
             readExposureRange()
             readGainRange()
+            readOffsetRange()
             try { initCooling() } catch (e: Exception) {
                 Log.w(TAG, "initCooling failed: ${e.message}")
             }
@@ -283,6 +298,14 @@ class ToupcamCamera : Camera, NativeEventCallback, CoolingCapable {
         }
     }
 
+    override fun setOffset(value: Float) {
+        if (!offsetSupported) return
+        val clamped = value.roundToInt().coerceIn(offsetRange.min.toInt(), offsetRange.max.toInt())
+        if (ToupcamJni.putOption(ToupcamJni.OPTION_BLACKLEVEL, clamped)) {
+            currentOffset = clamped.toFloat()
+        }
+    }
+
     override fun setPixelFormat(format: PixelFormat) {
         if (format == currentPixelFormat) return
 
@@ -307,6 +330,7 @@ class ToupcamCamera : Camera, NativeEventCallback, CoolingCapable {
         Log.i(TAG, "PixelFormat set to ${format.name} (BITDEPTH=$bitDepth, PIXEL_FORMAT=$pixFmtVal, ok=$ok)")
 
         currentPixelFormat = format
+        readOffsetRange()
 
         try { Thread.sleep(50) } catch (_: InterruptedException) {}
 
@@ -438,6 +462,7 @@ class ToupcamCamera : Camera, NativeEventCallback, CoolingCapable {
                 currentPixelFormat = if (isMono) PixelFormat.MONO8 else PixelFormat.BAYER_RG8
             }
         }
+        readOffsetRange()
         Log.i(TAG, "Format updated: ${currentPixelFormat.name} rawBits=$rawBits supported=${supportedPixelFormats.joinToString { it.name }}")
     }
 
@@ -584,6 +609,36 @@ class ToupcamCamera : Camera, NativeEventCallback, CoolingCapable {
             currentGain = curDb
         } catch (e: Exception) {
             Log.w(TAG, "readGainRange: ${e.message}")
+        }
+    }
+
+    private fun readOffsetRange() {
+        offsetSupported = (modelFlag and ToupcamJni.FLAG_BLACKLEVEL) != 0L
+        if (!offsetSupported) {
+            offsetRange = FloatRange(0f, 0f, 0f)
+            currentOffset = 0f
+            return
+        }
+
+        try {
+            val max = when {
+                currentPixelFormat.nativeBits <= 8 -> 31
+                currentPixelFormat.nativeBits <= 10 -> 124
+                currentPixelFormat.nativeBits <= 11 -> 248
+                currentPixelFormat.nativeBits <= 12 -> 496
+                currentPixelFormat.nativeBits <= 14 -> 1984
+                else -> 7936
+            }
+            currentOffset = ToupcamJni.getOption(ToupcamJni.OPTION_BLACKLEVEL)
+                .toFloat()
+                .coerceIn(0f, max.toFloat())
+            offsetRange = FloatRange(0f, max.toFloat(), currentOffset)
+            Log.i(TAG, "Black level range: 0-$max (current=${currentOffset.toInt()})")
+        } catch (e: Exception) {
+            offsetSupported = false
+            offsetRange = FloatRange(0f, 0f, 0f)
+            currentOffset = 0f
+            Log.w(TAG, "readOffsetRange: ${e.message}")
         }
     }
 

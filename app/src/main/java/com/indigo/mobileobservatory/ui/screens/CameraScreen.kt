@@ -122,7 +122,7 @@ fun CameraScreen(
     }
 
     if (showSettings) {
-        SettingsScreen(onBack = { showSettings = false })
+        SettingsScreen(viewModel = viewModel, onBack = { showSettings = false })
         return
     }
 
@@ -396,7 +396,9 @@ fun CameraScreen(
             MainControlTab.ACCESSORIES -> {
                 AccessoriesScreen(
                     viewModel = viewModel,
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f),
+                    onOpenCamera = { selectedTab = MainControlTab.CAMERA },
+                    onOpenMount = { selectedTab = MainControlTab.MOUNT }
                 )
             }
             MainControlTab.CAMERA -> Column(

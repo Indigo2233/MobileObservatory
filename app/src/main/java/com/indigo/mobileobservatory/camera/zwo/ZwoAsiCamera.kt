@@ -11,8 +11,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.roundToLong
 
-class ZwoAsiCamera : Camera {
+class ZwoAsiCamera : Camera, CameraOffsetCapable {
 
     companion object {
         private const val TAG = "ZwoAsiCam"
@@ -30,6 +31,7 @@ class ZwoAsiCamera : Camera {
 
         const val ASI_GAIN = 0
         const val ASI_EXPOSURE = 1
+        const val ASI_BRIGHTNESS = 5
         const val ASI_HARDWARE_BIN = 13
         const val ASI_HIGH_SPEED_MODE = 14
 
@@ -86,6 +88,11 @@ class ZwoAsiCamera : Camera {
     override var gainRange: FloatRange = FloatRange(0f, 500f, 0f); private set
     override var currentExposureUs: Float = 10_000f; private set
     override var currentGain: Float = 0f; private set
+    override var offsetSupported: Boolean = false; private set
+    override val offsetLabel: String = "Offset"
+    override var offsetRange: FloatRange = FloatRange(0f, 0f, 0f); private set
+    override val offsetStep: Float = 1f
+    override var currentOffset: Float = 0f; private set
     override var currentPixelFormat: PixelFormat = PixelFormat.MONO8; private set
     override var supportedPixelFormats: List<PixelFormat> = listOf(PixelFormat.MONO8); private set
     override var currentRoi: Roi = Roi(0, 0, 1920, 1080); private set
@@ -146,6 +153,7 @@ class ZwoAsiCamera : Camera {
 
             readExposureRange(cam)
             readGainRange(cam)
+            readOffsetRange(cam)
             readSupportedFormats(prop)
             configureInitialFormat(cam)
 
@@ -230,6 +238,18 @@ class ZwoAsiCamera : Camera {
         val clamped = db.coerceIn(gainRange.min, gainRange.max)
         cam.setControlValue(ASI_GAIN, clamped.toLong(), 0)
         currentGain = clamped
+    }
+
+    override fun setOffset(value: Float) {
+        val cam = zwoCamera ?: return
+        if (!offsetSupported) return
+        val clamped = value.roundToLong().coerceIn(offsetRange.min.toLong(), offsetRange.max.toLong())
+        val result = cam.setControlValue(ASI_BRIGHTNESS, clamped, 0)
+        if (result == ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
+            currentOffset = clamped.toFloat()
+        } else {
+            FileLogger.w(TAG, "Set offset failed: $result")
+        }
     }
 
     override fun setPixelFormat(format: PixelFormat) {
@@ -377,6 +397,24 @@ class ZwoAsiCamera : Camera {
             currentGain = def
             FileLogger.i(TAG, "Gain range: $min-$max (default=$def)")
         }
+    }
+
+    private fun readOffsetRange(cam: ZwoCamera) {
+        val capRet = cam.getControlCaps(ASI_BRIGHTNESS)
+        if (capRet.errorCode.intVal != ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) return
+
+        val cap = capRet.obj as ASIControlCap
+        if (cap.isWritable == 0) return
+
+        val min = cap.minValue.toFloat()
+        val max = cap.maxValue.toFloat()
+        val valueRet = cam.getControlValue(ASI_BRIGHTNESS)
+        if (valueRet.errorCode.intVal != ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) return
+
+        offsetSupported = true
+        currentOffset = valueRet.extraLongVal1.toFloat().coerceIn(min, max)
+        offsetRange = FloatRange(min, max, currentOffset)
+        FileLogger.i(TAG, "Offset range: $min-$max (current=$currentOffset)")
     }
 
     private fun readSupportedFormats(prop: com.zwo.ASICameraProperty) {

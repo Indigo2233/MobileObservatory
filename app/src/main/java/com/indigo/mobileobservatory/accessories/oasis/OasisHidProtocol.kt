@@ -94,7 +94,11 @@ data class OasisFocuserConfig(
 )
 
 object OasisFocuserProtocol {
+    const val defaultFineStep = 10
+    const val defaultCoarseStep = 50
+
     const val commandSetZero = 0x34
+    const val commandMoveRelative = 0x35
     const val commandMoveTo = 0x36
     const val commandStop = 0x37
     const val commandSync = 0x38
@@ -124,6 +128,13 @@ object OasisFocuserProtocol {
     fun setConfigCommand(generation: OasisFocuserGeneration): Int = when (generation) {
         OasisFocuserGeneration.FIRST -> commandSetConfigFirst
         OasisFocuserGeneration.ROSE -> commandSetConfigRose
+    }
+
+    fun relativeMovePayload(steps: Int): ByteArray {
+        require(steps != Int.MIN_VALUE)
+        val direction = if (steps >= 0) 1 else 0
+        val magnitude = if (steps >= 0) steps else -steps
+        return byteArrayOf(direction.toByte()) + OasisHidProtocol.int32(magnitude)
     }
 
     fun expectedStatusLength(generation: OasisFocuserGeneration): Int = when (generation) {

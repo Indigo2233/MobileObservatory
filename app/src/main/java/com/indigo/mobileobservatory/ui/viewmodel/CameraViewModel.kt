@@ -32,6 +32,10 @@ import com.indigo.mobileobservatory.recording.FITSWriter
 import com.indigo.mobileobservatory.recording.Mp4Writer
 import com.indigo.mobileobservatory.recording.PSERWriter
 import com.indigo.mobileobservatory.recording.SERWriter
+import com.indigo.mobileobservatory.settings.CameraDefaults
+import com.indigo.mobileobservatory.settings.CoverDefaults
+import com.indigo.mobileobservatory.settings.DeviceSettingsRepository
+import com.indigo.mobileobservatory.settings.FocuserDefaults
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancelChildren
@@ -182,6 +186,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _gain = MutableStateFlow(0f)
     val gain: StateFlow<Float> = _gain.asStateFlow()
 
+    private val _offset = MutableStateFlow<Float?>(null)
+    val offset: StateFlow<Float?> = _offset.asStateFlow()
+    private val _offsetRange = MutableStateFlow<FloatRange?>(null)
+    val offsetRange: StateFlow<FloatRange?> = _offsetRange.asStateFlow()
+    private val _offsetLabel = MutableStateFlow("Offset")
+    val offsetLabel: StateFlow<String> = _offsetLabel.asStateFlow()
+    private val _offsetStep = MutableStateFlow(1f)
+    val offsetStep: StateFlow<Float> = _offsetStep.asStateFlow()
+
     private val _pixelFormat = MutableStateFlow(PixelFormat.MONO8)
     val pixelFormat: StateFlow<PixelFormat> = _pixelFormat.asStateFlow()
 
@@ -193,6 +206,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _supportedReadoutModes = MutableStateFlow<List<ReadoutMode>>(listOf(ReadoutMode.NORMAL))
     val supportedReadoutModes: StateFlow<List<ReadoutMode>> = _supportedReadoutModes.asStateFlow()
+
+    private val _nativeReadoutModes = MutableStateFlow<List<CameraNativeReadoutMode>>(emptyList())
+    val nativeReadoutModes: StateFlow<List<CameraNativeReadoutMode>> = _nativeReadoutModes.asStateFlow()
+    private val _nativeReadoutModeId = MutableStateFlow<String?>(null)
+    val nativeReadoutModeId: StateFlow<String?> = _nativeReadoutModeId.asStateFlow()
 
     private val _detectedBitDepth = MutableStateFlow(8)
     val detectedBitDepth: StateFlow<Int> = _detectedBitDepth.asStateFlow()
@@ -376,6 +394,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val showDevicePicker: StateFlow<Boolean> = _showDevicePicker.asStateFlow()
 
     private val prefs = application.getSharedPreferences("mobile_observatory", Context.MODE_PRIVATE)
+    private val deviceSettings = DeviceSettingsRepository(application)
 
     val mountConnectionState = mountModule.mountConnectionState
     val mountHost = mountModule.mountHost
@@ -499,10 +518,27 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         val cam = cameraManager.activeCamera ?: return@collect
                         _exposureUs.value = cam.currentExposureUs
                         _gain.value = cam.currentGain
+                        syncOffsetCapability(cam)
                         _pixelFormat.value = cam.currentPixelFormat
                         _supportedPixelFormats.value = cam.supportedPixelFormats
                         _readoutMode.value = cam.currentReadoutMode
                         _supportedReadoutModes.value = cam.supportedReadoutModes
+                        (cam as? CameraNativeReadoutModeCapable)?.let { readoutCapable ->
+                            _nativeReadoutModes.value = readoutCapable.supportedNativeReadoutModes
+                            _nativeReadoutModeId.value = readoutCapable.currentNativeReadoutModeId
+                        } ?: run {
+                            _nativeReadoutModes.value = emptyList()
+                            _nativeReadoutModeId.value = null
+                        }
+                        applyCameraDefaults(cam)
+                        _gain.value = cam.currentGain
+                        _pixelFormat.value = cam.currentPixelFormat
+                        _readoutMode.value = cam.currentReadoutMode
+                        (cam as? CameraNativeReadoutModeCapable)?.let { readoutCapable ->
+                            _nativeReadoutModes.value = readoutCapable.supportedNativeReadoutModes
+                            _nativeReadoutModeId.value = readoutCapable.currentNativeReadoutModeId
+                        }
+                        syncOffsetCapability(cam)
                         _roi.value = cam.currentRoi
                         _longExposureEnabled.value = cam.longExposureEnabled
                         refreshExposureUiLimits()
@@ -517,12 +553,28 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         previewPipeline.stop()
                         _previewBitmap.value = null
                         unbindCoolingFlows()
+                        syncOffsetCapability(null)
+                        _nativeReadoutModes.value = emptyList()
+                        _nativeReadoutModeId.value = null
                     }
                     is ConnectionState.Enumerating -> {
                         _statusMessage.value = app.getString(R.string.searching_cameras)
                     }
                     is ConnectionState.Connecting -> {
                         _statusMessage.value = app.getString(R.string.connecting)
+                    }
+                }
+            }
+        }
+
+        var appliedFocuserId: String? = null
+        viewModelScope.launch {
+            eafInfo.collect { info ->
+                val deviceId = info?.name ?: return@collect
+                if (deviceId != appliedFocuserId) {
+                    appliedFocuserId = deviceId
+                    if (deviceSettings.hasFocuserDefaults(deviceId)) {
+                        applyFocuserDefaults(deviceSettings.focuserDefaults(deviceId))
                     }
                 }
             }
@@ -1403,6 +1455,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _gain.value = cam.currentGain
     }
 
+    fun setOffset(value: Float) {
+        val camera = (cameraManager.activeCamera as? CameraOffsetCapable)
+            ?.takeIf { it.offsetSupported } ?: return
+        camera.setOffset(value)
+        syncOffsetCapability(cameraManager.activeCamera)
+    }
+
     @Volatile private var pixelFormatSwitching = false
 
     /**
@@ -1427,6 +1486,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             } finally {
                 _pixelFormat.value = cam.currentPixelFormat
                 _supportedPixelFormats.value = cam.supportedPixelFormats
+                syncOffsetCapability(cam)
                 pixelFormatSwitching = false
             }
         }
@@ -1438,8 +1498,119 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _readoutMode.value = cam.currentReadoutMode
         _pixelFormat.value = cam.currentPixelFormat
         _supportedPixelFormats.value = cam.supportedPixelFormats
+        syncOffsetCapability(cam)
         frameProcessor.resetBitShiftDetection()
     }
+
+    fun setNativeReadoutMode(id: String) {
+        val camera = cameraManager.activeCamera as? CameraNativeReadoutModeCapable ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            if (camera.setNativeReadoutMode(id)) {
+                _nativeReadoutModes.value = camera.supportedNativeReadoutModes
+                _nativeReadoutModeId.value = camera.currentNativeReadoutModeId
+                _pixelFormat.value = cameraManager.activeCamera?.currentPixelFormat ?: _pixelFormat.value
+                _supportedPixelFormats.value = cameraManager.activeCamera?.supportedPixelFormats ?: _supportedPixelFormats.value
+                _roi.value = cameraManager.activeCamera?.currentRoi ?: _roi.value
+                syncOffsetCapability(cameraManager.activeCamera)
+            }
+        }
+    }
+
+    fun cameraDefaults(): CameraDefaults? {
+        val info = cameraManager.activeCamera?.cameraInfo ?: return null
+        return deviceSettings.cameraDefaults(cameraSettingsId(info))
+    }
+
+    fun saveCameraDefaults(settings: CameraDefaults) {
+        val info = cameraManager.activeCamera?.cameraInfo ?: return
+        deviceSettings.saveCameraDefaults(cameraSettingsId(info), settings)
+        applyCameraDefaults(cameraManager.activeCamera ?: return)
+        _gain.value = cameraManager.activeCamera?.currentGain ?: _gain.value
+        _pixelFormat.value = cameraManager.activeCamera?.currentPixelFormat ?: _pixelFormat.value
+        _readoutMode.value = cameraManager.activeCamera?.currentReadoutMode ?: _readoutMode.value
+        syncOffsetCapability(cameraManager.activeCamera)
+    }
+
+    fun focuserDefaults(): FocuserDefaults {
+        val info = eafInfo.value
+        val deviceId = info?.name ?: "focuser"
+        if (deviceSettings.hasFocuserDefaults(deviceId)) {
+            return deviceSettings.focuserDefaults(deviceId)
+        }
+        return info?.let {
+            FocuserDefaults(
+                fineStep = it.fineStep,
+                coarseStep = it.coarseStep,
+                maxStep = it.maxStep,
+                direction = it.direction,
+                backlashSteps = it.backlashSteps,
+                backlashDirection = it.backlashDirection
+            )
+        } ?: FocuserDefaults()
+    }
+
+    fun saveFocuserDefaults(settings: FocuserDefaults) {
+        val deviceId = eafInfo.value?.name ?: "focuser"
+        deviceSettings.saveFocuserDefaults(deviceId, settings)
+        applyFocuserDefaults(settings)
+    }
+
+    fun coverDefaults(): CoverDefaults =
+        deviceSettings.coverDefaults(coverDeviceInfo.value ?: "cover")
+
+    fun saveCoverDefaults(settings: CoverDefaults) {
+        val deviceId = coverDeviceInfo.value ?: "cover"
+        deviceSettings.saveCoverDefaults(deviceId, settings)
+        settings.brightness?.let(::setCalibratorBrightness)
+    }
+
+    private fun applyCameraDefaults(camera: Camera) {
+        val info = camera.cameraInfo ?: return
+        val settings = deviceSettings.cameraDefaults(cameraSettingsId(info))
+        settings.readoutMode
+            ?.takeIf { it in camera.supportedReadoutModes }
+            ?.let(camera::setReadoutMode)
+        settings.nativeReadoutModeId?.let { id ->
+            (camera as? CameraNativeReadoutModeCapable)?.let { readoutCapable ->
+                viewModelScope.launch(Dispatchers.IO) {
+                    if (readoutCapable.setNativeReadoutMode(id)) {
+                        _nativeReadoutModes.value = readoutCapable.supportedNativeReadoutModes
+                        _nativeReadoutModeId.value = readoutCapable.currentNativeReadoutModeId
+                    }
+                }
+            }
+        }
+        settings.pixelFormat
+            ?.takeIf { it in camera.supportedPixelFormats }
+            ?.let(camera::setPixelFormat)
+        settings.gain?.let { gain ->
+            camera.setGain(gain.coerceIn(camera.gainRange.min, camera.gainRange.max))
+        }
+        settings.offset?.let { offset ->
+            (camera as? CameraOffsetCapable)?.takeIf { it.offsetSupported }?.let { offsetCapable ->
+                offsetCapable.setOffset(offset.coerceIn(offsetCapable.offsetRange.min, offsetCapable.offsetRange.max))
+            }
+        }
+    }
+
+    private fun syncOffsetCapability(camera: Camera?) {
+        val offsetCapable = (camera as? CameraOffsetCapable)?.takeIf { it.offsetSupported }
+        _offset.value = offsetCapable?.currentOffset
+        _offsetRange.value = offsetCapable?.offsetRange
+        _offsetLabel.value = offsetCapable?.offsetLabel ?: "Offset"
+        _offsetStep.value = offsetCapable?.offsetStep ?: 1f
+    }
+
+    private fun applyFocuserDefaults(settings: FocuserDefaults) {
+        eafSetFineStep(settings.fineStep)
+        eafSetCoarseStep(settings.coarseStep)
+        settings.maxStep?.let(::eafSetMaxStep)
+        eafSetDirection(settings.direction)
+        eafSetBacklash(settings.backlashSteps, settings.backlashDirection)
+    }
+
+    private fun cameraSettingsId(info: CameraInfo): String =
+        listOf(info.name, info.serialNumber.ifBlank { "unknown" }).joinToString("_")
 
     fun setRoi(roi: Roi) {
         val cam = cameraManager.activeCamera ?: return
@@ -1537,6 +1708,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun eafSetZero() { eafCtrl.setZero() }
     fun eafSetDirection(dir: Int) { eafCtrl.setDirection(dir) }
     fun eafSetFineStep(step: Int) { eafCtrl.setFineStep(step) }
+    fun eafSetCoarseStep(step: Int) { eafCtrl.setCoarseStep(step) }
     fun eafSetMaxStep(maxStep: Int) { eafCtrl.setMaxStep(maxStep) }
     fun eafSetBacklash(steps: Int, direction: Int) { eafCtrl.setBacklash(steps, direction) }
 

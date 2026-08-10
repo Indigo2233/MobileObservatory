@@ -210,6 +210,18 @@ class EAFController {
         }
     }
 
+    fun setCoarseStep(step: Int) {
+        if (!_isConnected.value) return
+        val coarseStep = step.coerceAtLeast(1)
+        val ok = ToupcamJni.eafSet(ToupcamJni.AAF_SETCOARSE, coarseStep)
+        if (ok) {
+            _eafInfo.value = _eafInfo.value?.copy(coarseStep = coarseStep)
+            Log.i(TAG, "CoarseStep=$coarseStep")
+        } else {
+            Log.e(TAG, "AAF_SETCOARSE($coarseStep) failed")
+        }
+    }
+
     fun setMaxStep(maxStep: Int) {
         if (!_isConnected.value) return
         val clamped = maxStep.coerceAtLeast(100)
