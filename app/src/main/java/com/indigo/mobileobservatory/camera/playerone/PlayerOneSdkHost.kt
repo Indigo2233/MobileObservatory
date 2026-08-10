@@ -59,9 +59,47 @@ object PlayerOneSdkHost {
      * (including serial number for persistent identity).
      */
     fun enumerate(context: Context): List<EnumeratedCamera> {
+        val androidUsb = context.getSystemService(Context.USB_SERVICE) as? UsbManager
+        val androidDevices = androidUsb?.deviceList.orEmpty()
         ensureStarted(context)
         val devices = refreshDevices()
         if (devices.isEmpty()) return emptyList()
+
+        // The vendor bridge only exposes cameras through PlayerOneCameraSdk after
+        // an Android UsbDeviceConnection FD has been bound. When Android already
+        // granted permission (for example through USB_DEVICE_ATTACHED), the
+        // vendor callback is synchronous, so bind before querying camera count.
+        for (device in devices) {
+            val androidDevice = androidDevices[device.deviceName]
+            when {
+                androidDevice == null -> {
+                    FileLogger.w(
+                        TAG,
+                        "Cannot bind registration=${device.registrationId}: " +
+                            "Android device ${device.deviceName} is unavailable"
+                    )
+                }
+                androidUsb?.hasPermission(androidDevice) != true -> {
+                    FileLogger.i(
+                        TAG,
+                        "Bind deferred registration=${device.registrationId}: " +
+                            "Android USB permission is pending"
+                    )
+                }
+                device.isAuthorized -> Unit
+                else -> {
+                    var bindGranted: Boolean? = null
+                    requestPermission(device) { granted -> bindGranted = granted }
+                    if (bindGranted != true || !device.isAuthorized) {
+                        FileLogger.w(
+                            TAG,
+                            "Bind failed registration=${device.registrationId}: " +
+                                "granted=$bindGranted authorized=${device.isAuthorized}"
+                        )
+                    }
+                }
+            }
+        }
 
         val count = try {
             PlayerOneCameraSdk.getCameraCount()
@@ -91,7 +129,6 @@ object PlayerOneSdkHost {
             }
         )
 
-        val androidUsb = context.getSystemService(Context.USB_SERVICE) as? UsbManager
         val androidByPath = androidUsb?.deviceList ?: emptyMap()
 
         return cameras.mapIndexed { index, props ->

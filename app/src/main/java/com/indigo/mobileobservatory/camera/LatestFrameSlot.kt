@@ -12,14 +12,17 @@ class LatestFrameSlot<T> {
     val received: Long get() = _received.get()
     val dropped: Long get() = _dropped.get()
 
-    fun offer(value: T) {
+    /**
+     * Stores [value] and returns the unconsumed value it replaced, if any.
+     * The caller owns the returned value and must release its resources.
+     */
+    fun offer(value: T): T? {
         _received.incrementAndGet()
-        if (pending.getAndSet(value) != null) _dropped.incrementAndGet()
+        return pending.getAndSet(value)?.also { _dropped.incrementAndGet() }
     }
 
     fun takeLatest(): T? = pending.getAndSet(null)
 
-    fun clear() {
-        pending.set(null)
-    }
+    /** Removes and returns the pending value so its owner can release it. */
+    fun clear(): T? = pending.getAndSet(null)
 }

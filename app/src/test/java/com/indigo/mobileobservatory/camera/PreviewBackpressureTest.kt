@@ -9,11 +9,15 @@ class PreviewBackpressureTest {
     fun newestFrameReplacesPendingFrame() {
         val slot = LatestFrameSlot<Int>()
 
-        repeat(100) { slot.offer(it) }
+        val discarded = mutableListOf<Int>()
+        repeat(100) { value ->
+            slot.offer(value)?.let(discarded::add)
+        }
 
         assertEquals(99, slot.takeLatest())
         assertEquals(100, slot.received)
         assertEquals(99, slot.dropped)
+        assertEquals((0 until 99).toList(), discarded)
         assertNull(slot.takeLatest())
     }
 
@@ -27,5 +31,15 @@ class PreviewBackpressureTest {
         }
 
         assertEquals(0, slot.dropped)
+    }
+
+    @Test
+    fun clearReturnsPendingFrameForRelease() {
+        val slot = LatestFrameSlot<Int>()
+
+        slot.offer(42)
+
+        assertEquals(42, slot.clear())
+        assertNull(slot.clear())
     }
 }

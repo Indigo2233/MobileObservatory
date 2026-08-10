@@ -37,12 +37,16 @@ import com.indigo.mobileobservatory.settings.CoverDefaults
 import com.indigo.mobileobservatory.settings.DeviceSettingsRepository
 import com.indigo.mobileobservatory.settings.FocuserDefaults
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import android.content.ContentValues
 import android.os.Build
 import android.os.Environment
@@ -51,6 +55,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.LinkedBlockingQueue
 import kotlin.math.abs
@@ -77,6 +82,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         private const val GOTO_STABLE_SAMPLES = 2
         private const val MOTION_STABLE_TOLERANCE_DEG = 0.01
         private const val MOTION_STABLE_SAMPLES = 3
+        private const val RECORD_QUEUE_CAPACITY = 8
     }
 
     val cameraManager = DahengCameraManager(application)
@@ -359,8 +365,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _guideReverseDec = MutableStateFlow(false)
     val guideReverseDec: StateFlow<Boolean> = _guideReverseDec.asStateFlow()
 
-    private var lastFrame: FrameData? = null
-    private var lastGuideFrame: FrameData? = null
+    private val pendingFrameSnapshot = AtomicReference<CompletableDeferred<FrameData>?>(null)
+    private val frameSnapshotMutex = Mutex()
     private val latestGuideStars = AtomicReference<List<GuideStar>>(emptyList())
     @Volatile private var guideFrameSequence = 0L
     @Volatile private var pendingGuideConnect = false
@@ -375,7 +381,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     @Volatile private var mp4Writer: Mp4Writer? = null
     @Volatile private var currentRecordingFile: File? = null
     private var recordingStartTime: Long = 0
-    private val recordWriteQueue = LinkedBlockingQueue<FrameData>(64)
+    private val recordWriteQueue = LinkedBlockingQueue<FrameData>(RECORD_QUEUE_CAPACITY)
+    private val recordBufferPool = ReusableByteArrayPool(RECORD_QUEUE_CAPACITY)
+    private val recordDroppedFrames = AtomicLong(0)
     private var recordWriteThread: Thread? = null
 
     private val _captureFormat = MutableStateFlow(CaptureFormat.JPG)
@@ -735,18 +743,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         )
     }
 
-    private suspend fun awaitFreshPreviewFrame(timeoutMs: Long = 45_000L) {
-        val before = lastFrameArrivalMs
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (System.currentTimeMillis() < deadline) {
-            if (lastFrameArrivalMs > before && lastFrame != null) return
-            delay(100)
-        }
-        error(app.getString(R.string.precision_goto_no_frame))
-    }
-
     private suspend fun captureAndSolveForPrecisionGoto(hint: MountCoordinates?): MountCoordinates {
-        awaitFreshPreviewFrame()
         val file = captureTempFitsForPlateSolve()
             ?: error(app.getString(R.string.precision_goto_no_frame))
         val hints = withContext(Dispatchers.IO) { FitsSolveHintReader.read(file) }
@@ -1101,18 +1098,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private fun startGuidePreview() {
         val cam = guideCameraManager.activeCamera ?: return
 
-        guidePreviewPipeline.start { frame ->
-            _guidePreviewBitmap.value = guidePreviewPipeline.frame.value?.bitmap
-            val stars = detectGuideStars(frame)
-            latestGuideStars.set(stars)
-            _guideStars.value = stars
-            _guideStar.value = stars.firstOrNull()
-            processGuideCorrection(stars)
-        }
+        guidePreviewPipeline.start(
+            onProcessed = { frame ->
+                _guidePreviewBitmap.value = guidePreviewPipeline.frame.value?.bitmap
+                val stars = detectGuideStars(frame)
+                latestGuideStars.set(stars)
+                _guideStars.value = stars
+                _guideStar.value = stars.firstOrNull()
+                processGuideCorrection(stars)
+            },
+            recycleBuffer = cam::recycleBuffer
+        )
 
         cam.startCapture(object : FrameCallback {
             override fun onFrame(frame: FrameData) {
-                lastGuideFrame = frame
                 guideFrameSequence++
                 guidePreviewPipeline.submit(frame)
             }
@@ -1261,17 +1260,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 if (detectedBits != _detectedBitDepth.value) {
                     _detectedBitDepth.value = detectedBits
                 }
-            }
+            },
+            recycleBuffer = cam::recycleBuffer
         )
 
         startExposureTimer()
         cam.startCapture(object : FrameCallback {
             override fun onFrame(frame: FrameData) {
-                lastFrame = frame
                 onFrameArrived()
                 updateFps()
 
-                previewPipeline.submit(frame)
+                fulfillFrameSnapshot(frame)
 
                 if (autoExpFrameSkip++ % 10 == 0) {
                     val aeMax = if (_longExposureEnabled.value) {
@@ -1289,18 +1288,33 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 updateSoftwareStackingProgress(cam)
 
                 if (_isRecording.value) {
-                    val bpp = frame.pixelFormat.bytesPerPixel
-                    val size = frame.width * frame.height * bpp
-                    val copySize = size.coerceAtMost(frame.data.size)
-                    val copy = ByteArray(copySize)
-                    System.arraycopy(frame.data, 0, copy, 0, copySize)
-                    val recFrame = frame.copy(data = copy)
-                    if (!recordWriteQueue.offer(recFrame)) {
-                        Log.w("CameraViewModel", "Recording queue full, dropping frame")
+                    if (recordWriteQueue.remainingCapacity() == 0) {
+                        reportRecordingDrop()
+                    } else {
+                        val bpp = frame.pixelFormat.bytesPerPixel
+                        val size = frame.width * frame.height * bpp
+                        val copySize = size.coerceAtMost(frame.data.size)
+                        val copy = recordBufferPool.acquire(copySize)
+                        System.arraycopy(frame.data, 0, copy, 0, copySize)
+                        val recFrame = frame.copy(data = copy)
+                        if (!recordWriteQueue.offer(recFrame)) {
+                            recordBufferPool.release(copy)
+                            reportRecordingDrop()
+                        }
                     }
                 }
+
+                // Ownership transfers to the preview pipeline after all synchronous readers finish.
+                previewPipeline.submit(frame)
             }
         })
+    }
+
+    private fun reportRecordingDrop() {
+        val dropped = recordDroppedFrames.incrementAndGet()
+        if (dropped == 1L || dropped % 100L == 0L) {
+            Log.w(TAG, "Recording queue full, dropped=$dropped")
+        }
     }
 
     private fun startRecordWriteThread() {
@@ -1309,30 +1323,36 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 try {
                     val frame = recordWriteQueue.poll(100, java.util.concurrent.TimeUnit.MILLISECONDS)
                     if (frame != null) {
-                        val ser = serWriter
-                        val pser = pserWriter
-                        val mp4 = mp4Writer
-                        when {
-                            ser != null && ser.isOpen -> {
-                                ser.writeFrame(frame)
-                                _recordingFrameCount.value = ser.currentFrameCount
-                                _recordingBytes.value = ser.totalBytesWritten
+                        var writerAvailable = true
+                        try {
+                            val ser = serWriter
+                            val pser = pserWriter
+                            val mp4 = mp4Writer
+                            when {
+                                ser != null && ser.isOpen -> {
+                                    ser.writeFrame(frame)
+                                    _recordingFrameCount.value = ser.currentFrameCount
+                                    _recordingBytes.value = ser.totalBytesWritten
+                                }
+                                pser != null && pser.isOpen -> {
+                                    pser.writeFrame(frame)
+                                    _recordingFrameCount.value = pser.currentFrameCount
+                                    _recordingBytes.value = pser.totalBytesWritten
+                                }
+                                mp4 != null && mp4.isOpen -> {
+                                    mp4.wbRedGain = frameProcessor.wbRedGain
+                                    mp4.wbGreenGain = frameProcessor.wbGreenGain
+                                    mp4.wbBlueGain = frameProcessor.wbBlueGain
+                                    mp4.writeFrame(frame)
+                                    _recordingFrameCount.value = mp4.currentFrameCount
+                                    _recordingBytes.value = mp4.totalBytesWritten
+                                }
+                                else -> writerAvailable = false
                             }
-                            pser != null && pser.isOpen -> {
-                                pser.writeFrame(frame)
-                                _recordingFrameCount.value = pser.currentFrameCount
-                                _recordingBytes.value = pser.totalBytesWritten
-                            }
-                            mp4 != null && mp4.isOpen -> {
-                                mp4.wbRedGain = frameProcessor.wbRedGain
-                                mp4.wbGreenGain = frameProcessor.wbGreenGain
-                                mp4.wbBlueGain = frameProcessor.wbBlueGain
-                                mp4.writeFrame(frame)
-                                _recordingFrameCount.value = mp4.currentFrameCount
-                                _recordingBytes.value = mp4.totalBytesWritten
-                            }
-                            else -> break
+                        } finally {
+                            recordBufferPool.release(frame.data)
                         }
+                        if (!writerAvailable) break
                         _recordingDurationMs.value = System.currentTimeMillis() - recordingStartTime
                         
                         val limit = _recordLimit.value
@@ -1368,6 +1388,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         // Drain remaining frames
         while (true) {
             val frame = recordWriteQueue.poll() ?: break
+            var writeSucceeded = true
             try {
                 val ser = serWriter
                 val pser = pserWriter
@@ -1377,9 +1398,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     pser != null && pser.isOpen -> pser.writeFrame(frame)
                     mp4 != null && mp4.isOpen -> mp4.writeFrame(frame)
                 }
-            } catch (_: Throwable) { break }
+            } catch (_: Throwable) {
+                writeSucceeded = false
+            } finally {
+                recordBufferPool.release(frame.data)
+            }
+            if (!writeSucceeded) break
         }
-        recordWriteQueue.clear()
+        while (true) {
+            val frame = recordWriteQueue.poll() ?: break
+            recordBufferPool.release(frame.data)
+        }
+        recordBufferPool.clear()
     }
 
     fun setExposure(us: Float) {
@@ -1875,6 +1905,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             _recordingFrameCount.value = 0
             _recordingBytes.value = 0
             _recordingDurationMs.value = 0
+            recordDroppedFrames.set(0)
             val bitsInfo = if (fmt == RecordFormat.PSER && !useSERForPser8bit) " ${pixFmt.nativeBits}bit" else ""
             _statusMessage.value = if (useSERForPser8bit) {
                 "REC [SER]: ${file.name} (8bit→SER)"
@@ -1959,16 +1990,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     suspend fun captureTempFitsForPlateSolve(): File? = withContext(Dispatchers.IO) {
-        val frame = lastFrame ?: return@withContext null
         val cam = cameraManager.activeCamera ?: return@withContext null
-        val copiedFrame = frame.copy(data = frame.data.copyOf())
+        val frame = awaitFrameSnapshot() ?: return@withContext null
         val dir = File(getApplication<Application>().cacheDir, "polar_align").also { it.mkdirs() }
         val file = File(dir, "polar_${System.currentTimeMillis()}.fits")
         val info = cam.cameraInfo
         val focalLengthMm = prefs.getFloat("plate_focal_length_mm", 0f).takeIf { it > 0f }
         fitsWriter.write(
             file = file,
-            frame = copiedFrame,
+            frame = frame,
             exposureSeconds = cam.currentExposureUs / 1_000_000f,
             gain = cam.currentGain,
             cameraName = info?.name,
@@ -1986,11 +2016,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             _statusMessage.value = app.getString(R.string.trial_capture_disabled)
             return
         }
-        val frame = lastFrame ?: return
         val cam = cameraManager.activeCamera ?: return
         val filterName = currentFilterName()
         viewModelScope.launch(Dispatchers.IO) {
             try {
+                val frame = awaitFrameSnapshot() ?: return@launch
                 val dir = File(
                     getApplication<Application>().getExternalFilesDir("captures"),
                     "FITS"
@@ -2032,11 +2062,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             _statusMessage.value = app.getString(R.string.trial_capture_disabled)
             return
         }
-        val frame = lastFrame ?: return
         val cam = cameraManager.activeCamera ?: return
         val filterName = currentFilterName()
         viewModelScope.launch(Dispatchers.IO) {
             try {
+                val frame = awaitFrameSnapshot() ?: return@launch
                 val dir = File(
                     getApplication<Application>().getExternalFilesDir("captures"),
                     "JPG"
@@ -2107,6 +2137,30 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             Log.e(TAG, "Failed to save JPG to gallery: ${e.message}")
         }
     }
+
+    private fun fulfillFrameSnapshot(frame: FrameData) {
+        val request = pendingFrameSnapshot.getAndSet(null) ?: return
+        if (!request.isActive) return
+        try {
+            val expectedSize = (
+                frame.width.toLong() * frame.height * frame.pixelFormat.bytesPerPixel
+            ).coerceAtMost(frame.data.size.toLong()).toInt()
+            request.complete(frame.copy(data = frame.data.copyOf(expectedSize)))
+        } catch (error: Throwable) {
+            request.completeExceptionally(error)
+        }
+    }
+
+    private suspend fun awaitFrameSnapshot(timeoutMs: Long = 45_000L): FrameData? =
+        frameSnapshotMutex.withLock {
+            val request = CompletableDeferred<FrameData>()
+            check(pendingFrameSnapshot.compareAndSet(null, request))
+            try {
+                withTimeoutOrNull(timeoutMs) { request.await() }
+            } finally {
+                pendingFrameSnapshot.compareAndSet(request, null)
+            }
+        }
 
     private fun updateFps() {
         frameCount++

@@ -11,6 +11,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** A rendered preview frame. Sequence forces StateFlow emission for a reused Bitmap. */
 data class PreviewFrame(
@@ -42,20 +43,33 @@ class PreviewPipeline(
     private val latestFrame = LatestFrameSlot<FrameData>()
     private val _frame = MutableStateFlow<PreviewFrame?>(null)
     private val _performance = MutableStateFlow(PreviewPerformanceStats())
+    private val acceptingFrames = AtomicBoolean(false)
+    @Volatile private var recycleBuffer: (ByteArray) -> Unit = {}
     private var renderJob: Job? = null
 
     val frame: StateFlow<PreviewFrame?> = _frame.asStateFlow()
     val performance: StateFlow<PreviewPerformanceStats> = _performance.asStateFlow()
 
     fun submit(frame: FrameData) {
-        latestFrame.offer(frame)
+        if (!acceptingFrames.get()) {
+            releaseFrame(frame, recycleBuffer)
+            return
+        }
+        latestFrame.offer(frame)?.let { releaseFrame(it, recycleBuffer) }
+        if (!acceptingFrames.get()) {
+            latestFrame.clear()?.let { releaseFrame(it, recycleBuffer) }
+        }
     }
 
     fun start(
         paused: () -> Boolean = { false },
-        onProcessed: (FrameData) -> Unit = {}
+        onProcessed: (FrameData) -> Unit = {},
+        recycleBuffer: (ByteArray) -> Unit = {}
     ) {
         stop(clearFrame = false)
+        this.recycleBuffer = recycleBuffer
+        acceptingFrames.set(true)
+        val sessionRecycler = recycleBuffer
         renderJob = scope.launch(Dispatchers.Default) {
             var sequence = _frame.value?.sequence ?: 0L
             var rendered = 0L
@@ -67,14 +81,18 @@ class PreviewPipeline(
                 if (!paused()) {
                     val source = latestFrame.takeLatest()
                     if (source != null) {
-                        val processingStarted = System.nanoTime()
-                        val bitmap = processor.frameToBitmap(source)
-                        processingNanos += System.nanoTime() - processingStarted
-                        rendered++
-                        sampleRendered++
-                        sequence++
-                        _frame.value = PreviewFrame(bitmap, sequence)
-                        onProcessed(source)
+                        try {
+                            val processingStarted = System.nanoTime()
+                            val bitmap = processor.frameToBitmap(source)
+                            processingNanos += System.nanoTime() - processingStarted
+                            rendered++
+                            sampleRendered++
+                            sequence++
+                            _frame.value = PreviewFrame(bitmap, sequence)
+                            onProcessed(source)
+                        } finally {
+                            releaseFrame(source, sessionRecycler)
+                        }
                     }
                 }
 
@@ -103,13 +121,23 @@ class PreviewPipeline(
     }
 
     fun stop(clearFrame: Boolean = true) {
+        acceptingFrames.set(false)
         renderJob?.cancel()
         renderJob = null
-        latestFrame.clear()
+        latestFrame.clear()?.let { releaseFrame(it, recycleBuffer) }
+        recycleBuffer = {}
         if (clearFrame) _frame.value = null
     }
 
     fun close() = stop()
+
+    private fun releaseFrame(frame: FrameData, recycler: (ByteArray) -> Unit) {
+        try {
+            recycler(frame.data)
+        } catch (_: Throwable) {
+            // Buffer recycling must never terminate capture or preview processing.
+        }
+    }
 
     private companion object {
         const val STATS_INTERVAL_NANOS = 1_000_000_000L

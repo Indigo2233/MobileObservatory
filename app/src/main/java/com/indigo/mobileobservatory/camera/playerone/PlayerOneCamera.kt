@@ -11,6 +11,7 @@ import com.indigo.mobileobservatory.camera.FrameCallback
 import com.indigo.mobileobservatory.camera.FrameData
 import com.indigo.mobileobservatory.camera.PixelFormat
 import com.indigo.mobileobservatory.camera.ReadoutMode
+import com.indigo.mobileobservatory.camera.ReusableByteArrayPool
 import com.indigo.mobileobservatory.camera.Roi
 import com.indigo.mobileobservatory.camera.TempHistoryPoint
 import com.indigo.mobileobservatory.util.FileLogger
@@ -27,7 +28,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.nio.ByteBuffer
-import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToInt
 
@@ -37,6 +39,7 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable {
         private const val TAG = "PlayerOneCam"
         private const val GRAB_TIMEOUT_MS = 5000
         private const val DIRECT_BUF_COUNT = 3
+        private const val FRAME_BUFFER_POOL_SIZE = 8
         private const val STREAM_STATS_INTERVAL_NS = 5_000_000_000L
     }
 
@@ -46,11 +49,21 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable {
     private var disconnected = false
 
     private var captureThread: Thread? = null
+    private var deliveryThread: Thread? = null
     private val running = AtomicBoolean(false)
-    private val bufferPool = ConcurrentLinkedQueue<ByteArray>()
+    private val acceptRecycledBuffers = AtomicBoolean(true)
+    private val bufferPool = ReusableByteArrayPool(FRAME_BUFFER_POOL_SIZE)
     private var directBuffers: Array<ByteBuffer>? = null
-    private var directBufIndex = 0
     private var frameCallback: FrameCallback? = null
+
+    private class FrameSlot(val buffer: ByteBuffer) {
+        var width: Int = 0
+        var height: Int = 0
+        var expectedSize: Int = 0
+        var pixelFormat: PixelFormat = PixelFormat.MONO8
+        var frameId: Long = 0
+        var timestamp: Long = 0
+    }
 
     private val _isOpen = MutableStateFlow(false)
     override val isOpen: StateFlow<Boolean> = _isOpen.asStateFlow()
@@ -148,6 +161,7 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable {
             readGainRange(cam)
             readOffsetRange(cam)
             configureFormats(cam, props.imageFormats)
+            configureUsb3Transport(cam, props.isUsb3Speed)
             logTransportSettings(cam, props.isUsb3Speed)
             readSensorModes(cam)
             readGainOffsetPresets(cam)
@@ -168,6 +182,7 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable {
             }
 
             _isOpen.value = true
+            acceptRecycledBuffers.set(true)
             FileLogger.i(
                 TAG,
                 "Opened ${cameraInfo?.name} SN=${cameraInfo?.serialNumber} " +
@@ -208,6 +223,9 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable {
         val capture = captureThread
         captureThread = null
         capture?.interrupt()
+        val delivery = deliveryThread
+        deliveryThread = null
+        delivery?.interrupt()
         tempPollThread?.interrupt()
         tempPollThread = null
         rampThread?.interrupt()
@@ -217,6 +235,7 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable {
         _isOpen.value = false
         frameCallback = null
         poa = null
+        acceptRecycledBuffers.set(false)
         bufferPool.clear()
         directBuffers = null
         if (claimed) {
@@ -244,6 +263,9 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable {
         poa = null
         _isOpen.value = false
         cameraInfo = null
+        acceptRecycledBuffers.set(false)
+        bufferPool.clear()
+        directBuffers = null
         if (claimed) {
             PlayerOneSdkHost.release(cameraId)
             claimed = false
@@ -280,8 +302,12 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable {
     override fun stopCapture() {
         if (!_isCapturing.value && !running.get()) return
         running.set(false)
+        captureThread?.interrupt()
         captureThread?.join(3000)
         captureThread = null
+        deliveryThread?.interrupt()
+        deliveryThread?.join(3000)
+        deliveryThread = null
 
         if (!disconnected) {
             try {
@@ -438,7 +464,7 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable {
     }
 
     override fun recycleBuffer(buf: ByteArray) {
-        if (bufferPool.size < 8) bufferPool.offer(buf)
+        if (acceptRecycledBuffers.get()) bufferPool.release(buf)
     }
 
     // --- CoolingCapable ---
@@ -555,39 +581,50 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable {
 
     private fun captureLoop() {
         val cam = poa ?: return
+        val buffers = directBuffers ?: return
+        val freeSlots = ArrayBlockingQueue<FrameSlot>(buffers.size)
+        val pendingFrames = ArrayBlockingQueue<FrameSlot>(buffers.size)
+        buffers.forEach { buffer ->
+            buffer.clear()
+            freeSlots.offer(FrameSlot(buffer))
+        }
+
+        val delivery = Thread({
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY)
+            deliveryLoop(pendingFrames, freeSlots)
+        }, "PlayerOneDelivery").apply {
+            priority = Thread.MAX_PRIORITY
+            start()
+        }
+        deliveryThread = delivery
+
         var frameSeq = 0L
         var statsFrameCount = 0L
         var statsStartedNs = System.nanoTime()
         while (running.get() && !disconnected) {
+            var slot: FrameSlot? = null
             try {
-                if (!cam.isImageReady) {
-                    Thread.sleep(5)
-                    continue
-                }
                 val w = currentRoi.width
                 val h = currentRoi.height
                 val bpp = currentPixelFormat.bytesPerPixel
                 val expectedSize = w * h * bpp
-                val direct = nextDirectBuffer(expectedSize)
-                cam.getImageData(direct, GRAB_TIMEOUT_MS)
-                direct.position(0)
-                val outData = getBuffer(expectedSize)
-                direct.get(outData, 0, expectedSize.coerceAtMost(outData.size))
+                slot = freeSlots.take()
+                slot.buffer.clear()
+                cam.getImageData(slot.buffer, GRAB_TIMEOUT_MS)
 
                 frameSeq++
                 if (frameSeq == 1L) {
                     FileLogger.i(TAG, "First frame: ${w}x${h} fmt=${currentPixelFormat.name} bpp=$bpp")
                 }
-                frameCallback?.onFrame(
-                    FrameData(
-                        data = outData,
-                        width = w,
-                        height = h,
-                        pixelFormat = currentPixelFormat,
-                        frameId = frameSeq,
-                        timestamp = System.currentTimeMillis()
-                    )
-                )
+                val completedSlot = slot
+                completedSlot.width = w
+                completedSlot.height = h
+                completedSlot.expectedSize = expectedSize
+                completedSlot.pixelFormat = currentPixelFormat
+                completedSlot.frameId = frameSeq
+                completedSlot.timestamp = System.currentTimeMillis()
+                pendingFrames.put(completedSlot)
+                slot = null
                 statsFrameCount++
                 val statsNowNs = System.nanoTime()
                 val statsElapsedNs = statsNowNs - statsStartedNs
@@ -608,19 +645,83 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable {
                     statsStartedNs = statsNowNs
                 }
             } catch (e: PoaException) {
+                slot?.let(freeSlots::offer)
                 if (e.error == com.playeroneastronomy.camera.PoaError.TIMEOUT) continue
                 FileLogger.w(TAG, "capture ${e.error}: ${e.message}")
                 if (!running.get() || disconnected) break
                 try { Thread.sleep(10) } catch (_: InterruptedException) { break }
             } catch (e: InterruptedException) {
+                slot?.let(freeSlots::offer)
                 break
             } catch (e: Exception) {
+                slot?.let(freeSlots::offer)
                 FileLogger.e(TAG, "Capture error: ${e.message}")
                 if (!running.get() || disconnected) break
                 try { Thread.sleep(10) } catch (_: InterruptedException) { break }
             }
         }
+
+        try {
+            delivery.join(1000)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
+        if (delivery.isAlive) {
+            delivery.interrupt()
+            try {
+                delivery.join(1000)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+        }
+        if (deliveryThread === delivery) deliveryThread = null
         FileLogger.i(TAG, "Capture loop ended, $frameSeq frames")
+    }
+
+    private fun deliveryLoop(
+        pendingFrames: ArrayBlockingQueue<FrameSlot>,
+        freeSlots: ArrayBlockingQueue<FrameSlot>
+    ) {
+        while (running.get() || pendingFrames.isNotEmpty()) {
+            val pending = try {
+                pendingFrames.poll(50, TimeUnit.MILLISECONDS)
+            } catch (_: InterruptedException) {
+                break
+            } ?: continue
+
+            var outData: ByteArray? = null
+            var handedOff = false
+            try {
+                pending.buffer.position(0)
+                outData = bufferPool.acquire(pending.expectedSize)
+                pending.buffer.get(
+                    outData,
+                    0,
+                    pending.expectedSize.coerceAtMost(outData.size)
+                )
+
+                val callback = frameCallback
+                if (callback != null) {
+                    callback.onFrame(
+                        FrameData(
+                            data = outData,
+                            width = pending.width,
+                            height = pending.height,
+                            pixelFormat = pending.pixelFormat,
+                            frameId = pending.frameId,
+                            timestamp = pending.timestamp
+                        )
+                    )
+                    handedOff = true
+                }
+            } catch (e: Exception) {
+                FileLogger.e(TAG, "Frame delivery error: ${e.message}")
+            } finally {
+                if (!handedOff) outData?.let(::recycleBuffer)
+                pending.buffer.clear()
+                freeSlots.offer(pending)
+            }
+        }
     }
 
     private fun ensureDirectBuffers() {
@@ -630,26 +731,6 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable {
         val existing = directBuffers
         if (existing != null && existing.isNotEmpty() && existing[0].capacity() >= need) return
         directBuffers = Array(DIRECT_BUF_COUNT) { ByteBuffer.allocateDirect(need) }
-        directBufIndex = 0
-    }
-
-    private fun nextDirectBuffer(minSize: Int): ByteBuffer {
-        ensureDirectBuffers()
-        val bufs = directBuffers!!
-        val slot = directBufIndex
-        directBufIndex = (directBufIndex + 1) % bufs.size
-        var buf = bufs[slot]
-        if (buf.capacity() < minSize) {
-            buf = ByteBuffer.allocateDirect(minSize)
-            bufs[slot] = buf
-        }
-        buf.clear()
-        return buf
-    }
-
-    private fun getBuffer(size: Int): ByteArray {
-        val pooled = bufferPool.poll()
-        return if (pooled != null && pooled.size == size) pooled else ByteArray(size)
     }
 
     private fun syncRoiFromCamera(cam: PoaCamera) {
@@ -740,12 +821,42 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable {
         )
     }
 
+    private fun configureUsb3Transport(cam: PoaCamera, usb3Speed: Boolean) {
+        if (!usb3Speed) return
+        try {
+            val attrs = cam.getConfigAttributes(PoaConfig.USB_BANDWIDTH_LIMIT)
+            if (attrs.isWritable && attrs.isReadable) {
+                val requested = attrs.maximum.asInteger()
+                cam.setConfig(
+                    PoaConfig.USB_BANDWIDTH_LIMIT,
+                    ConfigValue.ofInteger(requested),
+                    false
+                )
+            }
+        } catch (e: PoaException) {
+            FileLogger.w(TAG, "USB bandwidth configuration failed: ${e.error}")
+        }
+        configureUnlimitedFrameRate(cam)
+    }
+
+    private fun configureUnlimitedFrameRate(cam: PoaCamera) {
+        try {
+            val attrs = cam.getConfigAttributes(PoaConfig.FRAME_LIMIT)
+            if (!attrs.isWritable || !attrs.isReadable) return
+            cam.setConfig(PoaConfig.FRAME_LIMIT, ConfigValue.ofInteger(0), false)
+        } catch (e: PoaException) {
+            FileLogger.w(TAG, "Frame limit configuration failed: ${e.error}")
+        }
+    }
+
     private fun readIntegerSetting(cam: PoaCamera, config: PoaConfig): String {
         return try {
             val attrs = cam.getConfigAttributes(config)
-            val current = cam.getConfig(config).value.asInteger()
-            "$current range=${attrs.minimum.asInteger()}..${attrs.maximum.asInteger()} " +
-                "default=${attrs.defaultValue.asInteger()} writable=${attrs.isWritable}"
+            val current = cam.getConfig(config)
+            "${current.value.asInteger()} auto=${current.isAuto} " +
+                "range=${attrs.minimum.asInteger()}..${attrs.maximum.asInteger()} " +
+                "default=${attrs.defaultValue.asInteger()} writable=${attrs.isWritable} " +
+                "supportsAuto=${attrs.supportsAuto()}"
         } catch (e: PoaException) {
             "unavailable(${e.error})"
         }
@@ -754,8 +865,10 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable {
     private fun readBooleanSetting(cam: PoaCamera, config: PoaConfig): String {
         return try {
             val attrs = cam.getConfigAttributes(config)
-            "${cam.getConfig(config).value.asBoolean()} " +
-                "default=${attrs.defaultValue.asBoolean()} writable=${attrs.isWritable}"
+            val current = cam.getConfig(config)
+            "${current.value.asBoolean()} auto=${current.isAuto} " +
+                "default=${attrs.defaultValue.asBoolean()} writable=${attrs.isWritable} " +
+                "supportsAuto=${attrs.supportsAuto()}"
         } catch (e: PoaException) {
             "unavailable(${e.error})"
         }

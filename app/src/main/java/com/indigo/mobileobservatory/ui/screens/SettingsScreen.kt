@@ -42,6 +42,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
+import com.indigo.mobileobservatory.BuildConfig
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.camera.ConnectionState
 import com.indigo.mobileobservatory.camera.PixelFormat
@@ -429,7 +430,14 @@ private fun DiagnosticsSettingsPage() = SettingsPage {
     }
     Divider()
     Text(stringResource(R.string.about), style = MaterialTheme.typography.titleSmall)
-    Text(stringResource(R.string.about_desc), color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Text(
+        stringResource(
+            R.string.about_desc,
+            BuildConfig.VERSION_NAME,
+            BuildConfig.VERSION_CODE
+        ),
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
 }
 
 @Composable

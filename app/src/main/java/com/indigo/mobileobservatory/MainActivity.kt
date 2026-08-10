@@ -25,6 +25,12 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         FileLogger.init(applicationContext)
+        FileLogger.i(
+            "App",
+            "Indigo Observatory ${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE}) " +
+                "pid=${android.os.Process.myPid()} action=${intent?.action} " +
+                "restored=${savedInstanceState != null}"
+        )
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         enableEdgeToEdge()
 

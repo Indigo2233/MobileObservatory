@@ -215,7 +215,7 @@
     <string name="clear_log">Clear Log</string>
     <string name="share_log">Share Log</string>
     <string name="about">About</string>
-    <string name="about_desc">Indigo Observatory v1.0.0\nCamera, mount, guiding and astronomy accessory control</string>
+    <string name="about_desc">Indigo Observatory v%1$s (build %2$d)\nCamera, mount, guiding and astronomy accessory control</string>
 
     <!-- FilterWheelPanel / EAFPanel -->
     <string name="filter_wheel_title">Filter Wheel</string>

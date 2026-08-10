@@ -6,6 +6,7 @@ param(
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $apk = Join-Path $root "app\build\outputs\apk\debug\app-debug.apk"
+$apkMetadata = Join-Path $root "app\build\outputs\apk\debug\output-metadata.json"
 $apkOut = Join-Path $root "bin\Installer\IndigoObservatory_android.apk"
 
 function Test-ValidApkArchive {
@@ -57,14 +58,35 @@ try {
     if (-not (Test-ValidApkArchive -Path $apk)) {
         throw "Gradle output is not a valid APK archive: $apk"
     }
+    if (-not (Test-Path -LiteralPath $apkMetadata)) {
+        throw "Gradle APK metadata is missing: $apkMetadata"
+    }
+
+    $metadata = Get-Content -LiteralPath $apkMetadata -Raw | ConvertFrom-Json
+    $apkElement = $metadata.elements | Select-Object -First 1
+    if ($null -eq $apkElement -or
+        $null -eq $apkElement.versionCode -or
+        [string]::IsNullOrWhiteSpace([string]$apkElement.versionName)) {
+        throw "Gradle APK metadata does not contain a version code and name: $apkMetadata"
+    }
+    $versionedApkOut = Join-Path $root (
+        "bin\Installer\IndigoObservatory_android_v{0}-build{1}.apk" -f
+        $apkElement.versionName,
+        $apkElement.versionCode
+    )
 
     New-Item -ItemType Directory -Path (Split-Path $apkOut) -Force | Out-Null
     Copy-Item -LiteralPath $apk -Destination $apkOut -Force
+    Copy-Item -LiteralPath $apk -Destination $versionedApkOut -Force
     if (-not (Test-ValidApkArchive -Path $apkOut)) {
         throw "Copied APK failed archive validation: $apkOut"
     }
+    if (-not (Test-ValidApkArchive -Path $versionedApkOut)) {
+        throw "Versioned APK failed archive validation: $versionedApkOut"
+    }
 
-    Write-Host "Indigo Observatory APK: $apkOut" -ForegroundColor Green
+    Write-Host "Indigo Observatory APK: $versionedApkOut" -ForegroundColor Green
+    Write-Host "Latest APK: $apkOut" -ForegroundColor Green
 }
 finally {
     Pop-Location

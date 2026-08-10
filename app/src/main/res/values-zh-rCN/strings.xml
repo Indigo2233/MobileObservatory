@@ -213,7 +213,7 @@
     <string name="clear_log">清除日志</string>
     <string name="share_log">分享日志</string>
     <string name="about">关于</string>
-    <string name="about_desc">靛空台 v1.0.0\n支持相机、赤道仪、导星和天文配件</string>
+    <string name="about_desc">靛空台 v%1$s（build %2$d）\n支持相机、赤道仪、导星和天文配件</string>
 
     <!-- FilterWheelPanel / EAFPanel -->
     <string name="filter_wheel_title">滤镜轮</string>
