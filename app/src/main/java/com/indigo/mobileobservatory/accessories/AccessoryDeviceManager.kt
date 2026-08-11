@@ -24,6 +24,9 @@ import com.indigo.mobileobservatory.accessories.focuser.OasisHidFocuserControlle
 import com.indigo.mobileobservatory.accessories.focuser.ToupTekFocuserAdapter
 import com.indigo.mobileobservatory.accessories.oasis.OasisUsbIds
 import com.indigo.mobileobservatory.accessories.rotator.EcaaSerialRotatorAdapter
+import com.indigo.mobileobservatory.accessories.rotator.RotatorAdapterKind
+import com.indigo.mobileobservatory.accessories.rotator.RotatorControllerRouter
+import com.indigo.mobileobservatory.accessories.rotator.WandererSerialRotatorAdapter
 import com.indigo.mobileobservatory.camera.AccessoryDeviceEntry
 import com.indigo.mobileobservatory.camera.AccessoryType
 import com.indigo.mobileobservatory.camera.toupcam.EAFController
@@ -98,7 +101,13 @@ class AccessoryDeviceManager(context: Context) {
         dlc = dlcCover,
         gemini = geminiFlat
     )
-    val rotatorController = EcaaSerialRotatorAdapter()
+    private val ecaaRotator = EcaaSerialRotatorAdapter()
+    private val wandererRotator = WandererSerialRotatorAdapter()
+    val rotatorController = RotatorControllerRouter(
+        scope = scope,
+        ecaa = ecaaRotator,
+        wanderer = wandererRotator
+    )
     private val _activeFocuserDeviceId = MutableStateFlow<Int?>(null)
     val activeFocuserDeviceId: StateFlow<Int?> = _activeFocuserDeviceId.asStateFlow()
     private val _activeCoverDeviceId = MutableStateFlow<Int?>(null)
@@ -550,7 +559,11 @@ class AccessoryDeviceManager(context: Context) {
         }
         if (_activeRotatorDeviceId.value == deviceId ||
             rotatorController.connectedDeviceId == deviceId) {
-            roles += SerialAccessoryRole.ROTATOR
+            roles += if (rotatorController.activeKind == RotatorAdapterKind.WANDERER) {
+                SerialAccessoryRole.WANDERER_ROTATOR
+            } else {
+                SerialAccessoryRole.ROTATOR
+            }
         }
         return roles.takeIf { it.isNotEmpty() }
     }
@@ -663,6 +676,10 @@ class AccessoryDeviceManager(context: Context) {
             }
             SerialAccessoryRole.ROTATOR -> {
                 if (!claimable(device.deviceId, "CAA")) return
+                connectRotatorGranted(device)
+            }
+            SerialAccessoryRole.WANDERER_ROTATOR -> {
+                if (!claimable(device.deviceId, "Wanderer CAA")) return
                 connectRotatorGranted(device)
             }
         }
@@ -892,16 +909,43 @@ class AccessoryDeviceManager(context: Context) {
         rotatorConnectJob = scope.launch {
             try {
                 awaitProbeIdle()
-                if (rotatorController.open(appContext, device)) {
-                    _activeRotatorDeviceId.value = device.deviceId
-                } else {
-                    _scanError.value = rotatorController.lastError.value
-                        ?: "electric CAA identification failed"
+                val roles = _devices.value
+                    .firstOrNull { it.usbDevice.deviceId == device.deviceId }
+                    ?.serialRoles
+                val connected = when {
+                    roles == setOf(SerialAccessoryRole.WANDERER_ROTATOR) -> {
+                        connectWandererRotator(device)
+                    }
+                    device.vendorId == 0x1a86 -> {
+                        connectWandererRotator(device) || connectEcaaRotator(device)
+                    }
+                    else -> connectEcaaRotator(device)
+                }
+                if (!connected) {
+                    _scanError.value = wandererRotator.lastError.value
+                        ?: ecaaRotator.lastError.value
+                        ?: "CAA identification failed"
                 }
             } finally {
                 rotatorConnectJob = null
             }
         }
+    }
+
+    private suspend fun connectWandererRotator(device: UsbDevice): Boolean {
+        ecaaRotator.close()
+        if (!wandererRotator.open(appContext, device)) return false
+        rotatorController.useWanderer()
+        _activeRotatorDeviceId.value = device.deviceId
+        return true
+    }
+
+    private suspend fun connectEcaaRotator(device: UsbDevice): Boolean {
+        wandererRotator.close()
+        if (!ecaaRotator.open(appContext, device)) return false
+        rotatorController.useEcaa()
+        _activeRotatorDeviceId.value = device.deviceId
+        return true
     }
 
     private fun claimable(deviceId: Int, role: String): Boolean {

@@ -10,8 +10,10 @@ interface RotatorController {
     val stepsPerDegree: StateFlow<Int>
     /** True when steps/degree was read from the control board (I#). */
     val stepsPerDegreeFromBoard: StateFlow<Boolean>
+    val supportsStepConfiguration: StateFlow<Boolean>
     val reversed: StateFlow<Boolean>
     val hold: StateFlow<Boolean>
+    val supportsHold: StateFlow<Boolean>
     val deviceInfo: StateFlow<String?>
     val lastError: StateFlow<String?>
 

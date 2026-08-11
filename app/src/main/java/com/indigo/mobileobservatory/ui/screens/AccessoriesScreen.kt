@@ -284,13 +284,16 @@ private fun DeviceCard(
     val showCover = !isSerial || matchedRoles == null ||
         SerialAccessoryRole.COVER in matchedRoles ||
         SerialAccessoryRole.GEMINI_FLAT in matchedRoles
-    val showRotator = !isSerial || matchedRoles == null || SerialAccessoryRole.ROTATOR in matchedRoles
+    val showRotator = !isSerial || matchedRoles == null ||
+        SerialAccessoryRole.ROTATOR in matchedRoles ||
+        SerialAccessoryRole.WANDERER_ROTATOR in matchedRoles
     val matchedLabel = when {
         matchedRoles?.singleOrNull() == SerialAccessoryRole.FOCUSER -> stringResource(R.string.focuser)
         matchedRoles?.singleOrNull() == SerialAccessoryRole.GEMINI_EAF -> stringResource(R.string.gemini_eaf)
         matchedRoles?.singleOrNull() == SerialAccessoryRole.COVER -> stringResource(R.string.cover)
         matchedRoles?.singleOrNull() == SerialAccessoryRole.GEMINI_FLAT -> stringResource(R.string.gemini_flat)
         matchedRoles?.singleOrNull() == SerialAccessoryRole.ROTATOR -> "CAA"
+        matchedRoles?.singleOrNull() == SerialAccessoryRole.WANDERER_ROTATOR -> "Wanderer CAA"
         else -> null
     }
     val statusText = when {
@@ -453,6 +456,7 @@ private fun RotatorControls(viewModel: CameraViewModel) {
     val scale by viewModel.rotatorStepsPerDegree.collectAsState()
     val reversed by viewModel.rotatorReversed.collectAsState()
     val hold by viewModel.rotatorHold.collectAsState()
+    val supportsHold by viewModel.rotatorSupportsHold.collectAsState()
     val info by viewModel.rotatorDeviceInfo.collectAsState()
     var target by remember { mutableStateOf("0") }
 
@@ -472,7 +476,9 @@ private fun RotatorControls(viewModel: CameraViewModel) {
                 OutlinedButton(onClick = viewModel::zeroRotator) { Text(stringResource(R.string.set_current_zero)) }
             }
             SwitchSetting(stringResource(R.string.reverse), reversed, viewModel::setRotatorReversed)
-            SwitchSetting(stringResource(R.string.motor_hold), hold, viewModel::setRotatorHold)
+            if (supportsHold) {
+                SwitchSetting(stringResource(R.string.motor_hold), hold, viewModel::setRotatorHold)
+            }
         }
     }
 }

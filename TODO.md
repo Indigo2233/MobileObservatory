@@ -1,5 +1,12 @@
 # Mobile Observatory TODO
 
+## WandererAstro accessories
+
+- [~] WandererRotator Mini / Lite V1 / Lite V2: direct Android USB-serial support.
+- [ ] WandererCover V3 / V4-EC / V4 Pro-EC: cover and flat-panel support.
+- [ ] Wanderer Snowflake filter wheel: serial protocol adapter.
+- [ ] WandererBox Plus V3 / Pro V3: power, USB, PWM and environment controller.
+
 > 本文档记录待评估的优化事项。优先级仅表示风险与收益，不代表最终实施顺序。
 >
 > 状态约定：`[ ]` 待办、`[~]` 进行中、`[x]` 已完成、`[-]` 暂不实施。

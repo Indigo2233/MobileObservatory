@@ -6,9 +6,17 @@ import android.hardware.usb.UsbManager
 import android.util.Log
 import com.hoho.android.usbserial.driver.UsbSerialPort
 import com.hoho.android.usbserial.driver.UsbSerialProber
+import com.indigo.mobileobservatory.accessories.rotator.WandererRotatorProtocol
 import kotlinx.coroutines.delay
 
-enum class SerialAccessoryRole { FOCUSER, GEMINI_EAF, COVER, GEMINI_FLAT, ROTATOR }
+enum class SerialAccessoryRole {
+    FOCUSER,
+    GEMINI_EAF,
+    COVER,
+    GEMINI_FLAT,
+    ROTATOR,
+    WANDERER_ROTATOR
+}
 
 /**
  * Lightweight identity probes for USB-serial accessories.
@@ -21,6 +29,9 @@ object SerialAccessoryProbe {
     private const val FOCUSER_SETTLE_MS = 2200L
     private const val GEMINI_EAF_SETTLE_MS = 1000L
     private const val COVER_SETTLE_MS = 2200L
+    private const val WANDERER_VENDOR_ID = 0x1a86
+    private const val WANDERER_SETTLE_MS = 500L
+    private const val WANDERER_READ_TIMEOUT_MS = 3000
     private const val READ_TIMEOUT_MS = 2500
     private const val DRAIN_LIMIT_MS = 1500L
     private const val DRAIN_QUIET_READS = 3
@@ -39,6 +50,25 @@ object SerialAccessoryProbe {
         }
         try {
             port.open(connection)
+
+            // WandererRotator devices commonly use CH340 USB serial adapters.
+            // Changing CH340 control lines can reset the controller, so preserve
+            // the open-time DTR/RTS state throughout this exchange.
+            if (device.vendorId == WANDERER_VENDOR_ID) {
+                port.setParameters(
+                    WandererRotatorProtocol.baudRate,
+                    UsbSerialPort.DATABITS_8,
+                    UsbSerialPort.STOPBITS_1,
+                    UsbSerialPort.PARITY_NONE
+                )
+                delay(WANDERER_SETTLE_MS)
+                drain(port)
+                val handshake = exchangeWandererHandshake(port)
+                if (handshake != null) {
+                    Log.i(TAG, "Probed ${handshake.model.displayName} on ${device.deviceName}")
+                    return setOf(SerialAccessoryRole.WANDERER_ROTATOR)
+                }
+            }
 
             // CAA first: same line mode as EcaaSerialRotatorAdapter (DTR/RTS high, long settle).
             port.setParameters(9600, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
@@ -164,6 +194,26 @@ object SerialAccessoryProbe {
             }
         }
         return response.toByteArray().toString(Charsets.US_ASCII).trim()
+    }
+
+    private fun exchangeWandererHandshake(
+        port: UsbSerialPort
+    ): WandererRotatorProtocol.Handshake? {
+        port.write(
+            "${WandererRotatorProtocol.handshakeCommand}\n".toByteArray(Charsets.US_ASCII),
+            WANDERER_READ_TIMEOUT_MS
+        )
+        val raw = StringBuilder()
+        val buffer = ByteArray(256)
+        val deadline = System.currentTimeMillis() + WANDERER_READ_TIMEOUT_MS
+        while (System.currentTimeMillis() < deadline) {
+            val count = port.read(buffer, 200)
+            if (count <= 0) continue
+            raw.append(String(buffer, 0, count, Charsets.US_ASCII))
+            WandererRotatorProtocol.parseHandshake(raw.toString())?.let { return it }
+            if (raw.length > 1024) raw.delete(0, raw.length - 512)
+        }
+        return null
     }
 
     private fun exchangeFrame(port: UsbSerialPort, code: String): String {

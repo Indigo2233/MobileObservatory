@@ -161,8 +161,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val rotatorStepsPerDegree = accessoryManager.rotatorController.stepsPerDegree
     val rotatorStepsPerDegreeFromBoard =
         accessoryManager.rotatorController.stepsPerDegreeFromBoard
+    val rotatorSupportsStepConfiguration =
+        accessoryManager.rotatorController.supportsStepConfiguration
     val rotatorReversed = accessoryManager.rotatorController.reversed
     val rotatorHold = accessoryManager.rotatorController.hold
+    val rotatorSupportsHold = accessoryManager.rotatorController.supportsHold
     val rotatorDeviceInfo = accessoryManager.rotatorController.deviceInfo
 
     // Cooling / TEC state (active for any CoolingCapable camera)
