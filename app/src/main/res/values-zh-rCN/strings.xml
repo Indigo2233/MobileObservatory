@@ -642,4 +642,34 @@
     <string name="calibration_next">下一步</string>
     <string name="calibration_capture_sample">采集样本</string>
     <string name="calibration_done_shell">壳流程完成 — 真实求解尚未接线。</string>
+    <!-- 设备中心与设备设置 -->
+    <string name="device_connections">连接</string>
+    <string name="open_device_control">打开控制</string>
+    <string name="device_connect_from_connections">请在“连接”页面中连接此设备。</string>
+    <string name="settings_general">常规</string>
+    <string name="settings_camera">相机</string>
+    <string name="settings_filter_wheel">滤镜轮</string>
+    <string name="settings_focuser">调焦器</string>
+    <string name="settings_cover">平场板 / 防尘盖</string>
+    <string name="settings_rotator">CAA</string>
+    <string name="settings_diagnostics">诊断</string>
+    <string name="no_active_camera">请连接相机以配置相机专用默认设置。</string>
+    <string name="no_active_filter_wheel">请连接滤镜轮以配置滤镜槽位。</string>
+    <string name="no_active_focuser">请连接调焦器以配置移动默认设置。</string>
+    <string name="no_active_cover">请连接平场板或防尘盖以配置默认设置。</string>
+    <string name="no_active_rotator">请连接 CAA 以配置默认设置。</string>
+    <string name="default_readout_mode">默认读出模式</string>
+    <string name="default_gain">默认增益</string>
+    <string name="default_pixel_format">默认像素格式</string>
+    <string name="offset_unavailable">连接的相机 SDK 提供偏置值时将在此处显示。</string>
+    <string name="coarse_step">粗调步长</string>
+    <string name="focuser_reverse_direction">反转方向</string>
+    <string name="backlash_direction">回差方向</string>
+    <string name="cover_open_angle">打开角度</string>
+    <string name="cover_closed_angle">关闭角度</string>
+    <string name="cover_working_angle">工作角度</string>
+    <string name="default_brightness">默认亮度</string>
+    <string name="cover_angle_capability_hint">这些角度预设会为支持角度控制的设备保留。当前 Gemini 和 DLC 适配器使用打开和关闭命令。</string>
+    <string name="settings_saved">设置已保存</string>
+    <string name="device_settings_apply">保存并应用</string>
 </resources>
