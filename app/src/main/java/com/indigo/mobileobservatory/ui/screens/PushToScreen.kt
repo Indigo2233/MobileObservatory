@@ -1,16 +1,15 @@
 package com.indigo.mobileobservatory.ui.screens
 
-import androidx.compose.animation.AnimatedVisibility
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -18,19 +17,15 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -42,11 +37,14 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -59,6 +57,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -68,10 +67,17 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.indigo.mobileobservatory.R
+import com.indigo.mobileobservatory.astro.CoordinateTransform
+import com.indigo.mobileobservatory.astro.EquatorialCoordinates
+import com.indigo.mobileobservatory.astro.ObserverSite
 import com.indigo.mobileobservatory.pointing.GuidanceCommand
 import com.indigo.mobileobservatory.pointing.GuidanceProximity
-import com.indigo.mobileobservatory.pointing.MockSkyAttitudeSource
+import com.indigo.mobileobservatory.pointing.PhoneSiteProvider
+import com.indigo.mobileobservatory.pointing.PhoneSkyAttitudeSource
 import com.indigo.mobileobservatory.pointing.PushToGuidance
+import com.indigo.mobileobservatory.pointing.SkyAttitudeFix
+import kotlinx.coroutines.launch
+import java.time.Instant
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.min
@@ -82,7 +88,7 @@ private val ReticleDim = Color(0xFF3A1010)
 
 /**
  * SSE-style push-to: distance-adaptive reticle, big move hints.
- * Orientation owned by CameraScreen (portrait). Demo sliders collapsed.
+ * The phone camera's optical axis and a real target position drive the reticle.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -91,28 +97,76 @@ fun PushToScreen(
     onOpenCalibration: () -> Unit = {},
     onOpenTargets: () -> Unit = {},
     initialTargetName: String? = null,
-    initialTargetAlt: Float = 55f,
-    initialTargetAz: Float = 180f
+    targetRaHours: Double = 5.588,
+    targetDecDeg: Double = -5.391
 ) {
-    val mock = remember { MockSkyAttitudeSource() }
-    var currentAlt by remember { mutableFloatStateOf(40f) }
-    var currentAz by remember { mutableFloatStateOf(160f) }
-    var targetAlt by remember { mutableFloatStateOf(initialTargetAlt) }
-    var targetAz by remember { mutableFloatStateOf(initialTargetAz) }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val source = remember { PhoneSkyAttitudeSource(context) }
+    var currentFix by remember { mutableStateOf<SkyAttitudeFix?>(null) }
+    var site by remember { mutableStateOf<ObserverSite?>(null) }
+    var solving by remember { mutableStateOf(false) }
+    var status by remember { mutableStateOf("") }
     var eyepieceFov by remember { mutableFloatStateOf(1.5f) }
     var previousProximity by remember { mutableStateOf<GuidanceProximity?>(null) }
-    var targetName by remember {
-        mutableStateOf(initialTargetName ?: "Demo target")
-    }
-    var showDemoControls by remember { mutableStateOf(false) }
+    val targetName = initialTargetName ?: "M42 · Orion Nebula"
 
-    mock.setFix(currentAlt.toDouble(), currentAz.toDouble())
-    val fix = mock.latestFix()!!
+    fun loadSite() {
+        scope.launch {
+            try {
+                site = PhoneSiteProvider.currentSite(context)
+                status = context.getString(R.string.push_to_live_ready)
+            } catch (t: Throwable) {
+                status = t.message ?: context.getString(R.string.phone_location_failed)
+            }
+        }
+    }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { grants ->
+        val locationGranted = grants[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+            grants[Manifest.permission.ACCESS_COARSE_LOCATION] == true ||
+            PhoneSiteProvider.hasPermission(context)
+        if (locationGranted) loadSite()
+        else status = context.getString(R.string.location_permission_required)
+    }
+
+    DisposableEffect(source) {
+        source.onFix = { currentFix = it }
+        if (!source.start()) status = context.getString(R.string.push_to_sensor_unavailable)
+        onDispose {
+            source.onFix = null
+            source.stop()
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        if (PhoneSiteProvider.hasPermission(context)) loadSite()
+    }
+
+    val fix = currentFix ?: SkyAttitudeFix(
+        altDeg = 0.0,
+        azDeg = 0.0,
+        timestampMs = System.currentTimeMillis(),
+        sourceId = source.id
+    )
+    val targetHorizontal = site?.let { observer ->
+        CoordinateTransform.j2000ToTopocentric(
+            EquatorialCoordinates(targetRaHours * 15.0, targetDecDeg),
+            Instant.ofEpochMilli(fix.timestampMs),
+            observer,
+            refraction = null
+        )
+    }
+    val targetAlt = targetHorizontal?.altitudeDeg ?: 0.0
+    val targetAz = targetHorizontal?.azimuthDeg ?: 0.0
+
     val cmd = PushToGuidance.compute(
         currentAltDeg = fix.altDeg,
         currentAzDeg = fix.azDeg,
-        targetAltDeg = targetAlt.toDouble(),
-        targetAzDeg = targetAz.toDouble(),
+        targetAltDeg = targetAlt,
+        targetAzDeg = targetAz,
         eyepieceFovDeg = eyepieceFov.toDouble(),
         previousProximity = previousProximity
     )
@@ -243,72 +297,96 @@ fun PushToScreen(
 
             ProximityPills(cmd.proximity, proximityColor)
 
-            // Collapsed demo attitude controls (SSE has no sliders — these are for mock only).
-            TextButton(
-                onClick = { showDemoControls = !showDemoControls },
-                modifier = Modifier.align(Alignment.CenterHorizontally)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                Icon(
-                    if (showDemoControls) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                    contentDescription = null,
-                    tint = Color(0xFFB71C1C)
+                Text(
+                    when {
+                        currentFix == null -> stringResource(R.string.push_to_waiting_sensor)
+                        source.plateSolved -> stringResource(R.string.push_to_source_solved)
+                        else -> stringResource(R.string.push_to_source_sensor)
+                    },
+                    color = if (source.plateSolved) Color(0xFF80CBC4) else Color(0xFFFFCC80),
+                    style = MaterialTheme.typography.labelSmall
                 )
                 Text(
-                    stringResource(R.string.push_to_demo_controls),
-                    color = Color(0xFFEF9A9A)
+                    stringResource(
+                        R.string.push_to_live_coordinates,
+                        fix.altDeg,
+                        fix.azDeg,
+                        targetAlt,
+                        targetAz
+                    ),
+                    color = Color(0xFFBCAAA4),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace
                 )
-            }
-            AnimatedVisibility(
-                visible = showDemoControls,
-                enter = expandVertically() + fadeIn(),
-                exit = shrinkVertically() + fadeOut()
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(260.dp)
-                        .verticalScroll(rememberScrollState())
-                        .padding(horizontal = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        stringResource(R.string.push_to_mock_banner),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color(0xFF8D6E63)
-                    )
-                    DemoSlider(
-                        stringResource(R.string.push_to_current_alt, currentAlt),
-                        currentAlt, 0f..89f
-                    ) { currentAlt = it }
-                    DemoSlider(
-                        stringResource(R.string.push_to_current_az, currentAz),
-                        currentAz, 0f..359f
-                    ) { currentAz = it }
-                    DemoSlider(
-                        stringResource(R.string.push_to_target_alt, targetAlt),
-                        targetAlt, 0f..89f
-                    ) { targetAlt = it }
-                    DemoSlider(
-                        stringResource(R.string.push_to_target_az, targetAz),
-                        targetAz, 0f..359f
-                    ) { targetAz = it }
-                    DemoSlider(
-                        stringResource(R.string.push_to_eyepiece_fov, eyepieceFov),
-                        eyepieceFov, 0.5f..3f, steps = 4
-                    ) { eyepieceFov = it }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton(onClick = {
-                            currentAlt = targetAlt
-                            currentAz = targetAz
-                        }) { Text(stringResource(R.string.push_to_snap_on_target), color = Color(0xFF80CBC4)) }
-                        TextButton(onClick = {
-                            currentAlt = (targetAlt - 25f).coerceIn(0f, 89f)
-                            currentAz = PushToGuidance.normalizeAzimuth((targetAz - 40f).toDouble()).toFloat()
-                            targetName = initialTargetName ?: "Demo target"
-                        }) { Text(stringResource(R.string.push_to_snap_far), color = Color(0xFFEF9A9A)) }
+                    FilledTonalButton(
+                        enabled = !solving && site != null && currentFix != null,
+                        onClick = {
+                            val observer = site ?: return@FilledTonalButton
+                            val cameraGranted = androidx.core.content.ContextCompat.checkSelfPermission(
+                                context,
+                                Manifest.permission.CAMERA
+                            ) == PackageManager.PERMISSION_GRANTED
+                            if (!cameraGranted) {
+                                permissionLauncher.launch(arrayOf(Manifest.permission.CAMERA))
+                                status = context.getString(R.string.phone_camera_permission_required)
+                                return@FilledTonalButton
+                            }
+                            solving = true
+                            status = context.getString(R.string.push_to_solving)
+                            scope.launch {
+                                val result = source.captureAndSolve(observer)
+                                status = result.message
+                                solving = false
+                            }
+                        }
+                    ) {
+                        Text(stringResource(if (solving) R.string.solving else R.string.push_to_solve_now))
                     }
-                    Spacer(Modifier.height(8.dp))
+                    TextButton(onClick = {
+                        permissionLauncher.launch(
+                            arrayOf(
+                                Manifest.permission.ACCESS_FINE_LOCATION,
+                                Manifest.permission.ACCESS_COARSE_LOCATION,
+                                Manifest.permission.CAMERA
+                            )
+                        )
+                    }) {
+                        Text(stringResource(R.string.push_to_permissions), color = Color(0xFFFF8A80))
+                    }
                 }
+                if (status.isNotBlank()) {
+                    Text(
+                        status,
+                        color = Color(0xFF9E9E9E),
+                        style = MaterialTheme.typography.labelSmall,
+                        textAlign = TextAlign.Center,
+                        maxLines = 2
+                    )
+                }
+                Text(
+                    stringResource(R.string.push_to_eyepiece_fov, eyepieceFov),
+                    color = Color(0xFFBCAAA4),
+                    style = MaterialTheme.typography.labelSmall
+                )
+                Slider(
+                    value = eyepieceFov,
+                    onValueChange = { eyepieceFov = it },
+                    valueRange = 0.5f..3f,
+                    steps = 4,
+                    modifier = Modifier.height(28.dp)
+                )
             }
         }
     }
@@ -347,18 +425,6 @@ private fun ProximityPills(proximity: GuidanceProximity, color: Color) {
             }
         }
     }
-}
-
-@Composable
-private fun DemoSlider(
-    label: String,
-    value: Float,
-    range: ClosedFloatingPointRange<Float>,
-    steps: Int = 0,
-    onChange: (Float) -> Unit
-) {
-    Text(label, color = Color(0xFFBCAAA4), style = MaterialTheme.typography.labelSmall)
-    Slider(value = value, onValueChange = onChange, valueRange = range, steps = steps)
 }
 
 @Composable

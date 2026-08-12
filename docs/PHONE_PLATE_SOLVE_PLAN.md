@@ -325,9 +325,10 @@ ui/components/NightChart.kt     低功耗星图绘制（替代 WebView）
 **进度（可与 M0 夜间实测并行）**
 
 - [x] `PushToGuidance` 纯算法 + 单测（方位环绕、天顶退化、滞回分档、目镜 FOV 归一化）
-- [x] `PushToScreen` 假数据驱动靶心/箭头壳（Mount Tab 入口）
+- [x] `PushToScreen` 真实数据驱动靶心/箭头（目标 RA/Dec + 手机位置/时间 + 手机姿态）
 - [x] `SkyAttitudeSource` / `MockSkyAttitudeSource` 接口占位
-- [ ] 真姿态源接线、语音、息屏模式、社团手感验收
+- [x] `PhoneSkyAttitudeSource` 最小真实链路（Camera2 → FITS → ASTAP → IMU 指向对齐；精度待实测）
+- [ ] 自动停手解算、语音、息屏模式、社团手感与精度验收
 
 #### 地平式（Dob）专属处理
 

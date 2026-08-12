@@ -66,7 +66,7 @@ class AstapRunner(private val context: Context) {
             executable.absolutePath,
             "-f", inputFile.absolutePath,
             "-r", "%.6f".format(Locale.US, effectiveSearchRadiusDeg.coerceIn(0.0, 180.0)),
-            "-fov", "%.6f".format(Locale.US, fovDeg.coerceIn(0.2, 6.0))
+            "-fov", "%.6f".format(Locale.US, fovDeg.coerceIn(0.2, 90.0))
         )
         if (mountCoordinates != null) {
             command += listOf(
