@@ -151,6 +151,40 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
             }
 
             onProgress(PhoneSkySolveStage.SOLVING)
+            val observationTime = Instant.ofEpochMilli(
+                captureStartedAt + capture.exposureNs / 2_000_000L
+            )
+            val localSolve = withContext(Dispatchers.Default) {
+                ImuAssistedWideFieldSolver.solve(
+                    extraction = extraction,
+                    frameWidth = stacked.frame.width,
+                    frameHeight = stacked.frame.height,
+                    fovWidthDeg = capture.fovWidthDeg ?: 72.0,
+                    fovHeightDeg = capture.fovHeightDeg ?: 54.0,
+                    imuDirection = rawAtCapture,
+                    instant = observationTime,
+                    site = site,
+                    catalog = PhoneBrightStarCatalog.load(appContext)
+                )
+            }
+            if (localSolve.success && localSolve.center != null) {
+                alignment.calibrate(rawAtCapture, Direction3.fromAltAz(
+                    localSolve.center.altitudeDeg,
+                    localSolve.center.azimuthDeg
+                ))
+                publish(alignment.apply(rawDirection ?: rawAtCapture), System.currentTimeMillis())
+                onProgress(PhoneSkySolveStage.COMPLETE)
+                return PhoneSkySolveResult(
+                    success = true,
+                    message = localSolve.message,
+                    fix = fix,
+                    fitsPath = fitsFile.absolutePath,
+                    frame = stacked.frame,
+                    extraction = extraction,
+                    cameraLabel = capture.capability.displayLabel,
+                    inputFrameCount = stacked.inputFrameCount
+                )
+            }
             val fovDeg = capture.fovHeightDeg ?: capture.fovWidthDeg ?: 60.0
             // Transitional solver only. A typical 24 mm-equivalent phone main camera has a
             // roughly 45–85 degree field and requires W08 or a tetra3 index built for that range.
@@ -169,9 +203,6 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
                     inputFrameCount = stacked.inputFrameCount
                 )
             } else {
-                val observationTime = Instant.ofEpochMilli(
-                    captureStartedAt + capture.exposureNs / 2_000_000L
-                )
                 val horizontal = CoordinateTransform.j2000ToTopocentric(
                     EquatorialCoordinates(raDeg, decDeg),
                     observationTime,
