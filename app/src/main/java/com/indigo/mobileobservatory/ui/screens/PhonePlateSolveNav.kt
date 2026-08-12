@@ -16,7 +16,6 @@ import androidx.compose.runtime.setValue
 enum class PhonePlateSolveDestination {
     PHONE_CAMERA_DEBUG,
     PUSH_TO,
-    CALIBRATION,
     TARGET_LIBRARY
 }
 
@@ -37,9 +36,6 @@ fun PhonePlateSolveScreens(nav: PhonePlateSolveNavState) {
         PhonePlateSolveDestination.PHONE_CAMERA_DEBUG ->
             PhoneCameraDebugScreen(onBack = { nav.destination = null })
 
-        PhonePlateSolveDestination.CALIBRATION ->
-            CalibrationWizardScreen(onBack = { nav.destination = null })
-
         PhonePlateSolveDestination.TARGET_LIBRARY ->
             TargetLibraryScreen(
                 onBack = { nav.destination = null },
@@ -54,7 +50,6 @@ fun PhonePlateSolveScreens(nav: PhonePlateSolveNavState) {
         PhonePlateSolveDestination.PUSH_TO ->
             PushToScreen(
                 onBack = { nav.destination = null },
-                onOpenCalibration = { nav.destination = PhonePlateSolveDestination.CALIBRATION },
                 onOpenTargets = { nav.destination = PhonePlateSolveDestination.TARGET_LIBRARY },
                 initialTargetName = nav.targetName,
                 targetRaHours = nav.targetRaHours,

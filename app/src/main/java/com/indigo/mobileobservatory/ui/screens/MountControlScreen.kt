@@ -78,7 +78,6 @@ fun MountControlScreen(
     onOpenPolarAlignment: () -> Unit,
     onOpenGuiding: () -> Unit,
     onOpenPushTo: () -> Unit = {},
-    onOpenCalibration: () -> Unit = {},
     onOpenTargetLibrary: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -548,9 +547,6 @@ fun MountControlScreen(
             }
             FilledTonalButton(onClick = onOpenTargetLibrary) {
                 Text(stringResource(R.string.target_library_title))
-            }
-            FilledTonalButton(onClick = onOpenCalibration) {
-                Text(stringResource(R.string.calibration_title))
             }
         }
         Card(modifier = Modifier.fillMaxWidth()) {

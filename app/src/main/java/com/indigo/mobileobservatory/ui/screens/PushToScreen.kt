@@ -92,9 +92,8 @@ private val ReticleDim = Color(0xFF3A1010)
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PushToScreen(
+private fun LegacyPushToScreen(
     onBack: () -> Unit,
-    onOpenCalibration: () -> Unit = {},
     onOpenTargets: () -> Unit = {},
     initialTargetName: String? = null,
     targetRaHours: Double = 5.588,
@@ -236,9 +235,6 @@ fun PushToScreen(
                 actions = {
                     TextButton(onClick = onOpenTargets) {
                         Text(stringResource(R.string.push_to_targets), color = Color(0xFFFF8A80))
-                    }
-                    TextButton(onClick = onOpenCalibration) {
-                        Text(stringResource(R.string.push_to_calibrate), color = Color(0xFFFF8A80))
                     }
                 }
             )
@@ -428,7 +424,7 @@ private fun ProximityPills(proximity: GuidanceProximity, color: Color) {
 }
 
 @Composable
-private fun SseReticle(
+internal fun SseReticle(
     cmd: GuidanceCommand,
     deltaAlt: Double,
     deltaAz: Double,

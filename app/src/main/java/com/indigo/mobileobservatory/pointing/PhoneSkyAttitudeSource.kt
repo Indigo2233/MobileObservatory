@@ -11,6 +11,7 @@ import com.indigo.mobileobservatory.astro.EquatorialCoordinates
 import com.indigo.mobileobservatory.astro.ObserverSite
 import com.indigo.mobileobservatory.camera.PhoneSkyCapture
 import com.indigo.mobileobservatory.camera.PhoneSkyCaptureStore
+import com.indigo.mobileobservatory.camera.FrameData
 import com.indigo.mobileobservatory.recording.FITSWriter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -27,8 +28,18 @@ data class PhoneSkySolveResult(
     val success: Boolean,
     val message: String,
     val fix: SkyAttitudeFix? = null,
-    val fitsPath: String? = null
+    val fitsPath: String? = null,
+    val frame: FrameData? = null,
+    val extraction: StarExtractionResult? = null,
+    val cameraLabel: String? = null
 )
+
+enum class PhoneSkySolveStage {
+    CAPTURING,
+    EXTRACTING_STARS,
+    SOLVING,
+    COMPLETE
+}
 
 /**
  * Live phone pointing source. The back-camera optical axis is read from the Android rotation
@@ -87,22 +98,38 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
     suspend fun captureAndSolve(
         site: ObserverSite,
         exposureSeconds: Double = 2.0,
-        iso: Int = 1600
+        iso: Int = 1600,
+        cameraId: String? = null,
+        preferRaw: Boolean = true,
+        onProgress: (PhoneSkySolveStage) -> Unit = {},
+        onCapture: (FrameData, StarExtractionResult) -> Unit = { _, _ -> }
     ): PhoneSkySolveResult {
         val rawAtCapture = rawDirection
             ?: return PhoneSkySolveResult(false, "Phone attitude sensor has no reading yet.")
         val captureStartedAt = System.currentTimeMillis()
 
         return try {
+            onProgress(PhoneSkySolveStage.CAPTURING)
             val directory = PhoneSkyCaptureStore.directory(appContext)
             val fitsFile = File(directory, "${PhoneSkyCaptureStore.newBaseName()}_push_to.fits")
             val capture = withContext(Dispatchers.Default) {
                 PhoneSkyCapture(appContext).capture(
                     exposureSeconds = exposureSeconds,
                     iso = iso,
-                    preferRaw = true
+                    preferRaw = preferRaw,
+                    cameraId = cameraId
                 )
             }
+            onProgress(PhoneSkySolveStage.EXTRACTING_STARS)
+            val extraction = withContext(Dispatchers.Default) {
+                WideFieldStarExtractor.extractFromFrame(
+                    frame = capture.frame,
+                    maxStars = 200,
+                    fovWidthDeg = capture.fovWidthDeg,
+                    fovHeightDeg = capture.fovHeightDeg
+                )
+            }
+            onCapture(capture.frame, extraction)
             withContext(Dispatchers.IO) {
                 FITSWriter().write(
                     file = fitsFile,
@@ -114,12 +141,23 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
                 PhoneSkyCaptureStore.enforceRetention(appContext)
             }
 
+            onProgress(PhoneSkySolveStage.SOLVING)
             val fovDeg = capture.fovHeightDeg ?: capture.fovWidthDeg ?: 60.0
+            // Transitional solver only. A typical 24 mm-equivalent phone main camera has a
+            // roughly 45–85 degree field and requires W08 or a tetra3 index built for that range.
+            // D50 remains useful for narrow cameras and must not be treated as the phone baseline.
             val solved = AstapRunner(appContext).solve(fitsFile, fovDeg)
             val raDeg = solved.raDeg
             val decDeg = solved.decDeg
             if (!solved.success || raDeg == null || decDeg == null) {
-                PhoneSkySolveResult(false, solved.message, fitsPath = fitsFile.absolutePath)
+                PhoneSkySolveResult(
+                    success = false,
+                    message = solved.message,
+                    fitsPath = fitsFile.absolutePath,
+                    frame = capture.frame,
+                    extraction = extraction,
+                    cameraLabel = capture.capability.displayLabel
+                )
             } else {
                 val observationTime = Instant.ofEpochMilli(
                     captureStartedAt + capture.exposureNs / 2_000_000L
@@ -136,11 +174,15 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
                 ))
                 val current = rawDirection ?: rawAtCapture
                 publish(alignment.apply(current), System.currentTimeMillis())
+                onProgress(PhoneSkySolveStage.COMPLETE)
                 PhoneSkySolveResult(
                     success = true,
                     message = "Solved in ${solved.elapsedMs} ms",
                     fix = fix,
-                    fitsPath = fitsFile.absolutePath
+                    fitsPath = fitsFile.absolutePath,
+                    frame = capture.frame,
+                    extraction = extraction,
+                    cameraLabel = capture.capability.displayLabel
                 )
             }
         } catch (t: Throwable) {

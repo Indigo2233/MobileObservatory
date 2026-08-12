@@ -321,7 +321,6 @@ fun CameraScreen(
                     onOpenPolarAlignment = { showPolarAlign = true },
                     onOpenGuiding = { showGuide = true },
                     onOpenPushTo = { phoneNav.destination = PhonePlateSolveDestination.PUSH_TO },
-                    onOpenCalibration = { phoneNav.destination = PhonePlateSolveDestination.CALIBRATION },
                     onOpenTargetLibrary = { phoneNav.destination = PhonePlateSolveDestination.TARGET_LIBRARY },
                     modifier = Modifier.weight(1f)
                 )

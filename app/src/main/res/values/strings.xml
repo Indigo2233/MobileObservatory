@@ -600,7 +600,6 @@
 
     <string name="push_to_title">Push-to</string>
     <string name="push_to_targets">Targets</string>
-    <string name="push_to_calibrate">Calibrate</string>
     <string name="push_to_eyepiece_fov">Eyepiece FOV: %1$.1f°</string>
     <string name="push_to_on_target">On target</string>
     <string name="push_to_zenith_warn">Near zenith: lower altitude before turning azimuth.</string>
@@ -616,6 +615,32 @@
     <string name="push_to_permissions">Permissions</string>
     <string name="push_to_live_ready">Live location and target coordinates are ready.</string>
     <string name="push_to_sensor_unavailable">This phone has no rotation-vector sensor.</string>
+    <string name="push_to_step_setup">Set up the phone sky camera</string>
+    <string name="push_to_step_guiding">Aligned · follow the chart and arrows</string>
+    <string name="push_to_change_target">Change target</string>
+    <string name="push_to_first_time_help">Keep the phone fixed firmly to the telescope and aim the rear camera at open sky. Choose a lens and exposure below, then take one alignment image.</string>
+    <string name="push_to_capture_settings">Sky camera</string>
+    <string name="push_to_workflow_target">Target</string>
+    <string name="push_to_workflow_camera">Camera</string>
+    <string name="push_to_workflow_solve">Align</string>
+    <string name="push_to_workflow_push">Push</string>
+    <string name="push_to_start_alignment">Take alignment image</string>
+    <string name="push_to_resolve">Take another image</string>
+    <string name="push_to_exposure_value">Exposure: %1$.1f s</string>
+    <string name="push_to_stage_capturing">Taking the sky image… Keep the telescope still.</string>
+    <string name="push_to_stage_extracting">Image captured. Finding stars…</string>
+    <string name="push_to_stage_solving">Stars found. Solving sky position…</string>
+    <string name="push_to_stage_complete">Alignment complete.</string>
+    <string name="push_to_star_count">Detected %1$d stars. Red circles mark detections.</string>
+    <string name="push_to_solve_success">Aligned using %1$d detected stars. Start pushing toward the target.</string>
+    <string name="push_to_solve_failed_detail">Could not align: %1$s. Review the image and increase exposure or ISO when too few stars are visible.</string>
+    <string name="push_to_distance_remaining">Remaining %1$s</string>
+    <string name="push_to_chart_target">TARGET</string>
+    <string name="push_to_chart_field">Altitude-up field</string>
+    <string name="push_to_lens_main">Main camera</string>
+    <string name="push_to_lens_ultra_wide">Ultra-wide camera</string>
+    <string name="push_to_lens_telephoto">Telephoto camera</string>
+    <string name="push_to_lens_other">Rear camera</string>
 
     <string name="target_library_title">Target library</string>
     <string name="target_library_shell_banner">Demo catalog (10 objects). OpenNGC + tonight ranking land in M7.</string>
