@@ -10,6 +10,7 @@ import androidx.lifecycle.viewModelScope
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.accessories.AccessoryDeviceManager
 import com.indigo.mobileobservatory.camera.*
+import com.indigo.mobileobservatory.camera.playerone.PlayerOneCamera
 import com.indigo.mobileobservatory.camera.toupcam.EAFInfo
 import com.indigo.mobileobservatory.camera.toupcam.FilterWheelInfo
 import com.indigo.mobileobservatory.license.License
@@ -1508,7 +1509,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         pixelFormatSwitching = true
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                frameProcessor.resetBitShiftDetection()
+                frameProcessor.resetBitShiftDetection(
+                    forceDeclaredLayout = cam is PlayerOneCamera &&
+                        cam.currentReadoutMode == ReadoutMode.HDR
+                )
                 cam.setPixelFormat(format)
                 if (cam.currentPixelFormat != format) {
                     _statusMessage.value =
@@ -1533,7 +1537,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _pixelFormat.value = cam.currentPixelFormat
         _supportedPixelFormats.value = cam.supportedPixelFormats
         syncOffsetCapability(cam)
-        frameProcessor.resetBitShiftDetection()
+        frameProcessor.resetBitShiftDetection(
+            forceDeclaredLayout = cam is PlayerOneCamera &&
+                cam.currentReadoutMode == ReadoutMode.HDR
+        )
     }
 
     fun setNativeReadoutMode(id: String) {

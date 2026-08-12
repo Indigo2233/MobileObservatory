@@ -25,7 +25,7 @@ class HighBitLayoutTest {
         val layout = detectHighBitLayout(maxValue = 900, lowBitsMask = 0x0387, declaredBits = 16)
 
         assertEquals(16, layout.effectiveBits)
-        assertEquals(0, layout.shift)
+        assertEquals(6, layout.shift)
     }
 
     @Test
@@ -34,5 +34,26 @@ class HighBitLayoutTest {
 
         assertEquals(16, layout.effectiveBits)
         assertEquals(0, layout.shift)
+    }
+
+    @Test
+    fun waitsForStableFramesBeforePublishingLowerBitDepth() {
+        val detector = HighBitLayoutDetector(stableFrameCount = 4)
+
+        repeat(3) {
+            assertEquals(16, detector.observe(7312, 0x1FF0, 16).effectiveBits)
+        }
+        assertEquals(12, detector.observe(7312, 0x1FF0, 16).effectiveBits)
+    }
+
+    @Test
+    fun laterLowBitEvidenceCorrectsTransitionFrames() {
+        val detector = HighBitLayoutDetector(stableFrameCount = 4)
+
+        repeat(4) { detector.observe(7312, 0x1FF0, 16) }
+        val corrected = detector.observe(65535, 0xFFFF, 16)
+
+        assertEquals(16, corrected.effectiveBits)
+        assertEquals(6, corrected.shift)
     }
 }
