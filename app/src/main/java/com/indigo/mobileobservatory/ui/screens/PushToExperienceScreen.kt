@@ -104,6 +104,7 @@ fun PushToScreen(
     var exposureSeconds by remember { mutableFloatStateOf(2f) }
     var iso by remember { mutableFloatStateOf(1600f) }
     var preferRaw by remember { mutableStateOf(true) }
+    var burstFrameCount by remember { mutableFloatStateOf(1f) }
     var cameraMenuOpen by remember { mutableStateOf(false) }
     var settingsExpanded by remember { mutableStateOf(true) }
     var solving by remember { mutableStateOf(false) }
@@ -367,6 +368,8 @@ fun PushToScreen(
                         onIsoChanged = { iso = it },
                         preferRaw = preferRaw,
                         onPreferRawChanged = { preferRaw = it },
+                        burstFrameCount = burstFrameCount,
+                        onBurstFrameCountChanged = { burstFrameCount = it },
                         expanded = true,
                         collapsible = false,
                         onExpandedChanged = {}
@@ -390,6 +393,8 @@ fun PushToScreen(
                     onIsoChanged = { iso = it },
                     preferRaw = preferRaw,
                     onPreferRawChanged = { preferRaw = it },
+                    burstFrameCount = burstFrameCount,
+                    onBurstFrameCountChanged = { burstFrameCount = it },
                     expanded = settingsExpanded,
                     collapsible = true,
                     onExpandedChanged = { settingsExpanded = it }
@@ -426,6 +431,7 @@ fun PushToScreen(
                                 iso = iso.toInt(),
                                 cameraId = camera.cameraId,
                                 preferRaw = preferRaw,
+                                burstFrameCount = burstFrameCount.toInt(),
                                 onProgress = { stage ->
                                     status = context.getString(
                                         when (stage) {
@@ -436,9 +442,21 @@ fun PushToScreen(
                                         }
                                     )
                                 },
-                                onCapture = { frame, stars ->
+                                onCapture = { frame, stars, count ->
                                     capturedFrame = frame
                                     extraction = stars
+                                    status = if (count > 1) {
+                                        context.getString(R.string.push_to_stage_stacked, count)
+                                    } else {
+                                        context.getString(R.string.push_to_stage_extracting)
+                                    }
+                                },
+                                onBurstProgress = { completed, total ->
+                                    status = context.getString(
+                                        R.string.push_to_stage_burst_capturing,
+                                        completed,
+                                        total
+                                    )
                                 }
                             )
                             capturedFrame = result.frame ?: capturedFrame
@@ -520,6 +538,8 @@ private fun CaptureSettingsCard(
     onIsoChanged: (Float) -> Unit,
     preferRaw: Boolean,
     onPreferRawChanged: (Boolean) -> Unit,
+    burstFrameCount: Float,
+    onBurstFrameCountChanged: (Float) -> Unit,
     expanded: Boolean,
     collapsible: Boolean,
     onExpandedChanged: (Boolean) -> Unit
@@ -594,6 +614,18 @@ private fun CaptureSettingsCard(
                     value = exposureSeconds.coerceIn(exposureMin, exposureMax),
                     onValueChange = onExposureChanged,
                     valueRange = exposureMin..exposureMax,
+                    modifier = Modifier.height(32.dp)
+                )
+                Text(
+                    stringResource(R.string.push_to_burst_frames_value, burstFrameCount.toInt()),
+                    color = Color(0xFFBCAAA4),
+                    style = MaterialTheme.typography.labelSmall
+                )
+                Slider(
+                    value = burstFrameCount.coerceIn(1f, 16f),
+                    onValueChange = { onBurstFrameCountChanged(it.toInt().toFloat()) },
+                    valueRange = 1f..16f,
+                    steps = 14,
                     modifier = Modifier.height(32.dp)
                 )
                 val isoMin = selectedCamera?.isoRange?.lower?.toFloat() ?: 100f

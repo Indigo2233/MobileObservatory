@@ -628,11 +628,14 @@
     <string name="push_to_resolve">Take another image</string>
     <string name="push_to_exposure_value">Exposure: %1$.1f s</string>
     <string name="push_to_stage_capturing">Taking the sky image… Keep the telescope still.</string>
+    <string name="push_to_stage_burst_capturing">Capturing sky frame %1$d / %2$d… Keep the telescope still.</string>
+    <string name="push_to_stage_stacked">Stacked %1$d short exposures. Finding stars…</string>
     <string name="push_to_stage_extracting">Image captured. Finding stars…</string>
     <string name="push_to_stage_solving">Stars found. Solving sky position…</string>
     <string name="push_to_stage_complete">Alignment complete.</string>
     <string name="push_to_star_count">Detected %1$d stars. Red circles mark detections.</string>
     <string name="push_to_solve_success">Aligned using %1$d detected stars. Start pushing toward the target.</string>
+    <string name="push_to_burst_frames_value">Short-exposure frames: %1$d</string>
     <string name="push_to_solve_failed_detail">Could not align: %1$s. Review the image and increase exposure or ISO when too few stars are visible.</string>
     <string name="push_to_distance_remaining">Remaining %1$s</string>
     <string name="push_to_chart_target">TARGET</string>

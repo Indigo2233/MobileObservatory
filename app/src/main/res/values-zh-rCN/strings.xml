@@ -628,11 +628,14 @@
     <string name="push_to_resolve">再拍一张校正</string>
     <string name="push_to_exposure_value">曝光：%1$.1f 秒</string>
     <string name="push_to_stage_capturing">正在拍摄星野，请保持镜筒静止…</string>
+    <string name="push_to_stage_burst_capturing">正在拍摄星野第 %1$d / %2$d 张，请保持镜筒静止…</string>
+    <string name="push_to_stage_stacked">已叠加 %1$d 张短曝光，正在识别星点…</string>
     <string name="push_to_stage_extracting">照片已拍摄，正在识别星点…</string>
     <string name="push_to_stage_solving">已找到星点，正在解算天空位置…</string>
     <string name="push_to_stage_complete">对齐完成。</string>
     <string name="push_to_star_count">识别到 %1$d 个星点，红圈表示识别结果。</string>
     <string name="push_to_solve_success">使用 %1$d 个星点完成对齐，请按星图向目标推镜。</string>
+    <string name="push_to_burst_frames_value">短曝光帧数：%1$d</string>
     <string name="push_to_solve_failed_detail">无法完成对齐：%1$s。请查看照片；星点过少时增加曝光或 ISO。</string>
     <string name="push_to_distance_remaining">剩余 %1$s</string>
     <string name="push_to_chart_target">目标</string>

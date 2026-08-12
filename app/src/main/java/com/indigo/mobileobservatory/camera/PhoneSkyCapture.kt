@@ -43,6 +43,19 @@ data class PhoneSkyCaptureResult(
     val dngError: String? = null
 )
 
+/** A short-exposure sequence captured while one Camera2 session remains open. */
+data class PhoneSkyBurstCaptureResult(
+    val captures: List<PhoneSkyCaptureResult>,
+    val requestedFrameCount: Int,
+    val sessionOpenLatencyMs: Long
+) {
+    init {
+        require(captures.isNotEmpty()) { "A burst must contain at least one frame" }
+    }
+
+    val first: PhoneSkyCaptureResult get() = captures.first()
+}
+
 /**
  * One-shot Camera2 full-manual capture for M0 sky feasibility.
  * Prefer RAW_SENSOR; fall back to YUV_420_888 luma. Closes the camera after each shot
@@ -59,6 +72,32 @@ class PhoneSkyCapture(private val context: Context) {
         cameraId: String? = null,
         dngOutputFile: File? = null
     ): PhoneSkyCaptureResult {
+        return captureBurst(
+            exposureSeconds = exposureSeconds,
+            iso = iso,
+            frameCount = 1,
+            preferRaw = preferRaw,
+            maxLongSide = maxLongSide,
+            cameraId = cameraId,
+            dngOutputDirectory = dngOutputFile?.parentFile
+        ).first
+    }
+
+    /**
+     * Captures [frameCount] frames without reopening the camera between frames. This is the
+     * phone-main-camera path for devices whose manual exposure is limited to roughly 0.5 s.
+     */
+    suspend fun captureBurst(
+        exposureSeconds: Double,
+        iso: Int,
+        frameCount: Int,
+        preferRaw: Boolean = true,
+        maxLongSide: Int = 2048,
+        cameraId: String? = null,
+        dngOutputDirectory: File? = null,
+        onFrameCaptured: (completed: Int, total: Int) -> Unit = { _, _ -> }
+    ): PhoneSkyBurstCaptureResult {
+        require(frameCount in 1..16) { "frameCount must be in 1..16" }
         val capability = if (cameraId != null) {
             resolveCapability(cameraId)
         } else {
@@ -112,57 +151,62 @@ class PhoneSkyCapture(private val context: Context) {
             session = createSession(device, reader.surface, physicalId, handler)
             val sessionOpenLatencyMs = (System.nanoTime() - openStart) / 1_000_000
 
-            val captureStart = System.nanoTime()
-            val (image, result) = stillCapture(
-                device = device,
-                session = session,
-                reader = reader,
-                handler = handler,
-                exposureNs = exposureNs,
-                iso = sensitivity,
-                chars = openChars
-            )
-            val captureLatencyMs = (System.nanoTime() - captureStart) / 1_000_000
-
-            var dngPath: String? = null
-            var dngError: String? = null
-            try {
-                val frame = if (useRaw) {
-                    // DngCreator must run before the ImageReader is closed in the finally block.
-                    if (dngOutputFile != null) {
-                        try {
-                            writeDng(openChars, result, image, dngOutputFile)
-                            dngPath = dngOutputFile.absolutePath
-                        } catch (t: Throwable) {
-                            dngError = t.message ?: t.javaClass.simpleName
-                        }
-                    }
-                    rawToMono16Frame(image, frameId = System.currentTimeMillis())
-                } else {
-                    yuvToMono8Frame(image, frameId = System.currentTimeMillis())
-                }
-
-                val fov = capability.estimatedFovDegrees(frame.width, frame.height)
-                return PhoneSkyCaptureResult(
-                    frame = frame,
-                    capability = capability,
-                    usedRaw = useRaw,
+            val captures = ArrayList<PhoneSkyCaptureResult>(frameCount)
+            repeat(frameCount) { index ->
+                val captureStart = System.nanoTime()
+                val (image, result) = stillCapture(
+                    device = device,
+                    session = session,
+                    reader = reader,
+                    handler = handler,
                     exposureNs = exposureNs,
                     iso = sensitivity,
-                    outputSize = outputSize,
-                    fovWidthDeg = fov?.first,
-                    fovHeightDeg = fov?.second,
-                    sessionOpenLatencyMs = sessionOpenLatencyMs,
-                    captureLatencyMs = captureLatencyMs,
-                    dngPath = dngPath,
-                    dngError = dngError
+                    chars = openChars
                 )
-            } finally {
+                val captureLatencyMs = (System.nanoTime() - captureStart) / 1_000_000
+                var dngPath: String? = null
+                var dngError: String? = null
                 try {
-                    image.close()
-                } catch (_: Exception) {
+                    val frame = if (useRaw) {
+                        val dngFile = dngOutputDirectory?.let { directory ->
+                            File(directory, "phone_sky_${System.currentTimeMillis()}_${index + 1}.dng")
+                        }
+                        if (dngFile != null) {
+                            try {
+                                writeDng(openChars, result, image, dngFile)
+                                dngPath = dngFile.absolutePath
+                            } catch (t: Throwable) {
+                                dngError = t.message ?: t.javaClass.simpleName
+                            }
+                        }
+                        rawToMono16Frame(image, frameId = System.currentTimeMillis())
+                    } else {
+                        yuvToMono8Frame(image, frameId = System.currentTimeMillis())
+                    }
+                    val fov = capability.estimatedFovDegrees(frame.width, frame.height)
+                    captures += PhoneSkyCaptureResult(
+                        frame = frame,
+                        capability = capability,
+                        usedRaw = useRaw,
+                        exposureNs = exposureNs,
+                        iso = sensitivity,
+                        outputSize = outputSize,
+                        fovWidthDeg = fov?.first,
+                        fovHeightDeg = fov?.second,
+                        sessionOpenLatencyMs = sessionOpenLatencyMs,
+                        captureLatencyMs = captureLatencyMs,
+                        dngPath = dngPath,
+                        dngError = dngError
+                    )
+                    onFrameCaptured(index + 1, frameCount)
+                } finally {
+                    try {
+                        image.close()
+                    } catch (_: Exception) {
+                    }
                 }
             }
+            return PhoneSkyBurstCaptureResult(captures, frameCount, sessionOpenLatencyMs)
         } finally {
             try {
                 session?.close()

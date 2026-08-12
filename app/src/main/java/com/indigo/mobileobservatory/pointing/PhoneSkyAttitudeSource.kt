@@ -31,7 +31,8 @@ data class PhoneSkySolveResult(
     val fitsPath: String? = null,
     val frame: FrameData? = null,
     val extraction: StarExtractionResult? = null,
-    val cameraLabel: String? = null
+    val cameraLabel: String? = null,
+    val inputFrameCount: Int = 1
 )
 
 enum class PhoneSkySolveStage {
@@ -101,8 +102,10 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
         iso: Int = 1600,
         cameraId: String? = null,
         preferRaw: Boolean = true,
+        burstFrameCount: Int = 1,
         onProgress: (PhoneSkySolveStage) -> Unit = {},
-        onCapture: (FrameData, StarExtractionResult) -> Unit = { _, _ -> }
+        onCapture: (FrameData, StarExtractionResult, Int) -> Unit = { _, _, _ -> },
+        onBurstProgress: (completed: Int, total: Int) -> Unit = { _, _ -> }
     ): PhoneSkySolveResult {
         val rawAtCapture = rawDirection
             ?: return PhoneSkySolveResult(false, "Phone attitude sensor has no reading yet.")
@@ -112,29 +115,35 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
             onProgress(PhoneSkySolveStage.CAPTURING)
             val directory = PhoneSkyCaptureStore.directory(appContext)
             val fitsFile = File(directory, "${PhoneSkyCaptureStore.newBaseName()}_push_to.fits")
-            val capture = withContext(Dispatchers.Default) {
-                PhoneSkyCapture(appContext).capture(
+            val burst = withContext(Dispatchers.Default) {
+                PhoneSkyCapture(appContext).captureBurst(
                     exposureSeconds = exposureSeconds,
                     iso = iso,
                     preferRaw = preferRaw,
-                    cameraId = cameraId
+                    cameraId = cameraId,
+                    frameCount = burstFrameCount,
+                    onFrameCaptured = onBurstProgress
                 )
+            }
+            val capture = burst.first
+            val stacked = withContext(Dispatchers.Default) {
+                ShortExposureStacker.stack(burst.captures.map { it.frame })
             }
             onProgress(PhoneSkySolveStage.EXTRACTING_STARS)
             val extraction = withContext(Dispatchers.Default) {
                 WideFieldStarExtractor.extractFromFrame(
-                    frame = capture.frame,
+                    frame = stacked.frame,
                     maxStars = 200,
                     fovWidthDeg = capture.fovWidthDeg,
                     fovHeightDeg = capture.fovHeightDeg
                 )
             }
-            onCapture(capture.frame, extraction)
+            onCapture(stacked.frame, extraction, stacked.inputFrameCount)
             withContext(Dispatchers.IO) {
                 FITSWriter().write(
                     file = fitsFile,
-                    frame = capture.frame,
-                    exposureSeconds = (capture.exposureNs / 1e9).toFloat(),
+                    frame = stacked.frame,
+                    exposureSeconds = (capture.exposureNs / 1e9 * stacked.inputFrameCount).toFloat(),
                     gain = capture.iso.toFloat(),
                     cameraName = "PhoneCamera/${capture.capability.displayLabel}"
                 )
@@ -154,9 +163,10 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
                     success = false,
                     message = solved.message,
                     fitsPath = fitsFile.absolutePath,
-                    frame = capture.frame,
+                    frame = stacked.frame,
                     extraction = extraction,
-                    cameraLabel = capture.capability.displayLabel
+                    cameraLabel = capture.capability.displayLabel,
+                    inputFrameCount = stacked.inputFrameCount
                 )
             } else {
                 val observationTime = Instant.ofEpochMilli(
@@ -180,9 +190,10 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
                     message = "Solved in ${solved.elapsedMs} ms",
                     fix = fix,
                     fitsPath = fitsFile.absolutePath,
-                    frame = capture.frame,
+                    frame = stacked.frame,
                     extraction = extraction,
-                    cameraLabel = capture.capability.displayLabel
+                    cameraLabel = capture.capability.displayLabel,
+                    inputFrameCount = stacked.inputFrameCount
                 )
             }
         } catch (t: Throwable) {
