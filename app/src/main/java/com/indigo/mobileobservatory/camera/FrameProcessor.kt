@@ -20,10 +20,43 @@ data class HistogramData(
     override fun hashCode() = bins.contentHashCode()
 }
 
+internal data class HighBitLayout(
+    val effectiveBits: Int,
+    val shift: Int,
+    val zeroBits: Int
+)
+
+internal fun detectHighBitLayout(maxValue: Int, lowBitsMask: Int, declaredBits: Int): HighBitLayout {
+    if (maxValue <= 0) return HighBitLayout(declaredBits, 0, 0)
+
+    val zeroBits = when {
+        (lowBitsMask and 0x3F) == 0 -> 6
+        (lowBitsMask and 0x0F) == 0 -> 4
+        (lowBitsMask and 0x03) == 0 -> 2
+        else -> 0
+    }
+    val effectiveBits = when {
+        zeroBits >= 6 -> 10
+        zeroBits >= 4 -> 12
+        zeroBits >= 2 -> 14
+        maxValue > 16383 -> 16
+        maxValue > 4095 -> 14
+        maxValue > 1023 -> 12
+        else -> declaredBits
+    }
+    val shift = when {
+        zeroBits >= 2 -> 6
+        maxValue > 1023 -> (effectiveBits - 10).coerceAtLeast(0)
+        else -> 0
+    }
+    return HighBitLayout(effectiveBits, shift, zeroBits)
+}
+
 class FrameProcessor {
     private companion object {
         const val PREVIEW_BITMAP_BUFFER_COUNT = 3
         const val HISTOGRAM_PUBLISH_INTERVAL_MS = 200L
+        const val BIT_DEPTH_SAMPLE_FRAMES = 3
     }
 
     private val _histogram = MutableStateFlow<HistogramData?>(null)
@@ -183,6 +216,9 @@ class FrameProcessor {
     fun resetBitShiftDetection() {
         detectedBitShift = -1
         detectedEffectiveBits = 16
+        bitDepthSampleFrames = 0
+        sampledMaxValue = 0
+        sampledLowBitsMask = 0
     }
 
     fun getDetectedEffectiveBits(): Int = detectedEffectiveBits
@@ -494,6 +530,9 @@ class FrameProcessor {
 
     private var detectedBitShift = -1
     private var detectedEffectiveBits = 16
+    private var bitDepthSampleFrames = 0
+    private var sampledMaxValue = 0
+    private var sampledLowBitsMask = 0
 
     fun computeHistogram(frame: FrameData): HistogramData {
         val totalPixels = frame.width * frame.height
@@ -515,7 +554,7 @@ class FrameProcessor {
         }
 
         if (frame.pixelFormat.is10bit) {
-            if (detectedBitShift < 0 && totalPixels > 0) {
+            if (bitDepthSampleFrames < BIT_DEPTH_SAMPLE_FRAMES && totalPixels > 0) {
                 var maxVal = 0
                 var lowBitsMask = 0
                 val sampleCount = totalPixels.coerceAtMost(10000)
@@ -526,27 +565,23 @@ class FrameProcessor {
                     if (v > maxVal) maxVal = v
                     lowBitsMask = lowBitsMask or v
                 }
+                sampledMaxValue = maxOf(sampledMaxValue, maxVal)
+                sampledLowBitsMask = sampledLowBitsMask or lowBitsMask
+                bitDepthSampleFrames++
 
-                val zeroBits = when {
-                    (lowBitsMask and 0x3F) == 0 -> 6   // Lower 6 bits always 0: 16-bit aligned 10-bit
-                    (lowBitsMask and 0x0F) == 0 -> 4   // Lower 4 bits always 0: 16-bit aligned 12-bit
-                    (lowBitsMask and 0x03) == 0 -> 2   // Lower 2 bits always 0: might be 14-bit
-                    else -> 0
+                val layout = detectHighBitLayout(sampledMaxValue, sampledLowBitsMask, frame.pixelFormat.nativeBits)
+                detectedBitShift = layout.shift
+                detectedEffectiveBits = if (bitDepthSampleFrames >= BIT_DEPTH_SAMPLE_FRAMES) {
+                    layout.effectiveBits
+                } else {
+                    frame.pixelFormat.nativeBits
                 }
 
-                detectedEffectiveBits = when {
-                    zeroBits >= 6 -> 10
-                    zeroBits >= 4 -> 12
-                    zeroBits >= 2 -> 14
-                    maxVal > 4095 -> 16
-                    maxVal > 1023 -> 12
-                    else -> 10
-                }
-
-                detectedBitShift = 16 - detectedEffectiveBits + (detectedEffectiveBits - 10).coerceAtLeast(0)
-                if (detectedEffectiveBits <= 10) detectedBitShift = zeroBits
-
-                android.util.Log.i("FrameProcessor", "Detected: maxVal=$maxVal zeroBits=$zeroBits effectiveBits=$detectedEffectiveBits shift=$detectedBitShift")
+                android.util.Log.i(
+                    "FrameProcessor",
+                    "Detected: frames=$bitDepthSampleFrames maxVal=$sampledMaxValue " +
+                        "zeroBits=${layout.zeroBits} effectiveBits=${layout.effectiveBits} shift=${layout.shift}"
+                )
             }
 
             val numBins = 1024

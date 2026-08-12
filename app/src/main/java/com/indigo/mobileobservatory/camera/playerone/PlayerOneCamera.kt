@@ -392,6 +392,7 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable {
     override fun setReadoutMode(mode: ReadoutMode) {
         val cam = poa ?: return
         if (disconnected) return
+        if (mode == currentReadoutMode) return
         val index = sensorModeIndices[mode] ?: run {
             if (mode == ReadoutMode.NORMAL) return
             FileLogger.w(TAG, "No sensor mode for $mode")
@@ -400,11 +401,28 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable {
         val wasCapturing = _isCapturing.value
         val cb = frameCallback
         if (wasCapturing) stopCapture()
+        val previousExposure = currentExposureUs
+        val previousGain = currentGain
+        val previousOffset = currentOffset
+        val previousFormat = currentPoaFormat
         try {
             cam.setSensorMode(index)
             currentReadoutMode = mode
-            applyPresetForMode(mode)
-            FileLogger.i(TAG, "SensorMode -> $mode (index=$index)")
+            try {
+                cam.setImageFormat(previousFormat)
+            } catch (e: PoaException) {
+                FileLogger.w(TAG, "restore image format ${e.error}: ${e.message}")
+            }
+            setExposureTime(previousExposure)
+            setGain(previousGain)
+            if (offsetSupported) setOffset(previousOffset)
+            readCurrentImagingSettings(cam)
+            directBuffers = null
+            FileLogger.i(
+                TAG,
+                "SensorMode -> $mode (index=$index), restored exposure=${currentExposureUs.toInt()}us " +
+                    "gain=${currentGain}dB offset=$currentOffset format=$currentPoaFormat"
+            )
         } catch (e: PoaException) {
             FileLogger.w(TAG, "setSensorMode ${e.error}: ${e.message}")
         }
@@ -862,6 +880,30 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable {
         }
     }
 
+    private fun readCurrentImagingSettings(cam: PoaCamera) {
+        try {
+            currentExposureUs = cam.getConfig(PoaConfig.EXPOSURE_MICROSECONDS)
+                .value.asInteger().toFloat().coerceIn(exposureRange.min, hwExposureMaxUs)
+        } catch (e: PoaException) {
+            FileLogger.w(TAG, "read exposure after sensor mode ${e.error}")
+        }
+        try {
+            currentGain = PoaMapping.gainToDb(
+                cam.getConfig(PoaConfig.GAIN).value.asInteger().toInt()
+            ).coerceIn(gainRange.min, gainRange.max)
+        } catch (e: PoaException) {
+            FileLogger.w(TAG, "read gain after sensor mode ${e.error}")
+        }
+        if (offsetSupported) {
+            try {
+                currentOffset = cam.getConfig(PoaConfig.OFFSET).value.asInteger().toFloat()
+                    .coerceIn(offsetRange.min, offsetRange.max)
+            } catch (e: PoaException) {
+                FileLogger.w(TAG, "read offset after sensor mode ${e.error}")
+            }
+        }
+    }
+
     private fun readBooleanSetting(cam: PoaCamera, config: PoaConfig): String {
         return try {
             val attrs = cam.getConfigAttributes(config)
@@ -914,29 +956,6 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable {
             )
         } catch (e: PoaException) {
             FileLogger.w(TAG, "getGainsAndOffsets ${e.error}")
-        }
-    }
-
-    private fun applyPresetForMode(mode: ReadoutMode) {
-        val cam = poa ?: return
-        val preset = gainOffsetPreset ?: return
-        val (gain, offset) = when (mode) {
-            ReadoutMode.HCG -> preset.highConversionGain to preset.offsetHighConversionGain
-            ReadoutMode.HDR -> preset.gainHighestDynamicRange to preset.offsetHighestDynamicRange
-            ReadoutMode.LOW_NOISE -> preset.gainLowestReadNoise to preset.offsetLowestReadNoise
-            ReadoutMode.NORMAL, ReadoutMode.LCG -> preset.unityGain to preset.offsetUnityGain
-        }
-        if (gain <= 0) return
-        try {
-            cam.setConfig(PoaConfig.GAIN, ConfigValue.ofInteger(gain.toLong()), false)
-            currentGain = PoaMapping.gainToDb(gain)
-            if (offset >= 0 && offsetSupported) {
-                cam.setConfig(PoaConfig.OFFSET, ConfigValue.ofInteger(offset.toLong()), false)
-                currentOffset = offset.toFloat().coerceIn(offsetRange.min, offsetRange.max)
-            }
-            FileLogger.i(TAG, "Applied gain preset for $mode: gain=$gain offset=$offset")
-        } catch (e: PoaException) {
-            FileLogger.w(TAG, "applyPreset ${e.error}")
         }
     }
 

@@ -1529,6 +1529,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val cam = cameraManager.activeCamera ?: return
         cam.setReadoutMode(mode)
         _readoutMode.value = cam.currentReadoutMode
+        _gain.value = cam.currentGain
         _pixelFormat.value = cam.currentPixelFormat
         _supportedPixelFormats.value = cam.supportedPixelFormats
         syncOffsetCapability(cam)
