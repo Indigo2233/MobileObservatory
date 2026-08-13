@@ -18,6 +18,7 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable {
     companion object {
         private const val TAG = "ZwoAsiCam"
         private const val GRAB_TIMEOUT_MS = 2000
+        private const val ZWO_GAIN_UNITS_PER_DB = 10f
 
         const val ASI_IMG_RAW8 = 0
         const val ASI_IMG_RGB24 = 1
@@ -32,8 +33,8 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable {
         const val ASI_GAIN = 0
         const val ASI_EXPOSURE = 1
         const val ASI_BRIGHTNESS = 5
+        const val ASI_BANDWIDTH_OVERLOAD = 6
         const val ASI_HARDWARE_BIN = 13
-        const val ASI_HIGH_SPEED_MODE = 14
 
         var sdkAvailable: Boolean = false
             private set
@@ -128,10 +129,11 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable {
             isColor = prop.isColorCam != 0
             bayerPattern = prop.bayerPattern
             val pixelSize = prop.pixelSize
-            val bitDepth = prop.run {
+            val transferBitDepth = prop.run {
                 val fmts = supportedVideoFormat
                 if (fmts != null && fmts.any { it == ASI_IMG_RAW16 }) 16 else 8
             }
+            val bitDepth = effectiveBitDepth(modelName, transferBitDepth)
             maxBitDepth = bitDepth
 
             FileLogger.i(TAG, "Opening ZWO camera: $modelName ID=$cameraID ${sensorW}x${sensorH} color=$isColor bayer=$bayerPattern pixel=${pixelSize}um bitDepth=$bitDepth")
@@ -154,6 +156,7 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable {
             readExposureRange(cam)
             readGainRange(cam)
             readOffsetRange(cam)
+            configureUsbBandwidth(cam, currentImgType)
             readSupportedFormats(prop)
             configureInitialFormat(cam)
 
@@ -235,9 +238,9 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable {
 
     override fun setGain(db: Float) {
         val cam = zwoCamera ?: return
-        val clamped = db.coerceIn(gainRange.min, gainRange.max)
-        cam.setControlValue(ASI_GAIN, clamped.toLong(), 0)
-        currentGain = clamped
+        val clampedDb = db.coerceIn(gainRange.min, gainRange.max)
+        cam.setControlValue(ASI_GAIN, (clampedDb * ZWO_GAIN_UNITS_PER_DB).roundToLong(), 0)
+        currentGain = clampedDb
     }
 
     override fun setOffset(value: Float) {
@@ -260,6 +263,7 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable {
         if (wasCapturing) stopCapture()
 
         val imgType = pixelFormatToAsiImgType(format)
+        configureUsbBandwidth(cam, imgType)
         val roiFmt = cam.getROIFormat()
         if (roiFmt.errorCode.intVal == ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
             val roi = roiFmt.obj as com.zwo.ASIROIFormat
@@ -321,7 +325,6 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable {
     private fun captureLoop() {
         val cam = zwoCamera ?: return
         var frameSeq = 0L
-        val bpp = currentPixelFormat.bytesPerPixel
         val maxBufSize = sensorW * sensorH * 3
         val imgBuf = ASIImageBuffer.allocate(maxBufSize)
 
@@ -331,11 +334,12 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable {
                 val h = currentRoi.height
                 val frameBpp = currentPixelFormat.bytesPerPixel
                 val expectedSize = w * h * frameBpp
-                val bufSize = expectedSize.coerceAtLeast(w * h * 2)
 
-                val ret = cam.getVideoData(imgBuf, bufSize, GRAB_TIMEOUT_MS)
+                val ret = cam.getVideoData(imgBuf, expectedSize, GRAB_TIMEOUT_MS)
                 if (ret.intVal != ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
-                    if (ret.intVal != ASIConstants.ASI_ERROR_CODE.ASI_ERROR_TIMEOUT) {
+                    if (ret.intVal == ASIConstants.ASI_ERROR_CODE.ASI_ERROR_TIMEOUT) {
+                        Thread.sleep(1)
+                    } else {
                         FileLogger.w(TAG, "getVideoData error: ${ret.intVal}")
                     }
                     continue
@@ -390,12 +394,12 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable {
         val capRet = cam.getControlCaps(ASI_GAIN)
         if (capRet.errorCode.intVal == ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
             val cap = capRet.obj as ASIControlCap
-            val min = cap.minValue.toFloat()
-            val max = cap.maxValue.toFloat()
-            val def = cap.defaultValue.toFloat().coerceIn(min, max)
-            gainRange = FloatRange(min, max, def)
-            currentGain = def
-            FileLogger.i(TAG, "Gain range: $min-$max (default=$def)")
+            val minDb = cap.minValue.toFloat() / ZWO_GAIN_UNITS_PER_DB
+            val maxDb = cap.maxValue.toFloat() / ZWO_GAIN_UNITS_PER_DB
+            val defaultDb = (cap.defaultValue.toFloat() / ZWO_GAIN_UNITS_PER_DB).coerceIn(minDb, maxDb)
+            gainRange = FloatRange(minDb, maxDb, defaultDb)
+            currentGain = defaultDb
+            FileLogger.i(TAG, "Gain range: $minDb-$maxDb dB (default=$defaultDb dB)")
         }
     }
 
@@ -415,6 +419,42 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable {
         currentOffset = valueRet.extraLongVal1.toFloat().coerceIn(min, max)
         offsetRange = FloatRange(min, max, currentOffset)
         FileLogger.i(TAG, "Offset range: $min-$max (current=$currentOffset)")
+    }
+
+    private fun configureUsbBandwidth(cam: ZwoCamera, imgType: Int) {
+        val countRet = cam.getNumOfControls() ?: return
+        if (countRet.errorCode.intVal != ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) return
+        val controlCount = (countRet.obj as? Number)?.toInt() ?: return
+        for (index in 0 until controlCount) {
+            val capRet = cam.getControlCapsByIndex(index) ?: continue
+            if (capRet.errorCode.intVal != ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) continue
+            val cap = capRet.obj as? ASIControlCap ?: continue
+            if (cap.controlType != ASI_BANDWIDTH_OVERLOAD) continue
+
+            val currentRet = cam.getControlValue(ASI_BANDWIDTH_OVERLOAD)
+            val current = if (currentRet?.errorCode?.intVal == ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
+                currentRet.extraLongVal1
+            } else {
+                cap.defaultValue
+            }
+            val target = if (imgType == ASI_IMG_RAW16) {
+                50L.coerceIn(cap.minValue, cap.maxValue)
+            } else {
+                80L.coerceIn(cap.minValue, cap.maxValue)
+            }
+            val result = if (cap.isWritable != 0) {
+                cam.setControlValue(ASI_BANDWIDTH_OVERLOAD, target, 0)
+            } else {
+                ASIConstants.ASI_ERROR_CODE.ASI_ERROR_INVALID_CONTROL_TYPE
+            }
+            FileLogger.i(
+                TAG,
+                "USB bandwidth: range=${cap.minValue}-${cap.maxValue} default=${cap.defaultValue} " +
+                    "current=$current target=$target result=$result"
+            )
+            return
+        }
+        FileLogger.i(TAG, "USB bandwidth control unavailable")
     }
 
     private fun readSupportedFormats(prop: com.zwo.ASICameraProperty) {
@@ -475,24 +515,61 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable {
 
     private fun asiImgTypeToPixelFormat(imgType: Int): PixelFormat = when {
         !isColor && imgType == ASI_IMG_RAW8 -> PixelFormat.MONO8
-        !isColor && imgType == ASI_IMG_RAW16 -> PixelFormat.MONO16
+        !isColor && imgType == ASI_IMG_RAW16 -> monoHighBitFormat()
         !isColor && imgType == ASI_IMG_Y8 -> PixelFormat.MONO8
         isColor && imgType == ASI_IMG_RAW8 -> defaultBayer8()
-        isColor && imgType == ASI_IMG_RAW16 -> when (bayerPattern) {
-            ASI_BAYER_RG -> PixelFormat.BAYER_RG16
-            ASI_BAYER_BG -> PixelFormat.BAYER_BG16
-            ASI_BAYER_GR -> PixelFormat.BAYER_GR16
-            ASI_BAYER_GB -> PixelFormat.BAYER_GB16
-            else -> PixelFormat.BAYER_RG16
-        }
+        isColor && imgType == ASI_IMG_RAW16 -> bayerHighBitFormat()
         else -> if (!isColor) PixelFormat.MONO8 else defaultBayer8()
     }
 
     private fun pixelFormatToAsiImgType(format: PixelFormat): Int = when (format) {
         PixelFormat.MONO8 -> ASI_IMG_RAW8
-        PixelFormat.MONO16 -> ASI_IMG_RAW16
+        PixelFormat.MONO10, PixelFormat.MONO12, PixelFormat.MONO14, PixelFormat.MONO16 -> ASI_IMG_RAW16
         PixelFormat.BAYER_RG8, PixelFormat.BAYER_GR8, PixelFormat.BAYER_GB8, PixelFormat.BAYER_BG8 -> ASI_IMG_RAW8
+        PixelFormat.BAYER_RG10, PixelFormat.BAYER_GR10, PixelFormat.BAYER_GB10, PixelFormat.BAYER_BG10,
+        PixelFormat.BAYER_RG12, PixelFormat.BAYER_GR12, PixelFormat.BAYER_GB12, PixelFormat.BAYER_BG12,
+        PixelFormat.BAYER_RG14, PixelFormat.BAYER_GR14, PixelFormat.BAYER_GB14, PixelFormat.BAYER_BG14,
         PixelFormat.BAYER_RG16, PixelFormat.BAYER_GR16, PixelFormat.BAYER_GB16, PixelFormat.BAYER_BG16 -> ASI_IMG_RAW16
         else -> ASI_IMG_RAW8
+    }
+
+    private fun effectiveBitDepth(modelName: String, transferBitDepth: Int): Int = when {
+        modelName.contains("533", ignoreCase = true) -> 14
+        else -> transferBitDepth
+    }
+
+    private fun monoHighBitFormat(): PixelFormat = when (maxBitDepth) {
+        10 -> PixelFormat.MONO10
+        12 -> PixelFormat.MONO12
+        14 -> PixelFormat.MONO14
+        else -> PixelFormat.MONO16
+    }
+
+    private fun bayerHighBitFormat(): PixelFormat = when (bayerPattern) {
+        ASI_BAYER_RG -> when (maxBitDepth) {
+            10 -> PixelFormat.BAYER_RG10
+            12 -> PixelFormat.BAYER_RG12
+            14 -> PixelFormat.BAYER_RG14
+            else -> PixelFormat.BAYER_RG16
+        }
+        ASI_BAYER_BG -> when (maxBitDepth) {
+            10 -> PixelFormat.BAYER_BG10
+            12 -> PixelFormat.BAYER_BG12
+            14 -> PixelFormat.BAYER_BG14
+            else -> PixelFormat.BAYER_BG16
+        }
+        ASI_BAYER_GR -> when (maxBitDepth) {
+            10 -> PixelFormat.BAYER_GR10
+            12 -> PixelFormat.BAYER_GR12
+            14 -> PixelFormat.BAYER_GR14
+            else -> PixelFormat.BAYER_GR16
+        }
+        ASI_BAYER_GB -> when (maxBitDepth) {
+            10 -> PixelFormat.BAYER_GB10
+            12 -> PixelFormat.BAYER_GB12
+            14 -> PixelFormat.BAYER_GB14
+            else -> PixelFormat.BAYER_GB16
+        }
+        else -> PixelFormat.BAYER_RG16
     }
 }

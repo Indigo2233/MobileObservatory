@@ -3,6 +3,7 @@ package com.indigo.mobileobservatory.camera
 import android.content.Context
 import android.hardware.usb.UsbDevice
 import android.util.Log
+import java.io.File
 
 object UsbHelper {
     private const val TAG = "UsbHelper"
@@ -31,10 +32,39 @@ object UsbHelper {
         val devAddr = parts[1].toIntOrNull() ?: return false
         Log.i(TAG, "registerUsbFd: bus=$busNum dev=$devAddr fd=$fd path=$devPath")
         return try {
-            nativeRegisterUsbFd(context.cacheDir.absolutePath, busNum, devAddr, fd)
+            val registered = nativeRegisterUsbFd(context.cacheDir.absolutePath, busNum, devAddr, fd)
+            if (registered) {
+                updateUsbSpeed(context, usbDevice, busNum, devAddr)
+            }
+            registered
         } catch (e: Throwable) {
             Log.e(TAG, "registerUsbFd failed: ${e.message}", e)
             false
+        }
+    }
+
+    private fun updateUsbSpeed(context: Context, usbDevice: UsbDevice, busNum: Int, devAddr: Int) {
+        val maxPacketSize = (0 until usbDevice.interfaceCount).maxOfOrNull { interfaceIndex ->
+            val usbInterface = usbDevice.getInterface(interfaceIndex)
+            (0 until usbInterface.endpointCount).maxOfOrNull { endpointIndex ->
+                usbInterface.getEndpoint(endpointIndex).maxPacketSize
+            } ?: 0
+        } ?: 0
+        val speedMbps = when {
+            maxPacketSize >= 1024 -> 5000
+            usbDevice.version.startsWith("3") || usbDevice.version.startsWith("4") -> 5000
+            maxPacketSize >= 512 || usbDevice.version.startsWith("2") -> 480
+            else -> 12
+        }
+        val speedFile = File(context.cacheDir, "fake_sysfs/$busNum-$devAddr/speed")
+        runCatching {
+            speedFile.writeText("$speedMbps\n")
+            Log.i(
+                TAG,
+                "USB speed override: version=${usbDevice.version} maxPacket=$maxPacketSize speed=${speedMbps}Mbps"
+            )
+        }.onFailure { error ->
+            Log.w(TAG, "USB speed override failed: ${error.message}")
         }
     }
 

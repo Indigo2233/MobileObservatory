@@ -829,10 +829,6 @@ class DahengCameraManager(
             }
             zwoUsbConnection = connection
 
-            for (i in 0 until usbDevice.interfaceCount) {
-                connection.claimInterface(usbDevice.getInterface(i), true)
-            }
-
             val fd = connection.fileDescriptor
             Log.i(TAG, "ZWO USB fd=$fd, installing hooks for libusb redirection")
 
