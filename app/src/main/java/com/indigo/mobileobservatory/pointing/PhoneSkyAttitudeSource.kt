@@ -5,7 +5,6 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
-import com.indigo.mobileobservatory.astrometry.AstapRunner
 import com.indigo.mobileobservatory.astro.CoordinateTransform
 import com.indigo.mobileobservatory.astro.EquatorialCoordinates
 import com.indigo.mobileobservatory.astro.ObserverSite
@@ -17,6 +16,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.time.Instant
+import org.json.JSONObject
 import kotlin.math.acos
 import kotlin.math.asin
 import kotlin.math.atan2
@@ -107,8 +107,9 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
         onCapture: (FrameData, StarExtractionResult, Int) -> Unit = { _, _, _ -> },
         onBurstProgress: (completed: Int, total: Int) -> Unit = { _, _ -> }
     ): PhoneSkySolveResult {
+        // Plate solving remains available without a rotation-vector sensor. In that case it
+        // returns the photographic solution while live push-to orientation awaits an IMU sample.
         val rawAtCapture = rawDirection
-            ?: return PhoneSkySolveResult(false, "Phone attitude sensor has no reading yet.")
         val captureStartedAt = System.currentTimeMillis()
 
         return try {
@@ -152,50 +153,28 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
 
             onProgress(PhoneSkySolveStage.SOLVING)
             val observationTime = Instant.ofEpochMilli(
-                captureStartedAt + capture.exposureNs / 2_000_000L
+                capture.metadata.exposureMidpointEpochMs ?: (captureStartedAt + capture.exposureNs / 2_000_000L)
             )
             val localSolve = withContext(Dispatchers.Default) {
-                ImuAssistedWideFieldSolver.solve(
+                WideFieldSolver.solve(WideFieldSolveRequest(
                     extraction = extraction,
                     frameWidth = stacked.frame.width,
                     frameHeight = stacked.frame.height,
-                    fovWidthDeg = capture.fovWidthDeg ?: 72.0,
-                    fovHeightDeg = capture.fovHeightDeg ?: 54.0,
+                    initialFovWidthDeg = capture.fovWidthDeg ?: 72.0,
+                    initialFovHeightDeg = capture.fovHeightDeg ?: 54.0,
                     imuDirection = rawAtCapture,
-                    instant = observationTime,
+                    observationTime = observationTime,
                     site = site,
                     catalog = PhoneBrightStarCatalog.load(appContext)
-                )
-            }
-            if (localSolve.success && localSolve.center != null) {
-                alignment.calibrate(rawAtCapture, Direction3.fromAltAz(
-                    localSolve.center.altitudeDeg,
-                    localSolve.center.azimuthDeg
                 ))
-                publish(alignment.apply(rawDirection ?: rawAtCapture), System.currentTimeMillis())
-                onProgress(PhoneSkySolveStage.COMPLETE)
-                return PhoneSkySolveResult(
-                    success = true,
-                    message = localSolve.message,
-                    fix = fix,
-                    fitsPath = fitsFile.absolutePath,
-                    frame = stacked.frame,
-                    extraction = extraction,
-                    cameraLabel = capture.capability.displayLabel,
-                    inputFrameCount = stacked.inputFrameCount
-                )
             }
-            val fovDeg = capture.fovHeightDeg ?: capture.fovWidthDeg ?: 60.0
-            // Transitional solver only. A typical 24 mm-equivalent phone main camera has a
-            // roughly 45–85 degree field and requires W08 or a tetra3 index built for that range.
-            // D50 remains useful for narrow cameras and must not be treated as the phone baseline.
-            val solved = AstapRunner(appContext).solve(fitsFile, fovDeg)
-            val raDeg = solved.raDeg
-            val decDeg = solved.decDeg
-            if (!solved.success || raDeg == null || decDeg == null) {
+            val raDeg = localSolve.raDeg
+            val decDeg = localSolve.decDeg
+            writeSolveDiagnostics(fitsFile, capture, localSolve)
+            if (!localSolve.success || raDeg == null || decDeg == null) {
                 PhoneSkySolveResult(
                     success = false,
-                    message = solved.message,
+                    message = localSolve.message,
                     fitsPath = fitsFile.absolutePath,
                     frame = stacked.frame,
                     extraction = extraction,
@@ -209,16 +188,17 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
                     site,
                     refraction = null
                 )
-                alignment.calibrate(rawAtCapture, Direction3.fromAltAz(
-                    horizontal.altitudeDeg,
-                    horizontal.azimuthDeg
-                ))
-                val current = rawDirection ?: rawAtCapture
-                publish(alignment.apply(current), System.currentTimeMillis())
+                rawAtCapture?.let { sensorDirection ->
+                    alignment.calibrate(sensorDirection, Direction3.fromAltAz(
+                        horizontal.altitudeDeg,
+                        horizontal.azimuthDeg
+                    ))
+                    publish(alignment.apply(rawDirection ?: sensorDirection), System.currentTimeMillis())
+                }
                 onProgress(PhoneSkySolveStage.COMPLETE)
                 PhoneSkySolveResult(
                     success = true,
-                    message = "Solved in ${solved.elapsedMs} ms",
+                    message = "Solved in ${localSolve.quality.elapsedMs} ms; ${localSolve.quality.matchedStars} matched stars",
                     fix = fix,
                     fitsPath = fitsFile.absolutePath,
                     frame = stacked.frame,
@@ -230,6 +210,37 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
         } catch (t: Throwable) {
             PhoneSkySolveResult(false, t.message ?: t.javaClass.simpleName)
         }
+    }
+
+    private fun writeSolveDiagnostics(
+        fitsFile: File,
+        capture: com.indigo.mobileobservatory.camera.PhoneSkyCaptureResult,
+        solve: WideFieldSolveResult
+    ) {
+        val metadata = capture.metadata
+        val json = JSONObject().apply {
+            put("logicalCameraId", metadata.logicalCameraId)
+            put("physicalCameraId", metadata.physicalCameraId)
+            put("focalLengthMm", metadata.focalLengthMm)
+            put("sensorWidthMm", metadata.sensorWidthMm)
+            put("sensorHeightMm", metadata.sensorHeightMm)
+            put("cropLeftPx", metadata.cropLeftPx)
+            put("cropTopPx", metadata.cropTopPx)
+            put("cropWidthPx", metadata.cropWidthPx)
+            put("cropHeightPx", metadata.cropHeightPx)
+            put("sensorOrientation", metadata.sensorOrientation)
+            put("exposureMidpointEpochMs", metadata.exposureMidpointEpochMs)
+            put("fovWidthDeg", capture.fovWidthDeg)
+            put("fovHeightDeg", capture.fovHeightDeg)
+            put("matchedStars", solve.quality.matchedStars)
+            put("rmsResidualDeg", solve.quality.rmsResidualDeg)
+            put("confidence", solve.quality.confidence)
+            put("usedImuPrior", solve.quality.usedImuPrior)
+            put("blindFallbackUsed", solve.quality.blindFallbackUsed)
+            put("failure", solve.failure?.name)
+        }
+        val target = fitsFile.resolveSibling("${fitsFile.nameWithoutExtension}_diagnostics.json")
+        runCatching { target.writeText(json.toString(2)) }
     }
 
     private fun publish(direction: Direction3, timestampMs: Long) {

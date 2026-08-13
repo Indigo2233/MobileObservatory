@@ -38,6 +38,7 @@ data class PhoneCameraCapability(
     val noiseReductionModes: IntArray,
     val edgeModes: IntArray,
     val oisAvailable: Boolean,
+    val sensorOrientation: Int = 0,
     /** Non-null when this is a physical sub-camera that must be opened via its logical parent. */
     val logicalParentId: String? = null
 ) {
@@ -263,6 +264,7 @@ data class PhoneCameraCapability(
                 edgeModes = chars.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES) ?: intArrayOf(),
                 oisAvailable = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)
                     ?.contains(CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_ON) == true,
+                sensorOrientation = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0,
                 logicalParentId = logicalParentId
             )
         }

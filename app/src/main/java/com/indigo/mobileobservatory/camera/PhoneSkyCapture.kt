@@ -38,9 +38,30 @@ data class PhoneSkyCaptureResult(
     val fovHeightDeg: Double?,
     val sessionOpenLatencyMs: Long,
     val captureLatencyMs: Long,
+    val metadata: PhoneCaptureMetadata,
     /** Written during capture, while the RAW [Image] is still valid. */
     val dngPath: String? = null,
     val dngError: String? = null
+)
+
+/** Actual Camera2 values attached to an individual still frame for solve diagnostics. */
+data class PhoneCaptureMetadata(
+    val logicalCameraId: String,
+    val physicalCameraId: String?,
+    val focalLengthMm: Double?,
+    val sensorWidthMm: Double?,
+    val sensorHeightMm: Double?,
+    val activeArrayLeftPx: Int?,
+    val activeArrayTopPx: Int?,
+    val activeArrayWidthPx: Int?,
+    val activeArrayHeightPx: Int?,
+    val cropLeftPx: Int?,
+    val cropTopPx: Int?,
+    val cropWidthPx: Int?,
+    val cropHeightPx: Int?,
+    val sensorOrientation: Int,
+    val exposureMidpointEpochMs: Long?,
+    val fov: CameraFovEstimate?
 )
 
 /** A short-exposure sequence captured while one Camera2 session remains open. */
@@ -183,7 +204,7 @@ class PhoneSkyCapture(private val context: Context) {
                     } else {
                         yuvToMono8Frame(image, frameId = System.currentTimeMillis())
                     }
-                    val fov = capability.estimatedFovDegrees(frame.width, frame.height)
+                    val metadata = captureMetadata(capability, openId, physicalId, result, frame.width, frame.height)
                     captures += PhoneSkyCaptureResult(
                         frame = frame,
                         capability = capability,
@@ -191,10 +212,11 @@ class PhoneSkyCapture(private val context: Context) {
                         exposureNs = exposureNs,
                         iso = sensitivity,
                         outputSize = outputSize,
-                        fovWidthDeg = fov?.first,
-                        fovHeightDeg = fov?.second,
+                        fovWidthDeg = metadata.fov?.widthDeg,
+                        fovHeightDeg = metadata.fov?.heightDeg,
                         sessionOpenLatencyMs = sessionOpenLatencyMs,
                         captureLatencyMs = captureLatencyMs,
+                        metadata = metadata,
                         dngPath = dngPath,
                         dngError = dngError
                     )
@@ -226,6 +248,48 @@ class PhoneSkyCapture(private val context: Context) {
             .getOrDefault(emptyList())
         return enumerated.firstOrNull { it.cameraId == cameraId }
             ?: PhoneCameraCapability.probe(context, cameraId)
+    }
+
+    private fun captureMetadata(
+        capability: PhoneCameraCapability,
+        openCameraId: String,
+        physicalCameraId: String?,
+        result: TotalCaptureResult,
+        outputWidth: Int,
+        outputHeight: Int
+    ): PhoneCaptureMetadata {
+        val active = capability.activeArraySize
+        val crop = result.get(android.hardware.camera2.CaptureResult.SCALER_CROP_REGION) ?: active
+        val focal = result.get(android.hardware.camera2.CaptureResult.LENS_FOCAL_LENGTH)?.toDouble()
+            ?: capability.focalLengthMm?.toDouble()
+        val fov = if (active != null && crop != null && focal != null) {
+            CameraFovCalculator.estimate(CameraFovInput(
+                focalLengthMm = focal,
+                sensorWidthMm = capability.sensorWidthMm?.toDouble() ?: 0.0,
+                sensorHeightMm = capability.sensorHeightMm?.toDouble() ?: 0.0,
+                activeWidthPx = active.width(), activeHeightPx = active.height(),
+                cropLeftPx = crop.left, cropTopPx = crop.top,
+                cropWidthPx = crop.width(), cropHeightPx = crop.height(),
+                outputWidthPx = outputWidth, outputHeightPx = outputHeight
+            ))
+        } else null
+        val timestampNs = result.get(android.hardware.camera2.CaptureResult.SENSOR_TIMESTAMP)
+        val midpointMs = timestampNs?.let {
+            System.currentTimeMillis() - (System.nanoTime() - it) / 1_000_000L +
+                (result.get(android.hardware.camera2.CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L) / 2_000_000L
+        }
+        return PhoneCaptureMetadata(
+            logicalCameraId = openCameraId,
+            physicalCameraId = physicalCameraId,
+            focalLengthMm = focal,
+            sensorWidthMm = capability.sensorWidthMm?.toDouble(), sensorHeightMm = capability.sensorHeightMm?.toDouble(),
+            activeArrayLeftPx = active?.left, activeArrayTopPx = active?.top,
+            activeArrayWidthPx = active?.width(), activeArrayHeightPx = active?.height(),
+            cropLeftPx = crop?.left, cropTopPx = crop?.top, cropWidthPx = crop?.width(), cropHeightPx = crop?.height(),
+            sensorOrientation = capability.sensorOrientation,
+            exposureMidpointEpochMs = midpointMs,
+            fov = fov
+        )
     }
 
     private fun writeDng(

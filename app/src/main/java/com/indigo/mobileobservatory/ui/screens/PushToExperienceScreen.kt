@@ -218,7 +218,7 @@ fun PushToScreen(
     val animatedAlt by animateFloatAsState(guidance.deltaAltDeg.toFloat(), label = "guide-alt")
     val animatedAz by animateFloatAsState(guidance.deltaAzDeg.toFloat(), label = "guide-az")
     val selectedCamera = cameras.firstOrNull { it.cameraId == selectedCameraId }
-    val readyToCapture = site != null && currentFix != null && selectedCamera != null && !solving
+    val readyToCapture = site != null && selectedCamera != null && !solving
     val moveLabel = when {
         guidance.proximity == GuidanceProximity.ON_TARGET -> stringResource(R.string.push_to_on_target)
         guidance.zenithDegenerate -> stringResource(R.string.push_to_zenith_warn)
