@@ -52,6 +52,10 @@ data class PlateSolveResult(
     val rotationDeg: Double? = null,
     val arcsecPerPixel: Double? = null,
     val elapsedMs: Long = 0L,
+    val matchedStars: Int = 0,
+    val rmsResidualDeg: Double? = null,
+    val confidence: Double? = null,
+    val usedImuPrior: Boolean = false,
     val wcsHeaderPath: String? = null,
     val log: String = ""
 )

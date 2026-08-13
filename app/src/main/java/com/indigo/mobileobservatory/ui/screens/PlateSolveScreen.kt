@@ -28,6 +28,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.indigo.mobileobservatory.astrometry.AstapRunner
+import com.indigo.mobileobservatory.astrometry.PlateSolveEngine
+import com.indigo.mobileobservatory.astrometry.PlateSolveInputKind
+import com.indigo.mobileobservatory.astrometry.PlateSolveRouting
 import com.indigo.mobileobservatory.astrometry.AstapDatabase
 import com.indigo.mobileobservatory.astrometry.D50Manager
 import com.indigo.mobileobservatory.astrometry.D50Status
@@ -215,7 +218,8 @@ fun PlateSolveScreen(
                         onClick = {
                             val file = selectedFile ?: return@Button
                             val fov = fovText.toDoubleOrNull()?.coerceIn(0.2, 6.0) ?: 1.0
-                            focalLengthText.toFloatOrNull()?.takeIf { it > 0f }?.let {
+                            val focal = focalLengthText.toFloatOrNull()?.takeIf { it > 0f }
+                            focal?.let {
                                 prefs.edit().putFloat("plate_focal_length_mm", it).apply()
                             }
                             scope.launch {
@@ -223,7 +227,11 @@ fun PlateSolveScreen(
                                 error = null
                                 result = null
                                 try {
-                                    result = runner.solve(file, fov, if (useMountHint) mountCoordinates else null)
+                                    result = if (PlateSolveRouting.select(PlateSolveInputKind.EXTERNAL_CAMERA, focal?.toDouble()) == PlateSolveEngine.ASTAP) {
+                                        runner.solve(file, fov, if (useMountHint) mountCoordinates else null)
+                                    } else {
+                                        PlateSolveResult(false, "ASTAP requires a confirmed external focal length of at least 200 mm.")
+                                    }
                                 } catch (e: Throwable) {
                                     result = PlateSolveResult(
                                         success = false,
