@@ -28,6 +28,8 @@ data class PhoneSkySolveResult(
     val success: Boolean,
     val message: String,
     val fix: SkyAttitudeFix? = null,
+    /** Photographic solution, available even when the handset has no usable IMU sample. */
+    val skySolution: WideFieldSolveResult? = null,
     val fitsPath: String? = null,
     val frame: FrameData? = null,
     val extraction: StarExtractionResult? = null,
@@ -139,6 +141,21 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
                     fovHeightDeg = capture.fovHeightDeg
                 )
             }
+            val solveExtraction = StarCoordinateUndistorter.correct(
+                extraction = extraction,
+                calibration = capture.metadata.lensCalibration,
+                cropLeftPx = capture.metadata.cropLeftPx,
+                cropTopPx = capture.metadata.cropTopPx,
+                cropWidthPx = capture.metadata.cropWidthPx,
+                cropHeightPx = capture.metadata.cropHeightPx,
+                frameWidth = stacked.frame.width,
+                frameHeight = stacked.frame.height,
+                alreadyCorrectedByCamera = !capture.usedRaw && (capture.metadata.distortionCorrectionMode ==
+                    android.hardware.camera2.CaptureRequest.DISTORTION_CORRECTION_MODE_FAST ||
+                    capture.metadata.distortionCorrectionMode ==
+                    android.hardware.camera2.CaptureRequest.DISTORTION_CORRECTION_MODE_HIGH_QUALITY),
+                coordinateDomain = capture.metadata.calibrationCoordinateDomain
+            )
             onCapture(stacked.frame, extraction, stacked.inputFrameCount)
             withContext(Dispatchers.IO) {
                 FITSWriter().write(
@@ -157,7 +174,7 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
             )
             val localSolve = withContext(Dispatchers.Default) {
                 WideFieldSolver.solve(WideFieldSolveRequest(
-                    extraction = extraction,
+                    extraction = solveExtraction,
                     frameWidth = stacked.frame.width,
                     frameHeight = stacked.frame.height,
                     initialFovWidthDeg = capture.fovWidthDeg ?: 72.0,
@@ -175,6 +192,7 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
                 PhoneSkySolveResult(
                     success = false,
                     message = localSolve.message,
+                    skySolution = localSolve,
                     fitsPath = fitsFile.absolutePath,
                     frame = stacked.frame,
                     extraction = extraction,
@@ -200,6 +218,7 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
                     success = true,
                     message = "Solved in ${localSolve.quality.elapsedMs} ms; ${localSolve.quality.matchedStars} matched stars",
                     fix = fix,
+                    skySolution = localSolve,
                     fitsPath = fitsFile.absolutePath,
                     frame = stacked.frame,
                     extraction = extraction,
@@ -229,6 +248,9 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
             put("cropWidthPx", metadata.cropWidthPx)
             put("cropHeightPx", metadata.cropHeightPx)
             put("sensorOrientation", metadata.sensorOrientation)
+            put("distortionCorrectionMode", metadata.distortionCorrectionMode)
+            put("calibrationCoordinateDomain", metadata.calibrationCoordinateDomain.name)
+            put("lensCalibrationAvailable", metadata.lensCalibration != null)
             put("exposureMidpointEpochMs", metadata.exposureMidpointEpochMs)
             put("fovWidthDeg", capture.fovWidthDeg)
             put("fovHeightDeg", capture.fovHeightDeg)

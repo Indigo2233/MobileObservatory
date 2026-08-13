@@ -8,6 +8,7 @@ import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
+import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.DngCreator
 import android.hardware.camera2.TotalCaptureResult
 import android.hardware.camera2.params.OutputConfiguration
@@ -19,6 +20,8 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.util.Size
 import android.view.Surface
+import com.indigo.mobileobservatory.pointing.CameraLensCalibration
+import com.indigo.mobileobservatory.pointing.LensCalibrationCoordinateDomain
 import kotlinx.coroutines.suspendCancellableCoroutine
 import java.io.File
 import java.io.FileOutputStream
@@ -55,11 +58,18 @@ data class PhoneCaptureMetadata(
     val activeArrayTopPx: Int?,
     val activeArrayWidthPx: Int?,
     val activeArrayHeightPx: Int?,
+    val preCorrectionActiveArrayLeftPx: Int?,
+    val preCorrectionActiveArrayTopPx: Int?,
+    val preCorrectionActiveArrayWidthPx: Int?,
+    val preCorrectionActiveArrayHeightPx: Int?,
     val cropLeftPx: Int?,
     val cropTopPx: Int?,
     val cropWidthPx: Int?,
     val cropHeightPx: Int?,
     val sensorOrientation: Int,
+    val distortionCorrectionMode: Int?,
+    val calibrationCoordinateDomain: LensCalibrationCoordinateDomain,
+    val lensCalibration: CameraLensCalibration?,
     val exposureMidpointEpochMs: Long?,
     val fov: CameraFovEstimate?
 )
@@ -204,7 +214,9 @@ class PhoneSkyCapture(private val context: Context) {
                     } else {
                         yuvToMono8Frame(image, frameId = System.currentTimeMillis())
                     }
-                    val metadata = captureMetadata(capability, openId, physicalId, result, frame.width, frame.height)
+                    val metadata = captureMetadata(
+                        capability, openId, physicalId, result, frame.width, frame.height, useRaw
+                    )
                     captures += PhoneSkyCaptureResult(
                         frame = frame,
                         capability = capability,
@@ -256,13 +268,32 @@ class PhoneSkyCapture(private val context: Context) {
         physicalCameraId: String?,
         result: TotalCaptureResult,
         outputWidth: Int,
-        outputHeight: Int
+        outputHeight: Int,
+        usedRaw: Boolean
     ): PhoneCaptureMetadata {
+        val physicalResult = if (physicalCameraId != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            result.physicalCameraResults[physicalCameraId]
+        } else null
+        // A logical multi-camera result can describe a different active lens. Lens-specific
+        // metadata is only trusted when Camera2 returned the requested physical result.
+        val lensResult: CaptureResult? = physicalResult ?: result.takeIf { physicalCameraId == null }
         val active = capability.activeArraySize
-        val crop = result.get(android.hardware.camera2.CaptureResult.SCALER_CROP_REGION) ?: active
-        val focal = result.get(android.hardware.camera2.CaptureResult.LENS_FOCAL_LENGTH)?.toDouble()
+        val preCorrection = capability.preCorrectionActiveArraySize
+        val postCrop = lensResult?.get(CaptureResult.SCALER_CROP_REGION) ?: active
+        val rawCrop = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            lensResult?.get(CaptureResult.SCALER_RAW_CROP_REGION)
+        } else null
+        val domain = when {
+            usedRaw && preCorrection != null && rawCrop != null -> LensCalibrationCoordinateDomain.PRE_CORRECTION
+            else -> LensCalibrationCoordinateDomain.UNKNOWN
+        }
+        val crop = when (domain) {
+            LensCalibrationCoordinateDomain.PRE_CORRECTION -> rawCrop
+            else -> postCrop
+        }
+        val focal = lensResult?.get(CaptureResult.LENS_FOCAL_LENGTH)?.toDouble()
             ?: capability.focalLengthMm?.toDouble()
-        val fov = if (active != null && crop != null && focal != null) {
+        val fov = if (lensResult != null && active != null && crop != null && focal != null) {
             CameraFovCalculator.estimate(CameraFovInput(
                 focalLengthMm = focal,
                 sensorWidthMm = capability.sensorWidthMm?.toDouble() ?: 0.0,
@@ -273,11 +304,17 @@ class PhoneSkyCapture(private val context: Context) {
                 outputWidthPx = outputWidth, outputHeightPx = outputHeight
             ))
         } else null
-        val timestampNs = result.get(android.hardware.camera2.CaptureResult.SENSOR_TIMESTAMP)
+        val timestampNs = lensResult?.get(CaptureResult.SENSOR_TIMESTAMP)
         val midpointMs = timestampNs?.let {
             System.currentTimeMillis() - (System.nanoTime() - it) / 1_000_000L +
-                (result.get(android.hardware.camera2.CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L) / 2_000_000L
+                (lensResult.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L) / 2_000_000L
         }
+        val calibration = lensResult?.let { frameResult ->
+            calibrationFrom(
+                frameResult.get(CaptureResult.LENS_INTRINSIC_CALIBRATION),
+                frameResult.get(CaptureResult.LENS_DISTORTION)
+            )
+        } ?: capability.lensCalibration
         return PhoneCaptureMetadata(
             logicalCameraId = openCameraId,
             physicalCameraId = physicalCameraId,
@@ -285,11 +322,33 @@ class PhoneSkyCapture(private val context: Context) {
             sensorWidthMm = capability.sensorWidthMm?.toDouble(), sensorHeightMm = capability.sensorHeightMm?.toDouble(),
             activeArrayLeftPx = active?.left, activeArrayTopPx = active?.top,
             activeArrayWidthPx = active?.width(), activeArrayHeightPx = active?.height(),
+            preCorrectionActiveArrayLeftPx = preCorrection?.left,
+            preCorrectionActiveArrayTopPx = preCorrection?.top,
+            preCorrectionActiveArrayWidthPx = preCorrection?.width(),
+            preCorrectionActiveArrayHeightPx = preCorrection?.height(),
             cropLeftPx = crop?.left, cropTopPx = crop?.top, cropWidthPx = crop?.width(), cropHeightPx = crop?.height(),
             sensorOrientation = capability.sensorOrientation,
+            distortionCorrectionMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                lensResult?.get(CaptureResult.DISTORTION_CORRECTION_MODE)
+            } else null,
+            calibrationCoordinateDomain = domain,
+            lensCalibration = calibration,
             exposureMidpointEpochMs = midpointMs,
             fov = fov
         )
+    }
+
+    private fun calibrationFrom(intrinsic: FloatArray?, distortion: FloatArray?): CameraLensCalibration? {
+        if (intrinsic?.size != 5 || distortion?.size != 5) return null
+        return runCatching {
+            CameraLensCalibration(
+                focalX = intrinsic[0].toDouble(), focalY = intrinsic[1].toDouble(),
+                principalX = intrinsic[2].toDouble(), principalY = intrinsic[3].toDouble(),
+                skew = intrinsic[4].toDouble(), radialK1 = distortion[0].toDouble(),
+                radialK2 = distortion[1].toDouble(), radialK3 = distortion[2].toDouble(),
+                tangentialP1 = distortion[3].toDouble(), tangentialP2 = distortion[4].toDouble()
+            )
+        }.getOrNull()
     }
 
     private fun writeDng(
@@ -415,6 +474,15 @@ class PhoneSkyCapture(private val context: Context) {
         builder.set(CaptureRequest.SENSOR_FRAME_DURATION, frameDuration)
         // Infinity focus: 0.0f diopters.
         builder.set(CaptureRequest.LENS_FOCUS_DISTANCE, 0f)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
+            chars.get(CameraCharacteristics.DISTORTION_CORRECTION_AVAILABLE_MODES)
+                ?.contains(CaptureRequest.DISTORTION_CORRECTION_MODE_OFF) == true
+        ) {
+            builder.set(
+                CaptureRequest.DISTORTION_CORRECTION_MODE,
+                CaptureRequest.DISTORTION_CORRECTION_MODE_OFF
+            )
+        }
 
         val nrModes = chars.get(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES)
         if (nrModes != null && nrModes.contains(CaptureRequest.NOISE_REDUCTION_MODE_OFF)) {
