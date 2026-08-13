@@ -60,6 +60,8 @@ data class PhoneCaptureMetadata(
     val cropWidthPx: Int?,
     val cropHeightPx: Int?,
     val sensorOrientation: Int,
+    val distortionCorrectionMode: Int?,
+    val lensCalibration: com.indigo.mobileobservatory.pointing.CameraLensCalibration?,
     val exposureMidpointEpochMs: Long?,
     val fov: CameraFovEstimate?
 )
@@ -287,6 +289,10 @@ class PhoneSkyCapture(private val context: Context) {
             activeArrayWidthPx = active?.width(), activeArrayHeightPx = active?.height(),
             cropLeftPx = crop?.left, cropTopPx = crop?.top, cropWidthPx = crop?.width(), cropHeightPx = crop?.height(),
             sensorOrientation = capability.sensorOrientation,
+            distortionCorrectionMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                result.get(android.hardware.camera2.CaptureResult.DISTORTION_CORRECTION_MODE)
+            } else null,
+            lensCalibration = capability.lensCalibration,
             exposureMidpointEpochMs = midpointMs,
             fov = fov
         )
@@ -415,6 +421,15 @@ class PhoneSkyCapture(private val context: Context) {
         builder.set(CaptureRequest.SENSOR_FRAME_DURATION, frameDuration)
         // Infinity focus: 0.0f diopters.
         builder.set(CaptureRequest.LENS_FOCUS_DISTANCE, 0f)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
+            chars.get(CameraCharacteristics.DISTORTION_CORRECTION_AVAILABLE_MODES)
+                ?.contains(CaptureRequest.DISTORTION_CORRECTION_MODE_OFF) == true
+        ) {
+            builder.set(
+                CaptureRequest.DISTORTION_CORRECTION_MODE,
+                CaptureRequest.DISTORTION_CORRECTION_MODE_OFF
+            )
+        }
 
         val nrModes = chars.get(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES)
         if (nrModes != null && nrModes.contains(CaptureRequest.NOISE_REDUCTION_MODE_OFF)) {

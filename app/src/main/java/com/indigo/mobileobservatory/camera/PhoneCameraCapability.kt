@@ -9,6 +9,7 @@ import android.os.Build
 import android.util.Log
 import android.util.Range
 import android.util.Size
+import com.indigo.mobileobservatory.pointing.CameraLensCalibration
 import kotlin.math.atan
 import kotlin.math.sqrt
 
@@ -39,6 +40,8 @@ data class PhoneCameraCapability(
     val edgeModes: IntArray,
     val oisAvailable: Boolean,
     val sensorOrientation: Int = 0,
+    val lensCalibration: CameraLensCalibration? = null,
+    val distortionCorrectionModes: IntArray = intArrayOf(),
     /** Non-null when this is a physical sub-camera that must be opened via its logical parent. */
     val logicalParentId: String? = null
 ) {
@@ -243,6 +246,23 @@ data class PhoneCameraCapability(
             val sensorW = physical?.width
             val sensorH = physical?.height
             val equiv = equivalentFocalLengthMm(focalMm, sensorW, sensorH)
+            val intrinsic = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                chars.get(CameraCharacteristics.LENS_INTRINSIC_CALIBRATION)
+            } else null
+            val distortion = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                chars.get(CameraCharacteristics.LENS_DISTORTION)
+            } else null
+            val calibration = if (intrinsic?.size == 5 && distortion?.size == 5) {
+                runCatching {
+                    CameraLensCalibration(
+                        focalX = intrinsic[0].toDouble(), focalY = intrinsic[1].toDouble(),
+                        principalX = intrinsic[2].toDouble(), principalY = intrinsic[3].toDouble(),
+                        skew = intrinsic[4].toDouble(), radialK1 = distortion[0].toDouble(),
+                        radialK2 = distortion[1].toDouble(), radialK3 = distortion[2].toDouble(),
+                        tangentialP1 = distortion[3].toDouble(), tangentialP2 = distortion[4].toDouble()
+                    )
+                }.getOrNull()
+            } else null
             return PhoneCameraCapability(
                 cameraId = cameraId,
                 facing = facing,
@@ -265,6 +285,10 @@ data class PhoneCameraCapability(
                 oisAvailable = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)
                     ?.contains(CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_ON) == true,
                 sensorOrientation = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0,
+                lensCalibration = calibration,
+                distortionCorrectionModes = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    chars.get(CameraCharacteristics.DISTORTION_CORRECTION_AVAILABLE_MODES) ?: intArrayOf()
+                } else intArrayOf(),
                 logicalParentId = logicalParentId
             )
         }

@@ -44,7 +44,7 @@
 FOV = 2 × atan(effectiveSensorSize / (2 × focalLength))
 ```
 
-该初值允许求解器在约 ±15% 尺度范围内检索；通过全星点验证后再拟合中心、旋转和尺度。首版使用针孔投影，超广角径向畸变 `k1` 作为后续扩展。
+该初值允许求解器在约 ±15% 尺度范围内检索；通过全星点验证后再拟合中心、旋转和尺度。提星后、匹配前优先采用 Camera2 的 `LENS_INTRINSIC_CALIBRATION` 与 `LENS_DISTORTION` 对星点质心做 Brown–Conrady 反畸变；图像与覆盖层保持原始坐标。拍摄请求优先关闭 HAL 畸变校正，无法关闭时依据 capture result 跳过重复校正。缺少设备标定数据时维持原始坐标并在诊断 JSON 中记录。
 
 元数据同步写入拍摄诊断 JSON；FITS 保留焦距、曝光及相机标识。`CameraFovCalculator` 已有针对全幅、数字裁切和 16:9 输出的单测。
 
