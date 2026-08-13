@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -27,6 +28,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.indigo.mobileobservatory.astrometry.AstapRunner
+import com.indigo.mobileobservatory.astrometry.AstapDatabase
 import com.indigo.mobileobservatory.astrometry.D50Manager
 import com.indigo.mobileobservatory.astrometry.D50Status
 import com.indigo.mobileobservatory.astrometry.DownloadProgress
@@ -53,6 +55,7 @@ fun PlateSolveScreen(
     val prefs = remember { context.applicationContext.getSharedPreferences("mobile_observatory", android.content.Context.MODE_PRIVATE) }
 
     var d50Status by remember { mutableStateOf(d50Manager.status()) }
+    var selectedDatabase by remember { mutableStateOf(d50Status.database ?: AstapDatabase.D20) }
     var selectedFile by remember(initialFile) { mutableStateOf(initialFile) }
     var fovText by remember { mutableStateOf("1.0") }
     var focalLengthText by remember { mutableStateOf(prefs.getFloat("plate_focal_length_mm", 0f).takeIf { it > 0f }?.toString() ?: "") }
@@ -138,13 +141,15 @@ fun PlateSolveScreen(
         ) {
             DatabaseCard(
                 status = d50Status,
+                selectedDatabase = selectedDatabase,
                 progress = progress,
+                onSelectDatabase = { selectedDatabase = it },
                 onDownload = {
                     downloadJob = scope.launch {
                         error = null
                         try {
                             withContext(Dispatchers.IO) {
-                                d50Manager.downloadAndInstall { update ->
+                                d50Manager.downloadAndInstall(selectedDatabase) { update ->
                                     scope.launch { progress = update }
                                 }
                             }
@@ -257,19 +262,44 @@ fun PlateSolveScreen(
 @Composable
 private fun DatabaseCard(
     status: D50Status,
+    selectedDatabase: AstapDatabase,
     progress: DownloadProgress,
+    onSelectDatabase: (AstapDatabase) -> Unit,
     onDownload: () -> Unit,
     onCancel: () -> Unit,
     onDelete: () -> Unit
 ) {
     Surface(shape = MaterialTheme.shapes.medium, tonalElevation = 1.dp) {
         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(stringResource(R.string.astap_d50_database), style = MaterialTheme.typography.titleSmall)
+            Text(stringResource(R.string.astap_database), style = MaterialTheme.typography.titleSmall)
+            AstapDatabase.entries.forEach { database ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    RadioButton(
+                        selected = selectedDatabase == database,
+                        onClick = { onSelectDatabase(database) },
+                        enabled = !progress.active && !status.installed
+                    )
+                    Text(
+                        text = stringResource(
+                            if (database == AstapDatabase.D20) R.string.astap_d20_database else R.string.astap_d50_database
+                        ),
+                        modifier = Modifier.padding(start = 4.dp)
+                    )
+                }
+            }
             Text(
                 if (status.installed) {
-                    stringResource(R.string.database_installed, status.fileCount, formatBytes(status.totalBytes))
+                    stringResource(
+                        R.string.database_installed_named,
+                        status.database!!.displayName,
+                        status.fileCount,
+                        formatBytes(status.totalBytes)
+                    )
                 } else {
-                    stringResource(R.string.database_not_installed)
+                    stringResource(R.string.database_not_installed_named, selectedDatabase.downloadSizeDescription)
                 },
                 fontSize = 12.sp
             )
@@ -285,7 +315,7 @@ private fun DatabaseCard(
                     Button(onClick = onDownload, enabled = !status.installed) {
                         Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text(stringResource(R.string.download_d50))
+                        Text(stringResource(R.string.download_database, selectedDatabase.displayName))
                     }
                     OutlinedButton(onClick = onDelete, enabled = status.installed) {
                         Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))

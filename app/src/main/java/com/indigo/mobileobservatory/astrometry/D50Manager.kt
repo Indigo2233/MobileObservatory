@@ -12,12 +12,6 @@ import java.util.zip.ZipInputStream
 import kotlin.coroutines.coroutineContext
 
 class D50Manager(private val context: Context) {
-    companion object {
-        private const val D50_URL =
-            "https://master.dl.sourceforge.net/project/astap-program/star_databases/d50_star_database.zip"
-        private const val MIN_FREE_BYTES = 2_500_000_000L
-    }
-
     val astapDir: File
         get() = File(context.filesDir, "astap").also { it.mkdirs() }
 
@@ -26,54 +20,55 @@ class D50Manager(private val context: Context) {
 
     fun status(): D50Status {
         migrateLegacyDatabaseIfNeeded()
-        val files = astapDir.listFiles { file ->
-            file.isFile && file.name.startsWith("d50_", ignoreCase = true) &&
-                file.name.endsWith(".1476", ignoreCase = true)
-        }.orEmpty()
+        val installedDatabase = AstapDatabase.entries.firstOrNull { database -> databaseFiles(database).isNotEmpty() }
+        val files = installedDatabase?.let(::databaseFiles).orEmpty()
         return D50Status(
             installed = files.isNotEmpty(),
+            database = installedDatabase,
             fileCount = files.size,
             totalBytes = files.sumOf { it.length() },
             directory = astapDir
         )
     }
 
-    fun hasEnoughSpace(): Boolean {
+    fun hasEnoughSpace(database: AstapDatabase): Boolean {
         val stat = StatFs(astapDir.absolutePath)
-        return stat.availableBytes >= MIN_FREE_BYTES
+        return stat.availableBytes >= database.minimumFreeBytes
     }
 
-    suspend fun downloadAndInstall(progress: (DownloadProgress) -> Unit) {
-        if (!hasEnoughSpace()) {
-            error("Need at least 2.5 GB free space for D50 download and extraction.")
+    suspend fun downloadAndInstall(database: AstapDatabase, progress: (DownloadProgress) -> Unit) {
+        val installed = status().database
+        if (installed != null && installed != database) {
+            error("Delete the installed ${installed.displayName} database before downloading ${database.displayName}.")
+        }
+        if (!hasEnoughSpace(database)) {
+            error("Need at least ${database.minimumFreeBytes / 1_000_000_000.0} GB free space for ${database.displayName} download and extraction.")
         }
 
         astapDir.mkdirs()
-        val zipFile = File(astapDir, "d50_star_database.zip.download")
-        val tmpDir = File(astapDir, "d50_tmp")
+        val zipFile = File(astapDir, "${database.displayName.lowercase()}_star_database.zip.download")
+        val tmpDir = File(astapDir, "${database.displayName.lowercase()}_tmp")
         if (tmpDir.exists()) tmpDir.deleteRecursively()
         tmpDir.mkdirs()
 
         try {
-            downloadZip(zipFile, progress)
-            progress(DownloadProgress(active = true, message = "Extracting D50..."))
+            downloadZip(zipFile, database, progress)
+            progress(DownloadProgress(active = true, message = "Extracting ${database.displayName}..."))
             unzip(zipFile, tmpDir)
 
             val extracted = tmpDir.walkTopDown()
-                .filter { it.isFile && it.name.startsWith("d50_", true) && it.name.endsWith(".1476", true) }
+                .filter { it.isFile && isDatabaseFile(it, database) }
                 .toList()
-            if (extracted.isEmpty()) error("D50 database files were not found in the downloaded archive.")
+            if (extracted.isEmpty()) error("${database.displayName} database files were not found in the downloaded archive.")
 
-            astapDir.listFiles { file ->
-                file.isFile && file.name.startsWith("d50_", true) && file.name.endsWith(".1476", true)
-            }?.forEach { it.delete() }
+            databaseFiles(database).forEach { it.delete() }
 
             extracted.forEach { source ->
                 val target = File(astapDir, source.name)
                 if (target.exists()) target.delete()
                 source.copyTo(target, overwrite = true)
             }
-            progress(DownloadProgress(active = false, message = "D50 installed: ${extracted.size} files"))
+            progress(DownloadProgress(active = false, message = "${database.displayName} installed: ${extracted.size} files"))
         } finally {
             zipFile.delete()
             if (tmpDir.exists()) tmpDir.deleteRecursively()
@@ -81,20 +76,16 @@ class D50Manager(private val context: Context) {
     }
 
     fun deleteDatabase() {
-        astapDir.listFiles { file ->
-            file.isFile && file.name.startsWith("d50_", true) && file.name.endsWith(".1476", true)
-        }?.forEach { it.delete() }
+        AstapDatabase.entries.forEach { database -> databaseFiles(database).forEach { it.delete() } }
     }
 
     private fun migrateLegacyDatabaseIfNeeded() {
-        val currentFiles = astapDir.listFiles { file ->
-            file.isFile && file.name.startsWith("d50_", true) && file.name.endsWith(".1476", true)
-        }.orEmpty()
+        val currentFiles = AstapDatabase.entries.flatMap(::databaseFiles)
         if (currentFiles.isNotEmpty()) return
 
         val legacy = legacyExternalAstapDir ?: return
         val legacyFiles = legacy.listFiles { file ->
-            file.isFile && file.name.startsWith("d50_", true) && file.name.endsWith(".1476", true)
+            isDatabaseFile(file, AstapDatabase.D50)
         }.orEmpty()
         if (legacyFiles.isEmpty()) return
 
@@ -107,8 +98,8 @@ class D50Manager(private val context: Context) {
         }
     }
 
-    private suspend fun downloadZip(zipFile: File, progress: (DownloadProgress) -> Unit) {
-        val connection = (URL(D50_URL).openConnection() as HttpURLConnection).apply {
+    private suspend fun downloadZip(zipFile: File, database: AstapDatabase, progress: (DownloadProgress) -> Unit) {
+        val connection = (URL(database.downloadUrl).openConnection() as HttpURLConnection).apply {
             connectTimeout = 20_000
             readTimeout = 30_000
             instanceFollowRedirects = true
@@ -117,7 +108,7 @@ class D50Manager(private val context: Context) {
         try {
             val total = connection.contentLengthLong
             if (connection.responseCode !in 200..299) {
-                error("D50 download failed: HTTP ${connection.responseCode}")
+                error("${database.displayName} download failed: HTTP ${connection.responseCode}")
             }
             BufferedInputStream(connection.inputStream).use { input ->
                 FileOutputStream(zipFile).use { output ->
@@ -133,7 +124,7 @@ class D50Manager(private val context: Context) {
                                 active = true,
                                 bytesRead = done,
                                 totalBytes = total,
-                                message = "Downloading D50"
+                                message = "Downloading ${database.displayName}"
                             )
                         )
                     }
@@ -143,6 +134,13 @@ class D50Manager(private val context: Context) {
             connection.disconnect()
         }
     }
+
+    private fun databaseFiles(database: AstapDatabase): List<File> = astapDir.listFiles { file ->
+        isDatabaseFile(file, database)
+    }?.toList().orEmpty()
+
+    private fun isDatabaseFile(file: File, database: AstapDatabase): Boolean =
+        file.isFile && file.name.startsWith(database.filePrefix, true) && file.name.endsWith(".1476", true)
 
     private suspend fun unzip(zipFile: File, targetDir: File) {
         ZipInputStream(BufferedInputStream(zipFile.inputStream())).use { zip ->

@@ -33,8 +33,9 @@ class AstapRunner(private val context: Context) {
         searchRadiusDeg: Double? = null
     ): PlateSolveResult = withContext(Dispatchers.IO) {
         val status = d50Manager.status()
-        if (!status.installed) {
-            return@withContext PlateSolveResult(false, "D50 database is not installed.")
+        val database = status.database
+        if (!status.installed || database == null) {
+            return@withContext PlateSolveResult(false, "An ASTAP D20 or D50 database is not installed.")
         }
 
         val bundledExecutable = astapExecutable()
@@ -59,7 +60,7 @@ class AstapRunner(private val context: Context) {
         val start = System.currentTimeMillis()
         val before = workDir.listFiles()?.associateWith { it.lastModified() }.orEmpty()
         val dbFiles = workDir.listFiles { file ->
-            file.isFile && file.name.startsWith("d50_", true) && file.name.endsWith(".1476", true)
+            file.isFile && file.name.startsWith(database.filePrefix, true) && file.name.endsWith(".1476", true)
         }.orEmpty()
         val effectiveSearchRadiusDeg = searchRadiusDeg ?: if (mountCoordinates != null) 10.0 else 180.0
         val command = mutableListOf(
@@ -79,7 +80,7 @@ class AstapRunner(private val context: Context) {
             appendLine("bundledASTAP=${bundledExecutable.absolutePath} exists=${bundledExecutable.exists()} canExec=${bundledExecutable.canExecute()}")
             appendLine("ASTAP=${executable.absolutePath} exists=${executable.exists()} canExec=${executable.canExecute()}")
             appendLine("workDir=${workDir.absolutePath}")
-            appendLine("D50 files=${dbFiles.size} bytes=${dbFiles.sumOf { it.length() }}")
+            appendLine("${database.displayName} files=${dbFiles.size} bytes=${dbFiles.sumOf { it.length() }}")
             appendLine("input=${inputFile.absolutePath} bytes=${inputFile.length()}")
             if (mountCoordinates != null) {
                 appendLine("mountHint=raHours=${mountCoordinates.raHours} decDeg=${mountCoordinates.decDeg} radiusDeg=$effectiveSearchRadiusDeg")

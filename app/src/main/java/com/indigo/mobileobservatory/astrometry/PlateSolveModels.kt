@@ -2,8 +2,32 @@ package com.indigo.mobileobservatory.astrometry
 
 import java.io.File
 
+enum class AstapDatabase(
+    val displayName: String,
+    val filePrefix: String,
+    val downloadUrl: String,
+    val downloadSizeDescription: String,
+    val minimumFreeBytes: Long
+) {
+    D20(
+        displayName = "D20",
+        filePrefix = "d20_",
+        downloadUrl = "https://master.dl.sourceforge.net/project/astap-program/star_databases/d20_star_database.zip",
+        downloadSizeDescription = "about 388 MB",
+        minimumFreeBytes = 1_200_000_000L
+    ),
+    D50(
+        displayName = "D50",
+        filePrefix = "d50_",
+        downloadUrl = "https://master.dl.sourceforge.net/project/astap-program/star_databases/d50_star_database.zip",
+        downloadSizeDescription = "about 901 MB",
+        minimumFreeBytes = 2_500_000_000L
+    )
+}
+
 data class D50Status(
     val installed: Boolean,
+    val database: AstapDatabase?,
     val fileCount: Int,
     val totalBytes: Long,
     val directory: File
