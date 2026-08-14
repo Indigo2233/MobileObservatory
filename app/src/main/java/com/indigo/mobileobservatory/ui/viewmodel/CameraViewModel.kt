@@ -196,6 +196,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _gain = MutableStateFlow(0f)
     val gain: StateFlow<Float> = _gain.asStateFlow()
 
+    private val _usbBandwidth = MutableStateFlow<Int?>(null)
+    val usbBandwidth: StateFlow<Int?> = _usbBandwidth.asStateFlow()
+    private val _usbBandwidthRange = MutableStateFlow<IntRange?>(null)
+    val usbBandwidthRange: StateFlow<IntRange?> = _usbBandwidthRange.asStateFlow()
+
     private val _offset = MutableStateFlow<Float?>(null)
     val offset: StateFlow<Float?> = _offset.asStateFlow()
     private val _offsetRange = MutableStateFlow<FloatRange?>(null)
@@ -543,6 +548,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             _nativeReadoutModeId.value = null
                         }
                         applyCameraDefaults(cam)
+                        applySavedUsbBandwidth(cam)
                         _gain.value = cam.currentGain
                         _pixelFormat.value = cam.currentPixelFormat
                         _readoutMode.value = cam.currentReadoutMode
@@ -551,6 +557,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             _nativeReadoutModeId.value = readoutCapable.currentNativeReadoutModeId
                         }
                         syncOffsetCapability(cam)
+                        syncUsbBandwidthCapability(cam)
                         _roi.value = cam.currentRoi
                         _longExposureEnabled.value = cam.longExposureEnabled
                         refreshExposureUiLimits()
@@ -566,6 +573,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         _previewBitmap.value = null
                         unbindCoolingFlows()
                         syncOffsetCapability(null)
+                        syncUsbBandwidthCapability(null)
                         _nativeReadoutModes.value = emptyList()
                         _nativeReadoutModeId.value = null
                     }
@@ -1496,6 +1504,23 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         syncOffsetCapability(cameraManager.activeCamera)
     }
 
+    fun setUsbBandwidth(value: Int) {
+        val camera = cameraManager.activeCamera ?: return
+        val capable = camera as? CameraUsbBandwidthCapable ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            if (capable.setUsbBandwidth(value)) {
+                syncUsbBandwidthCapability(camera)
+                val info = camera.cameraInfo ?: return@launch
+                val applied = capable.currentUsbBandwidth ?: return@launch
+                deviceSettings.saveCameraUsbBandwidth(
+                    cameraSettingsId(info),
+                    camera.currentPixelFormat,
+                    applied
+                )
+            }
+        }
+    }
+
     @Volatile private var pixelFormatSwitching = false
 
     /**
@@ -1514,6 +1539,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         cam.currentReadoutMode == ReadoutMode.HDR
                 )
                 cam.setPixelFormat(format)
+                applySavedUsbBandwidth(cam)
                 if (cam.currentPixelFormat != format) {
                     _statusMessage.value =
                         app.getString(R.string.pixel_format_switch_failed, format.displayName)
@@ -1524,6 +1550,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 _pixelFormat.value = cam.currentPixelFormat
                 _supportedPixelFormats.value = cam.supportedPixelFormats
                 syncOffsetCapability(cam)
+                syncUsbBandwidthCapability(cam)
                 pixelFormatSwitching = false
             }
         }
@@ -1640,6 +1667,23 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _offsetRange.value = offsetCapable?.offsetRange
         _offsetLabel.value = offsetCapable?.offsetLabel ?: "Offset"
         _offsetStep.value = offsetCapable?.offsetStep ?: 1f
+    }
+
+    private fun syncUsbBandwidthCapability(camera: Camera?) {
+        val capable = camera as? CameraUsbBandwidthCapable
+        _usbBandwidthRange.value = capable?.usbBandwidthRange
+        _usbBandwidth.value = capable?.currentUsbBandwidth
+    }
+
+    private fun applySavedUsbBandwidth(camera: Camera) {
+        val capable = camera as? CameraUsbBandwidthCapable ?: return
+        val range = capable.usbBandwidthRange ?: return
+        val info = camera.cameraInfo ?: return
+        val saved = deviceSettings.cameraUsbBandwidth(
+            cameraSettingsId(info),
+            camera.currentPixelFormat
+        ) ?: return
+        capable.setUsbBandwidth(saved.coerceIn(range.first, range.last))
     }
 
     private fun applyFocuserDefaults(settings: FocuserDefaults) {

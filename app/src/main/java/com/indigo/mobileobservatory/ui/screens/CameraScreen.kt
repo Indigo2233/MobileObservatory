@@ -130,6 +130,8 @@ fun CameraScreen(
 
     val exposureUs by viewModel.exposureUs.collectAsState()
     val gain by viewModel.gain.collectAsState()
+    val usbBandwidth by viewModel.usbBandwidth.collectAsState()
+    val usbBandwidthRange by viewModel.usbBandwidthRange.collectAsState()
     val pixelFormat by viewModel.pixelFormat.collectAsState()
     val supportedPixelFormats by viewModel.supportedPixelFormats.collectAsState()
     val roi by viewModel.roi.collectAsState()
@@ -719,6 +721,8 @@ fun CameraScreen(
                     ControlPanel(
                         exposureUs = exposureUs,
                         gain = gain,
+                        usbBandwidth = usbBandwidth,
+                        usbBandwidthRange = usbBandwidthRange,
                         pixelFormat = pixelFormat,
                         supportedPixelFormats = supportedPixelFormats,
                         roi = roi,
@@ -766,6 +770,7 @@ fun CameraScreen(
                         detectedBitDepth = detectedBitDepth,
                         onExposureChange = { viewModel.setExposure(it) },
                         onGainChange = { viewModel.setGain(it) },
+                        onUsbBandwidthChange = { viewModel.setUsbBandwidth(it) },
                         onPixelFormatChange = { viewModel.setPixelFormat(it) },
                         readoutMode = readoutMode,
                         supportedReadoutModes = supportedReadoutModes,

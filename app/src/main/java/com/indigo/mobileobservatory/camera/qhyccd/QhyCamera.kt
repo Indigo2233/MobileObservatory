@@ -12,8 +12,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.round
+import kotlin.math.roundToInt
 
-class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable {
+class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
+    CameraUsbBandwidthCapable {
 
     companion object {
         private const val TAG = "QhyCamera"
@@ -39,6 +41,8 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable {
     override var currentOffset = 0f; private set
     override var supportedNativeReadoutModes: List<CameraNativeReadoutMode> = emptyList(); private set
     override var currentNativeReadoutModeId: String = "0"; private set
+    override var usbBandwidthRange: IntRange? = null; private set
+    override var currentUsbBandwidth: Int? = null; private set
     override var currentPixelFormat = PixelFormat.MONO16; private set
     override var supportedPixelFormats = listOf(PixelFormat.MONO16, PixelFormat.MONO8); private set
     override var currentRoi = Roi(0, 0, 1, 1); private set
@@ -171,9 +175,7 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable {
             initGainRange()
             initOffsetRange()
 
-            QhyccdJni.setParam(QhyccdJni.CONTROL_USBTRAFFIC, 0.0)
-            val usbTrafficRange = QhyccdJni.getParamRange(QhyccdJni.CONTROL_USBTRAFFIC)
-            Log.i(TAG, "USB traffic set to 0 (range: ${usbTrafficRange?.get(0)}..${usbTrafficRange?.get(1)})")
+            initUsbBandwidth()
             setExposureTime(20_000f)
             setGain(20f)
 
@@ -185,6 +187,39 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable {
             try { QhyccdJni.close() } catch (_: Throwable) {}
             return false
         }
+    }
+
+    override fun setUsbBandwidth(value: Int): Boolean {
+        val range = usbBandwidthRange ?: return false
+        val target = value.coerceIn(range.first, range.last)
+        val result = QhyccdJni.setParam(QhyccdJni.CONTROL_USBTRAFFIC, target.toDouble())
+        if (result != QhyccdJni.QHYCCD_SUCCESS) {
+            FileLogger.w(TAG, "Set USB traffic failed: target=$target result=$result")
+            return false
+        }
+        val readBack = QhyccdJni.getParam(QhyccdJni.CONTROL_USBTRAFFIC)
+        currentUsbBandwidth = readBack.takeIf { it.isFinite() }
+            ?.roundToInt()?.takeIf { it in range } ?: target
+        FileLogger.i(TAG, "USB traffic set: requested=$target current=$currentUsbBandwidth")
+        return true
+    }
+
+    private fun initUsbBandwidth() {
+        val sdkRange = QhyccdJni.getParamRange(QhyccdJni.CONTROL_USBTRAFFIC)
+        if (sdkRange == null || sdkRange.size < 2) {
+            usbBandwidthRange = null
+            currentUsbBandwidth = null
+            return
+        }
+        val min = sdkRange[0].roundToInt()
+        val max = sdkRange[1].roundToInt()
+        if (min > max) {
+            usbBandwidthRange = null
+            currentUsbBandwidth = null
+            return
+        }
+        usbBandwidthRange = min..max
+        setUsbBandwidth(0.coerceIn(min, max))
     }
 
     private fun initPixelFormats(desiredBits: Int) {

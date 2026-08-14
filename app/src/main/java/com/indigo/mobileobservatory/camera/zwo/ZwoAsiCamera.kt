@@ -13,7 +13,7 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToLong
 
-class ZwoAsiCamera : Camera, CameraOffsetCapable {
+class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable {
 
     companion object {
         private const val TAG = "ZwoAsiCam"
@@ -94,6 +94,8 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable {
     override var offsetRange: FloatRange = FloatRange(0f, 0f, 0f); private set
     override val offsetStep: Float = 1f
     override var currentOffset: Float = 0f; private set
+    override var usbBandwidthRange: IntRange? = null; private set
+    override var currentUsbBandwidth: Int? = null; private set
     override var currentPixelFormat: PixelFormat = PixelFormat.MONO8; private set
     override var supportedPixelFormats: List<PixelFormat> = listOf(PixelFormat.MONO8); private set
     override var currentRoi: Roi = Roi(0, 0, 1920, 1080); private set
@@ -255,6 +257,26 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable {
         }
     }
 
+    override fun setUsbBandwidth(value: Int): Boolean {
+        val cam = zwoCamera ?: return false
+        val range = usbBandwidthRange ?: return false
+        val target = value.coerceIn(range.first, range.last)
+        val result = cam.setControlValue(ASI_BANDWIDTH_OVERLOAD, target.toLong(), 0)
+        if (result != ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
+            FileLogger.w(TAG, "Set USB bandwidth failed: target=$target result=$result")
+            return false
+        }
+
+        val readBack = cam.getControlValue(ASI_BANDWIDTH_OVERLOAD)
+        currentUsbBandwidth = if (readBack?.errorCode?.intVal == ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
+            readBack.extraLongVal1.toInt().coerceIn(range.first, range.last)
+        } else {
+            target
+        }
+        FileLogger.i(TAG, "USB bandwidth set: requested=$target current=$currentUsbBandwidth")
+        return true
+    }
+
     override fun setPixelFormat(format: PixelFormat) {
         if (format == currentPixelFormat) return
         val cam = zwoCamera ?: return
@@ -263,7 +285,6 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable {
         if (wasCapturing) stopCapture()
 
         val imgType = pixelFormatToAsiImgType(format)
-        configureUsbBandwidth(cam, imgType)
         val roiFmt = cam.getROIFormat()
         if (roiFmt.errorCode.intVal == ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
             val roi = roiFmt.obj as com.zwo.ASIROIFormat
@@ -271,6 +292,7 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable {
             if (ret.intVal == ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
                 currentImgType = imgType
                 currentPixelFormat = format
+                configureUsbBandwidth(cam, imgType)
                 FileLogger.i(TAG, "PixelFormat set to ${format.name} (asiType=$imgType)")
             } else {
                 FileLogger.w(TAG, "setRoiFormat failed for ${format.name}: ${ret.intVal}")
@@ -431,6 +453,18 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable {
             val cap = capRet.obj as? ASIControlCap ?: continue
             if (cap.controlType != ASI_BANDWIDTH_OVERLOAD) continue
 
+            if (cap.isWritable == 0) {
+                usbBandwidthRange = null
+                currentUsbBandwidth = null
+                FileLogger.i(TAG, "USB bandwidth control is read-only")
+                return
+            }
+
+            val min = cap.minValue.toInt()
+            val max = cap.maxValue.toInt()
+            if (min > max) return
+            usbBandwidthRange = min..max
+
             val currentRet = cam.getControlValue(ASI_BANDWIDTH_OVERLOAD)
             val current = if (currentRet?.errorCode?.intVal == ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
                 currentRet.extraLongVal1
@@ -438,15 +472,11 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable {
                 cap.defaultValue
             }
             val target = if (imgType == ASI_IMG_RAW16) {
-                50L.coerceIn(cap.minValue, cap.maxValue)
+                50.coerceIn(min, max)
             } else {
-                80L.coerceIn(cap.minValue, cap.maxValue)
+                80.coerceIn(min, max)
             }
-            val result = if (cap.isWritable != 0) {
-                cam.setControlValue(ASI_BANDWIDTH_OVERLOAD, target, 0)
-            } else {
-                ASIConstants.ASI_ERROR_CODE.ASI_ERROR_INVALID_CONTROL_TYPE
-            }
+            val result = setUsbBandwidth(target)
             FileLogger.i(
                 TAG,
                 "USB bandwidth: range=${cap.minValue}-${cap.maxValue} default=${cap.defaultValue} " +
@@ -454,6 +484,8 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable {
             )
             return
         }
+        usbBandwidthRange = null
+        currentUsbBandwidth = null
         FileLogger.i(TAG, "USB bandwidth control unavailable")
     }
 
