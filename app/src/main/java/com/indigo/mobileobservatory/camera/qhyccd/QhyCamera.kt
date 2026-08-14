@@ -44,6 +44,8 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
     override var currentUsbBandwidth: Int? = null; private set
     override var supportedNativeReadoutModes: List<CameraNativeReadoutMode> = emptyList(); private set
     override var currentNativeReadoutModeId: String = "0"; private set
+    override var usbBandwidthRange: IntRange? = null; private set
+    override var currentUsbBandwidth: Int? = null; private set
     override var currentPixelFormat = PixelFormat.MONO16; private set
     override var supportedPixelFormats = listOf(PixelFormat.MONO16, PixelFormat.MONO8); private set
     override var currentRoi = Roi(0, 0, 1, 1); private set

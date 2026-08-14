@@ -7,6 +7,7 @@ object ToupcamJni {
     const val EVENT_ERROR = 0x0080
 
     const val OPTION_RAW = 0x04
+    const val OPTION_BANDWIDTH = 0x2e
     const val OPTION_BITDEPTH = 0x06
     const val OPTION_BLACKLEVEL = 0x15
     const val OPTION_FRAMERATE = 0x11

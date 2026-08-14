@@ -92,6 +92,8 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
     override var supportedPixelFormats: List<PixelFormat> = listOf(PixelFormat.MONO8); private set
     override var currentReadoutMode: ReadoutMode = ReadoutMode.NORMAL; private set
     override var supportedReadoutModes: List<ReadoutMode> = listOf(ReadoutMode.NORMAL); private set
+    override var usbBandwidthRange: IntRange? = null; private set
+    override var currentUsbBandwidth: Int? = null; private set
     override var currentRoi: Roi = Roi(0, 0, 1920, 1080); private set
     @Volatile override var cropInfo: CropInfo = CropInfo(0, 0, 1920, 1080); private set
     override var hwExposureMaxUs: Float = 2_000_000_000f; private set

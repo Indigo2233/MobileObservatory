@@ -200,6 +200,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _gainCapability = MutableStateFlow<GainCapability?>(null)
     val gainCapability: StateFlow<GainCapability?> = _gainCapability.asStateFlow()
 
+    private val _usbBandwidth = MutableStateFlow<Int?>(null)
+    val usbBandwidth: StateFlow<Int?> = _usbBandwidth.asStateFlow()
+    private val _usbBandwidthRange = MutableStateFlow<IntRange?>(null)
+    val usbBandwidthRange: StateFlow<IntRange?> = _usbBandwidthRange.asStateFlow()
+
     private val _offset = MutableStateFlow<Float?>(null)
     val offset: StateFlow<Float?> = _offset.asStateFlow()
     private val _offsetRange = MutableStateFlow<FloatRange?>(null)

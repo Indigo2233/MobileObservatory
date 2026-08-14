@@ -79,6 +79,16 @@
 
 首次克隆请拉取 submodule（含 libusb）。原生构建相关说明见 `AGENTS.md`。
 
+## 许可证
+
+除另有标注的第三方组件外，本仓库的原创源代码依据
+[GNU Affero General Public License v3.0](LICENSE)（AGPL-3.0-only）发布。
+
+Stellarium Web Engine 保留其上游版权与 AGPL-3.0 许可。分发包含 Stellarium
+资源的 APK 时，必须同步提供对应源码、构建说明、版权声明和完整许可证文本；
+具体交付流程见 [`AGPL_SOURCE_DELIVERY.md`](AGPL_SOURCE_DELIVERY.md)。相机厂商
+SDK、星表、图像和其他第三方组件继续适用各自的许可证与再分发条款。
+
 ## 相关文档
 
 | 文档 | 内容 |
