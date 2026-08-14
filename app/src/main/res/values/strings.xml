@@ -144,6 +144,8 @@
     <!-- GainSlider -->
     <string name="gain">Gain</string>
     <string name="gain_format">%.1f dB</string>
+    <string name="usb_bandwidth">USB bandwidth</string>
+    <string name="usb_bandwidth_hint">Watch frame rate and stream stability; values vary by camera SDK.</string>
 
     <!-- RecordBar -->
     <string name="recording_status">%1$s  |  %2$d frames  |  %3$s</string>

@@ -57,6 +57,17 @@ class DeviceSettingsRepository(context: Context) {
             .apply()
     }
 
+    fun cameraUsbBandwidth(deviceId: String, pixelFormat: PixelFormat): Int? {
+        val key = "${prefix(CAMERA, deviceId)}usb_bandwidth_${pixelFormat.name}"
+        return preferences.takeIf { it.contains(key) }?.getInt(key, 0)
+    }
+
+    fun saveCameraUsbBandwidth(deviceId: String, pixelFormat: PixelFormat, value: Int) {
+        preferences.edit()
+            .putInt("${prefix(CAMERA, deviceId)}usb_bandwidth_${pixelFormat.name}", value)
+            .apply()
+    }
+
     fun focuserDefaults(deviceId: String): FocuserDefaults {
         val prefix = prefix(FOCUSER, deviceId)
         return FocuserDefaults(

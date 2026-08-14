@@ -55,6 +55,15 @@ interface CameraOffsetCapable {
     fun setOffset(value: Float)
 }
 
+/** Optional camera SDK control for the USB transfer bandwidth/traffic limit. */
+interface CameraUsbBandwidthCapable {
+    val usbBandwidthRange: IntRange?
+    val currentUsbBandwidth: Int?
+
+    /** Applies a device-native value and returns whether the SDK accepted it. */
+    fun setUsbBandwidth(value: Int): Boolean
+}
+
 data class CameraNativeReadoutMode(
     val id: String,
     val displayName: String

@@ -3,6 +3,7 @@ package com.indigo.mobileobservatory.camera.playerone
 import com.indigo.mobileobservatory.camera.Camera
 import com.indigo.mobileobservatory.camera.CameraInfo
 import com.indigo.mobileobservatory.camera.CameraOffsetCapable
+import com.indigo.mobileobservatory.camera.CameraUsbBandwidthCapable
 import com.indigo.mobileobservatory.camera.CoolingCapable
 import com.indigo.mobileobservatory.camera.CoolingInfo
 import com.indigo.mobileobservatory.camera.CropInfo
@@ -33,7 +34,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToInt
 
-class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable {
+class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBandwidthCapable {
 
     companion object {
         private const val TAG = "PlayerOneCam"
@@ -85,6 +86,8 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable {
     override var supportedPixelFormats: List<PixelFormat> = listOf(PixelFormat.MONO8); private set
     override var currentReadoutMode: ReadoutMode = ReadoutMode.NORMAL; private set
     override var supportedReadoutModes: List<ReadoutMode> = listOf(ReadoutMode.NORMAL); private set
+    override var usbBandwidthRange: IntRange? = null; private set
+    override var currentUsbBandwidth: Int? = null; private set
     override var currentRoi: Roi = Roi(0, 0, 1920, 1080); private set
     @Volatile override var cropInfo: CropInfo = CropInfo(0, 0, 1920, 1080); private set
     override var hwExposureMaxUs: Float = 2_000_000_000f; private set
@@ -840,21 +843,43 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable {
     }
 
     private fun configureUsb3Transport(cam: PoaCamera, usb3Speed: Boolean) {
-        if (!usb3Speed) return
         try {
             val attrs = cam.getConfigAttributes(PoaConfig.USB_BANDWIDTH_LIMIT)
-            if (attrs.isWritable && attrs.isReadable) {
-                val requested = attrs.maximum.asInteger()
-                cam.setConfig(
-                    PoaConfig.USB_BANDWIDTH_LIMIT,
-                    ConfigValue.ofInteger(requested),
-                    false
-                )
+            if (!attrs.isWritable || !attrs.isReadable) {
+                usbBandwidthRange = null
+                currentUsbBandwidth = null
+            } else {
+                val min = attrs.minimum.asInteger().toInt()
+                val max = attrs.maximum.asInteger().toInt()
+                if (min <= max) {
+                    usbBandwidthRange = min..max
+                    currentUsbBandwidth = cam.getConfig(PoaConfig.USB_BANDWIDTH_LIMIT)
+                        .value.asInteger().toInt().coerceIn(min, max)
+                    if (usb3Speed) setUsbBandwidth(max)
+                }
             }
         } catch (e: PoaException) {
+            usbBandwidthRange = null
+            currentUsbBandwidth = null
             FileLogger.w(TAG, "USB bandwidth configuration failed: ${e.error}")
         }
         configureUnlimitedFrameRate(cam)
+    }
+
+    override fun setUsbBandwidth(value: Int): Boolean {
+        val cam = poa ?: return false
+        val range = usbBandwidthRange ?: return false
+        val target = value.coerceIn(range.first, range.last)
+        return try {
+            cam.setConfig(PoaConfig.USB_BANDWIDTH_LIMIT, ConfigValue.ofInteger(target.toLong()), false)
+            currentUsbBandwidth = cam.getConfig(PoaConfig.USB_BANDWIDTH_LIMIT)
+                .value.asInteger().toInt().coerceIn(range.first, range.last)
+            FileLogger.i(TAG, "USB bandwidth set: requested=$target current=$currentUsbBandwidth")
+            true
+        } catch (e: PoaException) {
+            FileLogger.w(TAG, "Set USB bandwidth failed: ${e.error}")
+            false
+        }
     }
 
     private fun configureUnlimitedFrameRate(cam: PoaCamera) {

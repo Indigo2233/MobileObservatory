@@ -142,6 +142,8 @@
     <!-- GainSlider -->
     <string name="gain">增益</string>
     <string name="gain_format">%.1f dB</string>
+    <string name="usb_bandwidth">USB 带宽</string>
+    <string name="usb_bandwidth_hint">请结合帧率和画面稳定性观察；数值因相机 SDK 而异。</string>
 
     <!-- RecordBar -->
     <string name="recording_status">%1$s  |  %2$d 帧  |  %3$s</string>
