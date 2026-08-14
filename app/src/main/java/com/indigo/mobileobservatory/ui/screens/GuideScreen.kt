@@ -90,6 +90,8 @@ fun GuideScreen(
     val exposureUs by viewModel.guideExposureUs.collectAsState()
     val gain by viewModel.guideGain.collectAsState()
     val gainCapability by viewModel.guideGainCapability.collectAsState()
+    val gainDbEquivalent by viewModel.guideGainDbEquivalent.collectAsState()
+    val gainWriteInProgress by viewModel.guideGainWriteInProgress.collectAsState()
     val raAggressiveness by viewModel.guideRaAggressiveness.collectAsState()
     val decAggressiveness by viewModel.guideDecAggressiveness.collectAsState()
     val guideHistory by viewModel.guideHistory.collectAsState()
@@ -278,7 +280,9 @@ fun GuideScreen(
                                 capability = capability,
                                 gain = gain,
                                 onGainChange = viewModel::setGuideGain,
-                                enabled = connectionState is ConnectionState.Connected
+                                enabled = connectionState is ConnectionState.Connected,
+                                gainDbEquivalent = gainDbEquivalent,
+                                writeInProgress = gainWriteInProgress
                             )
                         }
                     }

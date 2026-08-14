@@ -5,9 +5,11 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
@@ -23,12 +25,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.camera.GainCapability
+import com.indigo.mobileobservatory.camera.GainHelperKind
 import com.indigo.mobileobservatory.camera.GainValueNormalizer
 import kotlin.math.roundToInt
 
@@ -39,7 +45,8 @@ fun GainControl(
     onGainChange: (Float) -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
-    gainDbEquivalent: Float? = null
+    gainDbEquivalent: Float? = null,
+    writeInProgress: Boolean = false
 ) {
     val allowedValues = remember(capability) {
         capability.allowedValues
@@ -49,7 +56,9 @@ fun GainControl(
             .sorted()
             .toList()
     }
+    val interactive = enabled && !writeInProgress && !capability.isReadOnly
     var editingText by remember { mutableStateOf(false) }
+    var inputInvalid by remember { mutableStateOf(false) }
     var draftValue by remember(capability, gain) {
         mutableFloatStateOf(GainValueNormalizer.normalize(capability, gain))
     }
@@ -61,18 +70,31 @@ fun GainControl(
         if (!editingText) {
             draftValue = GainValueNormalizer.normalize(capability, gain)
             inputText = GainValueNormalizer.displayValue(capability, gain)
+            inputInvalid = false
         }
     }
 
     fun updateDraft(value: Float) {
         draftValue = GainValueNormalizer.normalize(capability, value)
         inputText = GainValueNormalizer.displayValue(capability, draftValue)
+        inputInvalid = false
     }
 
     fun commit(value: Float) {
         updateDraft(value)
         editingText = false
         onGainChange(draftValue)
+    }
+
+    fun commitFromText() {
+        val parsed = GainValueNormalizer.parseInput(inputText)
+        if (parsed == null) {
+            inputInvalid = true
+            inputText = GainValueNormalizer.displayValue(capability, gain)
+            editingText = false
+            return
+        }
+        commit(parsed)
     }
 
     val sliderPosition = if (allowedValues.isNotEmpty()) {
@@ -92,7 +114,7 @@ fun GainControl(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
                     capability.label,
                     style = MaterialTheme.typography.labelMedium,
@@ -105,16 +127,38 @@ fun GainControl(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+                if (capability.helperKind == GainHelperKind.VENDOR_NATIVE) {
+                    Text(
+                        stringResource(R.string.gain_vendor_native_hint),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            if (writeInProgress) {
+                CircularProgressIndicator(
+                    modifier = Modifier
+                        .size(18.dp)
+                        .testTag("gain_write_busy"),
+                    strokeWidth = 2.dp
+                )
             }
             OutlinedTextField(
                 value = inputText,
                 onValueChange = {
                     editingText = true
+                    inputInvalid = false
                     inputText = it
                 },
-                enabled = enabled,
+                enabled = interactive,
+                isError = inputInvalid,
                 singleLine = true,
                 suffix = capability.unit?.let { unit -> { Text(unit) } },
+                supportingText = if (inputInvalid) {
+                    { Text(stringResource(R.string.gain_input_invalid)) }
+                } else {
+                    null
+                },
                 textStyle = MaterialTheme.typography.labelMedium.copy(
                     fontFamily = FontFamily.Monospace,
                     fontSize = 13.sp
@@ -124,13 +168,14 @@ fun GainControl(
                     imeAction = ImeAction.Done
                 ),
                 keyboardActions = androidx.compose.foundation.text.KeyboardActions(
-                    onDone = { commit(inputText.toFloatOrNull() ?: gain) }
+                    onDone = { commitFromText() }
                 ),
                 modifier = Modifier
                     .width(120.dp)
+                    .testTag("gain_input")
                     .onFocusChanged { focusState ->
                         if (editingText && !focusState.isFocused) {
-                            commit(inputText.toFloatOrNull() ?: gain)
+                            commitFromText()
                         }
                     }
             )
@@ -148,8 +193,10 @@ fun GainControl(
                 updateDraft(value)
             },
             onValueChangeFinished = { commit(draftValue) },
-            enabled = enabled && capability.min != capability.max,
-            modifier = Modifier.fillMaxWidth(),
+            enabled = interactive,
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("gain_slider"),
             colors = SliderDefaults.colors(
                 thumbColor = MaterialTheme.colorScheme.primary,
                 activeTrackColor = MaterialTheme.colorScheme.primary,
@@ -167,7 +214,7 @@ fun GainControl(
                 presets.forEach { preset ->
                     AssistChip(
                         onClick = { commit(preset.value) },
-                        enabled = enabled,
+                        enabled = interactive,
                         label = { Text("${preset.label} ${GainValueNormalizer.displayValue(capability, preset.value)}") }
                     )
                 }

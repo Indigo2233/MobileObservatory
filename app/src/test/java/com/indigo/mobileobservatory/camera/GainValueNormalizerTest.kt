@@ -94,4 +94,32 @@ class GainValueNormalizerTest {
         assertEquals(6.037f, GainValueNormalizer.normalize(capability, 6.037f), 0f)
         assertEquals(24f, GainValueNormalizer.normalize(capability, 25f), 0f)
     }
+
+    @Test
+    fun `decimal places follow device step`() {
+        assertEquals(0, GainValueNormalizer.decimalPlacesForStep(1f))
+        assertEquals(1, GainValueNormalizer.decimalPlacesForStep(0.1f))
+        assertEquals(2, GainValueNormalizer.decimalPlacesForStep(0.01f))
+        assertEquals(3, GainValueNormalizer.decimalPlacesForStep(0f))
+    }
+
+    @Test
+    fun `iso exposure stops move at least one legal value`() {
+        val capability = GainValueNormalizer.isoCapability(
+            allowedValues = listOf(100f, 200f, 400f, 800f, 1600f, 3200f),
+            current = 400f
+        )
+
+        assertEquals(800f, GainValueNormalizer.adjustForExposureStops(capability, 400f, 0.1f), 0f)
+        assertEquals(200f, GainValueNormalizer.adjustForExposureStops(capability, 400f, -0.5f), 0f)
+        assertEquals(3200f, GainValueNormalizer.adjustForExposureStops(capability, 3200f, 0.5f), 0f)
+        assertEquals(100f, GainValueNormalizer.adjustForExposureStops(capability, 100f, -0.1f), 0f)
+    }
+
+    @Test
+    fun `parse input rejects blank and non numeric text`() {
+        assertEquals(12.5f, requireNotNull(GainValueNormalizer.parseInput(" 12.5 ")), 0f)
+        assertEquals(null, GainValueNormalizer.parseInput("abc"))
+        assertEquals(null, GainValueNormalizer.parseInput(""))
+    }
 }

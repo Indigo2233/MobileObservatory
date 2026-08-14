@@ -18,7 +18,6 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable {
     companion object {
         private const val TAG = "ZwoAsiCam"
         private const val GRAB_TIMEOUT_MS = 2000
-        private const val ZWO_GAIN_UNITS_PER_DB = 10f
 
         const val ASI_IMG_RAW8 = 0
         const val ASI_IMG_RGB24 = 1
@@ -254,10 +253,16 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable {
     }
 
     override fun gainDbEquivalent(value: Float): Float? =
-        GainValueNormalizer.normalize(gainCapability, value) / ZWO_GAIN_UNITS_PER_DB
+        GainConversions.dbEquivalent(
+            gainCapability.unit,
+            GainConversions.zwoNativeToDb(GainValueNormalizer.normalize(gainCapability, value))
+        )
 
     override fun adjustGainForExposure(stops: Float): Float =
-        GainValueNormalizer.normalize(gainCapability, currentGain + stops * 60.206f)
+        GainValueNormalizer.normalize(
+            gainCapability,
+            currentGain + GainConversions.zwoStopsToNative(stops)
+        )
 
     override fun setOffset(value: Float) {
         val cam = zwoCamera ?: return
@@ -307,6 +312,7 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable {
                 currentImgType = imgType
                 currentPixelFormat = format
                 configureUsbBandwidth(cam, imgType)
+                readGainRange(cam)
                 FileLogger.i(TAG, "PixelFormat set to ${format.name} (asiType=$imgType)")
             } else {
                 FileLogger.w(TAG, "setRoiFormat failed for ${format.name}: ${ret.intVal}")
@@ -440,7 +446,13 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable {
                 defaultGain
             }
             gainRange = FloatRange(minGain, maxGain, current)
-            gainCapability = GainCapability(min = minGain, max = maxGain, step = 1f, defaultValue = defaultGain)
+            gainCapability = GainCapability(
+                min = minGain,
+                max = maxGain,
+                step = 1f,
+                defaultValue = defaultGain,
+                decimalPlaces = 0
+            )
             currentGain = GainValueNormalizer.normalize(gainCapability, current)
             FileLogger.i(TAG, "Gain range: $minGain-$maxGain native (current=$currentGain, default=$defaultGain)")
         }

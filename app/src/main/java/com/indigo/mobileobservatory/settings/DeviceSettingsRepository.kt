@@ -33,12 +33,18 @@ class DeviceSettingsRepository(context: Context) {
 
     fun cameraDefaults(deviceId: String): CameraDefaults {
         val prefix = prefix(CAMERA, deviceId)
+        if (preferences.contains("${prefix}${CameraGainSettings.LEGACY_SUFFIX}")) {
+            preferences.edit().remove("${prefix}${CameraGainSettings.LEGACY_SUFFIX}").apply()
+        }
         return CameraDefaults(
             readoutMode = preferences.getString("${prefix}readout", null)
                 ?.let { value -> ReadoutMode.entries.firstOrNull { it.name == value } },
             nativeReadoutModeId = preferences.getString("${prefix}native_readout", null),
-            gain = preferences.takeIf { it.contains("${prefix}gain_value") }
-                ?.getFloat("${prefix}gain_value", 0f),
+            gain = CameraGainSettings.read(
+                contains = preferences::contains,
+                getFloat = { key -> preferences.getFloat(key, 0f) },
+                prefix = prefix
+            ),
             offset = preferences.takeIf { it.contains("${prefix}offset") }
                 ?.getFloat("${prefix}offset", 0f),
             pixelFormat = preferences.getString("${prefix}pixel_format", null)
@@ -52,8 +58,8 @@ class DeviceSettingsRepository(context: Context) {
             .putString("${prefix}readout", settings.readoutMode?.name)
             .putString("${prefix}native_readout", settings.nativeReadoutModeId)
             .putString("${prefix}pixel_format", settings.pixelFormat?.name)
-            .applyNullableFloat("${prefix}gain_value", settings.gain)
-            .remove("${prefix}gain")
+            .applyNullableFloat("${prefix}${CameraGainSettings.VALUE_SUFFIX}", settings.gain)
+            .remove("${prefix}${CameraGainSettings.LEGACY_SUFFIX}")
             .applyNullableFloat("${prefix}offset", settings.offset)
             .apply()
     }
@@ -132,5 +138,19 @@ class DeviceSettingsRepository(context: Context) {
         const val CAMERA = "camera"
         const val FOCUSER = "focuser"
         const val COVER = "cover"
+    }
+}
+
+object CameraGainSettings {
+    const val VALUE_SUFFIX = "gain_value"
+    const val LEGACY_SUFFIX = "gain"
+
+    fun read(
+        contains: (String) -> Boolean,
+        getFloat: (String) -> Float,
+        prefix: String
+    ): Float? {
+        val nativeKey = prefix + VALUE_SUFFIX
+        return if (contains(nativeKey)) getFloat(nativeKey) else null
     }
 }

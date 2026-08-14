@@ -93,43 +93,70 @@ class AutoExposureController {
 
         val pixelFormat = frame.pixelFormat
         val isRgb48 = pixelFormat == PixelFormat.RGB48
-        val bitDepth = pixelFormat.nativeBits.coerceIn(8, 16)
         val isHighBit = pixelFormat.bytesPerPixel >= 2 && !isRgb48
-        val maxVal = if (isHighBit || isRgb48) ((1 shl bitDepth) - 1).toFloat() else 255f
+        val sampleStep = (total / 50000).coerceAtLeast(1)
+        val highBitShift = if (isHighBit) {
+            var maxValue = 0
+            var lowBitsMask = 0
+            for (index in 0 until total step sampleStep) {
+                val offset = index * 2
+                if (offset + 1 >= frame.data.size) break
+                val raw = (frame.data[offset].toInt() and 0xFF) or
+                    ((frame.data[offset + 1].toInt() and 0xFF) shl 8)
+                maxValue = maxOf(maxValue, raw)
+                lowBitsMask = lowBitsMask or raw
+            }
+            val declaredMax = (1 shl pixelFormat.nativeBits.coerceIn(1, 16)) - 1
+            if (maxValue <= declaredMax) {
+                (pixelFormat.nativeBits - 10).coerceAtLeast(0)
+            } else {
+                detectHighBitLayout(maxValue, lowBitsMask, pixelFormat.nativeBits).shift
+            }
+        } else {
+            0
+        }
+        val maxVal = if (isHighBit || isRgb48) 1023f else 255f
 
         var sum = 0L
-        val sampleStep = (total / 50000).coerceAtLeast(1)
-        val sampleCount = total / sampleStep
         val numBins = maxVal.toInt() + 1
         val histogram = IntArray(numBins)
+        var sampleCount = 0
 
         if (isHighBit) {
             for (i in 0 until total step sampleStep) {
-                val lo = frame.data[i * 2].toInt() and 0xFF
-                val hi = frame.data[i * 2 + 1].toInt() and 0xFF
-                val raw = (hi shl 8) or lo
+                val offset = i * 2
+                if (offset + 1 >= frame.data.size) break
+                val lo = frame.data[offset].toInt() and 0xFF
+                val hi = frame.data[offset + 1].toInt() and 0xFF
+                val raw = ((hi shl 8) or lo) shr highBitShift
                 val v = raw.coerceIn(0, maxVal.toInt())
                 sum += v
                 histogram[v]++
+                sampleCount++
             }
         } else if (isRgb48) {
             for (i in 0 until total step sampleStep) {
                 val offset = i * 6
+                if (offset + 5 >= frame.data.size) break
                 val red = ((frame.data[offset + 1].toInt() and 0xFF) shl 8) or (frame.data[offset].toInt() and 0xFF)
                 val green = ((frame.data[offset + 3].toInt() and 0xFF) shl 8) or (frame.data[offset + 2].toInt() and 0xFF)
                 val blue = ((frame.data[offset + 5].toInt() and 0xFF) shl 8) or (frame.data[offset + 4].toInt() and 0xFF)
-                val v = ((red + green + blue) / 3).coerceIn(0, maxVal.toInt())
+                val v = ((red + green + blue) / 3 shr 6).coerceIn(0, maxVal.toInt())
                 sum += v
                 histogram[v]++
+                sampleCount++
             }
         } else {
             for (i in 0 until total step sampleStep) {
+                if (i >= frame.data.size) break
                 val v = frame.data[i].toInt() and 0xFF
                 sum += v
                 histogram[v]++
+                sampleCount++
             }
         }
 
+        if (sampleCount == 0) return FrameStats(0f, 0f, maxVal)
         val mean = sum.toFloat() / sampleCount
         val medianTarget = sampleCount / 2
         var cumulative = 0

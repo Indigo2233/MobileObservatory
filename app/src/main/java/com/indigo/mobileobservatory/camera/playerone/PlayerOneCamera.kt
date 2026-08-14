@@ -11,6 +11,7 @@ import com.indigo.mobileobservatory.camera.FloatRange
 import com.indigo.mobileobservatory.camera.FrameCallback
 import com.indigo.mobileobservatory.camera.FrameData
 import com.indigo.mobileobservatory.camera.GainCapability
+import com.indigo.mobileobservatory.camera.GainConversions
 import com.indigo.mobileobservatory.camera.GainPreset
 import com.indigo.mobileobservatory.camera.GainValueNormalizer
 import com.indigo.mobileobservatory.camera.PixelFormat
@@ -92,8 +93,6 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
     override var supportedPixelFormats: List<PixelFormat> = listOf(PixelFormat.MONO8); private set
     override var currentReadoutMode: ReadoutMode = ReadoutMode.NORMAL; private set
     override var supportedReadoutModes: List<ReadoutMode> = listOf(ReadoutMode.NORMAL); private set
-    override var usbBandwidthRange: IntRange? = null; private set
-    override var currentUsbBandwidth: Int? = null; private set
     override var currentRoi: Roi = Roi(0, 0, 1920, 1080); private set
     @Volatile override var cropInfo: CropInfo = CropInfo(0, 0, 1920, 1080); private set
     override var hwExposureMaxUs: Float = 2_000_000_000f; private set
@@ -358,10 +357,16 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
     }
 
     override fun gainDbEquivalent(value: Float): Float? =
-        GainValueNormalizer.normalize(gainCapability, value) * 0.1f
+        GainConversions.dbEquivalent(
+            gainCapability.unit,
+            GainConversions.playerOneNativeToDb(GainValueNormalizer.normalize(gainCapability, value))
+        )
 
     override fun adjustGainForExposure(stops: Float): Float =
-        GainValueNormalizer.normalize(gainCapability, currentGain + stops * 60.206f)
+        GainValueNormalizer.normalize(
+            gainCapability,
+            currentGain + GainConversions.playerOneStopsToNative(stops)
+        )
 
     override fun setOffset(value: Float) {
         val cam = poa ?: return
@@ -399,6 +404,8 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
             currentPixelFormat = format
             directBuffers = null
             FileLogger.i(TAG, "PixelFormat -> ${format.name} ($poaFmt)")
+            readGainRange(cam)
+            readGainOffsetPresets(cam)
         } catch (e: PoaException) {
             FileLogger.w(TAG, "setImageFormat ${e.error}: ${e.message}")
         }
@@ -430,6 +437,8 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
             } catch (e: PoaException) {
                 FileLogger.w(TAG, "restore image format ${e.error}: ${e.message}")
             }
+            readGainRange(cam)
+            readGainOffsetPresets(cam)
             setExposureTime(previousExposure)
             setGain(previousGain)
             if (offsetSupported) setOffset(previousOffset)
@@ -803,7 +812,13 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
             val defaultGain = attrs.defaultValue.asInteger().toInt().toFloat().coerceIn(minGain, maxGain)
             val currentGain = cam.getConfig(PoaConfig.GAIN).value.asInteger().toFloat().coerceIn(minGain, maxGain)
             gainRange = FloatRange(minGain, maxGain, currentGain)
-            gainCapability = GainCapability(min = minGain, max = maxGain, step = 1f, defaultValue = defaultGain)
+            gainCapability = GainCapability(
+                min = minGain,
+                max = maxGain,
+                step = 1f,
+                defaultValue = defaultGain,
+                decimalPlaces = 0
+            )
             this.currentGain = GainValueNormalizer.normalize(gainCapability, currentGain)
             FileLogger.i(TAG, "Gain $minGain-$maxGain native (current=${this.currentGain}, 1 gain = 0.1 dB)")
         } catch (e: PoaException) {

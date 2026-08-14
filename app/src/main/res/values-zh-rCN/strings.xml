@@ -142,6 +142,8 @@
     <!-- Gain control -->
     <string name="gain">增益</string>
     <string name="gain_format">%.0f</string>
+    <string name="gain_vendor_native_hint">厂商原生增益</string>
+    <string name="gain_input_invalid">请输入有效数字</string>
     <string name="usb_bandwidth">USB 带宽</string>
     <string name="usb_bandwidth_hint">请结合帧率和画面稳定性观察；数值因相机 SDK 而异。</string>
 
@@ -332,7 +334,6 @@
     <string name="point_number">第 %d 点</string>
     <string name="elapsed_seconds">用时：%.1f 秒</string>
     <string name="guide_exposure_seconds">曝光 %.1f 秒</string>
-    <string name="guide_gain_db">增益 %.0f</string>
     <string name="detected_stars">检测到星点：%d</string>
     <string name="guide_rates">赤经 %1$.2f 像素/秒  赤纬 %2$.2f 像素/秒</string>
     <string name="guide_correction">dx %1$.2f  dy %2$.2f  赤经 %3$d 毫秒  赤纬 %4$d 毫秒</string>

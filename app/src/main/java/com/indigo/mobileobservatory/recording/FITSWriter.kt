@@ -57,14 +57,15 @@ class FITSWriter {
             cards.add(fitsCard("BSCALE", "1", "default scaling"))
         }
         cards.add(fitsCard("EXPOSURE", "%.6f".format(exposureSeconds), "exposure time in seconds"))
-        val gainComment = listOfNotNull(gainLabel, gainUnit?.takeIf { it.isNotBlank() })
-            .joinToString(" ") + " native value"
-        cards.add(fitsCard("GAIN", "%.2f".format(gain), gainComment))
-        gainDbEquivalent?.let { db ->
-            cards.add(fitsCard("GAINDB", "%.2f".format(db), "gain equivalent in dB"))
-        }
         if (gainKind == GainControlKind.ISO) {
             cards.add(fitsCard("ISOSPEED", gain.toInt().toString(), "camera ISO speed"))
+        } else {
+            val gainComment = listOfNotNull(gainLabel, gainUnit?.takeIf { it.isNotBlank() })
+                .joinToString(" ") + " native value"
+            cards.add(fitsCard("GAIN", "%.2f".format(gain), gainComment))
+            gainDbEquivalent?.let { db ->
+                cards.add(fitsCard("GAINDB", "%.2f".format(db), "gain equivalent in dB"))
+            }
         }
         cards.add(fitsCard("DATE-OBS", "'$dateObs'", "observation date"))
         cards.add(fitsCard("INSTRUME", "'${cameraName ?: "Camera"}'", "instrument"))

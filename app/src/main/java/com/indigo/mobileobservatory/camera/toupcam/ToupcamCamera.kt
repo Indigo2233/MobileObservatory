@@ -7,7 +7,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.math.log10
 import kotlin.math.pow
 import kotlin.math.roundToInt
 
@@ -341,7 +340,10 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
     }
 
     override fun gainDbEquivalent(value: Float): Float? =
-        (20.0 * log10(GainValueNormalizer.normalize(gainCapability, value) / 100.0)).toFloat()
+        GainConversions.dbEquivalent(
+            gainCapability.unit,
+            GainConversions.toupcamPercentToDb(GainValueNormalizer.normalize(gainCapability, value))
+        )
 
     override fun adjustGainForExposure(stops: Float): Float =
         GainValueNormalizer.normalize(gainCapability, (currentGain * 2.0.pow(stops.toDouble())).toFloat())
@@ -352,32 +354,6 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
         if (ToupcamJni.putOption(ToupcamJni.OPTION_BLACKLEVEL, clamped)) {
             currentOffset = clamped.toFloat()
         }
-    }
-
-    override fun setUsbBandwidth(value: Int): Boolean {
-        val range = usbBandwidthRange ?: return false
-        val target = value.coerceIn(range.first, range.last)
-        if (!ToupcamJni.putOption(ToupcamJni.OPTION_BANDWIDTH, target)) {
-            Log.w(TAG, "Set USB bandwidth failed: target=$target")
-            return false
-        }
-        currentUsbBandwidth = ToupcamJni.getOption(ToupcamJni.OPTION_BANDWIDTH)
-            .takeIf { it in range } ?: target
-        Log.i(TAG, "USB bandwidth set: requested=$target current=$currentUsbBandwidth")
-        return true
-    }
-
-    private fun initUsbBandwidth() {
-        val current = runCatching { ToupcamJni.getOption(ToupcamJni.OPTION_BANDWIDTH) }
-            .getOrNull()
-        if (current == null || current !in 1..100) {
-            usbBandwidthRange = null
-            currentUsbBandwidth = null
-            return
-        }
-        usbBandwidthRange = 1..100
-        currentUsbBandwidth = current
-        Log.i(TAG, "USB bandwidth range=1..100 current=$current")
     }
 
     override fun setPixelFormat(format: PixelFormat) {
@@ -405,6 +381,7 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
 
         currentPixelFormat = format
         readOffsetRange()
+        readGainRange()
 
         try { Thread.sleep(50) } catch (_: InterruptedException) {}
 
@@ -500,6 +477,7 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
         try { Thread.sleep(50) } catch (_: InterruptedException) {}
 
         refreshBitDepthAndFormat()
+        readGainRange()
 
         if (wasCapturing && cb != null) startCapture(cb)
     }
@@ -683,7 +661,8 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
                 max = maxPct,
                 step = 1f,
                 defaultValue = defaultPct,
-                unit = "%"
+                unit = "%",
+                decimalPlaces = 0
             )
             currentGain = GainValueNormalizer.normalize(gainCapability, curPct)
         } catch (e: Exception) {

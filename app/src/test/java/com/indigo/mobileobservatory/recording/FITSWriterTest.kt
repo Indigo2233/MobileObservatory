@@ -25,6 +25,8 @@ class FITSWriterTest {
 
             val header = file.readBytes().decodeToString()
             assertTrue(header.contains("ISOSPEED"))
+            assertFalse(header.contains("GAIN    "))
+            assertFalse(header.contains("GAINDB"))
         } finally {
             file.delete()
         }
@@ -44,6 +46,51 @@ class FITSWriterTest {
 
             val header = file.readBytes().decodeToString()
             assertFalse(header.contains("ISOSPEED"))
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test
+    fun `writes native GAIN and optional GAINDB without calling it dB`() {
+        val file = Files.createTempFile("indigo-qhy", ".fits").toFile()
+        try {
+            FITSWriter().write(
+                file = file,
+                frame = FrameData(ByteArray(4), 2, 2, PixelFormat.MONO8, frameId = 1L, timestamp = 0L),
+                exposureSeconds = 1f,
+                gain = 36f,
+                gainLabel = "Gain",
+                gainUnit = null,
+                gainDbEquivalent = null
+            )
+
+            val header = file.readBytes().decodeToString()
+            assertTrue(header.contains("GAIN"))
+            assertTrue(header.contains("native value"))
+            assertFalse(header.contains("gain in dB"))
+            assertFalse(header.contains("GAINDB"))
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test
+    fun `writes GAINDB only when a conversion is supplied`() {
+        val file = Files.createTempFile("indigo-zwo", ".fits").toFile()
+        try {
+            FITSWriter().write(
+                file = file,
+                frame = FrameData(ByteArray(4), 2, 2, PixelFormat.MONO8, frameId = 1L, timestamp = 0L),
+                exposureSeconds = 1f,
+                gain = 100f,
+                gainLabel = "Gain",
+                gainDbEquivalent = 10f
+            )
+
+            val header = file.readBytes().decodeToString()
+            assertTrue(header.contains("GAINDB"))
+            assertTrue(header.contains("10.00"))
         } finally {
             file.delete()
         }

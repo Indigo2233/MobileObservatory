@@ -42,6 +42,7 @@ fun ControlPanel(
     exposureUs: Float,
     gain: Float,
     gainDbEquivalent: Float?,
+    gainWriteInProgress: Boolean = false,
     usbBandwidth: Int?,
     usbBandwidthRange: IntRange?,
     pixelFormat: PixelFormat,
@@ -954,7 +955,8 @@ fun ControlPanel(
                     gain = gain,
                     onGainChange = onGainChange,
                     enabled = autoExposureMode == AutoExposureMode.OFF,
-                    gainDbEquivalent = gainDbEquivalent
+                    gainDbEquivalent = gainDbEquivalent,
+                    writeInProgress = gainWriteInProgress
                 )
 
                 if (usbBandwidth != null && usbBandwidthRange != null &&

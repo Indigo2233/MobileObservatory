@@ -44,8 +44,6 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
     override var currentUsbBandwidth: Int? = null; private set
     override var supportedNativeReadoutModes: List<CameraNativeReadoutMode> = emptyList(); private set
     override var currentNativeReadoutModeId: String = "0"; private set
-    override var usbBandwidthRange: IntRange? = null; private set
-    override var currentUsbBandwidth: Int? = null; private set
     override var currentPixelFormat = PixelFormat.MONO16; private set
     override var supportedPixelFormats = listOf(PixelFormat.MONO16, PixelFormat.MONO8); private set
     override var currentRoi = Roi(0, 0, 1, 1); private set
@@ -317,7 +315,14 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
             val step = range.getOrNull(2)?.toFloat()?.takeIf { it > 0f } ?: 1f
             val current = QhyccdJni.getParam(QhyccdJni.CONTROL_GAIN).toFloat().coerceIn(min, max)
             gainRange = FloatRange(min, max, current)
-            gainCapability = GainCapability(min = min, max = max, step = step, defaultValue = current)
+            gainCapability = GainCapability(
+                min = min,
+                max = max,
+                step = step,
+                defaultValue = current,
+                decimalPlaces = GainValueNormalizer.decimalPlacesForStep(step),
+                helperKind = GainHelperKind.VENDOR_NATIVE
+            )
             currentGain = current
         }
     }
@@ -751,6 +756,9 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
         QhyccdJni.setResolution(roi.x, roi.y, roi.width, roi.height)
         currentRoi = roi
         cropInfo = CropInfo(roi.x, roi.y, roi.width, roi.height)
+        initExposureRange()
+        initGainRange()
+        initOffsetRange()
         setExposureTime(exposure)
         setGain(gain)
         if (!applyTransferBit(bits)) return false

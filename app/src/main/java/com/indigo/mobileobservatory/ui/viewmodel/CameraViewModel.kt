@@ -199,6 +199,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val gainDbEquivalent: StateFlow<Float?> = _gainDbEquivalent.asStateFlow()
     private val _gainCapability = MutableStateFlow<GainCapability?>(null)
     val gainCapability: StateFlow<GainCapability?> = _gainCapability.asStateFlow()
+    private val _gainWriteInProgress = MutableStateFlow(false)
+    val gainWriteInProgress: StateFlow<Boolean> = _gainWriteInProgress.asStateFlow()
 
     private val _usbBandwidth = MutableStateFlow<Int?>(null)
     val usbBandwidth: StateFlow<Int?> = _usbBandwidth.asStateFlow()
@@ -213,11 +215,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val offsetLabel: StateFlow<String> = _offsetLabel.asStateFlow()
     private val _offsetStep = MutableStateFlow(1f)
     val offsetStep: StateFlow<Float> = _offsetStep.asStateFlow()
-
-    private val _usbBandwidth = MutableStateFlow<Int?>(null)
-    val usbBandwidth: StateFlow<Int?> = _usbBandwidth.asStateFlow()
-    private val _usbBandwidthRange = MutableStateFlow<IntRange?>(null)
-    val usbBandwidthRange: StateFlow<IntRange?> = _usbBandwidthRange.asStateFlow()
 
     private val _pixelFormat = MutableStateFlow(PixelFormat.MONO8)
     val pixelFormat: StateFlow<PixelFormat> = _pixelFormat.asStateFlow()
@@ -312,6 +309,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val guideGain: StateFlow<Float> = _guideGain.asStateFlow()
     private val _guideGainCapability = MutableStateFlow<GainCapability?>(null)
     val guideGainCapability: StateFlow<GainCapability?> = _guideGainCapability.asStateFlow()
+    private val _guideGainDbEquivalent = MutableStateFlow<Float?>(null)
+    val guideGainDbEquivalent: StateFlow<Float?> = _guideGainDbEquivalent.asStateFlow()
+    private val _guideGainWriteInProgress = MutableStateFlow(false)
+    val guideGainWriteInProgress: StateFlow<Boolean> = _guideGainWriteInProgress.asStateFlow()
 
     private val _guideStar = MutableStateFlow<GuideStar?>(null)
     val guideStar: StateFlow<GuideStar?> = _guideStar.asStateFlow()
@@ -387,6 +388,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private val pendingFrameSnapshot = AtomicReference<CompletableDeferred<FrameData>?>(null)
     private val frameSnapshotMutex = Mutex()
+    private val cameraDefaultsMutex = Mutex()
+    private val gainWriteMutex = Mutex()
+    private val guideGainWriteMutex = Mutex()
     private val latestGuideStars = AtomicReference<List<GuideStar>>(emptyList())
     @Volatile private var guideFrameSequence = 0L
     @Volatile private var pendingGuideConnect = false
@@ -560,8 +564,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             _nativeReadoutModes.value = emptyList()
                             _nativeReadoutModeId.value = null
                         }
-                        applyCameraDefaults(cam)
-                        applySavedUsbBandwidth(cam)
+                        withContext(Dispatchers.IO) {
+                            applyCameraDefaults(cam)
+                            applySavedUsbBandwidth(cam)
+                        }
                         _gain.value = cam.currentGain
                         _gainCapability.value = cam.gainCapability
                         _gainDbEquivalent.value = cam.gainDbEquivalent(cam.currentGain)
@@ -593,6 +599,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         _nativeReadoutModeId.value = null
                         _gainCapability.value = null
                         _gainDbEquivalent.value = null
+                        _gainWriteInProgress.value = false
                     }
                     is ConnectionState.Enumerating -> {
                         _statusMessage.value = app.getString(R.string.searching_cameras)
@@ -626,6 +633,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         _guideExposureUs.value = cam.currentExposureUs
                         _guideGainCapability.value = cam.gainCapability
                         _guideGain.value = cam.currentGain
+                        _guideGainDbEquivalent.value = cam.gainDbEquivalent(cam.currentGain)
                         _guideStatus.value = app.getString(R.string.guide_camera_connected_status, cam.cameraInfo?.name.orEmpty())
                         startGuidePreview()
                     }
@@ -641,6 +649,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         _guideReferenceStar.value = null
                         _guideReferenceStars.value = emptyList()
                         _guideGainCapability.value = null
+                        _guideGainDbEquivalent.value = null
+                        _guideGainWriteInProgress.value = false
                         _guideCorrection.value = null
                         _guideRunning.value = false
                         _guideCalibrating.value = false
@@ -918,8 +928,21 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setGuideGain(value: Float) {
         val cam = guideCameraManager.activeCamera ?: return
-        cam.setGain(value)
-        _guideGain.value = cam.currentGain
+        viewModelScope.launch(Dispatchers.IO) {
+            guideGainWriteMutex.withLock {
+                _guideGainWriteInProgress.value = true
+                try {
+                    cam.setGain(value)
+                    if (guideCameraManager.activeCamera === cam) {
+                        _guideGain.value = cam.currentGain
+                        _guideGainCapability.value = cam.gainCapability
+                        _guideGainDbEquivalent.value = cam.gainDbEquivalent(cam.currentGain)
+                    }
+                } finally {
+                    _guideGainWriteInProgress.value = false
+                }
+            }
+        }
     }
 
     fun lockGuideStar() {
@@ -1508,9 +1531,19 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setGain(value: Float) {
         val cam = cameraManager.activeCamera ?: return
-        cam.setGain(value)
-        _gain.value = cam.currentGain
-        _gainDbEquivalent.value = cam.gainDbEquivalent(cam.currentGain)
+        viewModelScope.launch(Dispatchers.IO) {
+            gainWriteMutex.withLock {
+                _gainWriteInProgress.value = true
+                try {
+                    cam.setGain(value)
+                    if (cameraManager.activeCamera === cam) {
+                        syncGainState(cam)
+                    }
+                } finally {
+                    _gainWriteInProgress.value = false
+                }
+            }
+        }
     }
 
     fun setOffset(value: Float) {
@@ -1565,6 +1598,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             } finally {
                 _pixelFormat.value = cam.currentPixelFormat
                 _supportedPixelFormats.value = cam.supportedPixelFormats
+                syncGainState(cam)
                 syncOffsetCapability(cam)
                 syncUsbBandwidthCapability(cam)
                 pixelFormatSwitching = false
@@ -1576,13 +1610,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val cam = cameraManager.activeCamera ?: return
         cam.setReadoutMode(mode)
         _readoutMode.value = cam.currentReadoutMode
-        _gain.value = cam.currentGain
-        _gainCapability.value = cam.gainCapability
-        _gainDbEquivalent.value = cam.gainDbEquivalent(cam.currentGain)
-                _pixelFormat.value = cam.currentPixelFormat
-                _supportedPixelFormats.value = cam.supportedPixelFormats
-                _gainCapability.value = cam.gainCapability
-                _gainDbEquivalent.value = cam.gainDbEquivalent(cam.currentGain)
+        syncGainState(cam)
+        _pixelFormat.value = cam.currentPixelFormat
+        _supportedPixelFormats.value = cam.supportedPixelFormats
         syncOffsetCapability(cam)
         frameProcessor.resetBitShiftDetection(
             forceDeclaredLayout = cam is PlayerOneCamera &&
@@ -1599,8 +1629,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 _pixelFormat.value = cameraManager.activeCamera?.currentPixelFormat ?: _pixelFormat.value
                 _supportedPixelFormats.value = cameraManager.activeCamera?.supportedPixelFormats ?: _supportedPixelFormats.value
                 _roi.value = cameraManager.activeCamera?.currentRoi ?: _roi.value
-                _gainCapability.value = cameraManager.activeCamera?.gainCapability
-                _gainDbEquivalent.value = cameraManager.activeCamera?.let { it.gainDbEquivalent(it.currentGain) }
+                cameraManager.activeCamera?.let(::syncGainState)
                 syncOffsetCapability(cameraManager.activeCamera)
             }
         }
@@ -1611,24 +1640,28 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         return deviceSettings.cameraDefaults(cameraSettingsId(info))
     }
 
-    fun saveCameraDefaults(settings: CameraDefaults): CameraDefaults? {
-        val camera = cameraManager.activeCamera ?: return null
-        val info = camera.cameraInfo ?: return null
+    fun saveCameraDefaults(settings: CameraDefaults, onSaved: (CameraDefaults) -> Unit = {}) {
+        val camera = cameraManager.activeCamera ?: return
+        val info = camera.cameraInfo ?: return
         val normalized = settings.gain?.let { GainValueNormalizer.normalize(camera.gainCapability, it) }
         val normalizedSettings = settings.copy(gain = normalized)
         deviceSettings.saveCameraDefaults(cameraSettingsId(info), normalizedSettings)
-        applyCameraDefaults(camera)
-        val persistedSettings = normalizedSettings.copy(
-            gain = normalized?.let { camera.currentGain }
-        )
-        deviceSettings.saveCameraDefaults(cameraSettingsId(info), persistedSettings)
-        _gain.value = camera.currentGain
-        _gainCapability.value = camera.gainCapability
-        _gainDbEquivalent.value = camera.gainDbEquivalent(camera.currentGain)
-        _pixelFormat.value = camera.currentPixelFormat
-        _readoutMode.value = camera.currentReadoutMode
-        syncOffsetCapability(camera)
-        return persistedSettings
+        viewModelScope.launch(Dispatchers.IO) {
+            applyCameraDefaults(camera, normalizedSettings)
+            val persistedSettings = normalizedSettings.copy(gain = normalized?.let { camera.currentGain })
+            deviceSettings.saveCameraDefaults(cameraSettingsId(info), persistedSettings)
+            withContext(Dispatchers.Main.immediate) {
+                if (cameraManager.activeCamera !== camera) return@withContext
+                _gain.value = camera.currentGain
+                _gainCapability.value = camera.gainCapability
+                _gainDbEquivalent.value = camera.gainDbEquivalent(camera.currentGain)
+                _pixelFormat.value = camera.currentPixelFormat
+                _supportedPixelFormats.value = camera.supportedPixelFormats
+                _readoutMode.value = camera.currentReadoutMode
+                syncOffsetCapability(camera)
+                onSaved(persistedSettings)
+            }
+        }
     }
 
     fun focuserDefaults(): FocuserDefaults {
@@ -1664,33 +1697,39 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         settings.brightness?.let(::setCalibratorBrightness)
     }
 
-    private fun applyCameraDefaults(camera: Camera) {
-        val info = camera.cameraInfo ?: return
-        val settings = deviceSettings.cameraDefaults(cameraSettingsId(info))
-        settings.readoutMode
-            ?.takeIf { it in camera.supportedReadoutModes }
-            ?.let(camera::setReadoutMode)
-        settings.nativeReadoutModeId?.let { id ->
-            (camera as? CameraNativeReadoutModeCapable)?.let { readoutCapable ->
-                viewModelScope.launch(Dispatchers.IO) {
-                    if (readoutCapable.setNativeReadoutMode(id)) {
-                        _nativeReadoutModes.value = readoutCapable.supportedNativeReadoutModes
-                        _nativeReadoutModeId.value = readoutCapable.currentNativeReadoutModeId
-                    }
+    private suspend fun applyCameraDefaults(camera: Camera, requestedSettings: CameraDefaults? = null) {
+        cameraDefaultsMutex.withLock {
+            val info = camera.cameraInfo ?: return@withLock
+            val settings = requestedSettings ?: deviceSettings.cameraDefaults(cameraSettingsId(info))
+            settings.readoutMode
+                ?.takeIf { it in camera.supportedReadoutModes }
+                ?.let(camera::setReadoutMode)
+            settings.nativeReadoutModeId?.let { id ->
+                (camera as? CameraNativeReadoutModeCapable)?.setNativeReadoutMode(id)
+            }
+            settings.pixelFormat
+                ?.takeIf { it in camera.supportedPixelFormats }
+                ?.let(camera::setPixelFormat)
+            settings.gain?.let { gain ->
+                camera.setGain(GainValueNormalizer.normalize(camera.gainCapability, gain))
+            }
+            settings.offset?.let { offset ->
+                (camera as? CameraOffsetCapable)?.takeIf { it.offsetSupported }?.let { offsetCapable ->
+                    offsetCapable.setOffset(offset.coerceIn(offsetCapable.offsetRange.min, offsetCapable.offsetRange.max))
                 }
             }
         }
-        settings.pixelFormat
-            ?.takeIf { it in camera.supportedPixelFormats }
-            ?.let(camera::setPixelFormat)
-        settings.gain?.let { gain ->
-            camera.setGain(GainValueNormalizer.normalize(camera.gainCapability, gain))
+    }
+
+    private fun syncGainState(camera: Camera?) {
+        if (camera == null) {
+            _gainCapability.value = null
+            _gainDbEquivalent.value = null
+            return
         }
-        settings.offset?.let { offset ->
-            (camera as? CameraOffsetCapable)?.takeIf { it.offsetSupported }?.let { offsetCapable ->
-                offsetCapable.setOffset(offset.coerceIn(offsetCapable.offsetRange.min, offsetCapable.offsetRange.max))
-            }
-        }
+        _gain.value = camera.currentGain
+        _gainCapability.value = camera.gainCapability
+        _gainDbEquivalent.value = camera.gainDbEquivalent(camera.currentGain)
     }
 
     private fun syncOffsetCapability(camera: Camera?) {

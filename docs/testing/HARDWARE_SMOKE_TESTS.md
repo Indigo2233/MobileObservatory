@@ -7,7 +7,11 @@ Record Android version, device model, accessory firmware, result, and relevant l
 
 - Connect each supported camera family and start preview.
 - Change exposure, gain, pixel format, readout mode, ROI, flip, and rotation.
+- Confirm the gain control shows the vendor-native value (not dB as the primary number).
+  Enter an exact gain, drag the slider, and for Player One tap HDR/HCG/Unity/lowest-noise presets.
+  After pixel-format and readout-mode changes, confirm the gain range and current value refresh.
 - Capture JPG and FITS; record and reopen SER, PSER, and MP4.
+  Confirm FITS `GAIN` is native (not labelled dB). If a dB conversion exists, `GAINDB` is present.
 - Leave preview running for 30 minutes. Record `Preview baseline` Logcat values,
   visible tearing, input latency, device temperature, and any reconnect failure.
 - Disconnect and reconnect after Activity recreation.

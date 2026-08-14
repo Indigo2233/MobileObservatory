@@ -465,6 +465,68 @@
 
 ---
 
+## P2：相机品牌扩展
+
+### [ ] 18. 单反 / 无反相机接入（Canon / Nikon / Sony PTP）
+
+**方案文档：** `docs/CAMERA_NATIVE_GAIN_AND_ISO_PLAN.md` §6.5 / M5（增益侧已预留；机身接入未开工）
+
+**与事项 17 的边界**
+
+- 事项 17 的 `PhoneCamera` 是手机 Camera2 板解指向，不是单反/无反。
+- 本事项是 USB PTP（及厂商变体）连接可换镜头机身，作为主成像相机接入现有 `Camera` 栈。
+
+**涉及模块（规划）**
+
+- USB 枚举与权限：`DahengCameraManager` / `CameraBrand` 增加 Canon、Nikon、Sony 等 VID
+- 新适配器：`camera/dslr/`（PTP 会话、Live View 取流、单张快门、ISO/快门/光圈）
+- 增益：复用已有 `GainControlKind.ISO`、`GainValueNormalizer.isoCapability()`、离散滑条、FITS `ISOSPEED`
+- 拍摄路径：现有 `Camera` 以连续取流 + 微秒曝光为主，单反还需 Live View 与 still 两条路径
+
+**现状（增益模型审查，2026-08）**
+
+当前统一 Gain 模型**足以覆盖现有天文相机（ToupTek / ZWO / Player One / QHY + 工业 overlay）**，也对**标准数字 ISO 档位**做了预留。单反/无反**不能**只靠补一个 ISO 控件完成，缺口主要在机身协议与 `Camera` 流式假设，而不是再发明一套增益 UI。
+
+已满足、接入时可以直接用：
+
+- `GainControlKind.ISO` + `allowedValues`：1/3 档（100/125/160/200…）与整档（100/200/400…）均可
+- 离散滑条按档位索引，不会把 ISO 当成线性区间拖
+- AE：`current × 2^stops` 吸附到最近合法档；若仍落在当前档则向该方向迈一档，避免小步长卡死
+- 偏好 `gain_value` 存原生 ISO 数字；FITS 在 `kind == ISO` 时只写 `ISOSPEED`，不写天文 `GAIN`
+- 像素格式 / 读出模式切换后可重读能力（Live View vs still、开启扩展 ISO 后列表变化可走同一条同步）
+- `gainWriteInProgress`：PTP 写 ISO 往往慢，忙碌态已有
+- `GainPreset`：可用标签标 Unity 类推荐，或把常用 ISO 做成芯片
+
+接入时仍要补、且**不应假装 Gain 模型已经覆盖**的部分：
+
+- **Auto ISO**：没有自动档语义。`allowedValues` 只有正数；不能用 `0` 或 `min==max` 冒充 AUTO 而不改模型或适配器状态
+- **Hi1 / Hi2 / Lo1 等扩展感光度**：能力值是 `List<Float>`。机内菜单名不是数字。可用「映射到等效 ISO + `GainPreset` 标签」权宜，或日后把离散项升级为「值 + 显示名」
+- **暂时锁定**：`isReadOnly` 目前等于 `min == max`。Live View 锁定 ISO、或 P/S/Auto 挡位不允许改 ISO 时，用户仍应看到完整列表但禁用写入；这需要独立的 `writable`（或适配器在 ViewModel 层传 `enabled=false` 并保留能力）
+- **`Camera` 接口**：`startCapture` / `setExposureTime(us)` / ROI / 像素格式是天文相机流。单反的镜后快门表、B 门、反光板预升、静音快门、静帧 RAW 不是 Gain 问题，但会倒逼接口扩展
+- **双源**：`gainRange` 与 `gainCapability` 并存。ISO 适配器必须同时维护，否则滑条与旧调用会漂
+- **品牌枚举**：`CameraBrand` 仍只有 TOUPCAM / QHY / ZWO / PLAYERONE
+
+**建议**
+
+1. **不要**为单反再做一套增益控件；ISO 走现有 `isoCapability()`。
+2. 立项时先选一台锚点机（原计划 Nikon D5100）打通：枚举 → PTP 连接 → 读 ISO 列表/当前值 → 写入 → Live View 取流 → 单张 RAW/JPEG。
+3. Auto ISO 与 Hi/Lo 作为适配器能力扩展，必要时给 `GainCapability` 增加 `writable` 和可选显示名；不要把 AUTO 写进 FITS `ISOSPEED`。
+4. 曝光（快门档）与光圈是独立控件，不要塞进 Gain。
+5. 本期增益 PR **不包含**本事项；合并 M1–M4 后保持 `[-]` / `[ ]` 即可。
+
+**验收标准（立项后）**
+
+- [ ] 至少一台 Nikon / Canon / Sony 机身能枚举、授权、连接和断开。
+- [ ] 界面 ISO 与机身菜单一致，只出现机身回报的合法档。
+- [ ] Live View 预览可进入现有预览管线（分辨率/格式允许降级）。
+- [ ] 单张拍摄能落到图库；FITS 或 EXIF 含正确 ISO，不写天文 `GAIN` 卡片。
+- [ ] 自动曝光在手动 ISO 下列表上能按档升降；Auto ISO 开启时不误写增益。
+- [ ] 与事项 17 的手机 Camera2 路径互不抢默认相机。
+
+**风险/成本：** 高。PTP 方言、USB 稳定性、Live View 带宽和静帧文件格式都比 ISO 控件重。增益模型本身不是阻塞项。
+
+---
+
 ## P1：性能与架构
 
 ### [x] 7. 拆分过大的 `CameraViewModel`
@@ -769,3 +831,9 @@ flowchart TD
 - 主要产出是社团 Dob push-to（M6），顺序上先做电控自动对齐（M5）作精度真值台
 - 从 M1 起立 `SkyAttitudeSource`：手机 / USB 寻星 / 主相机可插拔升档（L1→L4），兼容与精度并行
 - 功耗架构（方案第 8 节）主要约束 L1/L2，贯穿 M1、M3、M6
+
+### 批次 H：单反 / 无反
+
+- 事项 18：Canon / Nikon / Sony PTP 机身接入，详见 `docs/CAMERA_NATIVE_GAIN_AND_ISO_PLAN.md` §6.5
+- 增益/ISO 控件复用现有统一模型，不另做 UI；阻塞项是 PTP、Live View 与静帧路径
+- 不与事项 17 的手机 Camera2 板解混为同一适配器

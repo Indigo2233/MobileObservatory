@@ -133,6 +133,7 @@ fun CameraScreen(
     val gain by viewModel.gain.collectAsState()
     val gainCapability by viewModel.gainCapability.collectAsState()
     val gainDbEquivalent by viewModel.gainDbEquivalent.collectAsState()
+    val gainWriteInProgress by viewModel.gainWriteInProgress.collectAsState()
     val usbBandwidth by viewModel.usbBandwidth.collectAsState()
     val usbBandwidthRange by viewModel.usbBandwidthRange.collectAsState()
     val pixelFormat by viewModel.pixelFormat.collectAsState()
@@ -725,6 +726,7 @@ fun CameraScreen(
                         exposureUs = exposureUs,
                         gain = gain,
                         gainDbEquivalent = gainDbEquivalent,
+                        gainWriteInProgress = gainWriteInProgress,
                         usbBandwidth = usbBandwidth,
                         usbBandwidthRange = usbBandwidthRange,
                         pixelFormat = pixelFormat,

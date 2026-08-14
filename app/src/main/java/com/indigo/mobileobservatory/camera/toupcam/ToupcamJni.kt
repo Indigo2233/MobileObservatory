@@ -22,7 +22,6 @@ object ToupcamJni {
     const val OPTION_CG = 0x19
     const val OPTION_LOW_NOISE = 0x38
     const val OPTION_FLUSH = 0x3f
-    const val OPTION_BANDWIDTH = 0x2e
 
     const val PIXELFORMAT_RAW8 = 0x00
     const val PIXELFORMAT_RAW10 = 0x01

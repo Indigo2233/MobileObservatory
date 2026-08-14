@@ -144,6 +144,8 @@
     <!-- Gain control -->
     <string name="gain">Gain</string>
     <string name="gain_format">%.0f</string>
+    <string name="gain_vendor_native_hint">Vendor native gain</string>
+    <string name="gain_input_invalid">Enter a valid number</string>
     <string name="usb_bandwidth">USB bandwidth</string>
     <string name="usb_bandwidth_hint">Watch frame rate and stream stability; values vary by camera SDK.</string>
 
@@ -332,7 +334,6 @@
     <string name="point_number">Point %d</string>
     <string name="elapsed_seconds">Elapsed: %.1f s</string>
     <string name="guide_exposure_seconds">Exposure %.1f s</string>
-    <string name="guide_gain_db">Gain %.0f</string>
     <string name="detected_stars">Detected stars: %d</string>
     <string name="guide_rates">RA %1$.2f px/s  DEC %2$.2f px/s</string>
     <string name="guide_correction">dx %1$.2f  dy %2$.2f  RA %3$d ms  DEC %4$d ms</string>

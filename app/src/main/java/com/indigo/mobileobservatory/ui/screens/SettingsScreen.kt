@@ -161,6 +161,7 @@ private fun CameraSettingsPage(viewModel: CameraViewModel) = SettingsPage {
     val cameraInfo = (connection as? ConnectionState.Connected)?.info
     var defaults by remember(cameraInfo?.serialNumber) { mutableStateOf<CameraDefaults?>(null) }
     var gainText by remember(cameraInfo?.serialNumber) { mutableStateOf("") }
+    var gainInputInvalid by remember(cameraInfo?.serialNumber) { mutableStateOf(false) }
     var offsetText by remember(cameraInfo?.serialNumber) { mutableStateOf("") }
     var nativeReadoutModeId by remember(cameraInfo?.serialNumber) { mutableStateOf<String?>(null) }
 
@@ -207,7 +208,10 @@ private fun CameraSettingsPage(viewModel: CameraViewModel) = SettingsPage {
     }
     OutlinedTextField(
         value = gainText,
-        onValueChange = { gainText = it },
+        onValueChange = {
+            gainText = it
+            gainInputInvalid = false
+        },
         label = {
             val capability = gainCapability
             val label = capability?.label ?: stringResource(R.string.default_gain)
@@ -220,6 +224,7 @@ private fun CameraSettingsPage(viewModel: CameraViewModel) = SettingsPage {
             }
         },
         singleLine = true,
+        isError = gainInputInvalid,
         modifier = Modifier.fillMaxWidth()
     )
     Text(stringResource(R.string.default_pixel_format), style = MaterialTheme.typography.titleSmall)
@@ -245,6 +250,10 @@ private fun CameraSettingsPage(viewModel: CameraViewModel) = SettingsPage {
         Text(stringResource(R.string.offset_unavailable), color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     Button(onClick = {
+        if (gainText.isNotBlank() && gainText.toFloatOrNull() == null) {
+            gainInputInvalid = true
+            return@Button
+        }
         val normalizedGain = gainText.toFloatOrNull()?.let { value ->
             gainCapability?.let { capability -> GainValueNormalizer.normalize(capability, value) } ?: value
         }
@@ -253,9 +262,10 @@ private fun CameraSettingsPage(viewModel: CameraViewModel) = SettingsPage {
             offset = offsetText.toFloatOrNull(),
             nativeReadoutModeId = nativeReadoutModeId
         )
-        val savedDefaults = viewModel.saveCameraDefaults(updatedDefaults) ?: updatedDefaults
-        defaults = savedDefaults
-        gainText = savedDefaults.gain?.toString().orEmpty()
+        viewModel.saveCameraDefaults(updatedDefaults) { savedDefaults ->
+            defaults = savedDefaults
+            gainText = savedDefaults.gain?.toString().orEmpty()
+        }
     }) { Text(stringResource(R.string.device_settings_apply)) }
 }
 

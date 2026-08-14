@@ -53,20 +53,8 @@ interface Camera {
      * Adapters with an undocumented gain-to-exposure response should override this
      * method to return the current value until their mapping is validated.
      */
-    fun adjustGainForExposure(stops: Float): Float {
-        val capability = gainCapability
-        val step = capability.step.takeIf { it > 0f } ?: 1f
-        val multiplier = when {
-            stops >= 0.5f -> 10f
-            stops >= 0.25f -> 5f
-            stops > 0f -> 1f
-            stops <= -0.5f -> -10f
-            stops <= -0.25f -> -5f
-            stops < 0f -> -1f
-            else -> 0f
-        }
-        return GainValueNormalizer.normalize(capability, currentGain + step * multiplier)
-    }
+    fun adjustGainForExposure(stops: Float): Float =
+        GainValueNormalizer.adjustForExposureStops(gainCapability, currentGain, stops)
     fun setPixelFormat(format: PixelFormat)
     fun setReadoutMode(mode: ReadoutMode) {}
     fun setRoi(roi: Roi)
