@@ -1,6 +1,7 @@
 package com.indigo.mobileobservatory.recording
 
 import com.indigo.mobileobservatory.camera.FrameData
+import com.indigo.mobileobservatory.camera.GainControlKind
 import com.indigo.mobileobservatory.camera.PixelFormat
 import java.io.File
 import java.io.FileOutputStream
@@ -22,6 +23,10 @@ class FITSWriter {
         frame: FrameData,
         exposureSeconds: Float,
         gain: Float,
+        gainKind: GainControlKind = GainControlKind.NATIVE_GAIN,
+        gainLabel: String = "Gain",
+        gainUnit: String? = null,
+        gainDbEquivalent: Float? = null,
         cameraName: String? = null,
         filterName: String? = null,
         configuredFormat: PixelFormat? = null,
@@ -52,7 +57,15 @@ class FITSWriter {
             cards.add(fitsCard("BSCALE", "1", "default scaling"))
         }
         cards.add(fitsCard("EXPOSURE", "%.6f".format(exposureSeconds), "exposure time in seconds"))
-        cards.add(fitsCard("GAIN", "%.2f".format(gain), "gain in dB"))
+        val gainComment = listOfNotNull(gainLabel, gainUnit?.takeIf { it.isNotBlank() })
+            .joinToString(" ") + " native value"
+        cards.add(fitsCard("GAIN", "%.2f".format(gain), gainComment))
+        gainDbEquivalent?.let { db ->
+            cards.add(fitsCard("GAINDB", "%.2f".format(db), "gain equivalent in dB"))
+        }
+        if (gainKind == GainControlKind.ISO) {
+            cards.add(fitsCard("ISOSPEED", gain.toInt().toString(), "camera ISO speed"))
+        }
         cards.add(fitsCard("DATE-OBS", "'$dateObs'", "observation date"))
         cards.add(fitsCard("INSTRUME", "'${cameraName ?: "Camera"}'", "instrument"))
         if (pixelSizeUm != null && pixelSizeUm > 0f) {

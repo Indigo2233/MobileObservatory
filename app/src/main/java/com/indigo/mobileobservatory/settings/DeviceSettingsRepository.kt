@@ -37,8 +37,8 @@ class DeviceSettingsRepository(context: Context) {
             readoutMode = preferences.getString("${prefix}readout", null)
                 ?.let { value -> ReadoutMode.entries.firstOrNull { it.name == value } },
             nativeReadoutModeId = preferences.getString("${prefix}native_readout", null),
-            gain = preferences.takeIf { it.contains("${prefix}gain") }
-                ?.getFloat("${prefix}gain", 0f),
+            gain = preferences.takeIf { it.contains("${prefix}gain_value") }
+                ?.getFloat("${prefix}gain_value", 0f),
             offset = preferences.takeIf { it.contains("${prefix}offset") }
                 ?.getFloat("${prefix}offset", 0f),
             pixelFormat = preferences.getString("${prefix}pixel_format", null)
@@ -52,8 +52,20 @@ class DeviceSettingsRepository(context: Context) {
             .putString("${prefix}readout", settings.readoutMode?.name)
             .putString("${prefix}native_readout", settings.nativeReadoutModeId)
             .putString("${prefix}pixel_format", settings.pixelFormat?.name)
-            .applyNullableFloat("${prefix}gain", settings.gain)
+            .applyNullableFloat("${prefix}gain_value", settings.gain)
+            .remove("${prefix}gain")
             .applyNullableFloat("${prefix}offset", settings.offset)
+            .apply()
+    }
+
+    fun cameraUsbBandwidth(deviceId: String, pixelFormat: PixelFormat): Int? {
+        val key = "${prefix(CAMERA, deviceId)}usb_bandwidth_${pixelFormat.name}"
+        return preferences.takeIf { it.contains(key) }?.getInt(key, 0)
+    }
+
+    fun saveCameraUsbBandwidth(deviceId: String, pixelFormat: PixelFormat, value: Int) {
+        preferences.edit()
+            .putInt("${prefix(CAMERA, deviceId)}usb_bandwidth_${pixelFormat.name}", value)
             .apply()
     }
 

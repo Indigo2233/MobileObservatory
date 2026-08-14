@@ -11,7 +11,8 @@ import kotlin.math.log10
 import kotlin.math.pow
 import kotlin.math.roundToInt
 
-class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingCapable {
+class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingCapable,
+    CameraUsbBandwidthCapable {
 
     companion object {
         private const val TAG = "ToupcamCamera"
@@ -35,7 +36,15 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
     override var exposureRange: FloatRange = FloatRange(100f, 1_000_000f, 10_000f)
         private set
 
-    override var gainRange: FloatRange = FloatRange(0f, 24f, 0f)
+    override var gainRange: FloatRange = FloatRange(100f, 100f, 100f)
+        private set
+
+    override var gainCapability = GainCapability(
+        min = 100f,
+        max = 100f,
+        defaultValue = 100f,
+        unit = "%"
+    )
         private set
 
     override var currentExposureUs: Float = 10_000f
@@ -55,6 +64,12 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
     override val offsetStep: Float = 1f
 
     override var currentOffset: Float = 0f
+        private set
+
+    override var usbBandwidthRange: IntRange? = null
+        private set
+
+    override var currentUsbBandwidth: Int? = null
         private set
 
     override var currentPixelFormat: PixelFormat = PixelFormat.MONO8
@@ -187,6 +202,7 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
             readExposureRange()
             readGainRange()
             readOffsetRange()
+            initUsbBandwidth()
             try { initCooling() } catch (e: Exception) {
                 Log.w(TAG, "initCooling failed: ${e.message}")
             }
@@ -290,13 +306,44 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
         }
     }
 
-    override fun setGain(db: Float) {
-        val clamped = db.coerceIn(gainRange.min, gainRange.max)
-        val pct = (10.0.pow(clamped / 20.0) * 100.0).toInt().coerceAtLeast(100)
-        if (ToupcamJni.putExpoAGain(pct)) {
-            currentGain = clamped
+    override fun setGain(value: Float) {
+        val gain = GainValueNormalizer.normalize(gainCapability, value).roundToInt()
+        if (ToupcamJni.putExpoAGain(gain)) {
+            currentGain = GainValueNormalizer.normalize(gainCapability, ToupcamJni.getExpoAGain().toFloat())
         }
     }
+
+    override fun setUsbBandwidth(value: Int): Boolean {
+        val range = usbBandwidthRange ?: return false
+        val target = value.coerceIn(range.first, range.last)
+        if (!ToupcamJni.putOption(ToupcamJni.OPTION_BANDWIDTH, target)) {
+            Log.w(TAG, "Set USB bandwidth failed: target=$target")
+            return false
+        }
+        currentUsbBandwidth = ToupcamJni.getOption(ToupcamJni.OPTION_BANDWIDTH)
+            .takeIf { it in range } ?: target
+        Log.i(TAG, "USB bandwidth set: requested=$target current=$currentUsbBandwidth")
+        return true
+    }
+
+    private fun initUsbBandwidth() {
+        val current = runCatching { ToupcamJni.getOption(ToupcamJni.OPTION_BANDWIDTH) }
+            .getOrNull()
+        if (current == null || current !in 1..100) {
+            usbBandwidthRange = null
+            currentUsbBandwidth = null
+            return
+        }
+        usbBandwidthRange = 1..100
+        currentUsbBandwidth = current
+        Log.i(TAG, "USB bandwidth range=1..100 current=$current")
+    }
+
+    override fun gainDbEquivalent(value: Float): Float? =
+        (20.0 * log10(GainValueNormalizer.normalize(gainCapability, value) / 100.0)).toFloat()
+
+    override fun adjustGainForExposure(stops: Float): Float =
+        GainValueNormalizer.normalize(gainCapability, (currentGain * 2.0.pow(stops.toDouble())).toFloat())
 
     override fun setOffset(value: Float) {
         if (!offsetSupported) return
@@ -602,11 +649,16 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
             val minPct = range[0].toFloat()
             val maxPct = range[1].toFloat()
             val curPct = ToupcamJni.getExpoAGain().toFloat()
-            val minDb = (20.0 * log10(minPct / 100.0)).toFloat()
-            val maxDb = (20.0 * log10(maxPct / 100.0)).toFloat()
-            val curDb = (20.0 * log10(curPct / 100.0)).toFloat()
-            gainRange = FloatRange(minDb, maxDb, curDb)
-            currentGain = curDb
+            val defaultPct = range.getOrNull(2)?.toFloat()?.coerceIn(minPct, maxPct) ?: curPct
+            gainRange = FloatRange(minPct, maxPct, curPct)
+            gainCapability = GainCapability(
+                min = minPct,
+                max = maxPct,
+                step = 1f,
+                defaultValue = defaultPct,
+                unit = "%"
+            )
+            currentGain = GainValueNormalizer.normalize(gainCapability, curPct)
         } catch (e: Exception) {
             Log.w(TAG, "readGainRange: ${e.message}")
         }

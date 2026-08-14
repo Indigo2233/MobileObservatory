@@ -41,6 +41,9 @@ import kotlinx.coroutines.flow.StateFlow
 fun ControlPanel(
     exposureUs: Float,
     gain: Float,
+    gainDbEquivalent: Float?,
+    usbBandwidth: Int?,
+    usbBandwidthRange: IntRange?,
     pixelFormat: PixelFormat,
     supportedPixelFormats: List<PixelFormat>,
     roi: Roi,
@@ -56,7 +59,7 @@ fun ControlPanel(
     longExposureEnabled: Boolean,
     exposureMinFlow: StateFlow<Float>,
     exposureMaxFlow: StateFlow<Float>,
-    gainMax: Float = 24f,
+    gainCapability: GainCapability,
     longExposureProgress: String,
     // Device section params
     cameraInfo: CameraInfo?,
@@ -91,6 +94,7 @@ fun ControlPanel(
     detectedBitDepth: Int,
     onExposureChange: (Float) -> Unit,
     onGainChange: (Float) -> Unit,
+    onUsbBandwidthChange: (Int) -> Unit,
     onPixelFormatChange: (PixelFormat) -> Unit,
     readoutMode: ReadoutMode = ReadoutMode.NORMAL,
     supportedReadoutModes: List<ReadoutMode> = listOf(ReadoutMode.NORMAL),
@@ -945,10 +949,12 @@ fun ControlPanel(
                     }
                 }
 
-                GainSlider(
+                GainControl(
+                    capability = gainCapability,
                     gain = gain,
-                    maxGain = gainMax,
-                    onGainChange = onGainChange
+                    onGainChange = onGainChange,
+                    enabled = autoExposureMode == AutoExposureMode.OFF,
+                    gainDbEquivalent = gainDbEquivalent
                 )
 
                 Row(
@@ -976,6 +982,56 @@ fun ControlPanel(
                                 modifier = Modifier.height(28.dp)
                             )
                         }
+                    }
+                }
+
+                if (usbBandwidth != null && usbBandwidthRange != null &&
+                    usbBandwidthRange.first < usbBandwidthRange.last
+                ) {
+                    var pendingUsbBandwidth by remember(usbBandwidth, usbBandwidthRange) {
+                        mutableFloatStateOf(
+                            usbBandwidth.coerceIn(
+                                usbBandwidthRange.first,
+                                usbBandwidthRange.last
+                            ).toFloat()
+                        )
+                    }
+                    Column {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                stringResource(R.string.usb_bandwidth),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                pendingUsbBandwidth.toInt().toString(),
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        Slider(
+                            value = pendingUsbBandwidth,
+                            onValueChange = {
+                                pendingUsbBandwidth = kotlin.math.round(it)
+                            },
+                            onValueChangeFinished = {
+                                onUsbBandwidthChange(pendingUsbBandwidth.toInt())
+                            },
+                            valueRange = usbBandwidthRange.first.toFloat()..usbBandwidthRange.last.toFloat(),
+                            steps = (usbBandwidthRange.last - usbBandwidthRange.first - 1)
+                                .coerceIn(0, 100),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Text(
+                            stringResource(R.string.usb_bandwidth_hint),
+                            fontSize = 9.sp,
+                            color = MaterialTheme.colorScheme.outline
+                        )
                     }
                 }
 

@@ -3,12 +3,16 @@ package com.indigo.mobileobservatory.camera.playerone
 import com.indigo.mobileobservatory.camera.Camera
 import com.indigo.mobileobservatory.camera.CameraInfo
 import com.indigo.mobileobservatory.camera.CameraOffsetCapable
+import com.indigo.mobileobservatory.camera.CameraUsbBandwidthCapable
 import com.indigo.mobileobservatory.camera.CoolingCapable
 import com.indigo.mobileobservatory.camera.CoolingInfo
 import com.indigo.mobileobservatory.camera.CropInfo
 import com.indigo.mobileobservatory.camera.FloatRange
 import com.indigo.mobileobservatory.camera.FrameCallback
 import com.indigo.mobileobservatory.camera.FrameData
+import com.indigo.mobileobservatory.camera.GainCapability
+import com.indigo.mobileobservatory.camera.GainPreset
+import com.indigo.mobileobservatory.camera.GainValueNormalizer
 import com.indigo.mobileobservatory.camera.PixelFormat
 import com.indigo.mobileobservatory.camera.ReadoutMode
 import com.indigo.mobileobservatory.camera.ReusableByteArrayPool
@@ -33,7 +37,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToInt
 
-class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable {
+class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBandwidthCapable {
 
     companion object {
         private const val TAG = "PlayerOneCam"
@@ -74,6 +78,7 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable {
     override var cameraInfo: CameraInfo? = null; private set
     override var exposureRange: FloatRange = FloatRange(32f, 2_000_000_000f, 10_000f); private set
     override var gainRange: FloatRange = FloatRange(0f, 50f, 0f); private set
+    override var gainCapability = GainCapability(min = 0f, max = 500f, defaultValue = 0f); private set
     override var currentExposureUs: Float = 10_000f; private set
     override var currentGain: Float = 0f; private set
     override var offsetSupported: Boolean = false; private set
@@ -81,6 +86,8 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable {
     override var offsetRange: FloatRange = FloatRange(0f, 0f, 0f); private set
     override val offsetStep: Float = 1f
     override var currentOffset: Float = 0f; private set
+    override var usbBandwidthRange: IntRange? = null; private set
+    override var currentUsbBandwidth: Int? = null; private set
     override var currentPixelFormat: PixelFormat = PixelFormat.MONO8; private set
     override var supportedPixelFormats: List<PixelFormat> = listOf(PixelFormat.MONO8); private set
     override var currentReadoutMode: ReadoutMode = ReadoutMode.NORMAL; private set
@@ -333,18 +340,26 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable {
         }
     }
 
-    override fun setGain(db: Float) {
+    override fun setGain(value: Float) {
         val cam = poa ?: return
         if (disconnected) return
-        val clamped = db.coerceIn(gainRange.min, gainRange.max)
-        val gain = PoaMapping.dbToGain(clamped)
+        val gain = GainValueNormalizer.normalize(gainCapability, value).roundToInt()
         try {
             cam.setConfig(PoaConfig.GAIN, ConfigValue.ofInteger(gain.toLong()), false)
-            currentGain = PoaMapping.gainToDb(gain)
+            currentGain = GainValueNormalizer.normalize(
+                gainCapability,
+                cam.getConfig(PoaConfig.GAIN).value.asInteger().toFloat()
+            )
         } catch (e: PoaException) {
             FileLogger.w(TAG, "setGain ${e.error}: ${e.message}")
         }
     }
+
+    override fun gainDbEquivalent(value: Float): Float? =
+        GainValueNormalizer.normalize(gainCapability, value) * 0.1f
+
+    override fun adjustGainForExposure(stops: Float): Float =
+        GainValueNormalizer.normalize(gainCapability, currentGain + stops * 60.206f)
 
     override fun setOffset(value: Float) {
         val cam = poa ?: return
@@ -421,7 +436,7 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable {
             FileLogger.i(
                 TAG,
                 "SensorMode -> $mode (index=$index), restored exposure=${currentExposureUs.toInt()}us " +
-                    "gain=${currentGain}dB offset=$currentOffset format=$currentPoaFormat"
+                    "gain=$currentGain native offset=$currentOffset format=$currentPoaFormat"
             )
         } catch (e: PoaException) {
             FileLogger.w(TAG, "setSensorMode ${e.error}: ${e.message}")
@@ -781,12 +796,14 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable {
     private fun readGainRange(cam: PoaCamera) {
         try {
             val attrs = cam.getConfigAttributes(PoaConfig.GAIN)
-            val minDb = PoaMapping.gainToDb(attrs.minimum.asInteger().toInt())
-            val maxDb = PoaMapping.gainToDb(attrs.maximum.asInteger().toInt())
-            val defDb = PoaMapping.gainToDb(attrs.defaultValue.asInteger().toInt()).coerceIn(minDb, maxDb)
-            gainRange = FloatRange(minDb, maxDb, defDb)
-            currentGain = defDb
-            FileLogger.i(TAG, "Gain ${minDb}-${maxDb} dB (1 gain = 0.1 dB)")
+            val minGain = attrs.minimum.asInteger().toInt().toFloat()
+            val maxGain = attrs.maximum.asInteger().toInt().toFloat()
+            val defaultGain = attrs.defaultValue.asInteger().toInt().toFloat().coerceIn(minGain, maxGain)
+            val currentGain = cam.getConfig(PoaConfig.GAIN).value.asInteger().toFloat().coerceIn(minGain, maxGain)
+            gainRange = FloatRange(minGain, maxGain, currentGain)
+            gainCapability = GainCapability(min = minGain, max = maxGain, step = 1f, defaultValue = defaultGain)
+            this.currentGain = GainValueNormalizer.normalize(gainCapability, currentGain)
+            FileLogger.i(TAG, "Gain $minGain-$maxGain native (current=${this.currentGain}, 1 gain = 0.1 dB)")
         } catch (e: PoaException) {
             FileLogger.w(TAG, "GAIN attrs ${e.error}")
         }
@@ -840,21 +857,43 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable {
     }
 
     private fun configureUsb3Transport(cam: PoaCamera, usb3Speed: Boolean) {
-        if (!usb3Speed) return
         try {
             val attrs = cam.getConfigAttributes(PoaConfig.USB_BANDWIDTH_LIMIT)
-            if (attrs.isWritable && attrs.isReadable) {
-                val requested = attrs.maximum.asInteger()
-                cam.setConfig(
-                    PoaConfig.USB_BANDWIDTH_LIMIT,
-                    ConfigValue.ofInteger(requested),
-                    false
-                )
+            if (!attrs.isWritable || !attrs.isReadable) {
+                usbBandwidthRange = null
+                currentUsbBandwidth = null
+            } else {
+                val min = attrs.minimum.asInteger().toInt()
+                val max = attrs.maximum.asInteger().toInt()
+                if (min <= max) {
+                    usbBandwidthRange = min..max
+                    currentUsbBandwidth = cam.getConfig(PoaConfig.USB_BANDWIDTH_LIMIT)
+                        .value.asInteger().toInt().coerceIn(min, max)
+                    if (usb3Speed) setUsbBandwidth(max)
+                }
             }
         } catch (e: PoaException) {
+            usbBandwidthRange = null
+            currentUsbBandwidth = null
             FileLogger.w(TAG, "USB bandwidth configuration failed: ${e.error}")
         }
         configureUnlimitedFrameRate(cam)
+    }
+
+    override fun setUsbBandwidth(value: Int): Boolean {
+        val cam = poa ?: return false
+        val range = usbBandwidthRange ?: return false
+        val target = value.coerceIn(range.first, range.last)
+        return try {
+            cam.setConfig(PoaConfig.USB_BANDWIDTH_LIMIT, ConfigValue.ofInteger(target.toLong()), false)
+            currentUsbBandwidth = cam.getConfig(PoaConfig.USB_BANDWIDTH_LIMIT)
+                .value.asInteger().toInt().coerceIn(range.first, range.last)
+            FileLogger.i(TAG, "USB bandwidth set: requested=$target current=$currentUsbBandwidth")
+            true
+        } catch (e: PoaException) {
+            FileLogger.w(TAG, "Set USB bandwidth failed: ${e.error}")
+            false
+        }
     }
 
     private fun configureUnlimitedFrameRate(cam: PoaCamera) {
@@ -888,9 +927,10 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable {
             FileLogger.w(TAG, "read exposure after sensor mode ${e.error}")
         }
         try {
-            currentGain = PoaMapping.gainToDb(
-                cam.getConfig(PoaConfig.GAIN).value.asInteger().toInt()
-            ).coerceIn(gainRange.min, gainRange.max)
+            currentGain = GainValueNormalizer.normalize(
+                gainCapability,
+                cam.getConfig(PoaConfig.GAIN).value.asInteger().toFloat()
+            )
         } catch (e: PoaException) {
             FileLogger.w(TAG, "read gain after sensor mode ${e.error}")
         }
@@ -949,6 +989,14 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable {
         try {
             val preset = cam.gainsAndOffsets
             gainOffsetPreset = preset
+            gainCapability = gainCapability.copy(
+                presets = listOf(
+                    GainPreset(preset.gainHighestDynamicRange.toFloat(), "HDR"),
+                    GainPreset(preset.highConversionGain.toFloat(), "HCG"),
+                    GainPreset(preset.unityGain.toFloat(), "Unity"),
+                    GainPreset(preset.gainLowestReadNoise.toFloat(), "Lowest noise")
+                )
+            )
             FileLogger.i(
                 TAG,
                 "Gain presets: HDR=${preset.gainHighestDynamicRange} HCG=${preset.highConversionGain} " +

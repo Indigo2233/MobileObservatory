@@ -56,5 +56,22 @@ class StarCoordinateUndistorterTest {
         assertEquals(distorted.y, result.stars.single().y)
     }
 
+    @Test
+    fun mapsCalibrationThroughCenteredAspectCropBeforeUndistorting() {
+        // 4:3 sensor crop delivered as a centred 16:9 stream. The star is distorted in the
+        // original pre-correction coordinate system, then expressed in the 16:9 frame.
+        val idealY = 350.0
+        val normalizedY = (idealY - calibration.principalY) / calibration.focalY
+        val radial = 1.0 + calibration.radialK1 * normalizedY * normalizedY +
+            calibration.radialK2 * normalizedY * normalizedY * normalizedY * normalizedY
+        val distortedSensorY = calibration.principalY + normalizedY * radial * calibration.focalY
+        val frameY = (distortedSensorY - 187.5).toFloat()
+        val result = StarCoordinateUndistorter.correct(
+            StarExtractionResult(listOf(star(1_000f, frameY)), 32, 5f, null, 10f, 1f), calibration,
+            0, 0, 2_000, 1_500, 2_000, 1_125, alreadyCorrectedByCamera = false
+        )
+        assertEquals(idealY - 187.5, result.stars.single().y.toDouble(), 0.5)
+    }
+
     private fun star(x: Float, y: Float) = ExtractedStar(x, y, 100f, 50f, 20f, 10f)
 }

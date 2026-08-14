@@ -77,10 +77,12 @@ import com.indigo.mobileobservatory.pointing.PhoneSkySolveStage
 import com.indigo.mobileobservatory.pointing.PushToGuidance
 import com.indigo.mobileobservatory.pointing.SkyAttitudeFix
 import com.indigo.mobileobservatory.pointing.StarExtractionResult
+import com.indigo.mobileobservatory.pointing.WideFieldSolveResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.Instant
+import java.util.Locale
 
 private val NightBlack = Color(0xFF050505)
 private val NightRed = Color(0xFFFF8A80)
@@ -111,6 +113,7 @@ fun PushToScreen(
     var status by remember { mutableStateOf("") }
     var capturedFrame by remember { mutableStateOf<FrameData?>(null) }
     var extraction by remember { mutableStateOf<StarExtractionResult?>(null) }
+    var skySolution by remember { mutableStateOf<WideFieldSolveResult?>(null) }
     var eyepieceFov by remember { mutableFloatStateOf(1.5f) }
     var previousProximity by remember { mutableStateOf<GuidanceProximity?>(null) }
     val targetName = initialTargetName ?: "M42 · Orion Nebula"
@@ -272,7 +275,7 @@ fun PushToScreen(
             WorkflowStrip(
                 targetReady = targetHorizontal != null,
                 cameraReady = selectedCamera != null,
-                solved = source.plateSolved
+                solved = source.plateSolved || skySolution?.success == true
             )
 
             if (source.plateSolved && site != null) {
@@ -338,6 +341,33 @@ fun PushToScreen(
                         color = Color(0xFFFFCCBC),
                         style = MaterialTheme.typography.bodyMedium
                     )
+                    skySolution?.takeIf { it.success }?.let { solution ->
+                        Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF10201D))) {
+                            Text(
+                                "Sky solution: RA ${solution.raDeg?.let { value -> String.format(Locale.US, "%.4f°", value) } ?: "?"}, " +
+                                    "Dec ${solution.decDeg?.let { value -> String.format(Locale.US, "%.4f°", value) } ?: "?"}",
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                color = Color(0xFFB2DFDB),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Text(
+                                "Rotation ${solution.rotationDeg?.let { value -> String.format(Locale.US, "%.2f°", value) } ?: "?"}; " +
+                                    "FOV ${solution.fovWidthDeg?.let { value -> String.format(Locale.US, "%.2f°", value) } ?: "?"} × " +
+                                    "${solution.fovHeightDeg?.let { value -> String.format(Locale.US, "%.2f°", value) } ?: "?"}",
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 2.dp),
+                                color = Color(0xFFB2DFDB),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            if (!source.plateSolved) {
+                                Text(
+                                    "Photographic solve completed; live push-to requires a rotation-vector sensor sample.",
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    color = Color(0xFFFFCC80),
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            }
+                        }
+                    }
                     capturedFrame?.let { frame ->
                         Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF120909))) {
                             PhoneSkyPreview(frame, extraction, Modifier.padding(4.dp))
@@ -459,8 +489,9 @@ fun PushToScreen(
                                     )
                                 }
                             )
-                            capturedFrame = result.frame ?: capturedFrame
-                            extraction = result.extraction ?: extraction
+                        capturedFrame = result.frame ?: capturedFrame
+                        extraction = result.extraction ?: extraction
+                        skySolution = result.skySolution
                             status = if (result.success) {
                                 context.getString(
                                     R.string.push_to_solve_success,

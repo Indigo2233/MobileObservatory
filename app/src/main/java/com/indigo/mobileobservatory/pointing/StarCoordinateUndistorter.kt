@@ -54,13 +54,28 @@ object StarCoordinateUndistorter {
 
     private fun CameraLensCalibration.scaleToCrop(
         cropLeft: Int, cropTop: Int, cropWidth: Int, cropHeight: Int, frameWidth: Int, frameHeight: Int
-    ) = copy(
-        focalX = focalX * frameWidth / cropWidth,
-        focalY = focalY * frameHeight / cropHeight,
-        principalX = (principalX - cropLeft) * frameWidth / cropWidth,
-        principalY = (principalY - cropTop) * frameHeight / cropHeight,
-        skew = skew * frameWidth / cropWidth
-    )
+    ): CameraLensCalibration {
+        // Processed streams may crop the sensor centre to match their requested aspect ratio.
+        // Apply that content rectangle before mapping the pre-correction calibration to frame pixels.
+        val cropAspect = cropWidth.toDouble() / cropHeight
+        val frameAspect = frameWidth.toDouble() / frameHeight
+        val (usedWidth, usedHeight) = if (frameAspect > cropAspect) {
+            cropWidth.toDouble() to cropWidth / frameAspect
+        } else {
+            cropHeight * frameAspect to cropHeight.toDouble()
+        }
+        val contentLeft = cropLeft + (cropWidth - usedWidth) / 2.0
+        val contentTop = cropTop + (cropHeight - usedHeight) / 2.0
+        val scaleX = frameWidth / usedWidth
+        val scaleY = frameHeight / usedHeight
+        return copy(
+            focalX = focalX * scaleX,
+            focalY = focalY * scaleY,
+            principalX = (principalX - contentLeft) * scaleX,
+            principalY = (principalY - contentTop) * scaleY,
+            skew = skew * scaleX
+        )
+    }
 
     private fun ExtractedStar.copyPosition(calibration: CameraLensCalibration): ExtractedStar {
         // Convert distorted pixel coordinates to normalized camera coordinates, then iteratively

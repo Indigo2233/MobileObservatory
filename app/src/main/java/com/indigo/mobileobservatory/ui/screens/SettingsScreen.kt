@@ -45,6 +45,7 @@ import androidx.core.content.FileProvider
 import com.indigo.mobileobservatory.BuildConfig
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.camera.ConnectionState
+import com.indigo.mobileobservatory.camera.GainValueNormalizer
 import com.indigo.mobileobservatory.camera.PixelFormat
 import com.indigo.mobileobservatory.camera.ReadoutMode
 import com.indigo.mobileobservatory.settings.CameraDefaults
@@ -148,6 +149,7 @@ private fun CameraSettingsPage(viewModel: CameraViewModel) = SettingsPage {
     val supportedReadoutModes by viewModel.supportedReadoutModes.collectAsState()
     val supportedPixelFormats by viewModel.supportedPixelFormats.collectAsState()
     val gain by viewModel.gain.collectAsState()
+    val gainCapability by viewModel.gainCapability.collectAsState()
     val currentReadoutMode by viewModel.readoutMode.collectAsState()
     val currentPixelFormat by viewModel.pixelFormat.collectAsState()
     val offset by viewModel.offset.collectAsState()
@@ -206,7 +208,17 @@ private fun CameraSettingsPage(viewModel: CameraViewModel) = SettingsPage {
     OutlinedTextField(
         value = gainText,
         onValueChange = { gainText = it },
-        label = { Text(stringResource(R.string.default_gain)) },
+        label = {
+            val capability = gainCapability
+            val label = capability?.label ?: stringResource(R.string.default_gain)
+            val unit = capability?.unit?.let { " $it" }.orEmpty()
+            Text("$label$unit")
+        },
+        supportingText = {
+            gainCapability?.let { capability ->
+                Text("${capability.min}–${capability.max}, step ${capability.step}")
+            }
+        },
         singleLine = true,
         modifier = Modifier.fillMaxWidth()
     )
@@ -233,13 +245,17 @@ private fun CameraSettingsPage(viewModel: CameraViewModel) = SettingsPage {
         Text(stringResource(R.string.offset_unavailable), color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     Button(onClick = {
-        viewModel.saveCameraDefaults(
-            (defaults ?: CameraDefaults()).copy(
-                gain = gainText.toFloatOrNull(),
-                offset = offsetText.toFloatOrNull(),
-                nativeReadoutModeId = nativeReadoutModeId
-            )
+        val normalizedGain = gainText.toFloatOrNull()?.let { value ->
+            gainCapability?.let { capability -> GainValueNormalizer.normalize(capability, value) } ?: value
+        }
+        val updatedDefaults = (defaults ?: CameraDefaults()).copy(
+            gain = normalizedGain,
+            offset = offsetText.toFloatOrNull(),
+            nativeReadoutModeId = nativeReadoutModeId
         )
+        val savedDefaults = viewModel.saveCameraDefaults(updatedDefaults) ?: updatedDefaults
+        defaults = savedDefaults
+        gainText = savedDefaults.gain?.toString().orEmpty()
     }) { Text(stringResource(R.string.device_settings_apply)) }
 }
 

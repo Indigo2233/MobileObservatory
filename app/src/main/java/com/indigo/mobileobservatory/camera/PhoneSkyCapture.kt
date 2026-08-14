@@ -280,25 +280,39 @@ class PhoneSkyCapture(private val context: Context) {
         val active = capability.activeArraySize
         val preCorrection = capability.preCorrectionActiveArraySize
         val postCrop = lensResult?.get(CaptureResult.SCALER_CROP_REGION) ?: active
-        val rawCrop = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        val rawCrop = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             lensResult?.get(CaptureResult.SCALER_RAW_CROP_REGION)
+        } else null
+        val correctionMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            lensResult?.get(CaptureResult.DISTORTION_CORRECTION_MODE)
         } else null
         val domain = when {
             usedRaw && preCorrection != null && rawCrop != null -> LensCalibrationCoordinateDomain.PRE_CORRECTION
+            preCorrection != null && correctionMode == CaptureRequest.DISTORTION_CORRECTION_MODE_OFF ->
+                LensCalibrationCoordinateDomain.PRE_CORRECTION
+            correctionMode == CaptureRequest.DISTORTION_CORRECTION_MODE_FAST ||
+                correctionMode == CaptureRequest.DISTORTION_CORRECTION_MODE_HIGH_QUALITY ->
+                LensCalibrationCoordinateDomain.POST_CORRECTION
             else -> LensCalibrationCoordinateDomain.UNKNOWN
         }
         val crop = when (domain) {
-            LensCalibrationCoordinateDomain.PRE_CORRECTION -> rawCrop
+            LensCalibrationCoordinateDomain.PRE_CORRECTION -> rawCrop ?: postCrop
             else -> postCrop
+        }
+        val coordinateArray = when (domain) {
+            LensCalibrationCoordinateDomain.PRE_CORRECTION -> preCorrection
+            LensCalibrationCoordinateDomain.POST_CORRECTION, LensCalibrationCoordinateDomain.UNKNOWN -> active
         }
         val focal = lensResult?.get(CaptureResult.LENS_FOCAL_LENGTH)?.toDouble()
             ?: capability.focalLengthMm?.toDouble()
-        val fov = if (lensResult != null && active != null && crop != null && focal != null) {
+        val fov = if (lensResult != null && coordinateArray != null && crop != null && focal != null &&
+            (!usedRaw || domain != LensCalibrationCoordinateDomain.UNKNOWN)
+        ) {
             CameraFovCalculator.estimate(CameraFovInput(
                 focalLengthMm = focal,
                 sensorWidthMm = capability.sensorWidthMm?.toDouble() ?: 0.0,
                 sensorHeightMm = capability.sensorHeightMm?.toDouble() ?: 0.0,
-                activeWidthPx = active.width(), activeHeightPx = active.height(),
+                activeWidthPx = coordinateArray.width(), activeHeightPx = coordinateArray.height(),
                 cropLeftPx = crop.left, cropTopPx = crop.top,
                 cropWidthPx = crop.width(), cropHeightPx = crop.height(),
                 outputWidthPx = outputWidth, outputHeightPx = outputHeight
@@ -309,12 +323,13 @@ class PhoneSkyCapture(private val context: Context) {
             System.currentTimeMillis() - (System.nanoTime() - it) / 1_000_000L +
                 (lensResult.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L) / 2_000_000L
         }
-        val calibration = lensResult?.let { frameResult ->
+        val frameCalibration = if (lensResult != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             calibrationFrom(
-                frameResult.get(CaptureResult.LENS_INTRINSIC_CALIBRATION),
-                frameResult.get(CaptureResult.LENS_DISTORTION)
+                lensResult.get(CaptureResult.LENS_INTRINSIC_CALIBRATION),
+                lensResult.get(CaptureResult.LENS_DISTORTION)
             )
-        } ?: capability.lensCalibration
+        } else null
+        val calibration = frameCalibration ?: capability.lensCalibration
         return PhoneCaptureMetadata(
             logicalCameraId = openCameraId,
             physicalCameraId = physicalCameraId,
@@ -328,9 +343,7 @@ class PhoneSkyCapture(private val context: Context) {
             preCorrectionActiveArrayHeightPx = preCorrection?.height(),
             cropLeftPx = crop?.left, cropTopPx = crop?.top, cropWidthPx = crop?.width(), cropHeightPx = crop?.height(),
             sensorOrientation = capability.sensorOrientation,
-            distortionCorrectionMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                lensResult?.get(CaptureResult.DISTORTION_CORRECTION_MODE)
-            } else null,
+            distortionCorrectionMode = correctionMode,
             calibrationCoordinateDomain = domain,
             lensCalibration = calibration,
             exposureMidpointEpochMs = midpointMs,

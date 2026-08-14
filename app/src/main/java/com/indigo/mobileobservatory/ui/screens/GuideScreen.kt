@@ -58,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.indigo.mobileobservatory.camera.ConnectionState
 import com.indigo.mobileobservatory.camera.DeviceEntry
+import com.indigo.mobileobservatory.ui.components.GainControl
 import com.indigo.mobileobservatory.mount.MountConnectionState
 import com.indigo.mobileobservatory.ui.components.LivePreview
 import com.indigo.mobileobservatory.ui.viewmodel.CameraViewModel
@@ -88,6 +89,7 @@ fun GuideScreen(
     val guideStatus by viewModel.guideStatus.collectAsState()
     val exposureUs by viewModel.guideExposureUs.collectAsState()
     val gain by viewModel.guideGain.collectAsState()
+    val gainCapability by viewModel.guideGainCapability.collectAsState()
     val raAggressiveness by viewModel.guideRaAggressiveness.collectAsState()
     val decAggressiveness by viewModel.guideDecAggressiveness.collectAsState()
     val guideHistory by viewModel.guideHistory.collectAsState()
@@ -271,17 +273,14 @@ fun GuideScreen(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        Slider(
-                            value = gain.coerceIn(0f, 30f),
-                            onValueChange = { viewModel.setGuideGain(it) },
-                            valueRange = 0f..30f,
-                            enabled = connectionState is ConnectionState.Connected
-                        )
-                        Text(
-                            stringResource(R.string.guide_gain_db, gain),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        gainCapability?.let { capability ->
+                            GainControl(
+                                capability = capability,
+                                gain = gain,
+                                onGainChange = viewModel::setGuideGain,
+                                enabled = connectionState is ConnectionState.Connected
+                            )
+                        }
                     }
                 }
 

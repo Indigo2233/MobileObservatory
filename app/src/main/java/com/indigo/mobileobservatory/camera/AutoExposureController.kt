@@ -70,17 +70,16 @@ class AutoExposureController {
 
     private fun adjustGainStep(camera: Camera, ratio: Float) {
         val currentGain = camera.currentGain
-        val gainAdjDb = when {
-            ratio > 2f -> 3.0f
-            ratio > 1.5f -> 1.5f
-            ratio > 1.1f -> 0.5f
-            ratio < 0.5f -> -3.0f
-            ratio < 0.7f -> -1.5f
-            ratio < 0.9f -> -0.5f
+        val gainAdjustmentStops = when {
+            ratio > 2f -> 0.5f
+            ratio > 1.5f -> 0.25f
+            ratio > 1.1f -> 0.1f
+            ratio < 0.5f -> -0.5f
+            ratio < 0.7f -> -0.25f
+            ratio < 0.9f -> -0.1f
             else -> return
         }
-        val newGain = (currentGain + gainAdjDb)
-            .coerceIn(camera.gainRange.min, camera.gainRange.max)
+        val newGain = camera.adjustGainForExposure(gainAdjustmentStops)
         if (newGain != currentGain) {
             camera.setGain(newGain)
         }
@@ -92,20 +91,34 @@ class AutoExposureController {
         val total = frame.width * frame.height
         if (total == 0) return FrameStats(0f, 0f, 255f)
 
-        val is10bit = frame.pixelFormat.is10bit
-        val maxVal = if (is10bit) 1023f else 255f
+        val pixelFormat = frame.pixelFormat
+        val isRgb48 = pixelFormat == PixelFormat.RGB48
+        val bitDepth = pixelFormat.nativeBits.coerceIn(8, 16)
+        val isHighBit = pixelFormat.bytesPerPixel >= 2 && !isRgb48
+        val maxVal = if (isHighBit || isRgb48) ((1 shl bitDepth) - 1).toFloat() else 255f
 
         var sum = 0L
         val sampleStep = (total / 50000).coerceAtLeast(1)
         val sampleCount = total / sampleStep
-        val numBins = if (is10bit) 1024 else 256
+        val numBins = maxVal.toInt() + 1
         val histogram = IntArray(numBins)
 
-        if (is10bit) {
+        if (isHighBit) {
             for (i in 0 until total step sampleStep) {
                 val lo = frame.data[i * 2].toInt() and 0xFF
                 val hi = frame.data[i * 2 + 1].toInt() and 0xFF
-                val v = ((hi shl 8) or lo).coerceIn(0, 1023)
+                val raw = (hi shl 8) or lo
+                val v = raw.coerceIn(0, maxVal.toInt())
+                sum += v
+                histogram[v]++
+            }
+        } else if (isRgb48) {
+            for (i in 0 until total step sampleStep) {
+                val offset = i * 6
+                val red = ((frame.data[offset + 1].toInt() and 0xFF) shl 8) or (frame.data[offset].toInt() and 0xFF)
+                val green = ((frame.data[offset + 3].toInt() and 0xFF) shl 8) or (frame.data[offset + 2].toInt() and 0xFF)
+                val blue = ((frame.data[offset + 5].toInt() and 0xFF) shl 8) or (frame.data[offset + 4].toInt() and 0xFF)
+                val v = ((red + green + blue) / 3).coerceIn(0, maxVal.toInt())
                 sum += v
                 histogram[v]++
             }

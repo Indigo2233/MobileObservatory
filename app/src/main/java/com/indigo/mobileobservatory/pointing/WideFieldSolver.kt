@@ -5,6 +5,7 @@ import com.indigo.mobileobservatory.astro.EquatorialCoordinates
 import com.indigo.mobileobservatory.astro.ObserverSite
 import com.indigo.mobileobservatory.astro.TopocentricCoordinates
 import java.time.Instant
+import java.util.WeakHashMap
 import kotlin.math.acos
 import kotlin.math.atan2
 import kotlin.math.atan
@@ -57,7 +58,7 @@ data class WideFieldSolveResult(
  * always proceeds to the geometric lost-in-space matcher.
  */
 internal object WideFieldSolver {
-    private const val MINIMUM_STARS = 4
+    private const val MINIMUM_STARS = 5
 
     fun solve(request: WideFieldSolveRequest): WideFieldSolveResult {
         val started = System.nanoTime()
@@ -158,32 +159,31 @@ internal object BlindWideFieldMatcher {
     private const val ANCHOR_MAGNITUDE = 3.5
     private const val DETECTED_LIMIT = 12
     private const val TRIANGLE_TOLERANCE_RAD = Math.PI / 180.0 * 0.35
-    private const val VERIFY_TOLERANCE_RAD = Math.PI / 180.0 * 0.55
-    private const val MINIMUM_MATCHES = 4
-    private const val MAXIMUM_VERIFICATIONS = 30_000
+    private const val VERIFY_TOLERANCE_RAD = Math.PI / 180.0 * 0.45
+    private const val MAXIMUM_RESIDUAL_DEG = 0.30
+    private const val MINIMUM_MATCHES = 5
+    private const val MAXIMUM_VERIFICATIONS_PER_SCALE = 1_800
     // Run metadata scale first so normal captures retain the established fast path.
     private val SCALE_SAMPLES = listOf(1.0) + (15..26).map { it / 20.0 }.filter { it != 1.0 }
 
     fun solve(request: WideFieldSolveRequest): BlindMatchResult {
         val imageStars = request.extraction.stars.sortedByDescending { it.snr }.take(DETECTED_LIMIT)
         if (imageStars.size < MINIMUM_MATCHES) return BlindMatchResult.Failure(WideFieldSolveFailure.NO_CANDIDATE)
-        val catalog = request.catalog.stars.filter { it.magnitude <= ANCHOR_MAGNITUDE }
-        if (catalog.size < MINIMUM_MATCHES) return BlindMatchResult.Failure(WideFieldSolveFailure.NO_CANDIDATE)
-        val catalogVectors = catalog.map { it to vector(it.raDeg, it.decDeg) }
-        val index = buildTriangleIndex(catalogVectors)
-        val verificationCatalog = request.catalog.stars.mapIndexed { index, star -> CatalogVector(index, vector(star.raDeg, star.decDeg)) }
+        val catalog = runtimeIndex(request.catalog)
+        if (catalog.anchorCount < MINIMUM_MATCHES) return BlindMatchResult.Failure(WideFieldSolveFailure.NO_CANDIDATE)
         val clusters = mutableListOf<BlindCandidate>()
-        var verifications = 0
         for (imageScale in SCALE_SAMPLES) {
-            val image = imageStars.map { imageVector(it, request.frameWidth, request.frameHeight,
+            val image = imageStars.map { imagePoint(it, request.frameWidth, request.frameHeight,
                 request.initialFovWidthDeg, request.initialFovHeightDeg, imageScale) }
-            for (triangle in triangles(image)) {
-                for (target in index.candidates(triangle.vectors)) {
+            var scaleVerifications = 0
+            for (triangle in triangles(image.map { it.vector })) {
+                for (target in catalog.triangleIndex.candidates(triangle.vectors)) {
                     for (permutation in permutations(target)) {
-                        if (verifications++ >= MAXIMUM_VERIFICATIONS) break
+                        if (scaleVerifications++ >= MAXIMUM_VERIFICATIONS_PER_SCALE) break
+                        if (!sameTriangle(triangle.vectors, permutation)) continue
                         val rotation = rotationFromPairs(triangle.vectors, permutation) ?: continue
-                        val candidate = verify(rotation, image, verificationCatalog, imageScale) ?: continue
-                        val score = candidate.matches * 10.0 - candidate.residualDeg * 10.0
+                        val candidate = verify(rotation, image, catalog, imageScale) ?: continue
+                        val score = candidate.matches * 100.0 - candidate.residualDeg * 100.0
                         val scored = candidate.copy(score = score)
                         val existingIndex = clusters.indexOfFirst {
                             angularDistance(it.center, scored.center) <= Math.toRadians(5.0)
@@ -191,17 +191,19 @@ internal object BlindWideFieldMatcher {
                         if (existingIndex < 0) clusters += scored
                         else if (score > clusters[existingIndex].score) clusters[existingIndex] = scored
                     }
-                    if (verifications >= MAXIMUM_VERIFICATIONS) break
+                    if (scaleVerifications >= MAXIMUM_VERIFICATIONS_PER_SCALE) break
                 }
-                if (verifications >= MAXIMUM_VERIFICATIONS) break
+                if (scaleVerifications >= MAXIMUM_VERIFICATIONS_PER_SCALE) break
             }
-            if (verifications >= MAXIMUM_VERIFICATIONS) break
         }
-        val valid = clusters.filter { it.matches >= MINIMUM_MATCHES && it.residualDeg <= 0.45 }
+        val requiredMatches = maxOf(MINIMUM_MATCHES, (imageStars.size + 1) / 2)
+        val valid = clusters.filter { it.matches >= requiredMatches && it.residualDeg <= MAXIMUM_RESIDUAL_DEG }
             .sortedByDescending { it.score }
         val best = valid.firstOrNull() ?: return BlindMatchResult.Failure(WideFieldSolveFailure.NO_CANDIDATE)
         val runnerUp = valid.getOrNull(1)
-        if (runnerUp != null && best.score - runnerUp.score < 0.05) {
+        if (runnerUp != null && runnerUp.matches == best.matches &&
+            runnerUp.residualDeg <= best.residualDeg + 0.08
+        ) {
             return BlindMatchResult.Failure(WideFieldSolveFailure.AMBIGUOUS_CANDIDATE)
         }
         return BlindMatchResult.Success(best)
@@ -225,16 +227,17 @@ internal object BlindWideFieldMatcher {
         return TriangleIndex(map)
     }
 
-    private fun verify(rotation: Mat3, image: List<Vec>, catalog: List<CatalogVector>, imageScale: Double): BlindCandidate? {
+    private fun verify(rotation: Mat3, image: List<ImagePoint>, catalog: CatalogRuntimeIndex, imageScale: Double): BlindCandidate? {
+        val minimumDot = cos(VERIFY_TOLERANCE_RAD)
         val edges = buildList {
             image.forEachIndexed { imageIndex, point ->
-                val sky = rotation * point
-                catalog.forEach { star ->
-                    val distance = angularDistance(sky, star.vector)
-                    if (distance <= VERIFY_TOLERANCE_RAD) add(MatchEdge(imageIndex, star.index, distance))
+                val sky = rotation * point.vector
+                catalog.spatialIndex.nearby(sky, Math.toDegrees(VERIFY_TOLERANCE_RAD)).forEach { star ->
+                    val alignment = dot(sky, star.vector)
+                    if (alignment >= minimumDot) add(MatchEdge(imageIndex, star.index, alignment))
                 }
             }
-        }.sortedBy { it.distance }
+        }.sortedByDescending { it.alignment }
         val usedImage = HashSet<Int>()
         val usedCatalog = HashSet<Int>()
         val accepted = edges.filter { edge ->
@@ -247,7 +250,10 @@ internal object BlindWideFieldMatcher {
             }
         }
         val matches = accepted.size
-        val square = accepted.sumOf { it.distance * it.distance }
+        val square = accepted.sumOf { edge ->
+            val distance = acos(edge.alignment.coerceIn(-1.0, 1.0))
+            distance * distance
+        }
         if (matches == 0) return null
         val center = rotation * Vec(0.0, 0.0, 1.0)
         val yAxis = rotation * Vec(0.0, 1.0, 0.0)
@@ -255,8 +261,15 @@ internal object BlindWideFieldMatcher {
         val north = Vec(-cos(center.ra) * sin(Math.toRadians(center.decDeg)),
             -sin(center.ra) * sin(Math.toRadians(center.decDeg)), cos(Math.toRadians(center.decDeg)))
         val rotationDeg = Math.toDegrees(atan2(dot(yAxis, east), dot(yAxis, north)))
+        val fittedScale = accepted.mapNotNull { edge ->
+            val tangentRadius = image[edge.imageIndex].baseTangentRadius
+            if (tangentRadius <= 1e-7) null else {
+                val skyRadius = acos(dot(center, catalog.stars[edge.catalogIndex].vector).coerceIn(-1.0, 1.0))
+                (tan(skyRadius) / tangentRadius).takeIf { it.isFinite() && it in 0.65..1.45 }
+            }
+        }.medianOrNull() ?: imageScale
         return BlindCandidate(EquatorialCoordinates(center.raDeg, center.decDeg), rotationDeg, matches,
-            Math.toDegrees(kotlin.math.sqrt(square / matches)), 0.0, imageScale)
+            Math.toDegrees(kotlin.math.sqrt(square / matches)), 0.0, fittedScale)
     }
 
     private fun triangles(points: List<Vec>): List<ImageTriangle> = buildList {
@@ -288,17 +301,19 @@ internal object BlindWideFieldMatcher {
         listOf(values[1], values[0], values[2]), listOf(values[1], values[2], values[0]),
         listOf(values[2], values[0], values[1]), listOf(values[2], values[1], values[0])
     )
-    private fun imageVector(star: ExtractedStar, w: Int, h: Int, fovW: Double, fovH: Double, scale: Double = 1.0) = Vec(
-        ((star.x / w) * 2.0 - 1.0) * tan(Math.toRadians(fovW / 2.0)) * scale,
-        (1.0 - (star.y / h) * 2.0) * tan(Math.toRadians(fovH / 2.0)) * scale, 1.0
-    ).unit()
+    private fun imagePoint(star: ExtractedStar, w: Int, h: Int, fovW: Double, fovH: Double, scale: Double) : ImagePoint {
+        val x = ((star.x / w) * 2.0 - 1.0) * tan(Math.toRadians(fovW / 2.0))
+        val y = (1.0 - (star.y / h) * 2.0) * tan(Math.toRadians(fovH / 2.0))
+        return ImagePoint(Vec(x * scale, y * scale, 1.0).unit(), hypot(x, y))
+    }
     private fun vector(raDeg: Double, decDeg: Double): Vec { val ra = Math.toRadians(raDeg); val dec = Math.toRadians(decDeg); return Vec(cos(dec) * cos(ra), cos(dec) * sin(ra), sin(dec)) }
     private fun angularDistance(a: Vec, b: Vec) = acos(dot(a, b).coerceIn(-1.0, 1.0))
     private fun angularDistance(a: EquatorialCoordinates, b: EquatorialCoordinates) = angularDistance(vector(a.raDeg, a.decDeg), vector(b.raDeg, b.decDeg))
 
     internal data class BlindCandidate(val center: EquatorialCoordinates, val rotationDeg: Double, val matches: Int, val residualDeg: Double, val score: Double, val fovScale: Double)
     private data class CatalogVector(val index: Int, val vector: Vec)
-    private data class MatchEdge(val imageIndex: Int, val catalogIndex: Int, val distance: Double)
+    private data class ImagePoint(val vector: Vec, val baseTangentRadius: Double)
+    private data class MatchEdge(val imageIndex: Int, val catalogIndex: Int, val alignment: Double)
     private data class ImageTriangle(val vectors: List<Vec>)
     private data class TriangleKey(val a: Int, val b: Int, val c: Int) {
         companion object {
@@ -322,6 +337,58 @@ internal object BlindWideFieldMatcher {
                 }
             }
         }
+    }
+    private class SkyCellIndex(stars: List<CatalogVector>) {
+        private val cells = HashMap<Pair<Int, Int>, MutableList<CatalogVector>>()
+
+        init {
+            stars.forEach { star ->
+                cells.getOrPut(cellOf(star.vector)) { mutableListOf() } += star
+            }
+        }
+
+        fun nearby(center: Vec, radiusDeg: Double): Sequence<CatalogVector> = sequence {
+            val dec = center.decDeg
+            val decMin = kotlin.math.floor((dec - radiusDeg).coerceAtLeast(-90.0)).toInt()
+            val decMax = kotlin.math.floor((dec + radiusDeg).coerceAtMost(90.0)).toInt()
+            val cosDec = cos(Math.toRadians(dec)).let { kotlin.math.abs(it).coerceAtLeast(0.01) }
+            val raSpan = kotlin.math.ceil((radiusDeg / cosDec).coerceAtMost(180.0)).toInt()
+            val raCenter = kotlin.math.floor(center.raDeg).toInt()
+            for (decBin in decMin..decMax) for (offset in -raSpan..raSpan) {
+                val raBin = ((raCenter + offset) % 360 + 360) % 360
+                cells[raBin to decBin]?.forEach { yield(it) }
+            }
+        }
+
+        private fun cellOf(vector: Vec): Pair<Int, Int> =
+            kotlin.math.floor(vector.raDeg).toInt() to kotlin.math.floor(vector.decDeg).toInt()
+    }
+    private data class CatalogRuntimeIndex(
+        val stars: List<CatalogVector>,
+        val triangleIndex: TriangleIndex,
+        val spatialIndex: SkyCellIndex,
+        val anchorCount: Int
+    )
+
+    private val runtimeCache = WeakHashMap<PhoneBrightStarCatalog, CatalogRuntimeIndex>()
+    private fun runtimeIndex(catalog: PhoneBrightStarCatalog): CatalogRuntimeIndex = synchronized(runtimeCache) {
+        runtimeCache[catalog] ?: run {
+            val verificationStars = catalog.stars.mapIndexed { starIndex, star ->
+                CatalogVector(starIndex, vector(star.raDeg, star.decDeg))
+            }
+            val anchors = catalog.stars.filter { it.magnitude <= ANCHOR_MAGNITUDE }
+                .map { it to vector(it.raDeg, it.decDeg) }
+            CatalogRuntimeIndex(
+                stars = verificationStars,
+                triangleIndex = buildTriangleIndex(anchors),
+                spatialIndex = SkyCellIndex(verificationStars),
+                anchorCount = anchors.size
+            ).also { runtimeCache[catalog] = it }
+        }
+    }
+    private fun List<Double>.medianOrNull(): Double? = takeIf { it.isNotEmpty() }?.sorted()?.let { values ->
+        val middle = values.size / 2
+        if (values.size % 2 == 0) (values[middle - 1] + values[middle]) / 2.0 else values[middle]
     }
     private data class Vec(val x: Double, val y: Double, val z: Double) {
         val ra get() = atan2(y, x); val raDeg get() = ((Math.toDegrees(ra) % 360.0) + 360.0) % 360.0

@@ -195,6 +195,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _gain = MutableStateFlow(0f)
     val gain: StateFlow<Float> = _gain.asStateFlow()
+    private val _gainDbEquivalent = MutableStateFlow<Float?>(null)
+    val gainDbEquivalent: StateFlow<Float?> = _gainDbEquivalent.asStateFlow()
+    private val _gainCapability = MutableStateFlow<GainCapability?>(null)
+    val gainCapability: StateFlow<GainCapability?> = _gainCapability.asStateFlow()
 
     private val _offset = MutableStateFlow<Float?>(null)
     val offset: StateFlow<Float?> = _offset.asStateFlow()
@@ -204,6 +208,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val offsetLabel: StateFlow<String> = _offsetLabel.asStateFlow()
     private val _offsetStep = MutableStateFlow(1f)
     val offsetStep: StateFlow<Float> = _offsetStep.asStateFlow()
+
+    private val _usbBandwidth = MutableStateFlow<Int?>(null)
+    val usbBandwidth: StateFlow<Int?> = _usbBandwidth.asStateFlow()
+    private val _usbBandwidthRange = MutableStateFlow<IntRange?>(null)
+    val usbBandwidthRange: StateFlow<IntRange?> = _usbBandwidthRange.asStateFlow()
 
     private val _pixelFormat = MutableStateFlow(PixelFormat.MONO8)
     val pixelFormat: StateFlow<PixelFormat> = _pixelFormat.asStateFlow()
@@ -296,6 +305,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _guideGain = MutableStateFlow(0f)
     val guideGain: StateFlow<Float> = _guideGain.asStateFlow()
+    private val _guideGainCapability = MutableStateFlow<GainCapability?>(null)
+    val guideGainCapability: StateFlow<GainCapability?> = _guideGainCapability.asStateFlow()
 
     private val _guideStar = MutableStateFlow<GuideStar?>(null)
     val guideStar: StateFlow<GuideStar?> = _guideStar.asStateFlow()
@@ -529,7 +540,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     is ConnectionState.Connected -> {
                         val cam = cameraManager.activeCamera ?: return@collect
                         _exposureUs.value = cam.currentExposureUs
+                        _gainCapability.value = cam.gainCapability
                         _gain.value = cam.currentGain
+                        _gainDbEquivalent.value = cam.gainDbEquivalent(cam.currentGain)
                         syncOffsetCapability(cam)
                         _pixelFormat.value = cam.currentPixelFormat
                         _supportedPixelFormats.value = cam.supportedPixelFormats
@@ -543,7 +556,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             _nativeReadoutModeId.value = null
                         }
                         applyCameraDefaults(cam)
+                        applySavedUsbBandwidth(cam)
                         _gain.value = cam.currentGain
+                        _gainCapability.value = cam.gainCapability
+                        _gainDbEquivalent.value = cam.gainDbEquivalent(cam.currentGain)
                         _pixelFormat.value = cam.currentPixelFormat
                         _readoutMode.value = cam.currentReadoutMode
                         (cam as? CameraNativeReadoutModeCapable)?.let { readoutCapable ->
@@ -551,6 +567,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             _nativeReadoutModeId.value = readoutCapable.currentNativeReadoutModeId
                         }
                         syncOffsetCapability(cam)
+                        syncUsbBandwidthCapability(cam)
                         _roi.value = cam.currentRoi
                         _longExposureEnabled.value = cam.longExposureEnabled
                         refreshExposureUiLimits()
@@ -566,8 +583,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         _previewBitmap.value = null
                         unbindCoolingFlows()
                         syncOffsetCapability(null)
+                        syncUsbBandwidthCapability(null)
                         _nativeReadoutModes.value = emptyList()
                         _nativeReadoutModeId.value = null
+                        _gainCapability.value = null
+                        _gainDbEquivalent.value = null
                     }
                     is ConnectionState.Enumerating -> {
                         _statusMessage.value = app.getString(R.string.searching_cameras)
@@ -599,6 +619,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         val cam = guideCameraManager.activeCamera ?: return@collect
                         cam.setExposureTime(_guideExposureUs.value)
                         _guideExposureUs.value = cam.currentExposureUs
+                        _guideGainCapability.value = cam.gainCapability
                         _guideGain.value = cam.currentGain
                         _guideStatus.value = app.getString(R.string.guide_camera_connected_status, cam.cameraInfo?.name.orEmpty())
                         startGuidePreview()
@@ -614,6 +635,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         _guideStars.value = emptyList()
                         _guideReferenceStar.value = null
                         _guideReferenceStars.value = emptyList()
+                        _guideGainCapability.value = null
                         _guideCorrection.value = null
                         _guideRunning.value = false
                         _guideCalibrating.value = false
@@ -889,9 +911,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         prefs.edit().putFloat("guide_exposure_us", _guideExposureUs.value).apply()
     }
 
-    fun setGuideGain(db: Float) {
+    fun setGuideGain(value: Float) {
         val cam = guideCameraManager.activeCamera ?: return
-        cam.setGain(db)
+        cam.setGain(value)
         _guideGain.value = cam.currentGain
     }
 
@@ -1286,6 +1308,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     if (autoExposureController.mode != AutoExposureMode.OFF) {
                         _exposureUs.value = cam.currentExposureUs
                         _gain.value = cam.currentGain
+                        _gainDbEquivalent.value = cam.gainDbEquivalent(cam.currentGain)
                     }
                 }
 
@@ -1453,11 +1476,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun getExposureMax(): Float = _exposureUiMaxUs.value
 
-    fun getGainMax(): Float {
-        val cam = cameraManager.activeCamera ?: return 24f
-        return cam.gainRange.max
-    }
-
     private fun refreshExposureUiLimits() {
         val cam = cameraManager.activeCamera
         if (cam == null) {
@@ -1483,10 +1501,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun setGain(db: Float) {
+    fun setGain(value: Float) {
         val cam = cameraManager.activeCamera ?: return
-        cam.setGain(db)
+        cam.setGain(value)
         _gain.value = cam.currentGain
+        _gainDbEquivalent.value = cam.gainDbEquivalent(cam.currentGain)
     }
 
     fun setOffset(value: Float) {
@@ -1494,6 +1513,23 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             ?.takeIf { it.offsetSupported } ?: return
         camera.setOffset(value)
         syncOffsetCapability(cameraManager.activeCamera)
+    }
+
+    fun setUsbBandwidth(value: Int) {
+        val camera = cameraManager.activeCamera ?: return
+        val capable = camera as? CameraUsbBandwidthCapable ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            if (capable.setUsbBandwidth(value)) {
+                syncUsbBandwidthCapability(camera)
+                val info = camera.cameraInfo ?: return@launch
+                val applied = capable.currentUsbBandwidth ?: return@launch
+                deviceSettings.saveCameraUsbBandwidth(
+                    cameraSettingsId(info),
+                    camera.currentPixelFormat,
+                    applied
+                )
+            }
+        }
     }
 
     @Volatile private var pixelFormatSwitching = false
@@ -1514,6 +1550,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         cam.currentReadoutMode == ReadoutMode.HDR
                 )
                 cam.setPixelFormat(format)
+                applySavedUsbBandwidth(cam)
                 if (cam.currentPixelFormat != format) {
                     _statusMessage.value =
                         app.getString(R.string.pixel_format_switch_failed, format.displayName)
@@ -1524,6 +1561,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 _pixelFormat.value = cam.currentPixelFormat
                 _supportedPixelFormats.value = cam.supportedPixelFormats
                 syncOffsetCapability(cam)
+                syncUsbBandwidthCapability(cam)
                 pixelFormatSwitching = false
             }
         }
@@ -1534,8 +1572,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         cam.setReadoutMode(mode)
         _readoutMode.value = cam.currentReadoutMode
         _gain.value = cam.currentGain
-        _pixelFormat.value = cam.currentPixelFormat
-        _supportedPixelFormats.value = cam.supportedPixelFormats
+        _gainCapability.value = cam.gainCapability
+        _gainDbEquivalent.value = cam.gainDbEquivalent(cam.currentGain)
+                _pixelFormat.value = cam.currentPixelFormat
+                _supportedPixelFormats.value = cam.supportedPixelFormats
+                _gainCapability.value = cam.gainCapability
+                _gainDbEquivalent.value = cam.gainDbEquivalent(cam.currentGain)
         syncOffsetCapability(cam)
         frameProcessor.resetBitShiftDetection(
             forceDeclaredLayout = cam is PlayerOneCamera &&
@@ -1552,6 +1594,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 _pixelFormat.value = cameraManager.activeCamera?.currentPixelFormat ?: _pixelFormat.value
                 _supportedPixelFormats.value = cameraManager.activeCamera?.supportedPixelFormats ?: _supportedPixelFormats.value
                 _roi.value = cameraManager.activeCamera?.currentRoi ?: _roi.value
+                _gainCapability.value = cameraManager.activeCamera?.gainCapability
+                _gainDbEquivalent.value = cameraManager.activeCamera?.let { it.gainDbEquivalent(it.currentGain) }
                 syncOffsetCapability(cameraManager.activeCamera)
             }
         }
@@ -1562,14 +1606,24 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         return deviceSettings.cameraDefaults(cameraSettingsId(info))
     }
 
-    fun saveCameraDefaults(settings: CameraDefaults) {
-        val info = cameraManager.activeCamera?.cameraInfo ?: return
-        deviceSettings.saveCameraDefaults(cameraSettingsId(info), settings)
-        applyCameraDefaults(cameraManager.activeCamera ?: return)
-        _gain.value = cameraManager.activeCamera?.currentGain ?: _gain.value
-        _pixelFormat.value = cameraManager.activeCamera?.currentPixelFormat ?: _pixelFormat.value
-        _readoutMode.value = cameraManager.activeCamera?.currentReadoutMode ?: _readoutMode.value
-        syncOffsetCapability(cameraManager.activeCamera)
+    fun saveCameraDefaults(settings: CameraDefaults): CameraDefaults? {
+        val camera = cameraManager.activeCamera ?: return null
+        val info = camera.cameraInfo ?: return null
+        val normalized = settings.gain?.let { GainValueNormalizer.normalize(camera.gainCapability, it) }
+        val normalizedSettings = settings.copy(gain = normalized)
+        deviceSettings.saveCameraDefaults(cameraSettingsId(info), normalizedSettings)
+        applyCameraDefaults(camera)
+        val persistedSettings = normalizedSettings.copy(
+            gain = normalized?.let { camera.currentGain }
+        )
+        deviceSettings.saveCameraDefaults(cameraSettingsId(info), persistedSettings)
+        _gain.value = camera.currentGain
+        _gainCapability.value = camera.gainCapability
+        _gainDbEquivalent.value = camera.gainDbEquivalent(camera.currentGain)
+        _pixelFormat.value = camera.currentPixelFormat
+        _readoutMode.value = camera.currentReadoutMode
+        syncOffsetCapability(camera)
+        return persistedSettings
     }
 
     fun focuserDefaults(): FocuserDefaults {
@@ -1625,7 +1679,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             ?.takeIf { it in camera.supportedPixelFormats }
             ?.let(camera::setPixelFormat)
         settings.gain?.let { gain ->
-            camera.setGain(gain.coerceIn(camera.gainRange.min, camera.gainRange.max))
+            camera.setGain(GainValueNormalizer.normalize(camera.gainCapability, gain))
         }
         settings.offset?.let { offset ->
             (camera as? CameraOffsetCapable)?.takeIf { it.offsetSupported }?.let { offsetCapable ->
@@ -1640,6 +1694,23 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _offsetRange.value = offsetCapable?.offsetRange
         _offsetLabel.value = offsetCapable?.offsetLabel ?: "Offset"
         _offsetStep.value = offsetCapable?.offsetStep ?: 1f
+    }
+
+    private fun syncUsbBandwidthCapability(camera: Camera?) {
+        val capable = camera as? CameraUsbBandwidthCapable
+        _usbBandwidthRange.value = capable?.usbBandwidthRange
+        _usbBandwidth.value = capable?.currentUsbBandwidth
+    }
+
+    private fun applySavedUsbBandwidth(camera: Camera) {
+        val capable = camera as? CameraUsbBandwidthCapable ?: return
+        val range = capable.usbBandwidthRange ?: return
+        val info = camera.cameraInfo ?: return
+        val saved = deviceSettings.cameraUsbBandwidth(
+            cameraSettingsId(info),
+            camera.currentPixelFormat
+        ) ?: return
+        capable.setUsbBandwidth(saved.coerceIn(range.first, range.last))
     }
 
     private fun applyFocuserDefaults(settings: FocuserDefaults) {
@@ -2012,6 +2083,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             frame = frame,
             exposureSeconds = cam.currentExposureUs / 1_000_000f,
             gain = cam.currentGain,
+            gainKind = cam.gainCapability.kind,
+            gainLabel = cam.gainCapability.label,
+            gainUnit = cam.gainCapability.unit,
+            gainDbEquivalent = cam.gainDbEquivalent(cam.currentGain),
             cameraName = info?.name,
             filterName = currentFilterName(),
             configuredFormat = cam.currentPixelFormat,
@@ -2049,6 +2124,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     frame = frame,
                     exposureSeconds = cam.currentExposureUs / 1_000_000f,
                     gain = cam.currentGain,
+                    gainKind = cam.gainCapability.kind,
+                    gainLabel = cam.gainCapability.label,
+                    gainUnit = cam.gainCapability.unit,
+                    gainDbEquivalent = cam.gainDbEquivalent(cam.currentGain),
                     cameraName = info?.name,
                     filterName = filterName,
                     configuredFormat = cam.currentPixelFormat,

@@ -36,10 +36,14 @@ class PhoneBrightStarCatalog private constructor(val stars: List<PhoneCatalogSta
     companion object {
         const val ASSET_PATH = "catalog/phone_hyg_v41_m6.csv"
 
-        fun load(context: Context): PhoneBrightStarCatalog =
-            context.assets.open(ASSET_PATH).bufferedReader().use { reader ->
-                fromCsvLines(reader.readLines())
+        @Volatile
+        private var loadedCatalog: PhoneBrightStarCatalog? = null
+
+        fun load(context: Context): PhoneBrightStarCatalog = loadedCatalog ?: synchronized(this) {
+            loadedCatalog ?: context.assets.open(ASSET_PATH).bufferedReader().use { reader ->
+                fromCsvLines(reader.readLines()).also { loadedCatalog = it }
             }
+        }
 
         internal fun fromCsvLines(lines: List<String>): PhoneBrightStarCatalog {
             val stars = lines.asSequence()

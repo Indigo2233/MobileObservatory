@@ -12,6 +12,25 @@ import kotlin.math.tan
 class WideFieldSolverTest {
     @Test
     fun solvesSyntheticFieldWithoutImuPrior() {
+        val result = solveSynthetic(initialFovWidth = 70.0, initialFovHeight = 53.0)
+        assertTrue(result.message, result.success)
+        assertEquals(40.0, result.raDeg!!, 0.2)
+        assertEquals(20.0, result.decDeg!!, 0.2)
+        assertTrue(result.quality.matchedStars >= 5)
+        assertEquals(0.0, result.rotationDeg!!, 0.2)
+    }
+
+    @Test
+    fun fitsFieldWhenLensMetadataIsTenPercentTooNarrow() {
+        val result = solveSynthetic(initialFovWidth = 63.0, initialFovHeight = 47.7)
+        assertTrue(result.message, result.success)
+        assertEquals(40.0, result.raDeg!!, 0.35)
+        assertEquals(20.0, result.decDeg!!, 0.35)
+        assertEquals(70.0, result.fovWidthDeg!!, 2.0)
+        assertEquals(53.0, result.fovHeightDeg!!, 2.0)
+    }
+
+    private fun solveSynthetic(initialFovWidth: Double, initialFovHeight: Double): WideFieldSolveResult {
         val centerRa = 40.0
         val centerDec = 20.0
         val catalogStars = listOf(
@@ -29,16 +48,12 @@ class WideFieldSolverTest {
                 peak = 1000f - index, flux = 500f, snr = 100f - index, background = 10f
             )
         }
-        val result = WideFieldSolver.solve(WideFieldSolveRequest(
+        return WideFieldSolver.solve(WideFieldSolveRequest(
             extraction = StarExtractionResult(stars, 32, 5f, null, 10f, 1f),
-            frameWidth = width, frameHeight = height, initialFovWidthDeg = fovWidth, initialFovHeightDeg = fovHeight,
+            frameWidth = width, frameHeight = height, initialFovWidthDeg = initialFovWidth, initialFovHeightDeg = initialFovHeight,
             observationTime = Instant.parse("2026-08-12T14:00:00Z"), site = ObserverSite(30.0, 120.0),
             catalog = PhoneBrightStarCatalog.of(catalogStars)
         ))
-        assertTrue(result.message, result.success)
-        assertEquals(centerRa, result.raDeg!!, 0.2)
-        assertEquals(centerDec, result.decDeg!!, 0.2)
-        assertTrue(result.quality.matchedStars >= 4)
     }
 
     private fun localCoordinates(centerRaDeg: Double, centerDecDeg: Double, raDeg: Double, decDeg: Double): Triple<Double, Double, Double> {

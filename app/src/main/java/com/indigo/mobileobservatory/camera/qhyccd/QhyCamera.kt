@@ -12,8 +12,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.round
+import kotlin.math.roundToInt
 
-class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable {
+class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
+    CameraUsbBandwidthCapable {
 
     companion object {
         private const val TAG = "QhyCamera"
@@ -31,12 +33,15 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable {
     override var cameraInfo: CameraInfo? = null; private set
     override var exposureRange = FloatRange(1f, 3600_000_000f, 20_000f); private set
     override var gainRange = FloatRange(0f, 80f, 0f); private set
+    override var gainCapability = GainCapability(min = 0f, max = 80f, defaultValue = 0f); private set
     override var currentExposureUs = 20_000f; private set
     override var currentGain = 0f; private set
     override var offsetSupported = false; private set
     override var offsetRange = FloatRange(0f, 0f, 0f); private set
     override var offsetStep = 1f; private set
     override var currentOffset = 0f; private set
+    override var usbBandwidthRange: IntRange? = null; private set
+    override var currentUsbBandwidth: Int? = null; private set
     override var supportedNativeReadoutModes: List<CameraNativeReadoutMode> = emptyList(); private set
     override var currentNativeReadoutModeId: String = "0"; private set
     override var currentPixelFormat = PixelFormat.MONO16; private set
@@ -171,9 +176,7 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable {
             initGainRange()
             initOffsetRange()
 
-            QhyccdJni.setParam(QhyccdJni.CONTROL_USBTRAFFIC, 0.0)
-            val usbTrafficRange = QhyccdJni.getParamRange(QhyccdJni.CONTROL_USBTRAFFIC)
-            Log.i(TAG, "USB traffic set to 0 (range: ${usbTrafficRange?.get(0)}..${usbTrafficRange?.get(1)})")
+            initUsbBandwidth()
             setExposureTime(20_000f)
             setGain(20f)
 
@@ -185,6 +188,39 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable {
             try { QhyccdJni.close() } catch (_: Throwable) {}
             return false
         }
+    }
+
+    override fun setUsbBandwidth(value: Int): Boolean {
+        val range = usbBandwidthRange ?: return false
+        val target = value.coerceIn(range.first, range.last)
+        val result = QhyccdJni.setParam(QhyccdJni.CONTROL_USBTRAFFIC, target.toDouble())
+        if (result != QhyccdJni.QHYCCD_SUCCESS) {
+            FileLogger.w(TAG, "Set USB traffic failed: target=$target result=$result")
+            return false
+        }
+        val readBack = QhyccdJni.getParam(QhyccdJni.CONTROL_USBTRAFFIC)
+        currentUsbBandwidth = readBack.takeIf { it.isFinite() }
+            ?.roundToInt()?.takeIf { it in range } ?: target
+        FileLogger.i(TAG, "USB traffic set: requested=$target current=$currentUsbBandwidth")
+        return true
+    }
+
+    private fun initUsbBandwidth() {
+        val sdkRange = QhyccdJni.getParamRange(QhyccdJni.CONTROL_USBTRAFFIC)
+        if (sdkRange == null || sdkRange.size < 2) {
+            usbBandwidthRange = null
+            currentUsbBandwidth = null
+            return
+        }
+        val min = sdkRange[0].roundToInt()
+        val max = sdkRange[1].roundToInt()
+        if (min > max) {
+            usbBandwidthRange = null
+            currentUsbBandwidth = null
+            return
+        }
+        usbBandwidthRange = min..max
+        setUsbBandwidth(0.coerceIn(min, max))
     }
 
     private fun initPixelFormats(desiredBits: Int) {
@@ -273,8 +309,14 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable {
 
     private fun initGainRange() {
         val range = QhyccdJni.getParamRange(QhyccdJni.CONTROL_GAIN)
-        if (range != null) {
-            gainRange = FloatRange(range[0].toFloat(), range[1].toFloat(), currentGain)
+        if (range != null && range.size >= 2) {
+            val min = range[0].toFloat()
+            val max = range[1].toFloat()
+            val step = range.getOrNull(2)?.toFloat()?.takeIf { it > 0f } ?: 1f
+            val current = QhyccdJni.getParam(QhyccdJni.CONTROL_GAIN).toFloat().coerceIn(min, max)
+            gainRange = FloatRange(min, max, current)
+            gainCapability = GainCapability(min = min, max = max, step = step, defaultValue = current)
+            currentGain = current
         }
     }
 
@@ -587,10 +629,16 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable {
         QhyccdJni.setParam(QhyccdJni.CONTROL_EXPOSURE, currentExposureUs.toDouble())
     }
 
-    override fun setGain(db: Float) {
-        currentGain = db.coerceIn(gainRange.min, gainRange.max)
-        QhyccdJni.setParam(QhyccdJni.CONTROL_GAIN, currentGain.toDouble())
+    override fun setGain(value: Float) {
+        val gain = GainValueNormalizer.normalize(gainCapability, value)
+        QhyccdJni.setParam(QhyccdJni.CONTROL_GAIN, gain.toDouble())
+        currentGain = GainValueNormalizer.normalize(
+            gainCapability,
+            QhyccdJni.getParam(QhyccdJni.CONTROL_GAIN).toFloat()
+        )
     }
+
+    override fun adjustGainForExposure(stops: Float): Float = currentGain
 
     override fun setOffset(value: Float) {
         if (!offsetSupported || offsetRange.max < offsetRange.min) return
