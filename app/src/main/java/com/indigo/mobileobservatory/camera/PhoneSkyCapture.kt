@@ -280,7 +280,7 @@ class PhoneSkyCapture(private val context: Context) {
         val active = capability.activeArraySize
         val preCorrection = capability.preCorrectionActiveArraySize
         val postCrop = lensResult?.get(CaptureResult.SCALER_CROP_REGION) ?: active
-        val rawCrop = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        val rawCrop = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             lensResult?.get(CaptureResult.SCALER_RAW_CROP_REGION)
         } else null
         val domain = when {
@@ -309,12 +309,13 @@ class PhoneSkyCapture(private val context: Context) {
             System.currentTimeMillis() - (System.nanoTime() - it) / 1_000_000L +
                 (lensResult.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L) / 2_000_000L
         }
-        val calibration = lensResult?.let { frameResult ->
+        val frameCalibration = if (lensResult != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             calibrationFrom(
-                frameResult.get(CaptureResult.LENS_INTRINSIC_CALIBRATION),
-                frameResult.get(CaptureResult.LENS_DISTORTION)
+                lensResult.get(CaptureResult.LENS_INTRINSIC_CALIBRATION),
+                lensResult.get(CaptureResult.LENS_DISTORTION)
             )
-        } ?: capability.lensCalibration
+        } else null
+        val calibration = frameCalibration ?: capability.lensCalibration
         return PhoneCaptureMetadata(
             logicalCameraId = openCameraId,
             physicalCameraId = physicalCameraId,
