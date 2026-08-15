@@ -93,7 +93,8 @@ class AutoExposureController {
 
         val pixelFormat = frame.pixelFormat
         val isRgb48 = pixelFormat == PixelFormat.RGB48
-        val isHighBit = pixelFormat.bytesPerPixel >= 2 && !isRgb48
+        val isRgb24 = pixelFormat == PixelFormat.RGB24
+        val isHighBit = pixelFormat.bytesPerPixel >= 2 && !isRgb48 && !isRgb24
         val sampleStep = (total / 50000).coerceAtLeast(1)
         val highBitShift = if (isHighBit) {
             var maxValue = 0
@@ -142,6 +143,18 @@ class AutoExposureController {
                 val green = ((frame.data[offset + 3].toInt() and 0xFF) shl 8) or (frame.data[offset + 2].toInt() and 0xFF)
                 val blue = ((frame.data[offset + 5].toInt() and 0xFF) shl 8) or (frame.data[offset + 4].toInt() and 0xFF)
                 val v = ((red + green + blue) / 3 shr 6).coerceIn(0, maxVal.toInt())
+                sum += v
+                histogram[v]++
+                sampleCount++
+            }
+        } else if (isRgb24) {
+            for (i in 0 until total step sampleStep) {
+                val offset = i * 3
+                if (offset + 2 >= frame.data.size) break
+                val red = frame.data[offset].toInt() and 0xFF
+                val green = frame.data[offset + 1].toInt() and 0xFF
+                val blue = frame.data[offset + 2].toInt() and 0xFF
+                val v = ((red * 299 + green * 587 + blue * 114) / 1000).coerceIn(0, maxVal.toInt())
                 sum += v
                 histogram[v]++
                 sampleCount++

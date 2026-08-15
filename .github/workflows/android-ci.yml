@@ -19,12 +19,12 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           submodules: recursive
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
@@ -44,6 +44,35 @@ jobs:
 
       - name: Compile debug APK
         run: ./gradlew assembleDebug
+
+      - name: Generate ephemeral release key
+        run: |
+          keytool -genkeypair -noprompt \
+            -keystore "$RUNNER_TEMP/ci-release.jks" \
+            -storepass ci-release-password \
+            -keypass ci-release-password \
+            -alias ci-release \
+            -dname "CN=Indigo Observatory CI,O=Open Source CI,C=CN" \
+            -keyalg RSA -keysize 2048 -validity 1
+
+      - name: Compile signed release APK
+        env:
+          ANDROID_RELEASE_KEYSTORE: ${{ runner.temp }}/ci-release.jks
+          ANDROID_RELEASE_STORE_PASSWORD: ci-release-password
+          ANDROID_RELEASE_KEY_ALIAS: ci-release
+          ANDROID_RELEASE_KEY_PASSWORD: ci-release-password
+        run: ./gradlew assembleRelease
+
+      - name: Verify release signing identity
+        run: |
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)"
+          "$APKSIGNER" verify --print-certs app/build/outputs/apk/release/app-release.apk \
+            | tee "$RUNNER_TEMP/release-cert.txt"
+          grep -q "Indigo Observatory CI" "$RUNNER_TEMP/release-cert.txt"
+          if grep -qi "androiddebugkey" "$RUNNER_TEMP/release-cert.txt"; then
+            echo "Release APK used the Android debug signing identity."
+            exit 1
+          fi
 
       - name: Run Android lint
         run: ./gradlew lintDebug

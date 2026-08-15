@@ -127,6 +127,29 @@ class AutoExposureControllerTest {
         assertEquals(130f, camera.currentGain, 0f)
     }
 
+    @Test
+    fun `rgb24 midtones are not treated as high bit clipped values`() {
+        val camera = RecordingCamera(
+            gainCapability = GainValueNormalizer.isoCapability(
+                allowedValues = listOf(100f, 200f, 400f),
+                current = 200f
+            ),
+            initialGain = 200f
+        )
+        val controller = AutoExposureController().apply {
+            mode = AutoExposureMode.CONTINUOUS
+            adjustExposure = false
+            adjustGain = true
+        }
+        val data = ByteArray(12) { 70 }
+        controller.processFrame(
+            FrameData(data, 2, 2, PixelFormat.RGB24, frameId = 1L, timestamp = 0L),
+            camera
+        )
+        assertEquals(200f, camera.currentGain, 0f)
+        assertEquals(0, camera.gainWriteCount)
+    }
+
     private fun darkMono8(): FrameData =
         FrameData(ByteArray(4), 2, 2, PixelFormat.MONO8, frameId = 1L, timestamp = 0L)
 

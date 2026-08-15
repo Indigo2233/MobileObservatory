@@ -39,6 +39,7 @@ class SERWriter(private val file: File) {
         private set
 
     fun open(w: Int, h: Int, format: PixelFormat, cameraName: String? = null, filterName: String? = null) {
+        require(format != PixelFormat.RGB24) { "RGB24 Live View frames cannot be written as SER" }
         this.cameraName = cameraName
         this.filterName = filterName
         width = w

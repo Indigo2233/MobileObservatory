@@ -60,6 +60,26 @@ interface Camera {
     fun setRoi(roi: Roi)
     fun resetRoi()
     fun recycleBuffer(buf: ByteArray)
+    /** False for Live View bodies that cannot crop the sensor from the host. */
+    val supportsHostRoi: Boolean get() = true
+    /** False when startCapture frames are preview-only and must not be saved as SER/FITS. */
+    val recordsLiveViewAsScience: Boolean get() = true
+}
+
+enum class DslrStillFormat { JPEG, RAW, JPEG_PLUS_RAW }
+
+data class DslrStillResult(
+    val jpegFile: java.io.File?,
+    val rawFile: java.io.File?,
+    val iso: Int,
+    val exposureUs: Long,
+    val bulb: Boolean
+)
+
+interface CameraStillCaptureCapable {
+    val stillCaptureSupported: Boolean
+    val supportedStillFormats: List<DslrStillFormat>
+    fun captureStill(format: DslrStillFormat, outputDir: java.io.File): DslrStillResult
 }
 
 interface CameraOffsetCapable {

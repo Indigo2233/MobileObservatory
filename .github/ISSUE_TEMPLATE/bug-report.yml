@@ -1,0 +1,54 @@
+name: Bug report
+description: Report a reproducible application, protocol, or device problem.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Remove exact locations, serial numbers, credentials, and private image metadata.
+  - type: input
+    id: version
+    attributes:
+      label: App version or commit
+      placeholder: 0.1.1 / abc1234
+    validations:
+      required: true
+  - type: input
+    id: android
+    attributes:
+      label: Android device and version
+      placeholder: Manufacturer model, Android 14
+    validations:
+      required: true
+  - type: textarea
+    id: hardware
+    attributes:
+      label: Astronomy hardware
+      description: Device models, firmware, connection transport, and vendor SDK where relevant.
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and logs
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety checks
+      options:
+        - label: I removed credentials, precise locations, serial numbers, and private metadata.
+          required: true
+        - label: This report does not disclose a security vulnerability publicly.
+          required: true

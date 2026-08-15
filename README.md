@@ -1,5 +1,8 @@
 # 靛空台（Indigo Observatory）
 
+[![Android CI](https://github.com/Indigo2233/MobileObservatory/actions/workflows/android-ci.yml/badge.svg)](https://github.com/Indigo2233/MobileObservatory/actions/workflows/android-ci.yml)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
+
 靛空台是一款在 Android 手机 / 平板上运行的天文设备控制应用。相机、赤道仪、导星与配件各自独立连接，可单独使用，也可组成完整的观测与拍摄台。
 
 仓库目录与 Android 包名仍为 `MobileObservatory` / `com.indigo.mobileobservatory`。
@@ -73,6 +76,9 @@
 
 # 含 Stellarium Web 星图（非商业分发，需遵守 AGPL）
 .\Build.ps1 -NonCommercial
+
+# 正式签名候选包；密钥配置见 docs/RELEASE_PROCESS.md
+.\Build.ps1 -Release -NonCommercial
 ```
 
 产物：`bin/Installer/IndigoObservatory_android.apk`
@@ -95,7 +101,12 @@ SDK、星表、图像和其他第三方组件继续适用各自的许可证与�
 |---|---|
 | [`AGENTS.md`](AGENTS.md) | 工程约定、包名、构建与 libusb patch |
 | [`TODO.md`](TODO.md) | 已完成项与后续优化（导星增强、targetSdk 等） |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | 贡献流程、测试要求与硬件证据 |
+| [`SECURITY.md`](SECURITY.md) | 私密漏洞报告与支持范围 |
 | [`AGPL_SOURCE_DELIVERY.md`](AGPL_SOURCE_DELIVERY.md) | Stellarium Web 非商业交付与源码义务 |
+| [`docs/QUALITY_STATUS.md`](docs/QUALITY_STATUS.md) | 自动化、真机和手机板解成熟度现状 |
+| [`docs/README.md`](docs/README.md) | 方案文档索引（进行中 / 已落地待真机 / archive） |
+| [`docs/RELEASE_PROCESS.md`](docs/RELEASE_PROCESS.md) | 正式签名、发布候选与 go/no-go 门 |
 | [`docs/testing/HARDWARE_SMOKE_TESTS.md`](docs/testing/HARDWARE_SMOKE_TESTS.md) | 真机冒烟测试矩阵 |
 | [`docs/PHONE_PLATE_SOLVE_PLAN.md`](docs/PHONE_PLATE_SOLVE_PLAN.md) | 手机板解 / Push-to 方案（开放开发中） |
 
@@ -104,6 +115,6 @@ SDK、星表、图像和其他第三方组件继续适用各自的许可证与�
 - UI：Kotlin + Jetpack Compose  
 - 原生：CMake / JNI（各相机 SDK、自定义 libusb、ASTAP 等）  
 - 架构：相机 / 赤道仪 / 配件分模块，经统一 ViewModel 聚合到界面  
-- CI：GitHub Actions 跑单元测试与 debug APK 编译（见 `.github/workflows`）  
+- CI：GitHub Actions 跑单元测试、debug/release 编译、签名校验与 lint（见 `.github/workflows`）  
 
 更细的实现约束以 `AGENTS.md` 为准。

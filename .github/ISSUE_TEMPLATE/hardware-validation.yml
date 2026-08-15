@@ -1,0 +1,59 @@
+name: Hardware validation result
+description: Submit a reproducible device, protocol, or phone-solver test result.
+title: "[Hardware]: "
+labels: [hardware-validation]
+body:
+  - type: input
+    id: commit
+    attributes:
+      label: Tested commit
+      placeholder: Full 40-character Git commit
+    validations:
+      required: true
+  - type: input
+    id: android
+    attributes:
+      label: Android device and version
+    validations:
+      required: true
+  - type: textarea
+    id: equipment
+    attributes:
+      label: Equipment and firmware
+      description: Include models, firmware/SDK versions, and connection transports.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Validation area
+      options:
+        - Camera capture and recording
+        - Mount motion and STOP
+        - Guiding
+        - Accessory control
+        - Phone plate solving
+        - Permissions and reconnect
+        - Accessibility and layout
+    validations:
+      required: true
+  - type: textarea
+    id: procedure
+    attributes:
+      label: Procedure and duration
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: Result and measurements
+      description: Include pass/fail, latency, error rates, temperature, residuals, or logs where relevant.
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy confirmation
+      options:
+        - label: Attachments are de-identified and contain no precise location, serial number, or credentials.
+          required: true

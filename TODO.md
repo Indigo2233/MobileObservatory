@@ -1,11 +1,12 @@
 # Mobile Observatory TODO
 
-## WandererAstro accessories
+## WandererAstro / Oasis accessories
 
-- [~] WandererRotator Mini / Lite V1 / Lite V2: direct Android USB-serial support.
+- [~] WandererRotator Mini / Lite V1 / Lite V2: USB-serial **code** landed; hardware acceptance open. See `docs/wanderer-support-plan.md`.
 - [ ] WandererCover V3 / V4-EC / V4 Pro-EC: cover and flat-panel support.
 - [ ] Wanderer Snowflake filter wheel: serial protocol adapter.
 - [ ] WandererBox Plus V3 / Pro V3: power, USB, PWM and environment controller.
+- [~] Oasis USB HID: Rose 二代电调焦已真机通过；一代电调焦与两款滤镜轮待测。见 `docs/OASIS_ACCESSORY_INTEGRATION_PLAN.md`。
 
 > 本文档记录待评估的优化事项。优先级仅表示风险与收益，不代表最终实施顺序。
 >
@@ -467,9 +468,9 @@
 
 ## P2：相机品牌扩展
 
-### [ ] 18. 单反 / 无反相机接入（Canon / Nikon / Sony PTP）
+### [~] 18. 单反 / 无反相机接入（Canon / Nikon / Sony PTP）
 
-**方案文档：** `docs/CAMERA_NATIVE_GAIN_AND_ISO_PLAN.md` §6.5 / M5（增益侧已预留；机身接入未开工）
+**方案文档：** `docs/DSLR_MIRRORLESS_CAMERA_PLAN.md`。ISO 控件复用已落地的增益模型（`docs/CAMERA_NATIVE_GAIN_AND_ISO_PLAN.md`）。
 
 **与事项 17 的边界**
 
@@ -501,10 +502,10 @@
 
 - **Auto ISO**：没有自动档语义。`allowedValues` 只有正数；不能用 `0` 或 `min==max` 冒充 AUTO 而不改模型或适配器状态
 - **Hi1 / Hi2 / Lo1 等扩展感光度**：能力值是 `List<Float>`。机内菜单名不是数字。可用「映射到等效 ISO + `GainPreset` 标签」权宜，或日后把离散项升级为「值 + 显示名」
-- **暂时锁定**：`isReadOnly` 目前等于 `min == max`。Live View 锁定 ISO、或 P/S/Auto 挡位不允许改 ISO 时，用户仍应看到完整列表但禁用写入；这需要独立的 `writable`（或适配器在 ViewModel 层传 `enabled=false` 并保留能力）
+- **暂时锁定**：`GainCapability.writable` 已落地；`isReadOnly == !writable || min == max`。Live View 切换后重读 ISO 列表仍待真机。
 - **`Camera` 接口**：`startCapture` / `setExposureTime(us)` / ROI / 像素格式是天文相机流。单反的镜后快门表、B 门、反光板预升、静音快门、静帧 RAW 不是 Gain 问题，但会倒逼接口扩展
 - **双源**：`gainRange` 与 `gainCapability` 并存。ISO 适配器必须同时维护，否则滑条与旧调用会漂
-- **品牌枚举**：`CameraBrand` 仍只有 TOUPCAM / QHY / ZWO / PLAYERONE
+- **品牌枚举**：公开树已有 `NIKON/CANON/SONY`；Canon/Sony 后端仍未实现。工业 overlay 的 `CameraBrand` 需在同步时一并带上 Nikon，否则本地全量包会丢掉单反枚举。
 
 **建议**
 
@@ -698,7 +699,7 @@
 
 ---
 
-### [ ] 12. 正式 release 签名、版本和 R8
+### [~] 12. 正式 release 签名、版本和 R8
 
 **涉及模块**
 
@@ -707,11 +708,13 @@
 - `proguard-rules.pro`
 - 发布文档/CI secrets
 
-**现状**
+**当前进度**
 
-- release 使用 debug signing config。
-- `isMinifyEnabled = false`。
-- `versionCode = 1`、`versionName = "1.0.0"` 为静态配置。
+- release 已取消 debug signing 回退，缺少独立密钥时构建直接失败。
+- CI 使用临时非 debug 证书编译 release APK 并核验签名身份。
+- `Build.ps1` 已输出版本化 APK、SHA-256、构建信息与 AGPL 源码包。
+- production keystore、升级安装验收和密钥备份仍需维护者完成。
+- `isMinifyEnabled = false`；R8 等待厂商 SDK/JNI 真机矩阵通过。
 
 **建议**
 
@@ -724,11 +727,11 @@
 
 **验收标准**
 
-- [ ] release APK 使用稳定、非 debug 签名。
-- [ ] 签名密钥不出现在 Git 历史和构建日志中。
+- [x] release 构建仅接受独立、非 debug 签名配置。
+- [x] 签名密钥通过本机环境变量或 GitHub `release` environment 注入。
 - [ ] 同一签名可以覆盖升级已发布版本。
 - [ ] R8 构建通过全部设备与协议冒烟测试。
-- [ ] 发布产物包含版本、commit 和 SHA-256 信息。
+- [x] 发布产物包含版本、commit 和 SHA-256 信息。
 
 **依赖：** 建议在自动化测试与 ABI/flavor 策略明确后启用 R8。
 
@@ -834,6 +837,6 @@ flowchart TD
 
 ### 批次 H：单反 / 无反
 
-- 事项 18：Canon / Nikon / Sony PTP 机身接入，详见 `docs/CAMERA_NATIVE_GAIN_AND_ISO_PLAN.md` §6.5
-- 增益/ISO 控件复用现有统一模型，不另做 UI；阻塞项是 PTP、Live View 与静帧路径
-- 不与事项 17 的手机 Camera2 板解混为同一适配器
+- 事项 18：Canon / Nikon / Sony 机身接入，详见 `docs/DSLR_MIRRORLESS_CAMERA_PLAN.md`
+- 锚点机 Nikon D5100；M0 为 USB PTP 可行性 go/no-go。增益/ISO 复用现有模型，不另做 UI
+- 不与事项 17 的手机 Camera2 板解混为同一适配器；单反不进入导星列表

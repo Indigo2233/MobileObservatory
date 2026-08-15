@@ -222,6 +222,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _supportedPixelFormats = MutableStateFlow<List<PixelFormat>>(listOf(PixelFormat.MONO8))
     val supportedPixelFormats: StateFlow<List<PixelFormat>> = _supportedPixelFormats.asStateFlow()
 
+    private val _supportsHostRoi = MutableStateFlow(true)
+    val supportsHostRoi: StateFlow<Boolean> = _supportsHostRoi.asStateFlow()
+    private val _recordsLiveViewAsScience = MutableStateFlow(true)
+    val recordsLiveViewAsScience: StateFlow<Boolean> = _recordsLiveViewAsScience.asStateFlow()
+
     private val _readoutMode = MutableStateFlow(ReadoutMode.NORMAL)
     val readoutMode: StateFlow<ReadoutMode> = _readoutMode.asStateFlow()
 
@@ -390,6 +395,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val frameSnapshotMutex = Mutex()
     private val cameraDefaultsMutex = Mutex()
     private val gainWriteMutex = Mutex()
+    private val exposureWriteMutex = Mutex()
     private val guideGainWriteMutex = Mutex()
     private val latestGuideStars = AtomicReference<List<GuideStar>>(emptyList())
     @Volatile private var guideFrameSequence = 0L
@@ -555,6 +561,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         syncOffsetCapability(cam)
                         _pixelFormat.value = cam.currentPixelFormat
                         _supportedPixelFormats.value = cam.supportedPixelFormats
+                        _supportsHostRoi.value = cam.supportsHostRoi
+                        _recordsLiveViewAsScience.value = cam.recordsLiveViewAsScience
                         _readoutMode.value = cam.currentReadoutMode
                         _supportedReadoutModes.value = cam.supportedReadoutModes
                         (cam as? CameraNativeReadoutModeCapable)?.let { readoutCapable ->
@@ -600,6 +608,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         _gainCapability.value = null
                         _gainDbEquivalent.value = null
                         _gainWriteInProgress.value = false
+                        _supportsHostRoi.value = true
+                        _recordsLiveViewAsScience.value = true
                     }
                     is ConnectionState.Enumerating -> {
                         _statusMessage.value = app.getString(R.string.searching_cameras)
@@ -1478,9 +1488,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 ImageUtils.formatExposure(clamped)
             )
         }
-        cam.setExposureTime(clamped)
-        _exposureUs.value = cam.currentExposureUs
-        updateSoftwareStackingProgress(cam)
+        viewModelScope.launch(Dispatchers.IO) {
+            exposureWriteMutex.withLock {
+                cam.setExposureTime(clamped)
+                if (cameraManager.activeCamera === cam) {
+                    _exposureUs.value = cam.currentExposureUs
+                    updateSoftwareStackingProgress(cam)
+                }
+            }
+        }
     }
 
     fun toggleLongExposure() {
@@ -1492,8 +1508,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (!newState) {
             val shortMax = ExposureLimits.uiMaxUs(cam, false)
             if (cam.currentExposureUs > shortMax) {
-                cam.setExposureTime(shortMax)
-                _exposureUs.value = cam.currentExposureUs
+                viewModelScope.launch(Dispatchers.IO) {
+                    exposureWriteMutex.withLock {
+                        cam.setExposureTime(shortMax)
+                        if (cameraManager.activeCamera === cam) {
+                            _exposureUs.value = cam.currentExposureUs
+                        }
+                    }
+                }
             }
             _longExposureProgress.value = ""
         }
@@ -1979,6 +2001,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
         try {
             val cam = cameraManager.activeCamera ?: return
+            if (!cam.recordsLiveViewAsScience || cam.currentPixelFormat == PixelFormat.RGB24) {
+                _statusMessage.value = app.getString(R.string.dslr_live_view_not_science)
+                return
+            }
             val roi = cam.currentRoi
             val ts = winJuposTimestamp()
             val target = _targetName.value.ifBlank { "Pla" }
@@ -2117,6 +2143,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     suspend fun captureTempFitsForPlateSolve(): File? = withContext(Dispatchers.IO) {
         val cam = cameraManager.activeCamera ?: return@withContext null
+        if (!cam.recordsLiveViewAsScience || cam.currentPixelFormat == PixelFormat.RGB24) {
+            _statusMessage.value = app.getString(R.string.dslr_live_view_not_science)
+            return@withContext null
+        }
         val frame = awaitFrameSnapshot() ?: return@withContext null
         val dir = File(getApplication<Application>().cacheDir, "polar_align").also { it.mkdirs() }
         val file = File(dir, "polar_${System.currentTimeMillis()}.fits")
@@ -2147,6 +2177,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
         val cam = cameraManager.activeCamera ?: return
+        if (!cam.recordsLiveViewAsScience || cam.currentPixelFormat == PixelFormat.RGB24) {
+            _statusMessage.value = app.getString(R.string.dslr_live_view_not_science)
+            return
+        }
         val filterName = currentFilterName()
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -2198,6 +2232,43 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
         val cam = cameraManager.activeCamera ?: return
         val filterName = currentFilterName()
+        val still = cam as? CameraStillCaptureCapable
+        if (still != null && still.stillCaptureSupported) {
+            viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    val dir = File(
+                        getApplication<Application>().getExternalFilesDir("captures"),
+                        "JPG"
+                    )
+                    dir.mkdirs()
+                    val ts = winJuposTimestamp()
+                    val target = _targetName.value.ifBlank { "Pla" }
+                    val info = cam.cameraInfo
+                    val cameraShort = (info?.sensorName ?: info?.name)?.replace(" ", "")?.take(20) ?: "Camera"
+                    val filterPart = if (filterName != null) "-$filterName" else ""
+                    val fileName = "$ts-$target$filterPart-$cameraShort.jpg"
+                    val dest = File(dir, fileName)
+                    val result = still.captureStill(DslrStillFormat.JPEG, dir)
+                    val jpeg = result.jpegFile ?: error("Camera did not return a JPEG")
+                    if (jpeg.canonicalPath != dest.canonicalPath) {
+                        jpeg.copyTo(dest, overwrite = true)
+                        if (jpeg.exists() && jpeg.canonicalPath != dest.canonicalPath) {
+                            jpeg.delete()
+                        }
+                    }
+                    saveJpegFileToGallery(dest, fileName)
+                    withContext(Dispatchers.Main) {
+                        _statusMessage.value = app.getString(R.string.saved_file, fileName)
+                    }
+                } catch (e: Throwable) {
+                    Log.e(TAG, "captureJpg still failed", e)
+                    withContext(Dispatchers.Main) {
+                        _statusMessage.value = app.getString(R.string.capture_error_detail, e.message.orEmpty())
+                    }
+                }
+            }
+            return
+        }
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val frame = awaitFrameSnapshot() ?: return@launch
@@ -2230,6 +2301,43 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     _statusMessage.value = app.getString(R.string.capture_error_detail, e.message.orEmpty())
                 }
             }
+        }
+    }
+
+    private fun saveJpegFileToGallery(jpegFile: File, fileName: String) {
+        val app = getApplication<Application>()
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val values = ContentValues().apply {
+                    put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
+                    put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                    put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/MobileObservatory")
+                    put(MediaStore.Images.Media.IS_PENDING, 1)
+                }
+                val uri = app.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                if (uri != null) {
+                    app.contentResolver.openOutputStream(uri)?.use { os ->
+                        jpegFile.inputStream().use { it.copyTo(os) }
+                    }
+                    values.clear()
+                    values.put(MediaStore.Images.Media.IS_PENDING, 0)
+                    app.contentResolver.update(uri, values, null, null)
+                    Log.i(TAG, "JPG saved to gallery: $uri")
+                }
+            } else {
+                val picturesDir = File(
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES),
+                    "MobileObservatory"
+                )
+                picturesDir.mkdirs()
+                val galleryFile = File(picturesDir, fileName)
+                jpegFile.copyTo(galleryFile, overwrite = true)
+                MediaScannerConnection.scanFile(
+                    app, arrayOf(galleryFile.absolutePath), arrayOf("image/jpeg")
+                ) { path, uri -> Log.i(TAG, "JPG scanned: $path -> $uri") }
+            }
+        } catch (e: Throwable) {
+            Log.e(TAG, "Failed to save JPG to gallery: ${e.message}")
         }
     }
 

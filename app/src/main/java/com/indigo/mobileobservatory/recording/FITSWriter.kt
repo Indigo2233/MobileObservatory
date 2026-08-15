@@ -36,6 +36,9 @@ class FITSWriter {
         exposureStartedAt: Instant? = null
     ) {
         val effectiveFormat = configuredFormat ?: frame.pixelFormat
+        if (effectiveFormat == PixelFormat.RGB24 || frame.pixelFormat == PixelFormat.RGB24) {
+            error("RGB24 Live View frames cannot be written as FITS")
+        }
         val is16 = effectiveFormat.isHighBit
         val bitpix = if (is16) 16 else 8
         val naxis1 = frame.width

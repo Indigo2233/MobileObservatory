@@ -8,4 +8,6 @@
     <usb-device vendor-id="5656" />
     <!-- Player One cameras (VID 0xA0A0 = 41120) -->
     <usb-device vendor-id="41120" />
+    <!-- Nikon PTP / MTP cameras (VID 0x04B0 = 1200). Code also requires USB Still Image class. -->
+    <usb-device vendor-id="1200" />
 </resources>

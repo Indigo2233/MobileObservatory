@@ -2,6 +2,17 @@
 
 Run these checks before a release that changes device, permission, or preview code.
 Record Android version, device model, accessory firmware, result, and relevant logs.
+Use the GitHub `Hardware validation result` issue form for external reports. A release
+record must also include the tested commit, APK certificate fingerprint, test duration,
+transport, measurements, and links to de-identified evidence.
+
+## Release evidence gate
+
+- Record every affected hardware family as passed, failed, or unavailable.
+- Treat unavailable required hardware as an explicit release risk.
+- Repeat failed rows after the fix on the exact release commit.
+- Verify upgrade installation from the previous public APK with the production key.
+- Link the final matrix from release notes and retain logs outside ephemeral CI storage.
 
 ## Camera
 
@@ -15,6 +26,8 @@ Record Android version, device model, accessory firmware, result, and relevant l
 - Leave preview running for 30 minutes. Record `Preview baseline` Logcat values,
   visible tearing, input latency, device temperature, and any reconnect failure.
 - Disconnect and reconnect after Activity recreation.
+- Nikon PTP M0 (D5100): device appears only in the main camera list, OpenSession succeeds,
+  logcat/`FileLogger` shows model + ISO list. Live View is not required for this row.
 
 ## Mount
 

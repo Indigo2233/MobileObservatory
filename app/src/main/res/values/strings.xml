@@ -492,6 +492,7 @@
     <string name="long_exposure_disabled">Long exposure disabled</string>
     <string name="trial_recording_disabled">Trial version — recording disabled</string>
     <string name="record_error_detail">Record error: %s</string>
+    <string name="dslr_live_view_not_science">Live View cannot be saved as SER/FITS. Use still capture for JPEG.</string>
     <string name="recording_stopped">Recording stopped</string>
     <string name="trial_capture_disabled">Trial version — capture disabled</string>
     <string name="saved_file">Saved: %s</string>

@@ -138,6 +138,7 @@ fun CameraScreen(
     val usbBandwidthRange by viewModel.usbBandwidthRange.collectAsState()
     val pixelFormat by viewModel.pixelFormat.collectAsState()
     val supportedPixelFormats by viewModel.supportedPixelFormats.collectAsState()
+    val supportsHostRoi by viewModel.supportsHostRoi.collectAsState()
     val roi by viewModel.roi.collectAsState()
     val autoStretch by viewModel.autoStretch.collectAsState()
     val flipH by viewModel.flipH.collectAsState()
@@ -798,6 +799,7 @@ fun CameraScreen(
                         onToggleLongExposure = { viewModel.toggleLongExposure() },
                         roiMinWidth = roiMinW,
                         roiMinHeight = roiMinH,
+                        showHostRoi = supportsHostRoi,
                         coolingInfo = coolingInfo,
                         coolerOn = coolerOn,
                         sensorTempTenths = sensorTempTenths,

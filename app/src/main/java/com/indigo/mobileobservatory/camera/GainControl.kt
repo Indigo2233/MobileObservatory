@@ -31,10 +31,11 @@ data class GainCapability(
     val presets: List<GainPreset> = emptyList(),
     val decimalPlaces: Int = 0,
     val continuous: Boolean = false,
-    val helperKind: GainHelperKind = GainHelperKind.NONE
+    val helperKind: GainHelperKind = GainHelperKind.NONE,
+    val writable: Boolean = true
 ) {
     val isDiscrete: Boolean get() = allowedValues.isNotEmpty()
-    val isReadOnly: Boolean get() = min == max
+    val isReadOnly: Boolean get() = !writable || min == max
 }
 
 object GainValueNormalizer {
@@ -94,10 +95,12 @@ object GainValueNormalizer {
     fun isoCapability(
         allowedValues: List<Float>,
         current: Float,
-        defaultValue: Float = current
+        defaultValue: Float = current,
+        writable: Boolean = true,
+        presets: List<GainPreset> = emptyList()
     ): GainCapability {
         val allowed = allowedValues
-            .filter { it.isFinite() && it > 0f }
+            .filter { it.isFinite() && it > 0f && it < 65_535f }
             .distinct()
             .sorted()
         val min = allowed.firstOrNull() ?: 100f
@@ -111,7 +114,9 @@ object GainValueNormalizer {
             step = 1f,
             defaultValue = defaultValue.takeIf { it.isFinite() } ?: min,
             allowedValues = allowed,
-            decimalPlaces = 0
+            decimalPlaces = 0,
+            presets = presets,
+            writable = writable
         ).let { capability ->
             capability.copy(defaultValue = normalize(capability, fallback))
         }

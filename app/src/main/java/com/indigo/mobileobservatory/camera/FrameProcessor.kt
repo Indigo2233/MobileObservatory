@@ -177,6 +177,8 @@ class FrameProcessor {
 
         if (frame.pixelFormat == PixelFormat.RGB48) {
             fillRgb48Pixels(frame, pixels, w, h)
+        } else if (frame.pixelFormat == PixelFormat.RGB24) {
+            fillRgb24Pixels(frame, pixels, w, h)
         } else if (frame.pixelFormat.isBayer) {
             fillBayerPixels(frame, pixels, w, h)
         } else {
@@ -200,6 +202,13 @@ class FrameProcessor {
         val w = frame.width
         val h = frame.height
         if (w < 5 || h < 5) return 0f
+
+        if (frame.pixelFormat == PixelFormat.RGB24) {
+            return computeRgbLumaFocusScore(frame, bytesPerPixel = 3, valueShift = 0)
+        }
+        if (frame.pixelFormat == PixelFormat.RGB48) {
+            return computeRgbLumaFocusScore(frame, bytesPerPixel = 6, valueShift = 8)
+        }
 
         val data = frame.data
         val is10 = frame.pixelFormat.is10bit
@@ -232,6 +241,50 @@ class FrameProcessor {
         return if (range > 0f) ((variance - focusScoreMin) / range * 100f) else 50f
     }
 
+    private fun computeRgbLumaFocusScore(frame: FrameData, bytesPerPixel: Int, valueShift: Int): Float {
+        val w = frame.width
+        val h = frame.height
+        val data = frame.data
+        val step = 4
+        var sumL = 0.0
+        var sumL2 = 0.0
+        var count = 0
+        fun luma(x: Int, y: Int): Int {
+            val base = (y * w + x) * bytesPerPixel
+            val r: Int
+            val g: Int
+            val b: Int
+            if (bytesPerPixel >= 6) {
+                if (base + 5 >= data.size) return 0
+                r = (data[base].toInt() and 0xFF) or ((data[base + 1].toInt() and 0xFF) shl 8)
+                g = (data[base + 2].toInt() and 0xFF) or ((data[base + 3].toInt() and 0xFF) shl 8)
+                b = (data[base + 4].toInt() and 0xFF) or ((data[base + 5].toInt() and 0xFF) shl 8)
+            } else {
+                if (base + 2 >= data.size) return 0
+                r = data[base].toInt() and 0xFF
+                g = data[base + 1].toInt() and 0xFF
+                b = data[base + 2].toInt() and 0xFF
+            }
+            return ((r * 299 + g * 587 + b * 114) / 1000) shr valueShift
+        }
+        for (y in 2 until h - 2 step step) {
+            for (x in 2 until w - 2 step step) {
+                val c = luma(x, y)
+                val lap = (4 * c - luma(x - 1, y) - luma(x + 1, y) - luma(x, y - 1) - luma(x, y + 1)).toDouble()
+                sumL += lap
+                sumL2 += lap * lap
+                count++
+            }
+        }
+        if (count == 0) return 0f
+        val mean = sumL / count
+        val variance = (sumL2 / count - mean * mean).toFloat().coerceAtLeast(0f)
+        if (variance < focusScoreMin) focusScoreMin = variance
+        if (variance > focusScoreMax) focusScoreMax = variance
+        val range = focusScoreMax - focusScoreMin
+        return if (range > 0f) ((variance - focusScoreMin) / range * 100f) else 50f
+    }
+
     fun resetFocusRange() {
         focusScoreMin = Float.MAX_VALUE
         focusScoreMax = Float.MIN_VALUE
@@ -246,6 +299,21 @@ class FrameProcessor {
     }
 
     fun getDetectedEffectiveBits(): Int = detectedEffectiveBits
+
+    private fun fillRgb24Pixels(frame: FrameData, pixels: IntArray, w: Int, h: Int) {
+        val hist = computeHistogram(frame)
+        publishHistogram(hist)
+        val data = frame.data
+        val totalPixels = w * h
+        for (i in 0 until totalPixels) {
+            val base = i * 3
+            if (base + 2 >= data.size) break
+            val r = data[base].toInt() and 0xFF
+            val g = data[base + 1].toInt() and 0xFF
+            val b = data[base + 2].toInt() and 0xFF
+            pixels[i] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+        }
+    }
 
     private fun fillRgb48Pixels(frame: FrameData, pixels: IntArray, w: Int, h: Int) {
         val numBins = 1024
@@ -571,6 +639,22 @@ class FrameProcessor {
                 val b = (frame.data[base + 4].toInt() and 0xFF) or ((frame.data[base + 5].toInt() and 0xFF) shl 8)
                 val lum = (r * 299 + g * 587 + b * 114) / 1000
                 bins[(lum shr 6).coerceIn(0, 1023)]++
+            }
+            val maxCount = bins.max()
+            return computeStretchPoints(bins, numBins, maxCount, totalPixels)
+        }
+
+        if (frame.pixelFormat == PixelFormat.RGB24) {
+            val numBins = 256
+            val bins = reusableHistogramBins(numBins)
+            for (i in 0 until totalPixels) {
+                val base = i * 3
+                if (base + 2 >= frame.data.size) break
+                val r = frame.data[base].toInt() and 0xFF
+                val g = frame.data[base + 1].toInt() and 0xFF
+                val b = frame.data[base + 2].toInt() and 0xFF
+                val lum = ((r * 299 + g * 587 + b * 114) / 1000).coerceIn(0, 255)
+                bins[lum]++
             }
             val maxCount = bins.max()
             return computeStretchPoints(bins, numBins, maxCount, totalPixels)

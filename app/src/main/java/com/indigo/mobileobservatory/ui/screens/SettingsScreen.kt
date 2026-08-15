@@ -227,6 +227,7 @@ private fun CameraSettingsPage(viewModel: CameraViewModel) = SettingsPage {
         isError = gainInputInvalid,
         modifier = Modifier.fillMaxWidth()
     )
+    if (supportedPixelFormats.size > 1) {
     Text(stringResource(R.string.default_pixel_format), style = MaterialTheme.typography.titleSmall)
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         supportedPixelFormats.take(4).forEach { format ->
@@ -236,6 +237,7 @@ private fun CameraSettingsPage(viewModel: CameraViewModel) = SettingsPage {
                 label = { Text(format.displayName) }
             )
         }
+    }
     }
     if (offsetRange != null) {
         OutlinedTextField(

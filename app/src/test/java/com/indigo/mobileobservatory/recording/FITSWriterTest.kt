@@ -95,4 +95,19 @@ class FITSWriterTest {
             file.delete()
         }
     }
+
+    @Test(expected = IllegalStateException::class)
+    fun `refuses RGB24 live view frames`() {
+        val file = Files.createTempFile("indigo-rgb24", ".fits").toFile()
+        try {
+            FITSWriter().write(
+                file = file,
+                frame = FrameData(ByteArray(12), 2, 2, PixelFormat.RGB24, frameId = 1L, timestamp = 0L),
+                exposureSeconds = 1f,
+                gain = 100f
+            )
+        } finally {
+            file.delete()
+        }
+    }
 }

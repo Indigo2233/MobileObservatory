@@ -113,6 +113,7 @@ fun ControlPanel(
     onToggleLongExposure: () -> Unit,
     roiMinWidth: Int = 8,
     roiMinHeight: Int = 8,
+    showHostRoi: Boolean = true,
     // Cooling params
     coolingInfo: CoolingInfo?,
     coolerOn: Boolean,
@@ -1009,6 +1010,7 @@ fun ControlPanel(
                     }
                 }
 
+                if (supportedPixelFormats.size > 1) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -1035,6 +1037,7 @@ fun ControlPanel(
                             )
                         }
                     }
+                }
                 }
 
                 if (usbBandwidth != null && usbBandwidthRange != null &&
@@ -1227,6 +1230,7 @@ fun ControlPanel(
 
         Divider(color = MaterialTheme.colorScheme.outlineVariant)
 
+        if (showHostRoi) {
         // ── ROI ───────
         SectionHeader(stringResource(R.string.section_roi), roiExpanded) { roiExpanded = !roiExpanded }
         AnimatedVisibility(visible = roiExpanded) {
@@ -1350,6 +1354,7 @@ fun ControlPanel(
                 }
             }
         }
+        }
 
         // ── Info ───────
         if (cameraInfo != null) {
@@ -1363,9 +1368,9 @@ fun ControlPanel(
                     InfoRow(stringResource(R.string.info_sn), cameraInfo.serialNumber)
                     InfoRow(stringResource(R.string.info_sensor), cameraInfo.sensorName ?: "—")
                     InfoRow(stringResource(R.string.info_resolution), "${cameraInfo.sensorWidth} x ${cameraInfo.sensorHeight}")
-                    val displayBitDepth = if (pixelFormat.is8bit) 8 else detectedBitDepth
+                    val displayBitDepth = if (pixelFormat.is8bit || pixelFormat == PixelFormat.RGB24) 8 else detectedBitDepth
                     InfoRow(stringResource(R.string.info_bit_depth), "${displayBitDepth}-bit")
-                    val formatDisplayName = if (pixelFormat.is8bit) {
+                    val formatDisplayName = if (pixelFormat.is8bit || pixelFormat.isRgb) {
                         pixelFormat.displayName
                     } else {
                         val prefix = if (pixelFormat.isMono) "MONO" else "BAYER RG"

@@ -7,20 +7,26 @@ enum class PixelFormat {
     BAYER_RG12, BAYER_GR12, BAYER_GB12, BAYER_BG12,
     BAYER_RG14, BAYER_GR14, BAYER_GB14, BAYER_BG14,
     BAYER_RG16, BAYER_GR16, BAYER_GB16, BAYER_BG16,
-    RGB48;
+    RGB24, RGB48;
 
     val isBayer: Boolean get() = name.startsWith("BAYER_")
     val isMono: Boolean get() = name.startsWith("MONO")
     val isRgb: Boolean get() = name.startsWith("RGB")
     val is8bit: Boolean get() = name.endsWith("8") && !isRgb
     val is10bit: Boolean get() = !is8bit && !isRgb
-    val isHighBit: Boolean get() = !is8bit
+    val isHighBit: Boolean get() = when (this) {
+        RGB24 -> false
+        RGB48 -> true
+        else -> !is8bit
+    }
     val bytesPerPixel: Int get() = when {
+        this == RGB24 -> 3
         this == RGB48 -> 6
         is8bit -> 1
         else -> 2
     }
     val nativeBits: Int get() = when {
+        this == RGB24 -> 8
         this == RGB48 -> 16
         name.endsWith("16") -> 16
         name.endsWith("14") -> 14

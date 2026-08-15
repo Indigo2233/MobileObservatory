@@ -1,6 +1,7 @@
 package com.indigo.mobileobservatory.camera
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -121,5 +122,26 @@ class GainValueNormalizerTest {
         assertEquals(12.5f, requireNotNull(GainValueNormalizer.parseInput(" 12.5 ")), 0f)
         assertEquals(null, GainValueNormalizer.parseInput("abc"))
         assertEquals(null, GainValueNormalizer.parseInput(""))
+    }
+
+    @Test
+    fun `iso capability drops auto sentinels`() {
+        val capability = GainValueNormalizer.isoCapability(
+            allowedValues = listOf(0f, 100f, 200f, 65_535f),
+            current = 100f
+        )
+        assertEquals(listOf(100f, 200f), capability.allowedValues)
+        assertFalse(capability.allowedValues.contains(0f))
+    }
+
+    @Test
+    fun `writable false is read only even when the range has more than one value`() {
+        val capability = GainValueNormalizer.isoCapability(
+            allowedValues = listOf(100f, 200f, 400f),
+            current = 200f,
+            writable = false
+        )
+        assertTrue(capability.isReadOnly)
+        assertFalse(capability.writable)
     }
 }

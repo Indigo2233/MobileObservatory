@@ -492,6 +492,7 @@
     <string name="long_exposure_disabled">长曝光已禁用</string>
     <string name="trial_recording_disabled">试用版已禁用录制</string>
     <string name="record_error_detail">录制错误：%s</string>
+    <string name="dslr_live_view_not_science">Live View 不能保存为 SER/FITS。请用单张拍摄保存 JPEG。</string>
     <string name="recording_stopped">录制已停止</string>
     <string name="trial_capture_disabled">试用版已禁用拍摄</string>
     <string name="saved_file">已保存：%s</string>

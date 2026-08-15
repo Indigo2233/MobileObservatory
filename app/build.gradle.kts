@@ -6,6 +6,24 @@ plugins {
 val stellariumNonCommercial =
     providers.gradleProperty("stellariumNonCommercial").orNull == "true"
 
+fun releaseCredential(propertyName: String, environmentName: String): String? =
+    providers.gradleProperty(propertyName)
+        .orElse(providers.environmentVariable(environmentName))
+        .orNull
+        ?.takeIf { it.isNotBlank() }
+
+val releaseStoreFile = releaseCredential("releaseStoreFile", "ANDROID_RELEASE_KEYSTORE")
+val releaseStorePassword = releaseCredential("releaseStorePassword", "ANDROID_RELEASE_STORE_PASSWORD")
+val releaseKeyAlias = releaseCredential("releaseKeyAlias", "ANDROID_RELEASE_KEY_ALIAS")
+val releaseKeyPassword = releaseCredential("releaseKeyPassword", "ANDROID_RELEASE_KEY_PASSWORD")
+val releaseSigningValues = listOf(
+    "ANDROID_RELEASE_KEYSTORE" to releaseStoreFile,
+    "ANDROID_RELEASE_STORE_PASSWORD" to releaseStorePassword,
+    "ANDROID_RELEASE_KEY_ALIAS" to releaseKeyAlias,
+    "ANDROID_RELEASE_KEY_PASSWORD" to releaseKeyPassword
+)
+val releaseSigningConfigured = releaseSigningValues.all { it.second != null }
+
 android {
     namespace = "com.indigo.mobileobservatory"
     compileSdk = 34
@@ -39,8 +57,13 @@ android {
     }
 
     signingConfigs {
-        getByName("debug") {
-            // uses default debug keystore
+        if (releaseSigningConfigured) {
+            create("release") {
+                storeFile = file(releaseStoreFile!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
         }
     }
 
@@ -48,7 +71,7 @@ android {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (releaseSigningConfigured) signingConfigs.getByName("release") else null
         }
     }
 
@@ -93,6 +116,30 @@ android {
             }
         }
     }
+}
+
+val verifyReleaseSigning = tasks.register("verifyReleaseSigning") {
+    group = "verification"
+    description = "Rejects unsigned or debug-signed release builds."
+    doLast {
+        val missing = releaseSigningValues.filter { it.second == null }.map { it.first }
+        if (missing.isNotEmpty()) {
+            throw GradleException("Release signing requires: ${missing.joinToString()}")
+        }
+        val store = file(releaseStoreFile!!)
+        if (!store.isFile) {
+            throw GradleException("Release keystore does not exist: $store")
+        }
+        if (store.name.equals("debug.keystore", ignoreCase = true) ||
+            releaseKeyAlias.equals("androiddebugkey", ignoreCase = true)
+        ) {
+            throw GradleException("Release builds cannot use the Android debug signing identity.")
+        }
+    }
+}
+
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    dependsOn(verifyReleaseSigning)
 }
 
 dependencies {

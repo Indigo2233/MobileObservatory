@@ -10,6 +10,8 @@ import android.hardware.usb.UsbManager
 import android.os.Build
 import android.util.Log
 import androidx.core.content.ContextCompat
+import com.indigo.mobileobservatory.camera.dslr.DslrCamera
+import com.indigo.mobileobservatory.camera.dslr.DslrUsb
 import com.indigo.mobileobservatory.camera.playerone.PlayerOneCamera
 import com.indigo.mobileobservatory.camera.playerone.PlayerOneSdkHost
 import com.indigo.mobileobservatory.camera.qhyccd.QhyCamera
@@ -24,7 +26,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-enum class CameraBrand { TOUPCAM, QHY, ZWO, PLAYERONE }
+enum class CameraBrand { TOUPCAM, QHY, ZWO, PLAYERONE, NIKON, CANON, SONY }
 
 enum class AccessoryType { FILTER_WHEEL, FOCUSER, EFUCOSER_FOCUSER, SERIAL_DEVICE }
 
@@ -65,6 +67,7 @@ class DahengCameraManager(
     private val actionUsbPermissionQhy = "com.indigo.mobileobservatory.USB_PERMISSION_QHY.$sessionName"
     private val actionUsbPermissionQhyFw = "com.indigo.mobileobservatory.USB_PERMISSION_QHY_FW.$sessionName"
     private val actionUsbPermissionZwo = "com.indigo.mobileobservatory.USB_PERMISSION_ZWO.$sessionName"
+    private val actionUsbPermissionDslr = "com.indigo.mobileobservatory.USB_PERMISSION_DSLR.$sessionName"
 
     private val _devices = MutableStateFlow<List<DeviceEntry>>(emptyList())
     val devices: StateFlow<List<DeviceEntry>> = _devices.asStateFlow()
@@ -100,13 +103,15 @@ class DahengCameraManager(
                         if (isAccessory) return
                     }
                     if (usbDevice.vendorId == TOUPCAM_VENDOR_ID || usbDevice.vendorId == QHY_VENDOR_ID ||
-                        usbDevice.vendorId == ZWO_VENDOR_ID || usbDevice.vendorId == PLAYERONE_VENDOR_ID)
+                        usbDevice.vendorId == ZWO_VENDOR_ID || usbDevice.vendorId == PLAYERONE_VENDOR_ID ||
+                        DslrUsb.brandForVendor(usbDevice.vendorId) == CameraBrand.NIKON)
                         enumerateDevices()
                 }
                 UsbManager.ACTION_USB_DEVICE_DETACHED -> {
                     val usbDevice = intent.getParcelableExtra<UsbDevice>("device") ?: return
                     if (usbDevice.vendorId == TOUPCAM_VENDOR_ID || usbDevice.vendorId == QHY_VENDOR_ID ||
-                        usbDevice.vendorId == ZWO_VENDOR_ID || usbDevice.vendorId == PLAYERONE_VENDOR_ID) {
+                        usbDevice.vendorId == ZWO_VENDOR_ID || usbDevice.vendorId == PLAYERONE_VENDOR_ID ||
+                        DslrUsb.brandForVendor(usbDevice.vendorId) == CameraBrand.NIKON) {
                         Log.i(TAG, "USB detached: VID=0x${usbDevice.vendorId.toString(16)}")
                         if (usbDevice.vendorId == TOUPCAM_VENDOR_ID &&
                             ToupcamJni.isFilterWheel(usbDevice.vendorId, usbDevice.productId)) {
@@ -139,6 +144,15 @@ class DahengCameraManager(
                             val po = activeCamera as? PlayerOneCamera
                             if (po != null) {
                                 po.markDisconnected()
+                                activeCamera = null
+                            } else {
+                                activeCamera = null
+                            }
+                            _connectionState.value = ConnectionState.Disconnected
+                        } else if (DslrUsb.brandForVendor(usbDevice.vendorId) == CameraBrand.NIKON) {
+                            val dslr = activeCamera as? DslrCamera
+                            if (dslr != null) {
+                                dslr.markDisconnected()
                                 activeCamera = null
                             } else {
                                 activeCamera = null
@@ -227,6 +241,17 @@ class DahengCameraManager(
                         _connectionState.value = ConnectionState.Error("USB permission denied")
                     }
                 }
+                actionUsbPermissionDslr -> {
+                    val usbDevice = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
+                    val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
+                    if (granted && usbDevice != null) {
+                        Log.i(TAG, "USB permission granted for DSLR ${usbDevice.deviceName}")
+                        openDslrDevice(usbDevice)
+                    } else {
+                        Log.w(TAG, "DSLR USB permission denied")
+                        _connectionState.value = ConnectionState.Error("USB permission denied")
+                    }
+                }
             }
         }
     }
@@ -241,6 +266,7 @@ class DahengCameraManager(
             addAction(actionUsbPermissionQhy)
             addAction(actionUsbPermissionQhyFw)
             addAction(actionUsbPermissionZwo)
+            addAction(actionUsbPermissionDslr)
         }
         ContextCompat.registerReceiver(
             context,
@@ -383,6 +409,32 @@ class DahengCameraManager(
             Log.w(TAG, "Player One enumeration failed: ${e.message}")
         }
 
+        if (sessionName != "guide") {
+            try {
+                val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
+                for ((_, usbDev) in usbManager.deviceList) {
+                    if (!DslrUsb.isSupportedMainCamera(usbDev)) continue
+                    val productName = usbDev.productName?.takeIf { it.isNotBlank() } ?: "Nikon PTP"
+                    allDevices.add(
+                        DeviceEntry(
+                            index = allDevices.size,
+                            name = productName,
+                            serialNumber = "NIKON-${usbDev.productId.toString(16)}-${usbDev.deviceId}",
+                            brand = CameraBrand.NIKON,
+                            usbDevice = usbDev
+                        )
+                    )
+                    Log.i(
+                        TAG,
+                        "Found Nikon PTP: $productName VID=0x${usbDev.vendorId.toString(16)} " +
+                            "PID=0x${usbDev.productId.toString(16)}"
+                    )
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Nikon PTP enumeration failed: ${e.message}")
+            }
+        }
+
         if (allDevices.isNotEmpty()) {
             _devices.value = allDevices
         }
@@ -462,6 +514,15 @@ class DahengCameraManager(
                 requestPlayerOnePermission(entry.serialNumber)
                 true
             }
+            CameraBrand.NIKON -> {
+                val usbDev = entry.usbDevice ?: return false
+                requestDslrPermission(usbDev)
+                true
+            }
+            CameraBrand.CANON, CameraBrand.SONY -> {
+                _connectionState.value = ConnectionState.Error("This camera brand is not implemented yet")
+                false
+            }
         }
     }
 
@@ -490,6 +551,15 @@ class DahengCameraManager(
             CameraBrand.PLAYERONE -> {
                 requestPlayerOnePermission(sn)
                 true
+            }
+            CameraBrand.NIKON -> {
+                val usbDev = entry.usbDevice ?: return false
+                requestDslrPermission(usbDev)
+                true
+            }
+            CameraBrand.CANON, CameraBrand.SONY -> {
+                _connectionState.value = ConnectionState.Error("This camera brand is not implemented yet")
+                false
             }
         }
     }
@@ -884,6 +954,59 @@ class DahengCameraManager(
         try { zwoUsbConnection?.close() } catch (_: Throwable) {}
         zwoUsbConnection = null
         UsbHelper.clearUsbFds()
+    }
+
+    private fun requestDslrPermission(usbDevice: UsbDevice) {
+        if (activeCamera != null) closeCamera()
+        _connectionState.value = ConnectionState.Connecting
+        val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
+        if (usbManager.hasPermission(usbDevice)) {
+            openDslrDevice(usbDevice)
+            return
+        }
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+        else PendingIntent.FLAG_UPDATE_CURRENT
+        val pi = PendingIntent.getBroadcast(
+            context,
+            7,
+            Intent(actionUsbPermissionDslr).setPackage(context.packageName),
+            flags
+        )
+        usbManager.requestPermission(usbDevice, pi)
+    }
+
+    private fun openDslrDevice(usbDevice: UsbDevice) {
+        _connectionState.value = ConnectionState.Connecting
+        Thread({
+            try {
+                val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
+                val connection = usbManager.openDevice(usbDevice)
+                if (connection == null) {
+                    _connectionState.value = ConnectionState.Error("Failed to open USB device")
+                    return@Thread
+                }
+                val camera = DslrCamera()
+                if (camera.open(usbDevice, connection)) {
+                    activeCamera = camera
+                    val info = camera.cameraInfo
+                    if (info == null) {
+                        camera.close()
+                        _connectionState.value = ConnectionState.Error("Nikon PTP opened without device info")
+                        return@Thread
+                    }
+                    _connectionState.value = ConnectionState.Connected(info)
+                    Log.i(TAG, "Nikon PTP connected: ${info.name}")
+                } else {
+                    _connectionState.value = ConnectionState.Error(
+                        "Nikon PTP OpenSession/GetDeviceInfo failed. Check USB mode is MTP/PTP."
+                    )
+                }
+            } catch (e: Throwable) {
+                Log.e(TAG, "openDslrDevice failed: ${e.message}", e)
+                _connectionState.value = ConnectionState.Error("Nikon PTP open failed: ${e.message}")
+            }
+        }, "Dslr-OpenThread").start()
     }
 
     private fun requestPlayerOnePermission(serialNumber: String) {

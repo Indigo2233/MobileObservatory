@@ -1,5 +1,7 @@
 # WandererAstro accessory support plan
 
+> Status: **not finished.** Phase 1 rotator **code** is in tree (`WandererSerialRotatorAdapter`); hardware acceptance is still open. Phases 2–4 have no implementation.
+
 ## Scope and delivery order
 
 This plan covers direct Android USB-serial support for WandererAstro accessories.
@@ -8,7 +10,7 @@ behind its existing controller interface.
 
 | Phase | Status | Scope | Completion criterion |
 |---|---|---|---|
-| 1 | In progress | WandererRotator Mini, Lite V1, Lite V2 | Automatic identification, connection, movement, stop, zero and reverse operate on hardware. |
+| 1 | Code landed; hardware pending | WandererRotator Mini, Lite V1, Lite V2 | Automatic identification, connection, movement, stop, zero and reverse operate on hardware. |
 | 2 | Planned | WandererCover V3, V4-EC, V4 Pro-EC | Cover state and flat-panel brightness are available through the cover controller. |
 | 3 | Planned | Wanderer Snowflake filter wheel | Slot selection, calibration and supported slot-name handling are available. |
 | 4 | Planned | WandererBox Plus V3 and Pro V3 | Power, USB, PWM and environment monitoring are available through an independent power controller. |
