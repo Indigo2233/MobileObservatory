@@ -44,6 +44,11 @@ One). After upgrading any vendor SDK, re-verify the SONAMEs do not collide
 (`llvm-readelf -d`). Never paper over such a collision with
 `packaging.jniLibs.pickFirsts`. See `app/src/main/jniLibs/README.md`.
 
+`libASICamera2.so` must remain the official ASISDK_ANDROID arm64 build
+(7,042,880 bytes, contains the model table for ASI662/585/676/678/715 etc.).
+A stripped 1,173,184-byte snapshot without that table was accidentally
+committed in April 2026 and breaks post-2020 ZWO cameras; never restore it.
+
 ## Native package changes
 
 The camera JNI functions use package-qualified exported names. Any future Android

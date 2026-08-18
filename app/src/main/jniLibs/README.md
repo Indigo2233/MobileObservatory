@@ -41,6 +41,10 @@ llvm-readelf -d <库文件> | grep -E "SONAME|NEEDED"
 
 - `libtoupcam.so`：图谱官方库，自带 USB 实现，不依赖外部 libusb。
 - `libqhyccd.a`：QHY 静态库，由 `cpp/CMakeLists.txt` 链接进 `libqhyccd_jni.so`。
-- `libASICamera2.so` / `libzwo_camera.so`：ZWO 官方库，同样已停止更新，视为冻结资产。
+- `libASICamera2.so` / `libzwo_camera.so`：ZWO 官方库。`libASICamera2.so` 必须保持官方
+  ASISDK_ANDROID 包（2024-11 下载版）的 arm64 文件（7,042,880 字节），内含 ASI662 / 585 /
+  676 / 678 / 715 等 2021+ 新机型表。⚠ 2026-04 曾误被一个 1,173,184 字节的旧版快照覆盖
+  （缺新机型表，导致 662 等无法识别），已恢复，切勿再从旧快照/旧工程还原。
+  `libzwo_camera.so`（JNI 胶水）新旧导出一致，可保持现有文件。
 - `libastap_cli.so`：ASTAP 板解命令行。
 - `libc++_shared.so` / `libomp.so`：NDK 运行时。
