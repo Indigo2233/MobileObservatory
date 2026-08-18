@@ -96,6 +96,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val frameProcessor = FrameProcessor()
     private val guideFrameProcessor = FrameProcessor()
     private val captureFrameProcessor = FrameProcessor()
+    private val softwareBinning = SoftwareBinning()
     private val guideModule = com.indigo.mobileobservatory.guide.GuideModule()
     private val previewPipeline = PreviewPipeline(viewModelScope, frameProcessor, targetFps = 30)
     private val guidePreviewPipeline = PreviewPipeline(viewModelScope, guideFrameProcessor, targetFps = 12)
@@ -187,6 +188,19 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _rampStatus = MutableStateFlow("")
     val rampStatus: StateFlow<String> = _rampStatus.asStateFlow()
 
+    private val _heaterSupported = MutableStateFlow(false)
+    val heaterSupported: StateFlow<Boolean> = _heaterSupported.asStateFlow()
+    private val _heaterLevel = MutableStateFlow(0)
+    val heaterLevel: StateFlow<Int> = _heaterLevel.asStateFlow()
+    private val _heaterMaxLevel = MutableStateFlow(0)
+    val heaterMaxLevel: StateFlow<Int> = _heaterMaxLevel.asStateFlow()
+    private val _fanSupported = MutableStateFlow(false)
+    val fanSupported: StateFlow<Boolean> = _fanSupported.asStateFlow()
+    private val _fanLevel = MutableStateFlow(0)
+    val fanLevel: StateFlow<Int> = _fanLevel.asStateFlow()
+    private val _fanMaxLevel = MutableStateFlow(0)
+    val fanMaxLevel: StateFlow<Int> = _fanMaxLevel.asStateFlow()
+
     val connectionState: StateFlow<ConnectionState> = cameraManager.connectionState
     val devices: StateFlow<List<DeviceEntry>> = cameraManager.devices
 
@@ -195,8 +209,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _gain = MutableStateFlow(0f)
     val gain: StateFlow<Float> = _gain.asStateFlow()
-    private val _gainDbEquivalent = MutableStateFlow<Float?>(null)
-    val gainDbEquivalent: StateFlow<Float?> = _gainDbEquivalent.asStateFlow()
     private val _gainCapability = MutableStateFlow<GainCapability?>(null)
     val gainCapability: StateFlow<GainCapability?> = _gainCapability.asStateFlow()
     private val _gainWriteInProgress = MutableStateFlow(false)
@@ -243,6 +255,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _roi = MutableStateFlow(Roi(0, 0, 1920, 1200))
     val roi: StateFlow<Roi> = _roi.asStateFlow()
+
+    private val _binning = MutableStateFlow(1)
+    val binning: StateFlow<Int> = _binning.asStateFlow()
+    private val _binningUsesHardware = MutableStateFlow(false)
+    val binningUsesHardware: StateFlow<Boolean> = _binningUsesHardware.asStateFlow()
+    private val _binningUsesSoftware = MutableStateFlow(false)
+    val binningUsesSoftware: StateFlow<Boolean> = _binningUsesSoftware.asStateFlow()
+    private val _imagingWidth = MutableStateFlow(1920)
+    val imagingWidth: StateFlow<Int> = _imagingWidth.asStateFlow()
+    private val _imagingHeight = MutableStateFlow(1200)
+    val imagingHeight: StateFlow<Int> = _imagingHeight.asStateFlow()
 
     private val _autoStretch = MutableStateFlow(true)
     val autoStretch: StateFlow<Boolean> = _autoStretch.asStateFlow()
@@ -314,8 +337,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val guideGain: StateFlow<Float> = _guideGain.asStateFlow()
     private val _guideGainCapability = MutableStateFlow<GainCapability?>(null)
     val guideGainCapability: StateFlow<GainCapability?> = _guideGainCapability.asStateFlow()
-    private val _guideGainDbEquivalent = MutableStateFlow<Float?>(null)
-    val guideGainDbEquivalent: StateFlow<Float?> = _guideGainDbEquivalent.asStateFlow()
     private val _guideGainWriteInProgress = MutableStateFlow(false)
     val guideGainWriteInProgress: StateFlow<Boolean> = _guideGainWriteInProgress.asStateFlow()
 
@@ -521,6 +542,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun hideDevicePicker() { _showDevicePicker.value = false }
 
     private var coolingJobs = mutableListOf<kotlinx.coroutines.Job>()
+    private var environmentJobs = mutableListOf<kotlinx.coroutines.Job>()
 
     init {
         _guideExposureUs.value = prefs.getFloat("guide_exposure_us", 1_000_000f)
@@ -557,7 +579,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         _exposureUs.value = cam.currentExposureUs
                         _gainCapability.value = cam.gainCapability
                         _gain.value = cam.currentGain
-                        _gainDbEquivalent.value = cam.gainDbEquivalent(cam.currentGain)
                         syncOffsetCapability(cam)
                         _pixelFormat.value = cam.currentPixelFormat
                         _supportedPixelFormats.value = cam.supportedPixelFormats
@@ -578,7 +599,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         }
                         _gain.value = cam.currentGain
                         _gainCapability.value = cam.gainCapability
-                        _gainDbEquivalent.value = cam.gainDbEquivalent(cam.currentGain)
                         _pixelFormat.value = cam.currentPixelFormat
                         _readoutMode.value = cam.currentReadoutMode
                         (cam as? CameraNativeReadoutModeCapable)?.let { readoutCapable ->
@@ -588,10 +608,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         syncOffsetCapability(cam)
                         syncUsbBandwidthCapability(cam)
                         _roi.value = cam.currentRoi
+                        syncBinningState(cam, appBin = 1)
                         _longExposureEnabled.value = cam.longExposureEnabled
                         refreshExposureUiLimits()
                         _statusMessage.value = app.getString(R.string.camera_connected_status, cam.cameraInfo?.name.orEmpty(), cam.cameraInfo?.serialNumber.orEmpty())
                         bindCoolingFlows(cam)
+                        bindEnvironmentFlows(cam)
                         startPreview()
                     }
                     is ConnectionState.Error -> {
@@ -601,15 +623,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         previewPipeline.stop()
                         _previewBitmap.value = null
                         unbindCoolingFlows()
+                        unbindEnvironmentFlows()
                         syncOffsetCapability(null)
                         syncUsbBandwidthCapability(null)
                         _nativeReadoutModes.value = emptyList()
                         _nativeReadoutModeId.value = null
                         _gainCapability.value = null
-                        _gainDbEquivalent.value = null
                         _gainWriteInProgress.value = false
                         _supportsHostRoi.value = true
                         _recordsLiveViewAsScience.value = true
+                        resetBinningState()
                     }
                     is ConnectionState.Enumerating -> {
                         _statusMessage.value = app.getString(R.string.searching_cameras)
@@ -643,7 +666,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         _guideExposureUs.value = cam.currentExposureUs
                         _guideGainCapability.value = cam.gainCapability
                         _guideGain.value = cam.currentGain
-                        _guideGainDbEquivalent.value = cam.gainDbEquivalent(cam.currentGain)
                         _guideStatus.value = app.getString(R.string.guide_camera_connected_status, cam.cameraInfo?.name.orEmpty())
                         startGuidePreview()
                     }
@@ -659,7 +681,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         _guideReferenceStar.value = null
                         _guideReferenceStars.value = emptyList()
                         _guideGainCapability.value = null
-                        _guideGainDbEquivalent.value = null
                         _guideGainWriteInProgress.value = false
                         _guideCorrection.value = null
                         _guideRunning.value = false
@@ -946,7 +967,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     if (guideCameraManager.activeCamera === cam) {
                         _guideGain.value = cam.currentGain
                         _guideGainCapability.value = cam.gainCapability
-                        _guideGainDbEquivalent.value = cam.gainDbEquivalent(cam.currentGain)
                     }
                 } finally {
                     _guideGainWriteInProgress.value = false
@@ -1325,7 +1345,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     _detectedBitDepth.value = detectedBits
                 }
             },
-            recycleBuffer = cam::recycleBuffer
+            recycleBuffer = { buf ->
+                if (!softwareBinning.release(buf)) cam.recycleBuffer(buf)
+            }
         )
 
         startExposureTimer()
@@ -1334,7 +1356,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 onFrameArrived()
                 updateFps()
 
-                fulfillFrameSnapshot(frame)
+                val processed = softwareBinning.apply(frame)
+                if (processed !== frame) cam.recycleBuffer(frame.data)
+
+                fulfillFrameSnapshot(processed)
 
                 if (autoExpFrameSkip++ % 10 == 0) {
                     val aeMax = if (_longExposureEnabled.value) {
@@ -1342,11 +1367,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     } else {
                         ExposureLimits.uiMaxUs(cam, false)
                     }
-                    autoExposureController.processFrame(frame, cam, exposureMaxUs = aeMax)
+                    autoExposureController.processFrame(processed, cam, exposureMaxUs = aeMax)
                     if (autoExposureController.mode != AutoExposureMode.OFF) {
                         _exposureUs.value = cam.currentExposureUs
                         _gain.value = cam.currentGain
-                        _gainDbEquivalent.value = cam.gainDbEquivalent(cam.currentGain)
                     }
                 }
 
@@ -1356,12 +1380,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     if (recordWriteQueue.remainingCapacity() == 0) {
                         reportRecordingDrop()
                     } else {
-                        val bpp = frame.pixelFormat.bytesPerPixel
-                        val size = frame.width * frame.height * bpp
-                        val copySize = size.coerceAtMost(frame.data.size)
+                        val bpp = processed.pixelFormat.bytesPerPixel
+                        val size = processed.width * processed.height * bpp
+                        val copySize = size.coerceAtMost(processed.data.size)
                         val copy = recordBufferPool.acquire(copySize)
-                        System.arraycopy(frame.data, 0, copy, 0, copySize)
-                        val recFrame = frame.copy(data = copy)
+                        System.arraycopy(processed.data, 0, copy, 0, copySize)
+                        val recFrame = processed.copy(data = copy)
                         if (!recordWriteQueue.offer(recFrame)) {
                             recordBufferPool.release(copy)
                             reportRecordingDrop()
@@ -1370,7 +1394,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 }
 
                 // Ownership transfers to the preview pipeline after all synchronous readers finish.
-                previewPipeline.submit(frame)
+                previewPipeline.submit(processed)
             }
         })
     }
@@ -1651,6 +1675,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 _pixelFormat.value = cameraManager.activeCamera?.currentPixelFormat ?: _pixelFormat.value
                 _supportedPixelFormats.value = cameraManager.activeCamera?.supportedPixelFormats ?: _supportedPixelFormats.value
                 _roi.value = cameraManager.activeCamera?.currentRoi ?: _roi.value
+                cameraManager.activeCamera?.let(::updateImagingSize)
                 cameraManager.activeCamera?.let(::syncGainState)
                 syncOffsetCapability(cameraManager.activeCamera)
             }
@@ -1676,7 +1701,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 if (cameraManager.activeCamera !== camera) return@withContext
                 _gain.value = camera.currentGain
                 _gainCapability.value = camera.gainCapability
-                _gainDbEquivalent.value = camera.gainDbEquivalent(camera.currentGain)
                 _pixelFormat.value = camera.currentPixelFormat
                 _supportedPixelFormats.value = camera.supportedPixelFormats
                 _readoutMode.value = camera.currentReadoutMode
@@ -1746,12 +1770,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private fun syncGainState(camera: Camera?) {
         if (camera == null) {
             _gainCapability.value = null
-            _gainDbEquivalent.value = null
             return
         }
         _gain.value = camera.currentGain
         _gainCapability.value = camera.gainCapability
-        _gainDbEquivalent.value = camera.gainDbEquivalent(camera.currentGain)
     }
 
     private fun syncOffsetCapability(camera: Camera?) {
@@ -1800,6 +1822,81 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val cam = cameraManager.activeCamera ?: return
         cam.resetRoi()
         _roi.value = cam.currentRoi
+    }
+
+    @Volatile private var binningSwitching = false
+
+    fun setBinning(bin: Int) {
+        val cam = cameraManager.activeCamera ?: return
+        if (binningSwitching) return
+        val requested = bin.coerceAtLeast(1)
+        if (requested == _binning.value) return
+        binningSwitching = true
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                applyBinning(cam, requested)
+            } catch (e: Throwable) {
+                Log.e(TAG, "setBinning($requested) failed", e)
+            } finally {
+                binningSwitching = false
+            }
+        }
+    }
+
+    private fun applyBinning(cam: Camera, requested: Int) {
+        val capable = cam as? CameraBinningCapable
+        val app = requested.coerceAtLeast(1)
+        val candidates = AppBinning.hardwareCandidates(app, capable?.supportedHardwareBins.orEmpty())
+        var appliedHw = 1
+        if (capable != null) {
+            for (hw in candidates) {
+                if (capable.currentHardwareBin == hw || capable.setHardwareBin(hw)) {
+                    appliedHw = hw
+                    break
+                }
+            }
+            if (capable.currentHardwareBin != appliedHw) {
+                if (capable.currentHardwareBin != 1) capable.setHardwareBin(1)
+                appliedHw = 1
+            }
+        }
+        val plan = AppBinPlan(appBin = app, hardwareBin = appliedHw, softwareBin = (app / appliedHw).coerceAtLeast(1))
+        publishBinPlan(cam, plan)
+    }
+
+    private fun syncBinningState(cam: Camera, appBin: Int) {
+        val capable = cam as? CameraBinningCapable
+        val hw = capable?.currentHardwareBin ?: 1
+        val app = appBin.coerceAtLeast(1)
+        val software = if (hw > 0 && app % hw == 0) app / hw else app
+        publishBinPlan(cam, AppBinPlan(appBin = app, hardwareBin = hw, softwareBin = software.coerceAtLeast(1)))
+    }
+
+    private fun publishBinPlan(cam: Camera, plan: AppBinPlan) {
+        softwareBinning.factor = plan.softwareBin
+        _binning.value = plan.appBin
+        _binningUsesHardware.value = plan.usesHardware
+        _binningUsesSoftware.value = plan.usesSoftware
+        _roi.value = cam.currentRoi
+        updateImagingSize(cam)
+    }
+
+    private fun updateImagingSize(cam: Camera) {
+        val info = cam.cameraInfo
+        val hw = (cam as? CameraBinningCapable)?.currentHardwareBin ?: 1
+        val fullW = info?.sensorWidth ?: cam.currentRoi.width
+        val fullH = info?.sensorHeight ?: cam.currentRoi.height
+        _imagingWidth.value = (fullW / hw).coerceAtLeast(1)
+        _imagingHeight.value = (fullH / hw).coerceAtLeast(1)
+    }
+
+    private fun resetBinningState() {
+        softwareBinning.factor = 1
+        _binning.value = 1
+        _binningUsesHardware.value = false
+        _binningUsesSoftware.value = false
+        _imagingWidth.value = 1920
+        _imagingHeight.value = 1200
     }
 
     fun setAutoStretch(enabled: Boolean) {
@@ -1960,6 +2057,36 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _coolingInfo.value = null
         _tempHistory.value = emptyList()
         _rampStatus.value = ""
+    }
+
+    private fun bindEnvironmentFlows(cam: Camera) {
+        unbindEnvironmentFlows()
+        val env = cam as? CameraEnvironmentControlCapable ?: return
+        _heaterSupported.value = env.heaterSupported
+        _heaterMaxLevel.value = env.heaterMaxLevel
+        _fanSupported.value = env.fanSupported
+        _fanMaxLevel.value = env.fanMaxLevel
+        environmentJobs += viewModelScope.launch { env.heaterLevel.collect { _heaterLevel.value = it } }
+        environmentJobs += viewModelScope.launch { env.fanLevel.collect { _fanLevel.value = it } }
+    }
+
+    private fun unbindEnvironmentFlows() {
+        environmentJobs.forEach { it.cancel() }
+        environmentJobs.clear()
+        _heaterSupported.value = false
+        _heaterMaxLevel.value = 0
+        _heaterLevel.value = 0
+        _fanSupported.value = false
+        _fanMaxLevel.value = 0
+        _fanLevel.value = 0
+    }
+
+    fun setHeaterLevel(level: Int) {
+        (cameraManager.activeCamera as? CameraEnvironmentControlCapable)?.setHeaterLevel(level)
+    }
+
+    fun setFanLevel(level: Int) {
+        (cameraManager.activeCamera as? CameraEnvironmentControlCapable)?.setFanLevel(level)
     }
 
     fun setCoolerOn(on: Boolean) {
@@ -2166,7 +2293,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             configuredFormat = cam.currentPixelFormat,
             pixelSizeUm = info?.pixelSizeUm,
             focalLengthMm = focalLengthMm,
-            binning = 1
+            binning = _binning.value
         )
         file
     }
@@ -2211,7 +2338,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     configuredFormat = cam.currentPixelFormat,
                     pixelSizeUm = info?.pixelSizeUm,
                     focalLengthMm = focalLengthMm,
-                    binning = 1
+                    binning = _binning.value
                 )
                 withContext(Dispatchers.Main) {
                     _statusMessage.value = app.getString(R.string.saved_file, file.name)

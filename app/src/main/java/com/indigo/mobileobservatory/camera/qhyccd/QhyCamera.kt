@@ -15,7 +15,7 @@ import kotlin.math.round
 import kotlin.math.roundToInt
 
 class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
-    CameraUsbBandwidthCapable {
+    CameraUsbBandwidthCapable, CameraBinningCapable {
 
     companion object {
         private const val TAG = "QhyCamera"
@@ -53,6 +53,9 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
 
     private var sensorWidth = 0
     private var sensorHeight = 0
+    private var currentBin = 1
+    override val currentHardwareBin: Int get() = currentBin
+    override var supportedHardwareBins: List<Int> = listOf(1); private set
     private var maxBpp = 16
     private var bayerType = -1
     private var supportedTransferBits = listOf(8)
@@ -158,6 +161,8 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
             QhyccdJni.setBinMode(1, 1)
             QhyccdJni.setResolution(0, 0, sensorWidth, sensorHeight)
             QhyccdJni.setDebayerOnOff(false)
+            currentBin = 1
+            supportedHardwareBins = probeSupportedBins()
 
             useSingleFrameMode = singleFrame
             initPixelFormats(desiredBits)
@@ -679,10 +684,10 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
             sensorWidth = chipInfo[0]
             sensorHeight = chipInfo[1]
             maxBpp = chipInfo[2]
-            QhyccdJni.setBinMode(1, 1)
-            QhyccdJni.setResolution(0, 0, sensorWidth, sensorHeight)
-            currentRoi = Roi(0, 0, sensorWidth, sensorHeight)
-            cropInfo = CropInfo(0, 0, sensorWidth, sensorHeight)
+            QhyccdJni.setBinMode(currentBin, currentBin)
+            QhyccdJni.setResolution(0, 0, sensorWidth / currentBin, sensorHeight / currentBin)
+            currentRoi = Roi(0, 0, sensorWidth / currentBin, sensorHeight / currentBin)
+            cropInfo = CropInfo(0, 0, currentRoi.width, currentRoi.height)
             initPixelFormats(currentPixelFormat.nativeBits)
             initExposureRange()
             initGainRange()
@@ -790,7 +795,7 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
             return false
         }
         useSingleFrameMode = singleFrame
-        QhyccdJni.setBinMode(1, 1)
+        QhyccdJni.setBinMode(currentBin, currentBin)
         QhyccdJni.setDebayerOnOff(false)
         return true
     }
@@ -861,16 +866,18 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
 
     override fun setRoi(roi: Roi) {
         try {
-            val x = roi.x.coerceIn(0, sensorWidth - roiMinWidth)
-            val y = roi.y.coerceIn(0, sensorHeight - roiMinHeight)
-            val w = roi.width.coerceIn(roiMinWidth, sensorWidth - x)
-            val h = roi.height.coerceIn(roiMinHeight, sensorHeight - y)
+            val maxW = sensorWidth / currentBin
+            val maxH = sensorHeight / currentBin
+            val x = roi.x.coerceIn(0, (maxW - roiMinWidth).coerceAtLeast(0))
+            val y = roi.y.coerceIn(0, (maxH - roiMinHeight).coerceAtLeast(0))
+            val w = roi.width.coerceIn(roiMinWidth, maxW - x)
+            val h = roi.height.coerceIn(roiMinHeight, maxH - y)
 
             val wasCapturing = _isCapturing.value
             val cb = frameCallback
             if (wasCapturing) stopCapture()
 
-            Log.i(TAG, "setRoi: ${x},${y} ${w}x${h}")
+            Log.i(TAG, "setRoi: ${x},${y} ${w}x${h} bin=$currentBin")
             QhyccdJni.setResolution(x, y, w, h)
             currentRoi = Roi(x, y, w, h)
             cropInfo = CropInfo(x, y, w, h)
@@ -882,7 +889,55 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
     }
 
     override fun resetRoi() {
-        setRoi(Roi(0, 0, sensorWidth, sensorHeight))
+        val maxW = sensorWidth / currentBin
+        val maxH = sensorHeight / currentBin
+        setRoi(Roi(0, 0, maxW, maxH))
+    }
+
+    override fun setHardwareBin(bin: Int): Boolean {
+        val b = if (bin in supportedHardwareBins) bin else return false
+        if (b == currentBin) return true
+        val wasCapturing = _isCapturing.value
+        val cb = frameCallback
+        if (wasCapturing) stopCapture()
+        val previous = currentBin
+        val applied = try {
+            if (QhyccdJni.setBinMode(b, b) != QhyccdJni.QHYCCD_SUCCESS) {
+                Log.w(TAG, "setBinMode($b) failed")
+                false
+            } else {
+                currentBin = b
+                val maxW = sensorWidth / b
+                val maxH = sensorHeight / b
+                QhyccdJni.setResolution(0, 0, maxW, maxH)
+                currentRoi = Roi(0, 0, maxW, maxH)
+                cropInfo = CropInfo(0, 0, maxW, maxH)
+                FileLogger.i(TAG, "Bin -> $b, imageSize=${maxW}x${maxH}")
+                true
+            }
+        } catch (e: Throwable) {
+            Log.e(TAG, "setHardwareBin($b) failed", e)
+            currentBin = previous
+            false
+        }
+        if (wasCapturing && cb != null) startCapture(cb)
+        return applied
+    }
+
+    private fun probeSupportedBins(): List<Int> {
+        val bins = mutableListOf(1)
+        val probes = listOf(
+            2 to QhyccdJni.CAM_BIN2X2MODE,
+            3 to QhyccdJni.CAM_BIN3X3MODE,
+            4 to QhyccdJni.CAM_BIN4X4MODE
+        )
+        for ((n, control) in probes) {
+            if (QhyccdJni.isControlAvailable(control) == QhyccdJni.QHYCCD_SUCCESS) {
+                bins.add(n)
+            }
+        }
+        FileLogger.i(TAG, "Supported bins: ${bins.joinToString()}")
+        return bins
     }
 
     override fun recycleBuffer(buf: ByteArray) {

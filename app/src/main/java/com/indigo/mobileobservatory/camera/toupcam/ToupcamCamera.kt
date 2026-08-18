@@ -11,7 +11,7 @@ import kotlin.math.pow
 import kotlin.math.roundToInt
 
 class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingCapable,
-    CameraUsbBandwidthCapable {
+    CameraUsbBandwidthCapable, CameraBinningCapable {
 
     companion object {
         private const val TAG = "ToupcamCamera"
@@ -88,6 +88,11 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
     private var isMono = true
     private var sensorW = 0
     private var sensorH = 0
+    private var outputW = 0
+    private var outputH = 0
+    private var currentBin = 1
+    override val currentHardwareBin: Int get() = currentBin
+    override var supportedHardwareBins: List<Int> = listOf(1); private set
     private var rawBits = 8
     private var baseBitDepth = 12
     private var modelFlag = 0L
@@ -147,6 +152,10 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
             val maxRes = ToupcamJni.getModelMaxResolution(vendorId, productId)
             sensorW = maxRes[0].coerceAtLeast(1)
             sensorH = maxRes[1].coerceAtLeast(1)
+            outputW = sensorW
+            outputH = sensorH
+            currentBin = 1
+            supportedHardwareBins = probeSupportedBins()
 
             rawBits = ToupcamJni.getMaxBitDepth()
             if (rawBits < 8) rawBits = 8
@@ -208,6 +217,8 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
 
             currentRoi = Roi(0, 0, sensorW, sensorH)
             cropInfo = CropInfo(0, 0, sensorW, sensorH)
+            outputW = sensorW
+            outputH = sensorH
             _isOpen.value = true
             initUsbBandwidth()
             Log.i(TAG, "Opened: $modelName ${sensorW}x${sensorH} ${rawBits}bit mono=$isMono px=${pixelSize}um flag=0x${modelFlag.toString(16)}")
@@ -519,10 +530,12 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
     }
 
     override fun setRoi(roi: Roi) {
-        val x = roi.x.coerceIn(0, sensorW - 1)
-        val y = roi.y.coerceIn(0, sensorH - 1)
-        val w = roi.width.coerceIn(1, sensorW - x)
-        val h = roi.height.coerceIn(1, sensorH - y)
+        val maxW = outputW.coerceAtLeast(1)
+        val maxH = outputH.coerceAtLeast(1)
+        val x = roi.x.coerceIn(0, maxW - 1)
+        val y = roi.y.coerceIn(0, maxH - 1)
+        val w = roi.width.coerceIn(1, maxW - x)
+        val h = roi.height.coerceIn(1, maxH - y)
 
         Log.i(TAG, "ROI request: ${roi.width}x${roi.height}@(${roi.x},${roi.y}) -> clamped: ${w}x${h}@($x,$y)")
         if (ToupcamJni.putRoi(x, y, w, h)) {
@@ -538,7 +551,62 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
     }
 
     override fun resetRoi() {
-        setRoi(Roi(0, 0, sensorW, sensorH))
+        setRoi(Roi(0, 0, outputW, outputH))
+    }
+
+    override fun setHardwareBin(bin: Int): Boolean {
+        val b = if (bin in supportedHardwareBins) bin else return false
+        if (b == currentBin) return true
+        val wasCapturing = _isCapturing.value
+        val cb = frameCallback
+        if (wasCapturing) stopCapture()
+        val previous = currentBin
+        val applied = try {
+            val option = if (b == 1) 1 else b
+            if (!ToupcamJni.putOption(ToupcamJni.OPTION_BINNING, option)) {
+                Log.w(TAG, "OPTION_BINNING=$option failed")
+                false
+            } else {
+                currentBin = b
+                val size = ToupcamJni.getSize()
+                outputW = size[0].coerceAtLeast(1)
+                outputH = size[1].coerceAtLeast(1)
+                ToupcamJni.putRoi(0, 0, outputW, outputH)
+                currentRoi = Roi(0, 0, outputW, outputH)
+                cropInfo = CropInfo(0, 0, outputW, outputH)
+                Log.i(TAG, "Bin -> $b, imageSize=${outputW}x${outputH}")
+                true
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "setHardwareBin($b) failed: ${e.message}")
+            currentBin = previous
+            false
+        }
+        if (wasCapturing && cb != null) startCapture(cb)
+        return applied
+    }
+
+    private fun probeSupportedBins(): List<Int> {
+        val bins = mutableListOf(1)
+        try {
+            for (n in 2..4) {
+                if (ToupcamJni.putOption(ToupcamJni.OPTION_BINNING, n)) {
+                    bins.add(n)
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "probeSupportedBins: ${e.message}")
+        }
+        try {
+            ToupcamJni.putOption(ToupcamJni.OPTION_BINNING, 1)
+            val size = ToupcamJni.getSize()
+            if (size[0] > 0 && size[1] > 0) {
+                outputW = size[0]
+                outputH = size[1]
+            }
+        } catch (_: Exception) {}
+        Log.i(TAG, "Supported bins: ${bins.joinToString()}")
+        return bins
     }
 
     override fun recycleBuffer(buf: ByteArray) {

@@ -1,6 +1,8 @@
 package com.indigo.mobileobservatory.camera.playerone
 
 import com.indigo.mobileobservatory.camera.Camera
+import com.indigo.mobileobservatory.camera.CameraBinningCapable
+import com.indigo.mobileobservatory.camera.CameraEnvironmentControlCapable
 import com.indigo.mobileobservatory.camera.CameraInfo
 import com.indigo.mobileobservatory.camera.CameraOffsetCapable
 import com.indigo.mobileobservatory.camera.CameraUsbBandwidthCapable
@@ -12,7 +14,6 @@ import com.indigo.mobileobservatory.camera.FrameCallback
 import com.indigo.mobileobservatory.camera.FrameData
 import com.indigo.mobileobservatory.camera.GainCapability
 import com.indigo.mobileobservatory.camera.GainConversions
-import com.indigo.mobileobservatory.camera.GainPreset
 import com.indigo.mobileobservatory.camera.GainValueNormalizer
 import com.indigo.mobileobservatory.camera.PixelFormat
 import com.indigo.mobileobservatory.camera.ReadoutMode
@@ -38,7 +39,8 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToInt
 
-class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBandwidthCapable {
+class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBandwidthCapable,
+    CameraEnvironmentControlCapable, CameraBinningCapable {
 
     companion object {
         private const val TAG = "PlayerOneCam"
@@ -106,12 +108,29 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
     private var currentPoaFormat = PoaImageFormat.RAW8
     private var currentBin = 1
     private var supportedBins: List<Int> = listOf(1)
+    override val currentHardwareBin: Int get() = currentBin
+    override val supportedHardwareBins: List<Int> get() = supportedBins
     private var sensorModeIndices: Map<ReadoutMode, Int> = emptyMap()
     var gainOffsetPreset: GainOffsetPreset? = null; private set
+
+    // Environment controls (anti-dew heater, cooling fan)
+    private var heaterConfig: PoaConfig? = null
+    private val _heaterLevel = MutableStateFlow(0)
+    override val heaterLevel: StateFlow<Int> = _heaterLevel.asStateFlow()
+    override var heaterSupported: Boolean = false; private set
+    override var heaterMaxLevel: Int = 0; private set
+    private val _fanLevel = MutableStateFlow(0)
+    override val fanLevel: StateFlow<Int> = _fanLevel.asStateFlow()
+    override var fanSupported: Boolean = false; private set
+    override var fanMaxLevel: Int = 0; private set
 
     // Cooling
     private val _coolingInfo = MutableStateFlow<CoolingInfo?>(null)
     override val coolingInfo: StateFlow<CoolingInfo?> = _coolingInfo.asStateFlow()
+    private var coolerPowerMin = 0f
+    private var coolerPowerMax = 100f
+    private var coolerPowerScale = 1f
+    private var coolerPowerLogged = false
     private val _coolerOn = MutableStateFlow(false)
     override val coolerOn: StateFlow<Boolean> = _coolerOn.asStateFlow()
     private val _targetTempTenths = MutableStateFlow(0)
@@ -173,6 +192,7 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
             logTransportSettings(cam, props.isUsb3Speed)
             readSensorModes(cam)
             readGainOffsetPresets(cam)
+            readEnvironmentControls(cam)
 
             val maxW = (sensorW / currentBin / PoaMapping.ROI_WIDTH_ALIGN) * PoaMapping.ROI_WIDTH_ALIGN
             val maxH = (sensorH / currentBin / PoaMapping.ROI_HEIGHT_ALIGN) * PoaMapping.ROI_HEIGHT_ALIGN
@@ -456,22 +476,33 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
     }
 
     fun setBin(bin: Int) {
-        val cam = poa ?: return
-        if (disconnected) return
-        val b = if (bin in supportedBins) bin else supportedBins.firstOrNull() ?: 1
-        if (b == currentBin) return
+        setHardwareBin(bin)
+    }
+
+    override fun setHardwareBin(bin: Int): Boolean {
+        val cam = poa ?: return false
+        if (disconnected) return false
+        val b = if (bin in supportedBins) bin else return false
+        if (b == currentBin) return true
         val wasCapturing = _isCapturing.value
         val cb = frameCallback
         if (wasCapturing) stopCapture()
-        try {
+        val applied = try {
             cam.setImageBin(b)
             currentBin = b
+            val maxW = (sensorW / currentBin / PoaMapping.ROI_WIDTH_ALIGN) * PoaMapping.ROI_WIDTH_ALIGN
+            val maxH = (sensorH / currentBin / PoaMapping.ROI_HEIGHT_ALIGN) * PoaMapping.ROI_HEIGHT_ALIGN
+            cam.setImageStartPosition(0, 0)
+            cam.setImageSize(maxW.coerceAtLeast(PoaMapping.ROI_MIN), maxH.coerceAtLeast(PoaMapping.ROI_MIN))
             syncRoiFromCamera(cam)
             FileLogger.i(TAG, "Bin -> $b, imageSize=${currentRoi.width}x${currentRoi.height}")
+            true
         } catch (e: PoaException) {
             FileLogger.w(TAG, "setImageBin ${e.error}: ${e.message}")
+            false
         }
         if (wasCapturing && cb != null) startCapture(cb)
+        return applied
     }
 
     fun getBin(): Int = currentBin
@@ -913,6 +944,95 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
         }
     }
 
+    /** Anti-dew heater intensity and cooling fan speed from the PO SDK. */
+    private fun readEnvironmentControls(cam: PoaCamera) {
+        heaterConfig = null
+        heaterSupported = false
+        heaterMaxLevel = 0
+        _heaterLevel.value = 0
+        fanSupported = false
+        fanMaxLevel = 0
+        _fanLevel.value = 0
+
+        // Heater intensity first (HEATER_POWER, 0..max); fall back to a
+        // plain on/off HEATER control on cameras without a power level.
+        try {
+            val attrs = cam.getConfigAttributes(PoaConfig.HEATER_POWER)
+            if (attrs.isReadable && attrs.isWritable) {
+                val max = attrs.maximum.asInteger().toInt()
+                if (max >= 1) {
+                    heaterConfig = PoaConfig.HEATER_POWER
+                    heaterSupported = true
+                    heaterMaxLevel = max
+                    _heaterLevel.value = cam.getConfig(PoaConfig.HEATER_POWER)
+                        .value.asInteger().toInt().coerceIn(0, max)
+                }
+            }
+        } catch (_: PoaException) {
+        }
+        if (!heaterSupported) {
+            try {
+                val attrs = cam.getConfigAttributes(PoaConfig.HEATER)
+                if (attrs.isReadable && attrs.isWritable) {
+                    heaterConfig = PoaConfig.HEATER
+                    heaterSupported = true
+                    heaterMaxLevel = 1
+                    _heaterLevel.value =
+                        if (cam.getConfig(PoaConfig.HEATER).value.asBoolean()) 1 else 0
+                }
+            } catch (_: PoaException) {
+            }
+        }
+
+        try {
+            val attrs = cam.getConfigAttributes(PoaConfig.FAN_POWER)
+            if (attrs.isReadable && attrs.isWritable) {
+                val max = attrs.maximum.asInteger().toInt()
+                if (max >= 1) {
+                    fanSupported = true
+                    fanMaxLevel = max
+                    _fanLevel.value = cam.getConfig(PoaConfig.FAN_POWER)
+                        .value.asInteger().toInt().coerceIn(0, max)
+                }
+            }
+        } catch (_: PoaException) {
+        }
+
+        FileLogger.i(
+            TAG,
+            "Environment controls: heater=$heaterSupported (max=$heaterMaxLevel) " +
+                "fan=$fanSupported (max=$fanMaxLevel) heaterLevel=${_heaterLevel.value} fanLevel=${_fanLevel.value}"
+        )
+    }
+
+    override fun setHeaterLevel(level: Int) {
+        val cam = poa ?: return
+        val config = heaterConfig ?: return
+        val target = level.coerceIn(0, heaterMaxLevel)
+        try {
+            if (config == PoaConfig.HEATER) {
+                cam.setConfig(config, ConfigValue.ofBoolean(target > 0), false)
+            } else {
+                cam.setConfig(config, ConfigValue.ofInteger(target.toLong()), false)
+            }
+            _heaterLevel.value = target
+        } catch (e: PoaException) {
+            FileLogger.w(TAG, "Set heater failed: ${e.error}")
+        }
+    }
+
+    override fun setFanLevel(level: Int) {
+        val cam = poa ?: return
+        if (!fanSupported) return
+        val target = level.coerceIn(0, fanMaxLevel)
+        try {
+            cam.setConfig(PoaConfig.FAN_POWER, ConfigValue.ofInteger(target.toLong()), false)
+            _fanLevel.value = target
+        } catch (e: PoaException) {
+            FileLogger.w(TAG, "Set fan speed failed: ${e.error}")
+        }
+    }
+
     private fun configureUnlimitedFrameRate(cam: PoaCamera) {
         try {
             val attrs = cam.getConfigAttributes(PoaConfig.FRAME_LIMIT)
@@ -1006,17 +1126,13 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
         try {
             val preset = cam.gainsAndOffsets
             gainOffsetPreset = preset
-            gainCapability = gainCapability.copy(
-                presets = listOf(
-                    GainPreset(preset.gainHighestDynamicRange.toFloat(), "HDR"),
-                    GainPreset(preset.highConversionGain.toFloat(), "HCG"),
-                    GainPreset(preset.unityGain.toFloat(), "Unity"),
-                    GainPreset(preset.gainLowestReadNoise.toFloat(), "Lowest noise")
-                )
-            )
+            // The HDR/HCG/Unity/Lowest-noise gain shortcuts duplicate the sensor
+            // readout mode row (Normal/HDR) for Player One, so they are kept out
+            // of the gain slider to avoid two confusing "mode" pickers.
+            gainCapability = gainCapability.copy(presets = emptyList())
             FileLogger.i(
                 TAG,
-                "Gain presets: HDR=${preset.gainHighestDynamicRange} HCG=${preset.highConversionGain} " +
+                "Gain presets (hidden in UI): HDR=${preset.gainHighestDynamicRange} HCG=${preset.highConversionGain} " +
                     "unity=${preset.unityGain} LRN=${preset.gainLowestReadNoise}"
             )
         } catch (e: PoaException) {
@@ -1054,6 +1170,25 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
             tecVoltageMaxTenths = 0
         )
 
+        // Normalize the cooler power readback with the SDK-reported range, so
+        // percent is correct whether the camera reports 0..1, 0..100, watts, etc.
+        try {
+            val powerAttrs = cam.getConfigAttributes(PoaConfig.COOLER_POWER)
+            coolerPowerMin = configValueToFloat(powerAttrs.minimum)
+            coolerPowerMax = configValueToFloat(powerAttrs.maximum)
+            coolerPowerScale =
+                if (coolerPowerMax > coolerPowerMin) 100f / (coolerPowerMax - coolerPowerMin) else 1f
+            FileLogger.i(
+                TAG,
+                "COOLER_POWER attrs: min=$coolerPowerMin max=$coolerPowerMax scale=$coolerPowerScale"
+            )
+        } catch (e: PoaException) {
+            coolerPowerMin = 0f
+            coolerPowerMax = 100f
+            coolerPowerScale = 1f
+            FileLogger.w(TAG, "COOLER_POWER attrs ${e.error}")
+        }
+
         try {
             _coolerOn.value = cam.getConfig(PoaConfig.COOLER).value.asBoolean()
         } catch (_: PoaException) {}
@@ -1078,6 +1213,11 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
     private fun toTenths(value: ConfigValue): Int = when (value.type) {
         PoaValueType.FLOAT -> (value.asFloat() * 10).roundToInt()
         else -> value.asInteger().toInt() * 10
+    }
+
+    private fun configValueToFloat(value: ConfigValue): Float = when (value.type) {
+        PoaValueType.FLOAT -> value.asFloat().toFloat()
+        else -> value.asInteger().toFloat()
     }
 
     private fun writeTargetTemperature(cam: PoaCamera, tenths: Int) {
@@ -1105,11 +1245,17 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
                         } catch (_: PoaException) {}
                         try {
                             val power = cam.getConfig(PoaConfig.COOLER_POWER)
-                            val pct = when (power.value.type) {
-                                PoaValueType.FLOAT -> power.value.asFloat().toFloat()
-                                else -> power.value.asInteger().toFloat()
+                            val raw = configValueToFloat(power.value)
+                            val pct = ((raw - coolerPowerMin) * coolerPowerScale).coerceIn(0f, 100f)
+                            if (!coolerPowerLogged || kotlin.math.abs(pct - _coolingPowerPct.value) > 1f) {
+                                coolerPowerLogged = true
+                                FileLogger.i(
+                                    TAG,
+                                    "Cooler power raw=$raw type=${power.value.type} auto=${power.isAuto} " +
+                                        "attrsMin=$coolerPowerMin attrsMax=$coolerPowerMax -> $pct%"
+                                )
                             }
-                            _coolingPowerPct.value = pct.coerceIn(0f, 100f)
+                            _coolingPowerPct.value = pct
                         } catch (_: PoaException) {}
 
                         val history = _tempHistory.value.toMutableList()

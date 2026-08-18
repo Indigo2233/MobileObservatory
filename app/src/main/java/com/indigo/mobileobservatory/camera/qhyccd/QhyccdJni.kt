@@ -18,6 +18,10 @@ object QhyccdJni {
     const val CONTROL_WBR = 2
     const val CONTROL_WBB = 3
     const val CONTROL_WBG = 4
+    const val CAM_BIN1X1MODE = 21
+    const val CAM_BIN2X2MODE = 22
+    const val CAM_BIN3X3MODE = 23
+    const val CAM_BIN4X4MODE = 24
 
     const val QHYCCD_SUCCESS = 0
     const val QHYCCD_ERROR = 0xFFFFFFFF.toInt()

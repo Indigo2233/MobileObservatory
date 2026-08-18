@@ -118,6 +118,10 @@
     <!-- Image control -->
     <string name="auto_stretch">Auto Stretch</string>
     <string name="flip_rot">Flip/Rot</string>
+    <string name="bin_label">Bin</string>
+    <string name="bin_hardware">HW</string>
+    <string name="bin_software">SW</string>
+    <string name="bin_mixed">HW+SW</string>
 
     <!-- ROI -->
     <string name="roi_full">Full</string>
@@ -696,6 +700,10 @@
     <string name="no_active_cover">Connect a flat panel or cover to configure defaults.</string>
     <string name="no_active_rotator">Connect a CAA to configure defaults.</string>
     <string name="default_readout_mode">Default readout mode</string>
+    <string name="anti_dew_heater">Anti-dew heater</string>
+    <string name="fan_speed">Fan speed</string>
+    <string name="state_on">On</string>
+    <string name="state_off">Off</string>
     <string name="default_gain">Default gain</string>
     <string name="default_pixel_format">Default pixel format</string>
     <string name="offset_unavailable">Offset is shown when the connected camera SDK exposes it.</string>

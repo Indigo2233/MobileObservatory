@@ -116,6 +116,10 @@
     <!-- Image control -->
     <string name="auto_stretch">自动拉伸</string>
     <string name="flip_rot">翻转/旋转</string>
+    <string name="bin_label">Bin</string>
+    <string name="bin_hardware">硬件</string>
+    <string name="bin_software">软件</string>
+    <string name="bin_mixed">硬件+软件</string>
 
     <!-- ROI -->
     <string name="roi_full">全幅</string>
@@ -696,6 +700,10 @@
     <string name="no_active_cover">请连接平场板或防尘盖以配置默认设置。</string>
     <string name="no_active_rotator">请连接 CAA 以配置默认设置。</string>
     <string name="default_readout_mode">默认读出模式</string>
+    <string name="anti_dew_heater">防结露加热</string>
+    <string name="fan_speed">风扇速度</string>
+    <string name="state_on">开</string>
+    <string name="state_off">关</string>
     <string name="default_gain">默认增益</string>
     <string name="default_pixel_format">默认像素格式</string>
     <string name="offset_unavailable">连接的相机 SDK 提供偏置值时将在此处显示。</string>

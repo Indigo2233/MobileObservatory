@@ -13,7 +13,8 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToLong
 
-class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable {
+class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
+    CameraEnvironmentControlCapable, CameraBinningCapable {
 
     companion object {
         private const val TAG = "ZwoAsiCam"
@@ -34,6 +35,11 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable {
         const val ASI_BRIGHTNESS = 5
         const val ASI_BANDWIDTH_OVERLOAD = 6
         const val ASI_HARDWARE_BIN = 13
+        // Verified against ASISDK_ANDROID CameraSDK/include/ASICamera2.h:
+        // 15 = ASI_COOLER_POWER_PERC, 16 = ASI_TARGET_TEMP, 17 = ASI_COOLER_ON,
+        // 18 = ASI_MONO_BIN, 19 = ASI_FAN_ON, 20 = ASI_PATTERN_ADJUST, 21 = ASI_ANTI_DEW_HEATER.
+        const val ASI_ANTI_DEW_HEATER = 21
+        const val ASI_FAN_ON = 19
 
         var sdkAvailable: Boolean = false
             private set
@@ -96,6 +102,16 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable {
     override var currentOffset: Float = 0f; private set
     override var usbBandwidthRange: IntRange? = null; private set
     override var currentUsbBandwidth: Int? = null; private set
+
+    private val _heaterLevel = MutableStateFlow(0)
+    override val heaterLevel: StateFlow<Int> = _heaterLevel.asStateFlow()
+    override var heaterSupported: Boolean = false; private set
+    override var heaterMaxLevel: Int = 0; private set
+
+    private val _fanLevel = MutableStateFlow(0)
+    override val fanLevel: StateFlow<Int> = _fanLevel.asStateFlow()
+    override var fanSupported: Boolean = false; private set
+    override var fanMaxLevel: Int = 0; private set
     override var currentPixelFormat: PixelFormat = PixelFormat.MONO8; private set
     override var supportedPixelFormats: List<PixelFormat> = listOf(PixelFormat.MONO8); private set
     override var currentRoi: Roi = Roi(0, 0, 1920, 1080); private set
@@ -113,6 +129,9 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable {
     private var maxBitDepth = 8
     private var cameraID = -1
     private var currentBin = 1
+    override val currentHardwareBin: Int get() = currentBin
+    override var supportedHardwareBins: List<Int> = listOf(1); private set
+    private var hardwareBinControlAvailable = false
     private var currentImgType = ASI_IMG_RAW8
 
     fun open(cameraIndex: Int): Boolean {
@@ -160,7 +179,9 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable {
             readOffsetRange(cam)
             configureUsbBandwidth(cam, currentImgType)
             readSupportedFormats(prop)
+            readSupportedBins(prop, cam)
             configureInitialFormat(cam)
+            readEnvironmentControls(cam)
 
             val serialNumber = readSerialNumber(cam)
 
@@ -296,6 +317,70 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable {
         return true
     }
 
+    /** Anti-dew heater and cooling fan are on/off controls in the ZWO SDK. */
+    private fun readEnvironmentControls(cam: ZwoCamera) {
+        heaterSupported = false
+        heaterMaxLevel = 0
+        _heaterLevel.value = 0
+        fanSupported = false
+        fanMaxLevel = 0
+        _fanLevel.value = 0
+
+        val heaterCap = cam.getControlCaps(ASI_ANTI_DEW_HEATER)
+        if (heaterCap.errorCode.intVal == ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
+            val cap = heaterCap.obj as? ASIControlCap
+            if (cap != null && cap.isWritable != 0 && cap.maxValue.toInt() >= 1) {
+                heaterSupported = true
+                heaterMaxLevel = 1
+                val current = cam.getControlValue(ASI_ANTI_DEW_HEATER)
+                if (current?.errorCode?.intVal == ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
+                    _heaterLevel.value = current.extraLongVal1.toInt().coerceIn(0, 1)
+                }
+            }
+        }
+
+        val fanCap = cam.getControlCaps(ASI_FAN_ON)
+        if (fanCap.errorCode.intVal == ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
+            val cap = fanCap.obj as? ASIControlCap
+            if (cap != null && cap.isWritable != 0 && cap.maxValue.toInt() >= 1) {
+                fanSupported = true
+                fanMaxLevel = 1
+                val current = cam.getControlValue(ASI_FAN_ON)
+                if (current?.errorCode?.intVal == ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
+                    _fanLevel.value = current.extraLongVal1.toInt().coerceIn(0, 1)
+                }
+            }
+        }
+        FileLogger.i(
+            TAG,
+            "Environment controls: heater=$heaterSupported fan=$fanSupported heaterLevel=${_heaterLevel.value} fanLevel=${_fanLevel.value}"
+        )
+    }
+
+    override fun setHeaterLevel(level: Int) {
+        val cam = zwoCamera ?: return
+        if (!heaterSupported) return
+        val target = level.coerceIn(0, heaterMaxLevel)
+        val result = cam.setControlValue(ASI_ANTI_DEW_HEATER, target.toLong(), 0)
+        if (result == ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
+            _heaterLevel.value = target
+        } else {
+            FileLogger.w(TAG, "Set anti-dew heater failed: $result")
+        }
+    }
+
+    override fun setFanLevel(level: Int) {
+        val cam = zwoCamera ?: return
+        if (!fanSupported) return
+        val target = level.coerceIn(0, fanMaxLevel)
+        val result = cam.setControlValue(ASI_FAN_ON, target.toLong(), 0)
+        if (result == ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
+            _fanLevel.value = target
+        } else {
+            FileLogger.w(TAG, "Set fan failed: $result")
+        }
+    }
+
     override fun setPixelFormat(format: PixelFormat) {
         if (format == currentPixelFormat) return
         val cam = zwoCamera ?: return
@@ -353,6 +438,41 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable {
         val maxW = sensorW / currentBin
         val maxH = sensorH / currentBin
         setRoi(Roi(0, 0, maxW, maxH))
+    }
+
+    override fun setHardwareBin(bin: Int): Boolean {
+        val cam = zwoCamera ?: return false
+        val b = if (bin in supportedHardwareBins) bin else return false
+        if (b == currentBin) return true
+        val wasCapturing = _isCapturing.value
+        val cb = frameCallback
+        if (wasCapturing) stopCapture()
+        val previous = currentBin
+        val applied = try {
+            enableHardwareBinControl(cam, b > 1)
+            currentBin = b
+            val maxW = (sensorW / b / 8) * 8
+            val maxH = (sensorH / b / 2) * 2
+            val ret = cam.setRoiFormat(maxW.coerceAtLeast(roiMinWidth), maxH.coerceAtLeast(roiMinHeight), b, currentImgType)
+            if (ret.intVal != ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
+                FileLogger.w(TAG, "setHardwareBin($b) setRoiFormat failed: ${ret.intVal}")
+                currentBin = previous
+                enableHardwareBinControl(cam, previous > 1)
+                false
+            } else {
+                cam.setStartPos(0, 0)
+                currentRoi = Roi(0, 0, maxW.coerceAtLeast(roiMinWidth), maxH.coerceAtLeast(roiMinHeight))
+                cropInfo = CropInfo(0, 0, currentRoi.width, currentRoi.height)
+                FileLogger.i(TAG, "Bin -> $b, imageSize=${currentRoi.width}x${currentRoi.height}")
+                true
+            }
+        } catch (e: Throwable) {
+            FileLogger.w(TAG, "setHardwareBin($b) failed: ${e.message}")
+            currentBin = previous
+            false
+        }
+        if (wasCapturing && cb != null) startCapture(cb)
+        return applied
     }
 
     override fun recycleBuffer(buf: ByteArray) {
@@ -537,6 +657,34 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable {
         }
         supportedPixelFormats = formats
         FileLogger.i(TAG, "Supported formats: ${formats.joinToString { it.name }}")
+    }
+
+    private fun readSupportedBins(prop: com.zwo.ASICameraProperty, cam: ZwoCamera) {
+        val parsed = try {
+            prop.getSupportBins()?.filter { it > 0 }.orEmpty()
+        } catch (_: Throwable) {
+            emptyList()
+        }.distinct().sorted()
+        supportedHardwareBins = parsed.ifEmpty { listOf(1, 2) }
+        hardwareBinControlAvailable = try {
+            val capRet = cam.getControlCaps(ASI_HARDWARE_BIN)
+            capRet.errorCode.intVal == ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS &&
+                (capRet.obj as? ASIControlCap)?.isWritable != 0
+        } catch (_: Throwable) {
+            false
+        }
+        FileLogger.i(
+            TAG,
+            "Supported bins: ${supportedHardwareBins.joinToString()} hardwareControl=$hardwareBinControlAvailable"
+        )
+    }
+
+    private fun enableHardwareBinControl(cam: ZwoCamera, enable: Boolean) {
+        if (!hardwareBinControlAvailable) return
+        val result = cam.setControlValue(ASI_HARDWARE_BIN, if (enable) 1L else 0L, 0)
+        if (result != ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
+            FileLogger.w(TAG, "ASI_HARDWARE_BIN=${if (enable) 1 else 0} failed: $result")
+        }
     }
 
     private fun configureInitialFormat(cam: ZwoCamera) {

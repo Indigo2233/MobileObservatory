@@ -45,7 +45,6 @@ fun GainControl(
     onGainChange: (Float) -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
-    gainDbEquivalent: Float? = null,
     writeInProgress: Boolean = false
 ) {
     val allowedValues = remember(capability) {
@@ -120,13 +119,6 @@ fun GainControl(
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                gainDbEquivalent?.let { db ->
-                    Text(
-                        "%.1f dB".format(db),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
                 if (capability.helperKind == GainHelperKind.VENDOR_NATIVE) {
                     Text(
                         stringResource(R.string.gain_vendor_native_hint),

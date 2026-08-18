@@ -41,7 +41,6 @@ import kotlinx.coroutines.flow.StateFlow
 fun ControlPanel(
     exposureUs: Float,
     gain: Float,
-    gainDbEquivalent: Float?,
     gainWriteInProgress: Boolean = false,
     usbBandwidth: Int?,
     usbBandwidthRange: IntRange?,
@@ -114,6 +113,10 @@ fun ControlPanel(
     roiMinWidth: Int = 8,
     roiMinHeight: Int = 8,
     showHostRoi: Boolean = true,
+    binning: Int = 1,
+    binningUsesHardware: Boolean = false,
+    binningUsesSoftware: Boolean = false,
+    onBinningChange: (Int) -> Unit = {},
     // Cooling params
     coolingInfo: CoolingInfo?,
     coolerOn: Boolean,
@@ -956,7 +959,6 @@ fun ControlPanel(
                     gain = gain,
                     onGainChange = onGainChange,
                     enabled = autoExposureMode == AutoExposureMode.OFF,
-                    gainDbEquivalent = gainDbEquivalent,
                     writeInProgress = gainWriteInProgress
                 )
 
@@ -1038,56 +1040,6 @@ fun ControlPanel(
                         }
                     }
                 }
-                }
-
-                if (usbBandwidth != null && usbBandwidthRange != null &&
-                    usbBandwidthRange.first < usbBandwidthRange.last
-                ) {
-                    var pendingUsbBandwidth by remember(usbBandwidth, usbBandwidthRange) {
-                        mutableFloatStateOf(
-                            usbBandwidth.coerceIn(
-                                usbBandwidthRange.first,
-                                usbBandwidthRange.last
-                            ).toFloat()
-                        )
-                    }
-                    Column {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                stringResource(R.string.usb_bandwidth),
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                pendingUsbBandwidth.toInt().toString(),
-                                fontSize = 11.sp,
-                                fontFamily = FontFamily.Monospace,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                        Slider(
-                            value = pendingUsbBandwidth,
-                            onValueChange = {
-                                pendingUsbBandwidth = kotlin.math.round(it)
-                            },
-                            onValueChangeFinished = {
-                                onUsbBandwidthChange(pendingUsbBandwidth.toInt())
-                            },
-                            valueRange = usbBandwidthRange.first.toFloat()..usbBandwidthRange.last.toFloat(),
-                            steps = (usbBandwidthRange.last - usbBandwidthRange.first - 1)
-                                .coerceIn(0, 100),
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Text(
-                            stringResource(R.string.usb_bandwidth_hint),
-                            fontSize = 9.sp,
-                            color = MaterialTheme.colorScheme.outline
-                        )
-                    }
                 }
 
                 if (supportedReadoutModes.size > 1) {
@@ -1229,6 +1181,45 @@ fun ControlPanel(
         }
 
         Divider(color = MaterialTheme.colorScheme.outlineVariant)
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                stringResource(R.string.bin_label),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.width(50.dp)
+            )
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                AppBinning.OPTIONS.forEach { n ->
+                    FilterChip(
+                        selected = binning == n,
+                        onClick = { onBinningChange(n) },
+                        label = { Text("${n}×${n}", fontSize = 10.sp) },
+                        modifier = Modifier.height(28.dp)
+                    )
+                }
+                if (binning > 1) {
+                    val mode = when {
+                        binningUsesHardware && binningUsesSoftware -> R.string.bin_mixed
+                        binningUsesHardware -> R.string.bin_hardware
+                        else -> R.string.bin_software
+                    }
+                    Text(
+                        stringResource(mode),
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
 
         if (showHostRoi) {
         // ── ROI ───────

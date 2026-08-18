@@ -3,6 +3,7 @@ package com.indigo.mobileobservatory.ui.screens
 import android.content.Intent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -23,6 +24,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.ScrollableTabRow
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
@@ -33,6 +35,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -40,10 +43,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import com.indigo.mobileobservatory.BuildConfig
 import com.indigo.mobileobservatory.R
+import com.indigo.mobileobservatory.ui.AppOrientationMode
+import com.indigo.mobileobservatory.ui.RememberAppOrientation
 import com.indigo.mobileobservatory.camera.ConnectionState
 import com.indigo.mobileobservatory.camera.GainValueNormalizer
 import com.indigo.mobileobservatory.camera.PixelFormat
@@ -53,6 +59,7 @@ import com.indigo.mobileobservatory.settings.CoverDefaults
 import com.indigo.mobileobservatory.settings.FocuserDefaults
 import com.indigo.mobileobservatory.ui.viewmodel.CameraViewModel
 import com.indigo.mobileobservatory.util.FileLogger
+import kotlin.math.roundToInt
 
 private enum class SettingsSection {
     GENERAL,
@@ -71,6 +78,7 @@ fun SettingsScreen(
     onBack: () -> Unit
 ) {
     var selectedSection by rememberSaveable { mutableStateOf(SettingsSection.GENERAL) }
+    RememberAppOrientation(AppOrientationMode.PORTRAIT)
 
     Scaffold(
         topBar = {
@@ -158,6 +166,12 @@ private fun CameraSettingsPage(viewModel: CameraViewModel) = SettingsPage {
     val offsetStep by viewModel.offsetStep.collectAsState()
     val nativeReadoutModes by viewModel.nativeReadoutModes.collectAsState()
     val currentNativeReadoutModeId by viewModel.nativeReadoutModeId.collectAsState()
+    val heaterSupported by viewModel.heaterSupported.collectAsState()
+    val heaterLevel by viewModel.heaterLevel.collectAsState()
+    val heaterMaxLevel by viewModel.heaterMaxLevel.collectAsState()
+    val fanSupported by viewModel.fanSupported.collectAsState()
+    val fanLevel by viewModel.fanLevel.collectAsState()
+    val fanMaxLevel by viewModel.fanMaxLevel.collectAsState()
     val cameraInfo = (connection as? ConnectionState.Connected)?.info
     var defaults by remember(cameraInfo?.serialNumber) { mutableStateOf<CameraDefaults?>(null) }
     var gainText by remember(cameraInfo?.serialNumber) { mutableStateOf("") }
@@ -167,8 +181,8 @@ private fun CameraSettingsPage(viewModel: CameraViewModel) = SettingsPage {
 
     LaunchedEffect(cameraInfo?.serialNumber) {
         defaults = viewModel.cameraDefaults()
-        gainText = defaults?.gain?.toString() ?: gain.toString()
-        offsetText = defaults?.offset?.toString() ?: offset?.toString().orEmpty()
+        gainText = defaults?.gain?.toInt()?.toString() ?: gain.toInt().toString()
+        offsetText = defaults?.offset?.toInt()?.toString() ?: offset?.toInt()?.toString().orEmpty()
         nativeReadoutModeId = defaults?.nativeReadoutModeId ?: currentNativeReadoutModeId
     }
 
@@ -206,10 +220,94 @@ private fun CameraSettingsPage(viewModel: CameraViewModel) = SettingsPage {
             }
         }
     }
+    if (heaterSupported && heaterMaxLevel > 0) {
+        Text(stringResource(R.string.anti_dew_heater), style = MaterialTheme.typography.titleSmall)
+        if (heaterMaxLevel <= 1) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    if (heaterLevel > 0) stringResource(R.string.state_on) else stringResource(R.string.state_off),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Switch(
+                    checked = heaterLevel > 0,
+                    onCheckedChange = { viewModel.setHeaterLevel(if (it) 1 else 0) }
+                )
+            }
+        } else {
+            var heaterDraft by remember(cameraInfo?.serialNumber, heaterLevel) {
+                mutableIntStateOf(heaterLevel)
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Slider(
+                    value = heaterDraft.toFloat(),
+                    onValueChange = { heaterDraft = it.roundToInt().coerceIn(0, heaterMaxLevel) },
+                    onValueChangeFinished = { viewModel.setHeaterLevel(heaterDraft) },
+                    valueRange = 0f..heaterMaxLevel.toFloat(),
+                    steps = (heaterMaxLevel - 1).coerceIn(0, 100),
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    "$heaterDraft / $heaterMaxLevel",
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(start = 8.dp)
+                )
+            }
+        }
+    }
+    if (fanSupported && fanMaxLevel > 0) {
+        Text(stringResource(R.string.fan_speed), style = MaterialTheme.typography.titleSmall)
+        if (fanMaxLevel <= 1) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    if (fanLevel > 0) stringResource(R.string.state_on) else stringResource(R.string.state_off),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Switch(
+                    checked = fanLevel > 0,
+                    onCheckedChange = { viewModel.setFanLevel(if (it) 1 else 0) }
+                )
+            }
+        } else {
+            var fanDraft by remember(cameraInfo?.serialNumber, fanLevel) {
+                mutableIntStateOf(fanLevel)
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Slider(
+                    value = fanDraft.toFloat(),
+                    onValueChange = { fanDraft = it.roundToInt().coerceIn(0, fanMaxLevel) },
+                    onValueChangeFinished = { viewModel.setFanLevel(fanDraft) },
+                    valueRange = 0f..fanMaxLevel.toFloat(),
+                    steps = (fanMaxLevel - 1).coerceIn(0, 100),
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    "$fanDraft / $fanMaxLevel",
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(start = 8.dp)
+                )
+            }
+        }
+    }
     OutlinedTextField(
         value = gainText,
-        onValueChange = {
-            gainText = it
+        onValueChange = { raw ->
+            gainText = raw.filter { it.isDigit() }
             gainInputInvalid = false
         },
         label = {
@@ -220,11 +318,12 @@ private fun CameraSettingsPage(viewModel: CameraViewModel) = SettingsPage {
         },
         supportingText = {
             gainCapability?.let { capability ->
-                Text("${capability.min}–${capability.max}, step ${capability.step}")
+                Text("${capability.min.toInt()}-${capability.max.toInt()}")
             }
         },
         singleLine = true,
         isError = gainInputInvalid,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
         modifier = Modifier.fillMaxWidth()
     )
     if (supportedPixelFormats.size > 1) {
@@ -242,31 +341,32 @@ private fun CameraSettingsPage(viewModel: CameraViewModel) = SettingsPage {
     if (offsetRange != null) {
         OutlinedTextField(
             value = offsetText,
-            onValueChange = { offsetText = it },
+            onValueChange = { raw -> offsetText = raw.filter { it.isDigit() } },
             label = { Text("$offsetLabel (${offsetRange?.min?.toInt()}-${offsetRange?.max?.toInt()})") },
-            supportingText = { Text("Step: $offsetStep") },
+            supportingText = { Text("Step: ${offsetStep.toInt()}") },
             singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             modifier = Modifier.fillMaxWidth()
         )
     } else {
         Text(stringResource(R.string.offset_unavailable), color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     Button(onClick = {
-        if (gainText.isNotBlank() && gainText.toFloatOrNull() == null) {
+        if (gainText.isNotBlank() && gainText.toIntOrNull() == null) {
             gainInputInvalid = true
             return@Button
         }
-        val normalizedGain = gainText.toFloatOrNull()?.let { value ->
+        val normalizedGain = gainText.toIntOrNull()?.toFloat()?.let { value ->
             gainCapability?.let { capability -> GainValueNormalizer.normalize(capability, value) } ?: value
         }
         val updatedDefaults = (defaults ?: CameraDefaults()).copy(
             gain = normalizedGain,
-            offset = offsetText.toFloatOrNull(),
+            offset = offsetText.toIntOrNull()?.toFloat(),
             nativeReadoutModeId = nativeReadoutModeId
         )
         viewModel.saveCameraDefaults(updatedDefaults) { savedDefaults ->
             defaults = savedDefaults
-            gainText = savedDefaults.gain?.toString().orEmpty()
+            gainText = savedDefaults.gain?.toInt()?.toString().orEmpty()
         }
     }) { Text(stringResource(R.string.device_settings_apply)) }
 }

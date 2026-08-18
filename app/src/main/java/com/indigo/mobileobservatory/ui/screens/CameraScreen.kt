@@ -132,7 +132,6 @@ fun CameraScreen(
     val exposureUs by viewModel.exposureUs.collectAsState()
     val gain by viewModel.gain.collectAsState()
     val gainCapability by viewModel.gainCapability.collectAsState()
-    val gainDbEquivalent by viewModel.gainDbEquivalent.collectAsState()
     val gainWriteInProgress by viewModel.gainWriteInProgress.collectAsState()
     val usbBandwidth by viewModel.usbBandwidth.collectAsState()
     val usbBandwidthRange by viewModel.usbBandwidthRange.collectAsState()
@@ -140,6 +139,11 @@ fun CameraScreen(
     val supportedPixelFormats by viewModel.supportedPixelFormats.collectAsState()
     val supportsHostRoi by viewModel.supportsHostRoi.collectAsState()
     val roi by viewModel.roi.collectAsState()
+    val binning by viewModel.binning.collectAsState()
+    val binningUsesHardware by viewModel.binningUsesHardware.collectAsState()
+    val binningUsesSoftware by viewModel.binningUsesSoftware.collectAsState()
+    val imagingWidth by viewModel.imagingWidth.collectAsState()
+    val imagingHeight by viewModel.imagingHeight.collectAsState()
     val autoStretch by viewModel.autoStretch.collectAsState()
     val flipH by viewModel.flipH.collectAsState()
     val flipV by viewModel.flipV.collectAsState()
@@ -246,14 +250,8 @@ fun CameraScreen(
         )
     }
 
-    val sensorWidth = when (val cs = connectionState) {
-        is ConnectionState.Connected -> cs.info.sensorWidth
-        else -> 1920
-    }
-    val sensorHeight = when (val cs = connectionState) {
-        is ConnectionState.Connected -> cs.info.sensorHeight
-        else -> 1200
-    }
+    val sensorWidth = imagingWidth
+    val sensorHeight = imagingHeight
     val roiMinW = viewModel.cameraManager.activeCamera?.roiMinWidth ?: 8
     val roiMinH = viewModel.cameraManager.activeCamera?.roiMinHeight ?: 8
 
@@ -726,7 +724,6 @@ fun CameraScreen(
                     ControlPanel(
                         exposureUs = exposureUs,
                         gain = gain,
-                        gainDbEquivalent = gainDbEquivalent,
                         gainWriteInProgress = gainWriteInProgress,
                         usbBandwidth = usbBandwidth,
                         usbBandwidthRange = usbBandwidthRange,
@@ -800,6 +797,10 @@ fun CameraScreen(
                         roiMinWidth = roiMinW,
                         roiMinHeight = roiMinH,
                         showHostRoi = supportsHostRoi,
+                        binning = binning,
+                        binningUsesHardware = binningUsesHardware,
+                        binningUsesSoftware = binningUsesSoftware,
+                        onBinningChange = { viewModel.setBinning(it) },
                         coolingInfo = coolingInfo,
                         coolerOn = coolerOn,
                         sensorTempTenths = sensorTempTenths,
