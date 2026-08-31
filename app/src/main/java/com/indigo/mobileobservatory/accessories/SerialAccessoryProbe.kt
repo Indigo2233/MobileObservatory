@@ -14,6 +14,7 @@ enum class SerialAccessoryRole {
     GEMINI_EAF,
     COVER,
     GEMINI_FLAT,
+    GEMINI_POWER,
     ROTATOR,
     WANDERER_ROTATOR
 }
@@ -28,6 +29,7 @@ object SerialAccessoryProbe {
     private const val CAA_SETTLE_MS = 4000L
     private const val FOCUSER_SETTLE_MS = 2200L
     private const val GEMINI_EAF_SETTLE_MS = 1000L
+    private const val GEMINI_POWER_SETTLE_MS = 800L
     private const val COVER_SETTLE_MS = 2200L
     private const val WANDERER_VENDOR_ID = 0x1a86
     private const val WANDERER_SETTLE_MS = 500L
@@ -68,6 +70,23 @@ object SerialAccessoryProbe {
                     Log.i(TAG, "Probed ${handshake.model.displayName} on ${device.deviceName}")
                     return setOf(SerialAccessoryRole.WANDERER_ROTATOR)
                 }
+            }
+
+            // Gemini Power Box Plus V3 / Advanced v3 use 19200 8N1 with RTS/DTR enabled.
+            port.setParameters(
+                19200,
+                UsbSerialPort.DATABITS_8,
+                UsbSerialPort.STOPBITS_1,
+                UsbSerialPort.PARITY_NONE
+            )
+            runCatching { port.setDTR(true) }
+            runCatching { port.setRTS(true) }
+            delay(GEMINI_POWER_SETTLE_MS)
+            drain(port)
+            val powerIdentity = exchangeGeminiPowerIdentity(port)
+            if (SerialAccessoryIdentity.isSupportedGeminiPower(powerIdentity)) {
+                Log.i(TAG, "Probed Gemini power box on ${device.deviceName}")
+                return setOf(SerialAccessoryRole.GEMINI_POWER)
             }
 
             // CAA first: same line mode as EcaaSerialRotatorAdapter (DTR/RTS high, long settle).
@@ -173,6 +192,28 @@ object SerialAccessoryProbe {
             }
         }
         return response.toByteArray().toString(Charsets.US_ASCII).trim()
+    }
+
+    private fun exchangeGeminiPowerIdentity(port: UsbSerialPort): String {
+        port.write(">H#\r\n".toByteArray(Charsets.US_ASCII), READ_TIMEOUT_MS)
+        val response = StringBuilder()
+        val buffer = ByteArray(256)
+        val deadline = System.currentTimeMillis() + READ_TIMEOUT_MS
+        while (System.currentTimeMillis() < deadline) {
+            val count = port.read(buffer, 200)
+            for (i in 0 until count) {
+                when (val char = (buffer[i].toInt() and 0xff).toChar()) {
+                    '#' -> {
+                        val frame = response.toString().trim()
+                        response.clear()
+                        if (frame.startsWith("*H")) return frame
+                    }
+                    '\r', '\n' -> Unit
+                    else -> response.append(char)
+                }
+            }
+        }
+        return ""
     }
 
     private fun exchangeNewlineTerminated(port: UsbSerialPort, command: String): String {

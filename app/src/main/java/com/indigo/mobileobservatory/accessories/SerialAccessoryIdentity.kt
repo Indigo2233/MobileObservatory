@@ -13,6 +13,9 @@ package com.indigo.mobileobservatory.accessories
  * Gemini flat panels use `>H#` / `>P000#` handshakes (INDI gemini_flatpanel).
  */
 object SerialAccessoryIdentity {
+    const val GEMINI_POWER_ADV3_IDENTITY = "GeminiPowerBoxPlusAdv3"
+    const val GEMINI_POWER_V3_IDENTITY = "GeminiPowerBoxPlusV3"
+
     val FOCUSER_BANNER = Regex(
         "^EFucoser (?:ESP8266(?: ULN2003)?|Arduino Nano ULN2003) " +
             "Focuser ver (\\d+)$"
@@ -74,6 +77,15 @@ object SerialAccessoryIdentity {
     fun isGeminiFlatHandshake(response: String): Boolean =
         isGeminiFlatRev1Handshake(response) ||
             geminiFlatRevisionFromHandshake(response) != null
+
+    fun geminiPowerIdentity(response: String): String? {
+        val normalized = response.trim().removeSuffix("#")
+        if (!normalized.startsWith("*H")) return null
+        return normalized.removePrefix("*H").takeIf { it.startsWith("GeminiPowerBox") }
+    }
+
+    fun isSupportedGeminiPower(response: String): Boolean =
+        geminiPowerIdentity(response) != null
 
     /**
      * @return `REV2` / `LITE` / `PRO`, or null if not a `#`-terminated Gemini flat ping.

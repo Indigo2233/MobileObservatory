@@ -9,6 +9,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.accessories.AccessoryDeviceManager
+import com.indigo.mobileobservatory.accessories.power.DewHeaterMode
+import com.indigo.mobileobservatory.accessories.power.PowerInterfaceNames
 import com.indigo.mobileobservatory.camera.*
 import com.indigo.mobileobservatory.camera.playerone.PlayerOneCamera
 import com.indigo.mobileobservatory.camera.toupcam.EAFInfo
@@ -140,6 +142,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val activeFocuserDeviceId: StateFlow<Int?> = accessoryManager.activeFocuserDeviceId
     val activeCoverDeviceId: StateFlow<Int?> = accessoryManager.activeCoverDeviceId
     val activeRotatorDeviceId: StateFlow<Int?> = accessoryManager.activeRotatorDeviceId
+    val activePowerBoxDeviceId: StateFlow<Int?> = accessoryManager.activePowerBoxDeviceId
+    val powerBoxConnected = accessoryManager.powerBoxController.isConnected
+    val powerBoxCapabilities = accessoryManager.powerBoxController.capabilities
+    val powerBoxTelemetry = accessoryManager.powerBoxController.telemetry
+    private val _powerBoxInterfaceNames = MutableStateFlow<Map<String, String>>(emptyMap())
+    val powerBoxInterfaceNames: StateFlow<Map<String, String>> =
+        _powerBoxInterfaceNames.asStateFlow()
 
     // EAF (Electric Auto Focuser) state
     private val eafCtrl get() = accessoryManager.focuserController
@@ -570,6 +579,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             mountModule.statusMessage.collect { message ->
                 if (message.isNotBlank()) _statusMessage.value = message
             }
+        }
+        viewModelScope.launch {
+            powerBoxCapabilities
+                .map { it?.identity }
+                .distinctUntilChanged()
+                .collect { identity ->
+                    _powerBoxInterfaceNames.value = if (identity == null) {
+                        emptyMap()
+                    } else {
+                        withContext(Dispatchers.IO) {
+                            deviceSettings.powerInterfaceNames(identity)
+                        }
+                    }
+                }
         }
         viewModelScope.launch {
             cameraManager.connectionState.collect { state ->
@@ -1999,6 +2022,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun connectEfucoser(device: AccessoryDeviceEntry) = accessoryManager.connectEfucoser(device)
     fun connectCover(device: AccessoryDeviceEntry) = accessoryManager.connectCover(device)
     fun connectRotator(device: AccessoryDeviceEntry) = accessoryManager.connectRotator(device)
+    fun connectPowerBox(device: AccessoryDeviceEntry) = accessoryManager.connectPowerBox(device)
 
     fun disconnectFilterWheel() {
         accessoryManager.disconnectFilterWheel()
@@ -2010,6 +2034,27 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun disconnectCover() = accessoryManager.disconnectCover()
     fun disconnectRotator() = accessoryManager.disconnectRotator()
+    fun disconnectPowerBox() = accessoryManager.disconnectPowerBox()
+    fun setPowerBoxDcOutput(index: Int, enabled: Boolean) =
+        accessoryManager.powerBoxController.setDcOutput(index, enabled)
+    fun setPowerBoxUsbOutput(index: Int, enabled: Boolean) =
+        accessoryManager.powerBoxController.setUsbOutput(index, enabled)
+    fun setPowerBoxUsbMaster(enabled: Boolean) =
+        accessoryManager.powerBoxController.setUsbMasterEnabled(enabled)
+    fun setPowerBoxDewEnabled(index: Int, enabled: Boolean) =
+        accessoryManager.powerBoxController.setDewEnabled(index, enabled)
+    fun setPowerBoxDewMode(index: Int, mode: DewHeaterMode) =
+        accessoryManager.powerBoxController.setDewMode(index, mode)
+    fun setPowerBoxDewPower(index: Int, value: Int) =
+        accessoryManager.powerBoxController.setDewPower(index, value)
+    fun setPowerBoxInterfaceNames(names: Map<String, String>) {
+        val identity = powerBoxCapabilities.value?.identity ?: return
+        val normalized = PowerInterfaceNames.normalize(names)
+        _powerBoxInterfaceNames.value = normalized
+        viewModelScope.launch(Dispatchers.IO) {
+            deviceSettings.savePowerInterfaceNames(identity, normalized)
+        }
+    }
     fun openCover() = accessoryManager.coverController.openCover()
     fun closeCover() = accessoryManager.coverController.closeCover()
     fun haltCover() = accessoryManager.coverController.halt()

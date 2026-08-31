@@ -1,6 +1,7 @@
 package com.indigo.mobileobservatory.settings
 
 import android.content.Context
+import com.indigo.mobileobservatory.accessories.power.PowerInterfaceNames
 import com.indigo.mobileobservatory.camera.PixelFormat
 import com.indigo.mobileobservatory.camera.ReadoutMode
 
@@ -124,6 +125,31 @@ class DeviceSettingsRepository(context: Context) {
             .apply()
     }
 
+    fun powerInterfaceNames(deviceId: String): Map<String, String> {
+        val keyPrefix = prefix(POWER_BOX, deviceId) + "interface_name."
+        return PowerInterfaceNames.normalize(
+            preferences.all.mapNotNull { (key, value) ->
+                if (key.startsWith(keyPrefix) && value is String) {
+                    key.removePrefix(keyPrefix) to value
+                } else {
+                    null
+                }
+            }.toMap()
+        )
+    }
+
+    fun savePowerInterfaceNames(deviceId: String, names: Map<String, String>) {
+        val keyPrefix = prefix(POWER_BOX, deviceId) + "interface_name."
+        val editor = preferences.edit()
+        preferences.all.keys
+            .filter { it.startsWith(keyPrefix) }
+            .forEach(editor::remove)
+        PowerInterfaceNames.normalize(names).forEach { (key, value) ->
+            editor.putString(keyPrefix + key, value)
+        }
+        editor.apply()
+    }
+
     private fun prefix(type: String, deviceId: String): String =
         "$type.${deviceId.replace(Regex("[^A-Za-z0-9_.-]"), "_")}."
 
@@ -138,6 +164,7 @@ class DeviceSettingsRepository(context: Context) {
         const val CAMERA = "camera"
         const val FOCUSER = "focuser"
         const val COVER = "cover"
+        const val POWER_BOX = "power_box"
     }
 }
 

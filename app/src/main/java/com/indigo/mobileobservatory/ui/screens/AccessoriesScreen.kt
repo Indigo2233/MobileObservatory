@@ -46,6 +46,7 @@ import com.indigo.mobileobservatory.camera.ConnectionState
 import com.indigo.mobileobservatory.mount.MountConnectionState
 import com.indigo.mobileobservatory.ui.components.EAFPanel
 import com.indigo.mobileobservatory.ui.components.FilterWheelPanel
+import com.indigo.mobileobservatory.ui.components.PowerBoxPanel
 import com.indigo.mobileobservatory.ui.viewmodel.CameraViewModel
 
 private enum class DeviceTab {
@@ -55,6 +56,7 @@ private enum class DeviceTab {
     FILTER_WHEEL,
     FOCUSER,
     COVER,
+    POWER,
     ROTATOR
 }
 
@@ -70,6 +72,7 @@ fun AccessoriesScreen(
     val filterWheelConnected by viewModel.filterWheelConnected.collectAsState()
     val coverConnected by viewModel.coverConnected.collectAsState()
     val rotatorConnected by viewModel.rotatorConnected.collectAsState()
+    val powerBoxConnected by viewModel.powerBoxConnected.collectAsState()
     val cameraConnection by viewModel.connectionState.collectAsState()
     val mountConnection by viewModel.mountConnectionState.collectAsState()
 
@@ -125,6 +128,11 @@ fun AccessoriesScreen(
                 title = stringResource(R.string.cover_calibrator),
                 onOpenConnections = { selectedTab = DeviceTab.CONNECTIONS }
             ) { CoverControls(viewModel) }
+            DeviceTab.POWER -> DeviceControlPage(
+                connected = powerBoxConnected,
+                title = stringResource(R.string.gemini_power_box),
+                onOpenConnections = { selectedTab = DeviceTab.CONNECTIONS }
+            ) { PowerBoxControls(viewModel) }
             DeviceTab.ROTATOR -> DeviceControlPage(
                 connected = rotatorConnected,
                 title = stringResource(R.string.motorized_caa),
@@ -142,6 +150,7 @@ private fun deviceTabTitle(tab: DeviceTab): String = when (tab) {
     DeviceTab.FILTER_WHEEL -> stringResource(R.string.filter_wheel)
     DeviceTab.FOCUSER -> stringResource(R.string.focuser)
     DeviceTab.COVER -> stringResource(R.string.cover)
+    DeviceTab.POWER -> stringResource(R.string.power_management)
     DeviceTab.ROTATOR -> "CAA"
 }
 
@@ -157,6 +166,7 @@ private fun DeviceConnectionPage(
     val activeFocuserId by viewModel.activeFocuserDeviceId.collectAsState()
     val activeCoverId by viewModel.activeCoverDeviceId.collectAsState()
     val activeRotatorId by viewModel.activeRotatorDeviceId.collectAsState()
+    val activePowerBoxId by viewModel.activePowerBoxDeviceId.collectAsState()
     val filterWheelConnected by viewModel.filterWheelConnected.collectAsState()
     val cameraConnection by viewModel.connectionState.collectAsState()
     val mountConnection by viewModel.mountConnectionState.collectAsState()
@@ -201,6 +211,7 @@ private fun DeviceConnectionPage(
                     activeFocuserId -> DeviceTab.FOCUSER
                     activeCoverId -> DeviceTab.COVER
                     activeRotatorId -> DeviceTab.ROTATOR
+                    activePowerBoxId -> DeviceTab.POWER
                     else -> if (device.type == AccessoryType.FILTER_WHEEL && filterWheelConnected) {
                         DeviceTab.FILTER_WHEEL
                     } else null
@@ -210,6 +221,7 @@ private fun DeviceConnectionPage(
                         DeviceTab.FOCUSER -> stringResource(R.string.focuser)
                         DeviceTab.COVER -> stringResource(R.string.cover)
                         DeviceTab.ROTATOR -> "CAA"
+                        DeviceTab.POWER -> stringResource(R.string.power_management)
                         DeviceTab.FILTER_WHEEL -> stringResource(R.string.filter_wheel)
                         else -> null
                     }
@@ -222,11 +234,13 @@ private fun DeviceConnectionPage(
                     onFocuser = { viewModel.connectEfucoser(device) },
                     onCover = { viewModel.connectCover(device) },
                     onRotator = { viewModel.connectRotator(device) },
+                    onPower = { viewModel.connectPowerBox(device) },
                     onDisconnect = {
                         when (device.usbDevice.deviceId) {
                             activeFocuserId -> viewModel.disconnectEaf()
                             activeCoverId -> viewModel.disconnectCover()
                             activeRotatorId -> viewModel.disconnectRotator()
+                            activePowerBoxId -> viewModel.disconnectPowerBox()
                             else -> if (device.type == AccessoryType.FILTER_WHEEL) {
                                 viewModel.disconnectFilterWheel()
                             }
@@ -270,6 +284,7 @@ private fun DeviceCard(
     onFocuser: () -> Unit,
     onCover: () -> Unit,
     onRotator: () -> Unit,
+    onPower: () -> Unit,
     onDisconnect: () -> Unit,
     onOpenControl: () -> Unit
 ) {
@@ -287,11 +302,14 @@ private fun DeviceCard(
     val showRotator = !isSerial || matchedRoles == null ||
         SerialAccessoryRole.ROTATOR in matchedRoles ||
         SerialAccessoryRole.WANDERER_ROTATOR in matchedRoles
+    val showPower = !isSerial || matchedRoles == null ||
+        SerialAccessoryRole.GEMINI_POWER in matchedRoles
     val matchedLabel = when {
         matchedRoles?.singleOrNull() == SerialAccessoryRole.FOCUSER -> stringResource(R.string.focuser)
         matchedRoles?.singleOrNull() == SerialAccessoryRole.GEMINI_EAF -> stringResource(R.string.gemini_eaf)
         matchedRoles?.singleOrNull() == SerialAccessoryRole.COVER -> stringResource(R.string.cover)
         matchedRoles?.singleOrNull() == SerialAccessoryRole.GEMINI_FLAT -> stringResource(R.string.gemini_flat)
+        matchedRoles?.singleOrNull() == SerialAccessoryRole.GEMINI_POWER -> stringResource(R.string.gemini_power_box)
         matchedRoles?.singleOrNull() == SerialAccessoryRole.ROTATOR -> "CAA"
         matchedRoles?.singleOrNull() == SerialAccessoryRole.WANDERER_ROTATOR -> "Wanderer CAA"
         else -> null
@@ -336,6 +354,13 @@ private fun DeviceCard(
                             if (showRotator) {
                                 if (matchedLabel != null) Button(onClick = onRotator) { Text("CAA") }
                                 else OutlinedButton(onClick = onRotator) { Text("CAA") }
+                            }
+                        }
+                        if (showPower) {
+                            if (matchedLabel != null) {
+                                Button(onClick = onPower) { Text(stringResource(R.string.power_management)) }
+                            } else {
+                                OutlinedButton(onClick = onPower) { Text(stringResource(R.string.power_management)) }
                             }
                         }
                     }
@@ -446,6 +471,25 @@ private fun CoverControls(viewModel: CameraViewModel) {
             OutlinedButton(onClick = viewModel::calibratorOff) { Text(stringResource(R.string.turn_off_calibrator)) }
         }
     }
+}
+
+@Composable
+private fun PowerBoxControls(viewModel: CameraViewModel) {
+    val capabilities by viewModel.powerBoxCapabilities.collectAsState()
+    val telemetry by viewModel.powerBoxTelemetry.collectAsState()
+    val customNames by viewModel.powerBoxInterfaceNames.collectAsState()
+    PowerBoxPanel(
+        capabilities = capabilities,
+        telemetry = telemetry,
+        customNames = customNames,
+        onSetDcOutput = viewModel::setPowerBoxDcOutput,
+        onSetUsbOutput = viewModel::setPowerBoxUsbOutput,
+        onSetUsbMaster = viewModel::setPowerBoxUsbMaster,
+        onSetDewEnabled = viewModel::setPowerBoxDewEnabled,
+        onSetDewMode = viewModel::setPowerBoxDewMode,
+        onSetDewPower = viewModel::setPowerBoxDewPower,
+        onSaveInterfaceNames = viewModel::setPowerBoxInterfaceNames
+    )
 }
 
 @Composable

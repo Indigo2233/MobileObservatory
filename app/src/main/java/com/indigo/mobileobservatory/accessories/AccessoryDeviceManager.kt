@@ -23,6 +23,7 @@ import com.indigo.mobileobservatory.accessories.focuser.GeminiEafSerialFocuserCo
 import com.indigo.mobileobservatory.accessories.focuser.OasisHidFocuserController
 import com.indigo.mobileobservatory.accessories.focuser.ToupTekFocuserAdapter
 import com.indigo.mobileobservatory.accessories.oasis.OasisUsbIds
+import com.indigo.mobileobservatory.accessories.power.GeminiPowerBoxController
 import com.indigo.mobileobservatory.accessories.rotator.EcaaSerialRotatorAdapter
 import com.indigo.mobileobservatory.accessories.rotator.RotatorAdapterKind
 import com.indigo.mobileobservatory.accessories.rotator.RotatorControllerRouter
@@ -62,6 +63,8 @@ class AccessoryDeviceManager(context: Context) {
             "com.indigo.mobileobservatory.ACCESSORY_COVER_PERMISSION"
         private const val ACTION_ROTATOR_PERMISSION =
             "com.indigo.mobileobservatory.ACCESSORY_ROTATOR_PERMISSION"
+        private const val ACTION_POWER_BOX_PERMISSION =
+            "com.indigo.mobileobservatory.ACCESSORY_POWER_BOX_PERMISSION"
         private const val ACTION_SERIAL_AUTO_PERMISSION =
             "com.indigo.mobileobservatory.ACCESSORY_SERIAL_AUTO_PERMISSION"
     }
@@ -108,17 +111,21 @@ class AccessoryDeviceManager(context: Context) {
         ecaa = ecaaRotator,
         wanderer = wandererRotator
     )
+    val powerBoxController = GeminiPowerBoxController()
     private val _activeFocuserDeviceId = MutableStateFlow<Int?>(null)
     val activeFocuserDeviceId: StateFlow<Int?> = _activeFocuserDeviceId.asStateFlow()
     private val _activeCoverDeviceId = MutableStateFlow<Int?>(null)
     val activeCoverDeviceId: StateFlow<Int?> = _activeCoverDeviceId.asStateFlow()
     private val _activeRotatorDeviceId = MutableStateFlow<Int?>(null)
     val activeRotatorDeviceId: StateFlow<Int?> = _activeRotatorDeviceId.asStateFlow()
+    private val _activePowerBoxDeviceId = MutableStateFlow<Int?>(null)
+    val activePowerBoxDeviceId: StateFlow<Int?> = _activePowerBoxDeviceId.asStateFlow()
     private var pendingFilterWheelDeviceId: Int? = null
     private var pendingFocuserDeviceId: Int? = null
     private var pendingEfucoserDeviceId: Int? = null
     private var pendingCoverDeviceId: Int? = null
     private var pendingRotatorDeviceId: Int? = null
+    private var pendingPowerBoxDeviceId: Int? = null
     private var pendingSerialAutoDeviceId: Int? = null
     private var connectingFocuserDeviceId: Int? = null
     private var serialAutoJob: Job? = null
@@ -126,6 +133,7 @@ class AccessoryDeviceManager(context: Context) {
     private var focuserConnectGeneration = 0
     private var coverConnectJob: Job? = null
     private var rotatorConnectJob: Job? = null
+    private var powerBoxConnectJob: Job? = null
 
     private val _devices = MutableStateFlow<List<AccessoryDeviceEntry>>(emptyList())
     val devices: StateFlow<List<AccessoryDeviceEntry>> = _devices.asStateFlow()
@@ -165,6 +173,7 @@ class AccessoryDeviceManager(context: Context) {
                             if (_activeFocuserDeviceId.value == device.deviceId) disconnectFocuser()
                             if (_activeCoverDeviceId.value == device.deviceId) disconnectCover()
                             if (_activeRotatorDeviceId.value == device.deviceId) disconnectRotator()
+                            if (_activePowerBoxDeviceId.value == device.deviceId) disconnectPowerBox()
                         }
                     }
                     _devices.value = _devices.value.filterNot {
@@ -224,6 +233,16 @@ class AccessoryDeviceManager(context: Context) {
                     }
                     pendingRotatorDeviceId = null
                 }
+                ACTION_POWER_BOX_PERMISSION -> {
+                    val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
+                    val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
+                    if (granted && device != null && pendingPowerBoxDeviceId == device.deviceId) {
+                        connectPowerBoxGranted(device)
+                    } else {
+                        _scanError.value = "Gemini power box USB permission denied"
+                    }
+                    pendingPowerBoxDeviceId = null
+                }
                 ACTION_SERIAL_AUTO_PERMISSION -> {
                     val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
                     val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
@@ -250,6 +269,7 @@ class AccessoryDeviceManager(context: Context) {
             addAction(ACTION_EFUCOSER_PERMISSION)
             addAction(ACTION_COVER_PERMISSION)
             addAction(ACTION_ROTATOR_PERMISSION)
+            addAction(ACTION_POWER_BOX_PERMISSION)
             addAction(ACTION_SERIAL_AUTO_PERMISSION)
         }
         ContextCompat.registerReceiver(
@@ -408,6 +428,15 @@ class AccessoryDeviceManager(context: Context) {
         }
     }
 
+    fun connectPowerBox(device: AccessoryDeviceEntry) {
+        if (!claimable(device.usbDevice.deviceId, "Gemini power box")) return
+        pendingPowerBoxDeviceId = device.usbDevice.deviceId
+        requestPermission(device.usbDevice, ACTION_POWER_BOX_PERMISSION, 26) {
+            pendingPowerBoxDeviceId = null
+            connectPowerBoxGranted(device.usbDevice)
+        }
+    }
+
     /**
      * Request USB permission if needed, probe CAA / focuser / cover identity,
      * then connect the uniquely matched role.
@@ -522,6 +551,13 @@ class AccessoryDeviceManager(context: Context) {
         _activeRotatorDeviceId.value = null
     }
 
+    fun disconnectPowerBox() {
+        powerBoxConnectJob?.cancel()
+        powerBoxConnectJob = null
+        powerBoxController.close()
+        _activePowerBoxDeviceId.value = null
+    }
+
     fun unregister() {
         if (registered) {
             runCatching { appContext.unregisterReceiver(usbReceiver) }
@@ -539,6 +575,7 @@ class AccessoryDeviceManager(context: Context) {
         focuserController.destroy()
         coverController.destroy()
         rotatorController.destroy()
+        powerBoxController.destroy()
         scope.cancel()
         _devices.value = emptyList()
     }
@@ -564,6 +601,10 @@ class AccessoryDeviceManager(context: Context) {
             } else {
                 SerialAccessoryRole.ROTATOR
             }
+        }
+        if (powerBoxController.connectedDeviceId == deviceId ||
+            _activePowerBoxDeviceId.value == deviceId) {
+            roles += SerialAccessoryRole.GEMINI_POWER
         }
         return roles.takeIf { it.isNotEmpty() }
     }
@@ -674,6 +715,10 @@ class AccessoryDeviceManager(context: Context) {
                 if (!claimable(device.deviceId, "Gemini 平场")) return
                 connectGeminiFlat(device)
             }
+            SerialAccessoryRole.GEMINI_POWER -> {
+                if (!claimable(device.deviceId, "Gemini power box")) return
+                connectPowerBoxGranted(device)
+            }
             SerialAccessoryRole.ROTATOR -> {
                 if (!claimable(device.deviceId, "CAA")) return
                 connectRotatorGranted(device)
@@ -704,16 +749,19 @@ class AccessoryDeviceManager(context: Context) {
         return (_activeFocuserDeviceId.value == deviceId) ||
             (_activeCoverDeviceId.value == deviceId) ||
             (_activeRotatorDeviceId.value == deviceId) ||
+            (_activePowerBoxDeviceId.value == deviceId) ||
             (connectingFocuserDeviceId == deviceId) ||
             (pendingEfucoserDeviceId == deviceId) ||
             (pendingCoverDeviceId == deviceId) ||
             (pendingRotatorDeviceId == deviceId) ||
+            (pendingPowerBoxDeviceId == deviceId) ||
             (pendingSerialAutoDeviceId == deviceId) ||
             (efucoserFocuser.connectedDeviceId == deviceId) ||
             (geminiEafFocuser.connectedDeviceId == deviceId) ||
             (dlcCover.connectedDeviceId == deviceId) ||
             (geminiFlat.connectedDeviceId == deviceId) ||
-            (rotatorController.connectedDeviceId == deviceId)
+            (rotatorController.connectedDeviceId == deviceId) ||
+            (powerBoxController.connectedDeviceId == deviceId)
     }
 
     /** Cancel scan-time probing and wait until the USB serial port is released. */
@@ -928,6 +976,25 @@ class AccessoryDeviceManager(context: Context) {
                 }
             } finally {
                 rotatorConnectJob = null
+            }
+        }
+    }
+
+    private fun connectPowerBoxGranted(device: UsbDevice) {
+        powerBoxConnectJob?.cancel()
+        powerBoxConnectJob = scope.launch {
+            try {
+                awaitProbeIdle()
+                powerBoxController.close()
+                if (powerBoxController.open(appContext, device)) {
+                    _activePowerBoxDeviceId.value = device.deviceId
+                    updateDeviceRoles(device.deviceId, setOf(SerialAccessoryRole.GEMINI_POWER))
+                } else {
+                    _scanError.value = powerBoxController.lastError.value
+                        ?: "Gemini power box identification failed"
+                }
+            } finally {
+                powerBoxConnectJob = null
             }
         }
     }
