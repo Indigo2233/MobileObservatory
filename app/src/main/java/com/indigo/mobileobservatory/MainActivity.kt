@@ -1,5 +1,6 @@
 package com.indigo.mobileobservatory
 
+import android.content.Intent
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -57,6 +58,12 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        FileLogger.i("App", "Received intent action=${intent.action} in existing activity")
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
