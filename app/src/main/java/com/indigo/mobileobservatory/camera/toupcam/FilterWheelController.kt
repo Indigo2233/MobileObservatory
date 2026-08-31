@@ -3,6 +3,7 @@ package com.indigo.mobileobservatory.camera.toupcam
 import android.content.Context
 import android.content.SharedPreferences
 import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbManager
 import android.util.Log
 import kotlinx.coroutines.*
@@ -15,6 +16,9 @@ data class FilterWheelInfo(
     val slotCount: Int
 )
 
+internal fun validFilterWheelSlotCount(reportedSlotCount: Int): Int? =
+    reportedSlotCount.takeIf { it in 1..16 }
+
 class FilterWheelController {
 
     companion object {
@@ -22,7 +26,6 @@ class FilterWheelController {
         private const val PREFS_NAME = "filter_wheel_prefs"
         private const val KEY_SLOT_NAMES = "slot_names"
         private const val KEY_BIDIRECTIONAL = "bidirectional"
-        private const val KEY_SLOT_COUNT_OVERRIDE = "slot_count_override"
         private val DEFAULT_SLOT_NAMES = listOf("L", "R", "G", "B", "R+", "UV", "CH4", "R+610")
     }
 
@@ -47,11 +50,10 @@ class FilterWheelController {
     private var pollingJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var prefs: SharedPreferences? = null
-    private var currentContext: Context? = null
+    private var usbConnection: UsbDeviceConnection? = null
 
     fun open(context: Context, usbDevice: UsbDevice): Boolean {
         try {
-            currentContext = context
             prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             
             val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
@@ -69,21 +71,18 @@ class FilterWheelController {
                 connection.close()
                 return false
             }
+            usbConnection = connection
 
             val modelName = ToupcamJni.getModelName(vid, pid) ?: "ToupTek Filter Wheel"
             val rawSlotCount = ToupcamJni.fwGetSlotCount()
-            Log.i(TAG, "SDK reported slot count: $rawSlotCount")
-            
-            val savedSlotCount = prefs?.getInt(KEY_SLOT_COUNT_OVERRIDE, 0) ?: 0
-            val slotCount = if (savedSlotCount > 0) {
-                Log.i(TAG, "Using user-defined slot count: $savedSlotCount")
-                if (savedSlotCount != rawSlotCount) {
-                    ToupcamJni.fwSetSlotCount(savedSlotCount)
-                }
-                savedSlotCount
-            } else {
-                rawSlotCount.coerceAtLeast(1)
+            val slotCount = validFilterWheelSlotCount(rawSlotCount) ?: run {
+                Log.e(TAG, "Invalid filter wheel slot count reported by SDK: $rawSlotCount")
+                ToupcamJni.fwClose()
+                connection.close()
+                usbConnection = null
+                return false
             }
+            Log.i(TAG, "Using SDK-reported slot count: $slotCount")
             
             val position = ToupcamJni.fwGetPosition()
 
@@ -106,6 +105,9 @@ class FilterWheelController {
             Log.i(TAG, "Filter wheel connected: $modelName, $slotCount slots, position=$position, bidirectional=${_bidirectional.value}")
             return true
         } catch (e: Throwable) {
+            ToupcamJni.fwClose()
+            usbConnection?.close()
+            usbConnection = null
             Log.e(TAG, "Filter wheel open failed", e)
             return false
         }
@@ -114,14 +116,18 @@ class FilterWheelController {
     fun close() {
         pollingJob?.cancel()
         pollingJob = null
-        if (_isConnected.value) {
+        if (usbConnection != null) {
             ToupcamJni.fwClose()
+        }
+        if (_isConnected.value) {
             _isConnected.value = false
             _wheelInfo.value = null
             _currentPosition.value = -2
             _isMoving.value = false
             Log.i(TAG, "Filter wheel disconnected")
         }
+        usbConnection?.close()
+        usbConnection = null
     }
 
     fun setPosition(pos: Int) {
@@ -169,7 +175,6 @@ class FilterWheelController {
     fun setSlotCount(count: Int) {
         if (count < 1 || count > 16) return
         if (ToupcamJni.fwSetSlotCount(count)) {
-            prefs?.edit()?.putInt(KEY_SLOT_COUNT_OVERRIDE, count)?.apply()
             val info = _wheelInfo.value
             if (info != null) {
                 _wheelInfo.value = info.copy(slotCount = count)
