@@ -263,9 +263,11 @@
     <string name="go_home">回到原点</string>
     <string name="bluetooth">蓝牙</string>
     <string name="paired_devices">已配对设备</string>
-    <string name="synscan_app_address">SynScan App 地址</string>
+    <string name="synscan_app_address">赤道仪 Wi‑Fi 地址</string>
     <string name="udp_port">UDP 端口</string>
-    <string name="synscan_connection_hint">先使用 SynScan App 连接 Wi‑Fi 模块并完成对星；同机默认地址为 127.0.0.1:11882。</string>
+    <string name="synscan_connection_hint">手机先连赤道仪热点（SSID 一般为 SynScan_xxxx），再点连接，默认 192.168.4.1:11880。连接前选择赤道仪或经纬仪模式。请在极轴页填好经纬度；原点开机或连上后对一颗星同步。</string>
+    <string name="synscan_mode_equatorial">赤道仪</string>
+    <string name="synscan_mode_altaz">经纬仪</string>
     <string name="guiding_module">导星模块</string>
     <string name="guiding_module_description">导星相机、校准、脉冲修正与状态监控</string>
     <string name="confirm_mount_slew">确认赤道仪转动</string>

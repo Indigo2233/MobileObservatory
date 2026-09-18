@@ -26,6 +26,7 @@ import com.indigo.mobileobservatory.mount.MountMotionState
 import com.indigo.mobileobservatory.mount.MountSlewRate
 import com.indigo.mobileobservatory.mount.MountProtocolType
 import com.indigo.mobileobservatory.mount.MountTransportType
+import com.indigo.mobileobservatory.mount.SkyWatcherMountMode
 import com.indigo.mobileobservatory.mount.PrecisionGotoProgress
 import com.indigo.mobileobservatory.ui.components.RecordLimit
 import com.indigo.mobileobservatory.ui.components.RecordLimitType
@@ -469,6 +470,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val mountPort = mountModule.mountPort
     val synScanHost = mountModule.synScanHost
     val synScanPort = mountModule.synScanPort
+    val skyWatcherMountMode = mountModule.skyWatcherMountMode
     val mountTransport = mountModule.mountTransport
     val mountUsbDevices = mountModule.mountUsbDevices
     val mountUsbDeviceId = mountModule.mountUsbDeviceId
@@ -631,7 +633,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         syncOffsetCapability(cam)
                         syncUsbBandwidthCapability(cam)
                         _roi.value = cam.currentRoi
-                        syncBinningState(cam, appBin = 1)
+                        syncBinningState(cam, appBin = (cam as? CameraBinningCapable)?.currentHardwareBin ?: 1)
                         _longExposureEnabled.value = cam.longExposureEnabled
                         refreshExposureUiLimits()
                         _statusMessage.value = app.getString(R.string.camera_connected_status, cam.cameraInfo?.name.orEmpty(), cam.cameraInfo?.serialNumber.orEmpty())
@@ -803,6 +805,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setMountPort(value: String) = mountModule.setMountPort(value)
     fun setSynScanHost(value: String) = mountModule.setSynScanHost(value)
     fun setSynScanPort(value: String) = mountModule.setSynScanPort(value)
+    fun setSkyWatcherMountMode(value: SkyWatcherMountMode) = mountModule.setSkyWatcherMountMode(value)
     fun setMountTransport(value: MountTransportType) = mountModule.setMountTransport(value)
     fun setMountProtocol(value: MountProtocolType) = mountModule.setMountProtocol(value)
     fun setMountUsbDevice(value: Int) = mountModule.setMountUsbDevice(value)

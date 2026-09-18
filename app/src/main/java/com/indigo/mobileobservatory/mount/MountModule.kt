@@ -26,10 +26,20 @@ class MountModule(
 ) {
     private companion object {
         const val ACTION_MOUNT_USB_PERMISSION = "com.indigo.mobileobservatory.MOUNT_USB_PERMISSION"
+        const val DEFAULT_SYNSCAN_HOST = "192.168.4.1"
+        const val DEFAULT_SYNSCAN_PORT = 11880
         const val GOTO_TOLERANCE_DEG = 0.05
         const val GOTO_STABLE_SAMPLES = 2
         const val MOTION_STABLE_TOLERANCE_DEG = 0.01
         const val MOTION_STABLE_SAMPLES = 3
+
+        internal fun migratedSynScanEndpoint(host: String, port: Int): Pair<String, Int> {
+            return if (host == "127.0.0.1" && port == 11882) {
+                DEFAULT_SYNSCAN_HOST to DEFAULT_SYNSCAN_PORT
+            } else {
+                host to port
+            }
+        }
     }
 
     private val prefs = application.getSharedPreferences("mobile_observatory", Context.MODE_PRIVATE)
@@ -48,13 +58,25 @@ class MountModule(
     private val _mountPort = MutableStateFlow(prefs.getInt("mount_lx200_port", 9998).toString())
     val mountPort: StateFlow<String> = _mountPort.asStateFlow()
 
-    private val _synScanHost =
-        MutableStateFlow(prefs.getString("synscan_host", "127.0.0.1") ?: "127.0.0.1")
+    private val synScanEndpoint = migratedSynScanEndpoint(
+        prefs.getString("synscan_host", DEFAULT_SYNSCAN_HOST) ?: DEFAULT_SYNSCAN_HOST,
+        prefs.getInt("synscan_port", DEFAULT_SYNSCAN_PORT)
+    )
+    private val _synScanHost = MutableStateFlow(synScanEndpoint.first)
     val synScanHost: StateFlow<String> = _synScanHost.asStateFlow()
 
-    private val _synScanPort =
-        MutableStateFlow(prefs.getInt("synscan_port", 11882).toString())
+    private val _synScanPort = MutableStateFlow(synScanEndpoint.second.toString())
     val synScanPort: StateFlow<String> = _synScanPort.asStateFlow()
+
+    private val _skyWatcherMountMode = MutableStateFlow(
+        runCatching {
+            SkyWatcherMountMode.valueOf(
+                prefs.getString("skywatcher_mount_mode", SkyWatcherMountMode.EQUATORIAL.name)
+                    ?: SkyWatcherMountMode.EQUATORIAL.name
+            )
+        }.getOrDefault(SkyWatcherMountMode.EQUATORIAL)
+    )
+    val skyWatcherMountMode: StateFlow<SkyWatcherMountMode> = _skyWatcherMountMode.asStateFlow()
 
     private val _mountTransport = MutableStateFlow(
         runCatching { MountTransportType.valueOf(prefs.getString("mount_transport", MountTransportType.TCP.name) ?: MountTransportType.TCP.name) }
@@ -162,6 +184,11 @@ class MountModule(
 
     fun setSynScanPort(port: String) {
         _synScanPort.value = port.filter { it.isDigit() }.take(5)
+    }
+
+    fun setSkyWatcherMountMode(mode: SkyWatcherMountMode) {
+        _skyWatcherMountMode.value = mode
+        prefs.edit().putString("skywatcher_mount_mode", mode.name).apply()
     }
 
     fun setMountTransport(type: MountTransportType) {
@@ -426,8 +453,9 @@ class MountModule(
     }
 
     private fun connectSynScanWifiMount() {
-        val host = _synScanHost.value.trim().ifBlank { "127.0.0.1" }
-        val port = _synScanPort.value.toIntOrNull() ?: 11882
+        val host = _synScanHost.value.trim().ifBlank { DEFAULT_SYNSCAN_HOST }
+        val port = _synScanPort.value.toIntOrNull() ?: DEFAULT_SYNSCAN_PORT
+        val site = _mountSite.value ?: storedObservatorySite()
         scope.launch {
             _mountBusy.value = true
             _mountConnectionState.value = MountConnectionState.Connecting
@@ -437,9 +465,16 @@ class MountModule(
                     .putString("synscan_host", host)
                     .putInt("synscan_port", port)
                     .putString("mount_protocol", MountProtocolType.SKYWATCHER.name)
+                    .putString("skywatcher_mount_mode", _skyWatcherMountMode.value.name)
                     .apply()
                 _activeUsbMountDeviceId.value = null
-                val coordinates = controller.connectSynScanWifi(host, port)
+                val coordinates = controller.connectSynScanWifi(
+                    host = host,
+                    port = port,
+                    context = application,
+                    site = site,
+                    mode = _skyWatcherMountMode.value
+                )
                 _mountProtocol.value = MountProtocolType.SKYWATCHER
                 runCatching { controller.setMoveRate(_mountSlewRate.value) }
                 _mountCoordinates.value = coordinates
@@ -447,6 +482,7 @@ class MountModule(
                     .onSuccess { _mountSite.value = it }
                 _mountConnectionState.value = MountConnectionState.Connected
                 updateDetectedMountInfo()
+                startMountCoordinatePolling()
                 _statusMessage.value =
                     "Sky-Watcher connected: ${coordinates.formatRa()} ${coordinates.formatDec()}"
             } catch (e: Throwable) {
@@ -461,6 +497,16 @@ class MountModule(
                 _mountBusy.value = false
             }
         }
+    }
+
+    private fun storedObservatorySite(): MountSite? {
+        if (!prefs.contains("polar_latitude_deg") || !prefs.contains("polar_longitude_deg")) {
+            return null
+        }
+        return MountSite(
+            latitudeDeg = prefs.getFloat("polar_latitude_deg", 0f).toDouble(),
+            longitudeDeg = prefs.getFloat("polar_longitude_deg", 0f).toDouble()
+        )
     }
 
     private fun updateDetectedMountInfo() {
@@ -632,7 +678,6 @@ class MountModule(
             return false
         }
         val target = MountCoordinates(raHours = raHours, decDeg = decDeg)
-        val supportsSync = controller.activeProtocol != MountProtocolType.SKYWATCHER
         val started = motionRunner.start(
             state = MountMotionState(MountMotionType.GOTO, "Precision GOTO $name"),
             onError = { error ->
@@ -723,7 +768,7 @@ class MountModule(
                         )
                     }
 
-                    if (supportsSync) {
+                    if (controller.supportsSync) {
                         publishPrecisionProgress(
                             phase = PrecisionGotoPhase.SYNCING,
                             name = name,
@@ -799,7 +844,12 @@ class MountModule(
             } else {
                 0
             }
-            if (stableSamples >= GOTO_STABLE_SAMPLES) return
+            if (stableSamples >= GOTO_STABLE_SAMPLES) {
+                if (_mountTrackingEnabled.value) {
+                    runCatching { controller.setTracking(true) }
+                }
+                return
+            }
         }
         error("Mount GOTO timed out before reaching the target.")
     }
@@ -862,7 +912,6 @@ class MountModule(
                 _statusMessage.value = _mountMoveStatus.value
             }
             val stopped = motionRunner.stop()
-            stopMountCoordinatePolling()
             if (!stopped && controller.isConnected) {
                 runCatching { controller.abortMotion() }
             }
@@ -884,7 +933,6 @@ class MountModule(
                     MountConnectionState.Error(error.message ?: "Mount move failed")
                 _mountMoveStatus.value = "Mount move error: ${error.message}"
                 _statusMessage.value = _mountMoveStatus.value
-                stopMountCoordinatePolling()
             }
         ) {
             controller.startMove(direction)
@@ -910,6 +958,7 @@ class MountModule(
         mountCoordinatePollingJob = scope.launch {
             while (controller.isConnected) {
                 refreshMountCoordinatesAfterCommand()
+                runCatching { controller.refreshTracking() }
                 kotlinx.coroutines.delay(500)
             }
         }

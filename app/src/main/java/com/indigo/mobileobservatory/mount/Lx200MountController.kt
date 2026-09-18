@@ -84,6 +84,11 @@ enum class MountProtocolType {
     SKYWATCHER
 }
 
+enum class SkyWatcherMountMode {
+    EQUATORIAL,
+    ALTAZ
+}
+
 enum class MountDirection(val command: String, val stopCommand: String) {
     NORTH(":Mn#", ":Qn#"),
     SOUTH(":Ms#", ":Qs#"),
@@ -170,13 +175,16 @@ class Lx200MountController {
     private var serialConnection: UsbDeviceConnection? = null
     private var bluetoothSocket: BluetoothSocket? = null
     private var synScanSocket: DatagramSocket? = null
-    private var skyWatcherAdapter: SkyWatcherAdapter? = null
+    private var skyWatcherAdapter: SkyWatcherMountSession? = null
     @Volatile private var permanentlyClosed = false
 
     var activeProtocol: MountProtocolType = MountProtocolType.AUTO
         private set
     var mountModel: String? = null
         private set
+    val supportsSync: Boolean
+        get() = skyWatcherAdapter?.supportsSync
+            ?: (activeProtocol != MountProtocolType.SKYWATCHER)
 
     val isConnected: Boolean
         get() = (socket?.isConnected == true && socket?.isClosed == false) ||
@@ -304,7 +312,10 @@ class Lx200MountController {
 
     suspend fun connectSynScanWifi(
         host: String,
-        port: Int = 11882
+        port: Int = 11880,
+        context: Context? = null,
+        site: MountSite? = null,
+        mode: SkyWatcherMountMode = SkyWatcherMountMode.EQUATORIAL
     ): MountCoordinates = withContext(Dispatchers.IO) {
         check(!permanentlyClosed) { "Mount controller is closed." }
         disconnect()
@@ -312,21 +323,23 @@ class Lx200MountController {
         val udp = DatagramSocket()
         synScanSocket = udp
         try {
-            udp.soTimeout = SERIAL_TIMEOUT_MS
+            context?.let { MountWifiNetwork.bindSocket(it, udp) }
+            udp.soTimeout = HANDSHAKE_TIMEOUT_MS
             udp.connect(address, port)
             check(!permanentlyClosed) { "Mount controller is closed." }
-            val adapter = SkyWatcherAdapter(::exchangeSkyWatcher)
-            val coordinates = adapter.open()
+            val adapter = openMotorSkyWatcherSession(site, mode)
             skyWatcherAdapter = adapter
             activeProtocol = MountProtocolType.SKYWATCHER
             mountModel = adapter.modelName
-            coordinates
+            udp.soTimeout = SERIAL_TIMEOUT_MS
+            adapter.readCoordinates()
         } catch (e: Throwable) {
             udp.close()
             synScanSocket = null
             skyWatcherAdapter = null
             throw IllegalStateException(
-                "SynScan Wi-Fi connection failed. Keep SynScan App connected and aligned; use UDP 127.0.0.1:11882. ${e.message}",
+                "SynScan Wi-Fi connection failed. Connect the phone to the mount hotspot " +
+                    "(SSID SynScan_xxxx) then use UDP 192.168.4.1:11880. ${e.message}",
                 e
             )
         }
@@ -466,6 +479,10 @@ class Lx200MountController {
         )
     }
 
+    fun refreshTracking() {
+        skyWatcherAdapter?.refreshTracking()
+    }
+
     suspend fun readSite(): MountSite = withContext(Dispatchers.IO) {
         skyWatcherAdapter?.let { return@withContext it.readSite() }
         if (activeProtocol == MountProtocolType.IOPTRON) {
@@ -544,8 +561,9 @@ class Lx200MountController {
         require(coordinates.decDeg.isFinite() && coordinates.decDeg in -90.0..90.0) {
             "Sync Dec is invalid."
         }
-        if (skyWatcherAdapter != null) {
-            error("Sky-Watcher SynScan sync is not supported here. Align in SynScan first.")
+        skyWatcherAdapter?.let {
+            it.syncTo(coordinates)
+            return@withContext
         }
         Log.i(
             TAG,
@@ -683,6 +701,42 @@ class Lx200MountController {
             if (!sendIoptronOk(":SZP#")) error("iOptron mount rejected set-home command.")
         } else {
             sendNoReplyCommand(":hF#")
+        }
+    }
+
+    private fun openMotorSkyWatcherSession(
+        site: MountSite?,
+        mode: SkyWatcherMountMode
+    ): SkyWatcherMountSession {
+        drainSynScanInput()
+        val probe = runCatching {
+            exchangeSkyWatcher(SkyWatcherMotorCodec.command('e', SkyWatcherAxis.RA), null)
+        }
+        val reply = probe.getOrNull()
+        require(reply != null && SkyWatcherMotorCodec.isMotorReply(reply)) {
+            probe.exceptionOrNull()?.message ?: "No Sky-Watcher motor-controller reply"
+        }
+        val adapter = SkyWatcherMotorAdapter(
+            exchange = { payload -> exchangeSkyWatcher(payload, null) },
+            site = site ?: MountSite(0.0, 0.0),
+            mode = mode
+        )
+        adapter.open()
+        return adapter
+    }
+
+    private fun drainSynScanInput() {
+        val udp = synScanSocket ?: return
+        val previous = udp.soTimeout
+        try {
+            udp.soTimeout = 40
+            val buffer = ByteArray(256)
+            repeat(8) {
+                runCatching { udp.receive(DatagramPacket(buffer, buffer.size)) }
+                    .onFailure { return }
+            }
+        } finally {
+            udp.soTimeout = previous
         }
     }
 
@@ -889,20 +943,12 @@ class Lx200MountController {
     }
 
     private fun emergencyStop() {
-        if (activeProtocol == MountProtocolType.SKYWATCHER) {
-            skyWatcherEmergencyStopPayloads().forEach(::emergencyWriteBytes)
+        val payloads = skyWatcherAdapter?.emergencyStopPayloads()
+        if (payloads != null) {
+            payloads.forEach(::emergencyWriteBytes)
         } else {
             emergencyWriteBytes(":Q#".toByteArray(Charsets.US_ASCII))
         }
-    }
-
-    private fun skyWatcherEmergencyStopPayloads(): List<ByteArray> {
-        return listOf(
-            byteArrayOf('P'.code.toByte(), 2, 16, 36, 0, 0, 0, 0),
-            byteArrayOf('P'.code.toByte(), 2, 16, 37, 0, 0, 0, 0),
-            byteArrayOf('P'.code.toByte(), 2, 17, 36, 0, 0, 0, 0),
-            byteArrayOf('P'.code.toByte(), 2, 17, 37, 0, 0, 0, 0)
-        )
     }
 
     private fun emergencyWriteBytes(bytes: ByteArray) {

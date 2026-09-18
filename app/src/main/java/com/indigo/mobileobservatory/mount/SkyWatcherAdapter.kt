@@ -12,15 +12,16 @@ import kotlin.math.sin
  */
 class SkyWatcherAdapter(
     private val exchange: (payload: ByteArray, fixedResponseLength: Int?) -> ByteArray
-) {
-    var modelName: String = "Sky-Watcher SynScan"
+) : SkyWatcherMountSession {
+    override var modelName: String = "Sky-Watcher SynScan"
         private set
+    override val supportsSync: Boolean = false
     var aligned: Boolean = false
         private set
     private var slewRate = 6
     private var homeCoordinates: MountCoordinates? = null
 
-    fun open(): MountCoordinates {
+    override fun open(): MountCoordinates {
         val echo = command("Kx")
         require(echo.firstOrNull()?.toInt()?.toChar() == 'x') {
             "No Sky-Watcher SynScan response."
@@ -39,7 +40,7 @@ class SkyWatcherAdapter(
         return readCoordinates()
     }
 
-    fun readCoordinates(): MountCoordinates {
+    override fun readCoordinates(): MountCoordinates {
         val response = commandText("e")
         val parts = response.split(',')
         require(parts.size == 2) { "Invalid SynScan coordinate response: $response" }
@@ -51,7 +52,7 @@ class SkyWatcherAdapter(
         return precessJ2000ToNow(MountCoordinates(raJ2000, decJ2000))
     }
 
-    fun slewTo(targetNow: MountCoordinates) {
+    override fun slewTo(targetNow: MountCoordinates) {
         val target = precessNowToJ2000(targetNow)
         val raRaw = ((target.raHours.mod(24.0) / 24.0) * UINT32_RANGE)
             .toLong().toULong() and 0xffffffffu
@@ -66,7 +67,7 @@ class SkyWatcherAdapter(
         }
     }
 
-    fun startMove(direction: MountDirection) {
+    override fun startMove(direction: MountDirection) {
         val pierWest = runCatching { commandText("p").firstOrNull() == 'W' }
             .getOrDefault(false)
         val synDirection = when (direction) {
@@ -78,7 +79,7 @@ class SkyWatcherAdapter(
         sendFixedRate(synDirection, slewRate)
     }
 
-    fun stopMove(direction: MountDirection?) {
+    override fun stopMove(direction: MountDirection?) {
         when (direction) {
             MountDirection.NORTH, MountDirection.SOUTH -> {
                 sendFixedRate(Direction.NORTH, 0)
@@ -92,16 +93,16 @@ class SkyWatcherAdapter(
         }
     }
 
-    fun setMoveRate(rate: MountSlewRate) {
+    override fun setMoveRate(rate: MountSlewRate) {
         slewRate = rate.skyWatcherRate
     }
 
-    fun setTracking(enabled: Boolean) {
+    override fun setTracking(enabled: Boolean) {
         val mode = if (enabled) 2 else 0 // 2 = sidereal EQ tracking.
         command(byteArrayOf('T'.code.toByte(), mode.toByte()))
     }
 
-    fun readSite(): MountSite {
+    override fun readSite(): MountSite {
         val data = command("w")
         require(data.size >= 8) { "Invalid SynScan location response." }
         val latitude = dms(data[0], data[1], data[2], data[3].toInt() != 0)
@@ -110,7 +111,7 @@ class SkyWatcherAdapter(
         return MountSite(latitude, longitude)
     }
 
-    fun setSite(site: MountSite) {
+    override fun setSite(site: MountSite) {
         val lat = toDms(site.latitudeDeg)
         val lon = toDms(site.longitudeDeg)
         command(
@@ -124,11 +125,11 @@ class SkyWatcherAdapter(
         )
     }
 
-    fun setHomeHere() {
+    override fun setHomeHere() {
         homeCoordinates = readCoordinates()
     }
 
-    fun goHome() {
+    override fun goHome() {
         val home = homeCoordinates
         if (home != null) {
             slewTo(home)
@@ -138,6 +139,17 @@ class SkyWatcherAdapter(
         val pole = if (site.latitudeDeg >= 0) 90.0 else -90.0
         slewTo(MountCoordinates(localSiderealHours(site.longitudeDeg), pole))
     }
+
+    override fun syncTo(coordinates: MountCoordinates) {
+        error("Sky-Watcher SynScan sync is not supported here. Align in SynScan first.")
+    }
+
+    override fun emergencyStopPayloads(): List<ByteArray> = listOf(
+        byteArrayOf('P'.code.toByte(), 2, 16, 36, 0, 0, 0, 0),
+        byteArrayOf('P'.code.toByte(), 2, 16, 37, 0, 0, 0, 0),
+        byteArrayOf('P'.code.toByte(), 2, 17, 36, 0, 0, 0, 0),
+        byteArrayOf('P'.code.toByte(), 2, 17, 37, 0, 0, 0, 0)
+    )
 
     private fun sendFixedRate(direction: Direction, rate: Int) {
         val axis = if (direction == Direction.NORTH || direction == Direction.SOUTH) 17 else 16

@@ -263,9 +263,11 @@
     <string name="go_home">Go home</string>
     <string name="bluetooth">Bluetooth</string>
     <string name="paired_devices">Paired devices</string>
-    <string name="synscan_app_address">SynScan app address</string>
+    <string name="synscan_app_address">Mount Wi-Fi address</string>
     <string name="udp_port">UDP port</string>
-    <string name="synscan_connection_hint">First align the mount using the SynScan app. The default local endpoint is 127.0.0.1:11882.</string>
+    <string name="synscan_connection_hint">Join the mount hotspot (SSID SynScan_xxxx), then connect. Default is 192.168.4.1:11880. Choose equatorial or alt-azimuth mode before connecting. Set site coordinates on the polar-alignment page, power on at home, or sync a star after connecting.</string>
+    <string name="synscan_mode_equatorial">Equatorial</string>
+    <string name="synscan_mode_altaz">Alt-azimuth</string>
     <string name="guiding_module">Guiding module</string>
     <string name="guiding_module_description">Guide camera, calibration, pulse correction, and status monitoring</string>
     <string name="confirm_mount_slew">Confirm mount slew</string>

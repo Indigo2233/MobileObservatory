@@ -64,6 +64,7 @@ import com.indigo.mobileobservatory.mount.MountDirection
 import com.indigo.mobileobservatory.mount.MountProtocolType
 import com.indigo.mobileobservatory.mount.MountSlewRate
 import com.indigo.mobileobservatory.mount.MountTransportType
+import com.indigo.mobileobservatory.mount.SkyWatcherMountMode
 import com.indigo.mobileobservatory.permissions.AppSettingsNavigator
 import com.indigo.mobileobservatory.permissions.BluetoothPermissionPolicy
 import com.indigo.mobileobservatory.ui.MountConnectionAction
@@ -88,6 +89,7 @@ fun MountControlScreen(
     val port by viewModel.mountPort.collectAsState()
     val synScanHost by viewModel.synScanHost.collectAsState()
     val synScanPort by viewModel.synScanPort.collectAsState()
+    val skyWatcherMode by viewModel.skyWatcherMountMode.collectAsState()
     val usbDevices by viewModel.mountUsbDevices.collectAsState()
     val usbDeviceId by viewModel.mountUsbDeviceId.collectAsState()
     val baudRate by viewModel.mountBaudRate.collectAsState()
@@ -384,6 +386,27 @@ fun MountControlScreen(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.outline
                         )
+                        Row(
+                            modifier = Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            FilterChip(
+                                selected = skyWatcherMode == SkyWatcherMountMode.EQUATORIAL,
+                                onClick = {
+                                    viewModel.setSkyWatcherMountMode(SkyWatcherMountMode.EQUATORIAL)
+                                },
+                                label = { Text(stringResource(R.string.synscan_mode_equatorial)) },
+                                enabled = !connected && !busy
+                            )
+                            FilterChip(
+                                selected = skyWatcherMode == SkyWatcherMountMode.ALTAZ,
+                                onClick = {
+                                    viewModel.setSkyWatcherMountMode(SkyWatcherMountMode.ALTAZ)
+                                },
+                                label = { Text(stringResource(R.string.synscan_mode_altaz)) },
+                                enabled = !connected && !busy
+                            )
+                        }
                     }
                 }
 
