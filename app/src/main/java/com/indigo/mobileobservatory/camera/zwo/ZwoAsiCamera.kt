@@ -5,6 +5,7 @@ import com.indigo.mobileobservatory.util.FileLogger
 import com.zwo.ASIConstants
 import com.zwo.ASIControlCap
 import com.zwo.ASIImageBuffer
+import com.zwo.ASIReturnType
 import com.zwo.ZwoCamera
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -14,11 +15,10 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToLong
 
 class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
-    CameraEnvironmentControlCapable, CameraBinningCapable {
+    CameraEnvironmentControlCapable, CameraBinningCapable, CoolingCapable {
 
     companion object {
         private const val TAG = "ZwoAsiCam"
-        private const val GRAB_TIMEOUT_MS = 2000
 
         const val ASI_IMG_RAW8 = 0
         const val ASI_IMG_RGB24 = 1
@@ -35,6 +35,11 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
         const val ASI_BRIGHTNESS = 5
         const val ASI_BANDWIDTH_OVERLOAD = 6
         const val ASI_HARDWARE_BIN = 13
+        const val ASI_HIGH_SPEED_MODE = 14
+        const val ASI_TEMPERATURE = 8
+        const val ASI_COOLER_POWER_PERC = 15
+        const val ASI_TARGET_TEMP = 16
+        const val ASI_COOLER_ON = 17
         // Verified against ASISDK_ANDROID CameraSDK/include/ASICamera2.h:
         // 15 = ASI_COOLER_POWER_PERC, 16 = ASI_TARGET_TEMP, 17 = ASI_COOLER_ON,
         // 18 = ASI_MONO_BIN, 19 = ASI_FAN_ON, 20 = ASI_PATTERN_ADJUST, 21 = ASI_ANTI_DEW_HEATER.
@@ -128,22 +133,48 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
     private var sensorH = 0
     private var maxBitDepth = 8
     private var cameraID = -1
+    var lastOpenError: String? = null
+        private set
     private var currentBin = 1
     override val currentHardwareBin: Int get() = currentBin
     override var supportedHardwareBins: List<Int> = listOf(1); private set
     private var hardwareBinControlAvailable = false
     private var currentImgType = ASI_IMG_RAW8
 
+    private val _coolingInfo = MutableStateFlow<CoolingInfo?>(null)
+    override val coolingInfo: StateFlow<CoolingInfo?> = _coolingInfo.asStateFlow()
+    private val _coolerOn = MutableStateFlow(false)
+    override val coolerOn: StateFlow<Boolean> = _coolerOn.asStateFlow()
+    private val _targetTempTenths = MutableStateFlow(0)
+    override val targetTempTenths: StateFlow<Int> = _targetTempTenths.asStateFlow()
+    private val _sensorTempTenths = MutableStateFlow(0)
+    override val sensorTempTenths: StateFlow<Int> = _sensorTempTenths.asStateFlow()
+    private val _tecVoltageTenths = MutableStateFlow(0)
+    override val tecVoltageTenths: StateFlow<Int> = _tecVoltageTenths.asStateFlow()
+    private val _coolingPowerPct = MutableStateFlow(0f)
+    override val coolingPowerPct: StateFlow<Float> = _coolingPowerPct.asStateFlow()
+    private val _tempHistory = MutableStateFlow<List<TempHistoryPoint>>(emptyList())
+    override val tempHistory: StateFlow<List<TempHistoryPoint>> = _tempHistory.asStateFlow()
+    private val _rampStatus = MutableStateFlow("")
+    override val rampStatus: StateFlow<String> = _rampStatus.asStateFlow()
+    private var targetTempWholeCelsius = true
+    private val tempPollRunning = AtomicBoolean(false)
+    private var tempPollThread: Thread? = null
+    private val rampRunning = AtomicBoolean(false)
+    private var rampThread: Thread? = null
+
     fun open(cameraIndex: Int): Boolean {
+        lastOpenError = null
+        var opened: ZwoCamera? = null
         try {
             val propRet = ZwoCamera.getCameraProperty(cameraIndex)
-            if (propRet.errorCode.intVal != ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
-                FileLogger.e(TAG, "getCameraProperty failed: ${propRet.errorCode.intVal}")
-                return false
+            if (!asiOk(propRet)) {
+                return failOpen("getCameraProperty", asiCode(propRet))
             }
 
-            val prop = propRet.obj as com.zwo.ASICameraProperty
-            cameraID = prop.cameraID
+            val prop = propRet?.obj as? com.zwo.ASICameraProperty
+                ?: return failOpen("getCameraProperty", -1)
+            cameraID = ZwoSdk.openIndex(cameraIndex)
             val modelName = prop.name ?: "ZWO ASI Camera"
             sensorW = prop.maxWidth.toInt()
             sensorH = prop.maxHeight.toInt()
@@ -157,31 +188,40 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
             val bitDepth = effectiveBitDepth(modelName, transferBitDepth)
             maxBitDepth = bitDepth
 
-            FileLogger.i(TAG, "Opening ZWO camera: $modelName ID=$cameraID ${sensorW}x${sensorH} color=$isColor bayer=$bayerPattern pixel=${pixelSize}um bitDepth=$bitDepth")
+            FileLogger.i(
+                TAG,
+                "Opening ZWO camera: $modelName sdkIndex=$cameraID propertyId=${prop.cameraID} " +
+                    "${sensorW}x${sensorH} color=$isColor bayer=$bayerPattern pixel=${pixelSize}um bitDepth=$bitDepth"
+            )
 
             val cam = ZwoCamera(cameraID)
             val openRet = cam.openCamera()
-            if (openRet.intVal != ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
-                FileLogger.e(TAG, "openCamera failed: ${openRet.intVal}")
-                return false
+            if (openRet?.intVal != ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
+                return failOpen("openCamera", openRet?.intVal ?: -1)
             }
+            opened = cam
 
             val initRet = cam.initCamera()
-            if (initRet.intVal != ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
-                FileLogger.e(TAG, "initCamera failed: ${initRet.intVal}")
+            if (initRet?.intVal != ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
                 cam.closeCamera()
-                return false
+                return failOpen("initCamera", initRet?.intVal ?: -1)
             }
             zwoCamera = cam
+            ignoreJni("refreshSensorSizeFromRoi") { refreshSensorSizeFromRoi(cam, modelName) }
 
-            readExposureRange(cam)
-            readGainRange(cam)
-            readOffsetRange(cam)
-            configureUsbBandwidth(cam, currentImgType)
-            readSupportedFormats(prop)
-            readSupportedBins(prop, cam)
-            configureInitialFormat(cam)
-            readEnvironmentControls(cam)
+            ignoreJni("readExposureRange") { readExposureRange(cam) }
+            ignoreJni("readGainRange") { readGainRange(cam) }
+            ignoreJni("readOffsetRange") { readOffsetRange(cam) }
+            ignoreJni("configureUsbBandwidth") { configureUsbBandwidth(cam, currentImgType) }
+            ignoreJni("readSupportedFormats") { readSupportedFormats(prop) }
+            ignoreJni("readSupportedBins") { readSupportedBins(prop, cam) }
+            ignoreJni("configureInitialFormat") { configureInitialFormat(cam) }
+            ignoreJni("readEnvironmentControls") { readEnvironmentControls(cam) }
+            ignoreJni("initCooling") { initCooling(cam) }
+            ignoreJni("applyInitialControls") {
+                cam.setControlValue(ASI_EXPOSURE, currentExposureUs.toLong().coerceAtLeast(1), 0)
+                cam.setControlValue(ASI_GAIN, currentGain.roundToLong(), 0)
+            }
 
             val serialNumber = readSerialNumber(cam)
 
@@ -195,21 +235,33 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
                 pixelSizeUm = pixelSize.toFloat().takeIf { it > 0f }
             )
 
-            currentRoi = Roi(0, 0, sensorW, sensorH)
-            cropInfo = CropInfo(0, 0, sensorW, sensorH)
             _isOpen.value = true
-            FileLogger.i(TAG, "Camera opened: $modelName (SN=$serialNumber) ${sensorW}x${sensorH} maxBit=$maxBitDepth color=$isColor")
+            startTempPolling()
+            FileLogger.i(
+                TAG,
+                "Camera opened: $modelName (SN=$serialNumber) ${sensorW}x${sensorH} " +
+                    "image=${currentRoi.width}x${currentRoi.height} bin=$currentBin maxBit=$maxBitDepth color=$isColor"
+            )
             return true
         } catch (e: Throwable) {
+            lastOpenError = e.message ?: e.javaClass.simpleName
             FileLogger.e(TAG, "Failed to open ZWO camera: ${e.message}", e)
+            try {
+                (opened ?: zwoCamera)?.closeCamera()
+            } catch (_: Throwable) {
+            }
+            zwoCamera = null
             return false
         }
     }
 
     override fun close() {
         stopCapture()
+        stopRamp()
+        stopTempPolling()
         zwoCamera?.closeCamera()
         zwoCamera = null
+        _coolingInfo.value = null
         _isOpen.value = false
         cameraInfo = null
         FileLogger.i(TAG, "Camera closed")
@@ -221,10 +273,15 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
         frameCallback = callback
 
         val ret = cam.startVideoCapture()
-        if (ret.intVal != ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
-            FileLogger.e(TAG, "startVideoCapture failed: ${ret.intVal}")
+        if (ret?.intVal != ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
+            FileLogger.e(TAG, "startVideoCapture failed: ${ret?.intVal}")
             return
         }
+        FileLogger.i(
+            TAG,
+            "startVideoCapture OK roi=${currentRoi.width}x${currentRoi.height} bin=$currentBin " +
+                "imgType=$currentImgType exp=${currentExposureUs.toInt()}us"
+        )
 
         running.set(true)
         captureThread = Thread({
@@ -246,6 +303,7 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
         captureThread = null
 
         zwoCamera?.stopVideoCapture()
+        bufferPool.clear()
         _isCapturing.value = false
         frameCallback = null
         FileLogger.i(TAG, "Capture stopped")
@@ -265,11 +323,10 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
         val result = cam.setControlValue(ASI_GAIN, gain.roundToLong(), 0)
         if (result == ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
             val readBack = cam.getControlValue(ASI_GAIN)
-            currentGain = if (readBack.errorCode.intVal == ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
-                GainValueNormalizer.normalize(gainCapability, readBack.extraLongVal1.toFloat())
-            } else {
-                gain
-            }
+            currentGain = GainValueNormalizer.normalize(
+                gainCapability,
+                asiLong(readBack)?.toFloat() ?: gain
+            )
         }
     }
 
@@ -308,11 +365,7 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
         }
 
         val readBack = cam.getControlValue(ASI_BANDWIDTH_OVERLOAD)
-        currentUsbBandwidth = if (readBack?.errorCode?.intVal == ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
-            readBack.extraLongVal1.toInt().coerceIn(range.first, range.last)
-        } else {
-            target
-        }
+        currentUsbBandwidth = asiLong(readBack)?.toInt()?.coerceIn(range.first, range.last) ?: target
         FileLogger.i(TAG, "USB bandwidth set: requested=$target current=$currentUsbBandwidth")
         return true
     }
@@ -326,35 +379,130 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
         fanMaxLevel = 0
         _fanLevel.value = 0
 
-        val heaterCap = cam.getControlCaps(ASI_ANTI_DEW_HEATER)
-        if (heaterCap.errorCode.intVal == ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
-            val cap = heaterCap.obj as? ASIControlCap
-            if (cap != null && cap.isWritable != 0 && cap.maxValue.toInt() >= 1) {
+        try {
+            val heaterCap = findControlCap(cam, ASI_ANTI_DEW_HEATER)
+            if (heaterCap != null && heaterCap.isWritable != 0 && heaterCap.maxValue.toInt() >= 1) {
                 heaterSupported = true
                 heaterMaxLevel = 1
                 val current = cam.getControlValue(ASI_ANTI_DEW_HEATER)
-                if (current?.errorCode?.intVal == ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
-                    _heaterLevel.value = current.extraLongVal1.toInt().coerceIn(0, 1)
-                }
+                _heaterLevel.value = asiLong(current)?.toInt()?.coerceIn(0, 1) ?: 0
             }
-        }
 
-        val fanCap = cam.getControlCaps(ASI_FAN_ON)
-        if (fanCap.errorCode.intVal == ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
-            val cap = fanCap.obj as? ASIControlCap
-            if (cap != null && cap.isWritable != 0 && cap.maxValue.toInt() >= 1) {
+            val fanCap = findControlCap(cam, ASI_FAN_ON)
+            if (fanCap != null && fanCap.isWritable != 0 && fanCap.maxValue.toInt() >= 1) {
                 fanSupported = true
                 fanMaxLevel = 1
                 val current = cam.getControlValue(ASI_FAN_ON)
-                if (current?.errorCode?.intVal == ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
-                    _fanLevel.value = current.extraLongVal1.toInt().coerceIn(0, 1)
-                }
+                _fanLevel.value = asiLong(current)?.toInt()?.coerceIn(0, 1) ?: 0
             }
+        } catch (e: Throwable) {
+            FileLogger.w(TAG, "Environment controls unavailable: ${e.message}")
         }
         FileLogger.i(
             TAG,
             "Environment controls: heater=$heaterSupported fan=$fanSupported heaterLevel=${_heaterLevel.value} fanLevel=${_fanLevel.value}"
         )
+    }
+
+    private fun initCooling(cam: ZwoCamera) {
+        stopTempPolling()
+        _coolingInfo.value = null
+        _coolerOn.value = false
+        _coolingPowerPct.value = 0f
+        _tempHistory.value = emptyList()
+
+        val coolerCap = findControlCap(cam, ASI_COOLER_ON)
+        val targetCap = findControlCap(cam, ASI_TARGET_TEMP)
+        val hasTec = coolerCap != null && coolerCap.isWritable != 0
+        val canSetTarget = targetCap != null && targetCap.isWritable != 0
+        if (!hasTec && findControlCap(cam, ASI_TEMPERATURE) == null) {
+            FileLogger.i(TAG, "Cooling: no TEC or temperature control")
+            return
+        }
+
+        targetTempWholeCelsius = if (targetCap != null) {
+            ZwoSdk.targetTempIsWholeCelsius(targetCap.minValue, targetCap.maxValue)
+        } else {
+            true
+        }
+        val targetMin = if (targetCap != null) {
+            ZwoSdk.nativeTargetToTenths(targetCap.minValue, targetTempWholeCelsius)
+        } else {
+            -400
+        }
+        val targetMax = if (targetCap != null) {
+            ZwoSdk.nativeTargetToTenths(targetCap.maxValue, targetTempWholeCelsius)
+        } else {
+            300
+        }
+
+        _coolingInfo.value = CoolingInfo(
+            hasTec = hasTec,
+            canSetTarget = canSetTarget,
+            targetMinTenths = targetMin,
+            targetMaxTenths = targetMax,
+            tecVoltageMaxTenths = 0
+        )
+        _coolerOn.value = (asiLong(cam.getControlValue(ASI_COOLER_ON)) ?: 0L) != 0L
+        if (targetCap != null) {
+            _targetTempTenths.value = ZwoSdk.nativeTargetToTenths(
+                asiLong(cam.getControlValue(ASI_TARGET_TEMP)) ?: targetCap.defaultValue,
+                targetTempWholeCelsius
+            )
+        }
+        _sensorTempTenths.value = (asiLong(cam.getControlValue(ASI_TEMPERATURE)) ?: 0L).toInt()
+        _coolingPowerPct.value = (asiLong(cam.getControlValue(ASI_COOLER_POWER_PERC)) ?: 0L)
+            .toFloat().coerceIn(0f, 100f)
+        FileLogger.i(
+            TAG,
+            "Cooling init: hasTec=$hasTec canSetTarget=$canSetTarget " +
+                "range=[${targetMin / 10.0}..${targetMax / 10.0}]C wholeCelsius=$targetTempWholeCelsius " +
+                "sensor=${_sensorTempTenths.value / 10.0}C coolerOn=${_coolerOn.value}"
+        )
+    }
+
+    private fun startTempPolling() {
+        if (_coolingInfo.value == null) return
+        tempPollRunning.set(true)
+        tempPollThread = Thread({
+            while (tempPollRunning.get() && zwoCamera != null) {
+                try {
+                    val cam = zwoCamera
+                    if (cam != null) {
+                        asiLong(cam.getControlValue(ASI_TEMPERATURE))?.let {
+                            _sensorTempTenths.value = it.toInt()
+                        }
+                        asiLong(cam.getControlValue(ASI_COOLER_POWER_PERC))?.let {
+                            _coolingPowerPct.value = it.toFloat().coerceIn(0f, 100f)
+                        }
+                        asiLong(cam.getControlValue(ASI_COOLER_ON))?.let {
+                            _coolerOn.value = it != 0L
+                        }
+                        val history = _tempHistory.value.toMutableList()
+                        history += TempHistoryPoint(
+                            System.currentTimeMillis(),
+                            _sensorTempTenths.value,
+                            _coolingPowerPct.value
+                        )
+                        while (history.size > 180) history.removeAt(0)
+                        _tempHistory.value = history
+                    }
+                } catch (_: Exception) {
+                }
+                try {
+                    Thread.sleep(2000)
+                } catch (_: InterruptedException) {
+                    break
+                }
+            }
+        }, "ZWO-TEC-Poll").apply { isDaemon = true; start() }
+    }
+
+    private fun stopTempPolling() {
+        tempPollRunning.set(false)
+        tempPollThread?.interrupt()
+        tempPollThread?.join(2000)
+        tempPollThread = null
     }
 
     override fun setHeaterLevel(level: Int) {
@@ -390,17 +538,19 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
 
         val imgType = pixelFormatToAsiImgType(format)
         val roiFmt = cam.getROIFormat()
-        if (roiFmt.errorCode.intVal == ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
-            val roi = roiFmt.obj as com.zwo.ASIROIFormat
-            val ret = cam.setRoiFormat(roi.imgWidth, roi.imgHeight, roi.getiBin(), imgType)
-            if (ret.intVal == ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
-                currentImgType = imgType
-                currentPixelFormat = format
-                configureUsbBandwidth(cam, imgType)
-                readGainRange(cam)
-                FileLogger.i(TAG, "PixelFormat set to ${format.name} (asiType=$imgType)")
-            } else {
-                FileLogger.w(TAG, "setRoiFormat failed for ${format.name}: ${ret.intVal}")
+        if (asiOk(roiFmt)) {
+            val roi = roiFmt?.obj as? com.zwo.ASIROIFormat
+            if (roi != null) {
+                val ret = cam.setRoiFormat(roi.imgWidth, roi.imgHeight, roi.getiBin(), imgType)
+                if (ret?.intVal == ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
+                    currentImgType = imgType
+                    currentPixelFormat = format
+                    configureUsbBandwidth(cam, imgType)
+                    readGainRange(cam)
+                    FileLogger.i(TAG, "PixelFormat set to ${format.name} (asiType=$imgType)")
+                } else {
+                    FileLogger.w(TAG, "setRoiFormat failed for ${format.name}: ${ret?.intVal}")
+                }
             }
         }
 
@@ -419,7 +569,7 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
         val h = (reqH / 2) * 2
 
         val ret = cam.setRoiFormat(w, h, currentBin, currentImgType)
-        if (ret.intVal == ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
+        if (ret?.intVal == ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
             val startX = roi.x.coerceIn(0, (sensorW / currentBin) - w)
             val startY = roi.y.coerceIn(0, (sensorH / currentBin) - h)
             cam.setStartPos(startX, startY)
@@ -428,7 +578,7 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
             cropInfo = CropInfo(0, 0, w, h)
             FileLogger.i(TAG, "ROI set: ${w}x${h}@($startX,$startY) bin=$currentBin")
         } else {
-            FileLogger.w(TAG, "setRoiFormat failed: ${ret.intVal}")
+            FileLogger.w(TAG, "setRoiFormat failed: ${ret?.intVal}")
         }
 
         if (wasCapturing && cb != null) startCapture(cb)
@@ -454,8 +604,8 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
             val maxW = (sensorW / b / 8) * 8
             val maxH = (sensorH / b / 2) * 2
             val ret = cam.setRoiFormat(maxW.coerceAtLeast(roiMinWidth), maxH.coerceAtLeast(roiMinHeight), b, currentImgType)
-            if (ret.intVal != ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
-                FileLogger.w(TAG, "setHardwareBin($b) setRoiFormat failed: ${ret.intVal}")
+            if (ret?.intVal != ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
+                FileLogger.w(TAG, "setHardwareBin($b) setRoiFormat failed: ${ret?.intVal}")
                 currentBin = previous
                 enableHardwareBinControl(cam, previous > 1)
                 false
@@ -475,8 +625,120 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
         return applied
     }
 
+    override fun setCoolerOn(on: Boolean) {
+        val cam = zwoCamera ?: return
+        if (_coolingInfo.value?.hasTec != true) return
+        val result = cam.setControlValue(ASI_COOLER_ON, if (on) 1L else 0L, 0)
+        if (result == ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
+            _coolerOn.value = on
+            FileLogger.i(TAG, "Cooler ${if (on) "ON" else "OFF"}")
+        } else {
+            FileLogger.w(TAG, "setCoolerOn failed: $result")
+        }
+    }
+
+    override fun setTargetTemperature(tenthsDegC: Int) {
+        val cam = zwoCamera ?: return
+        val ci = _coolingInfo.value ?: return
+        if (!ci.canSetTarget) return
+        val clamped = tenthsDegC.coerceIn(ci.targetMinTenths, ci.targetMaxTenths)
+        val native = ZwoSdk.tenthsToNativeTarget(clamped, targetTempWholeCelsius)
+        val result = cam.setControlValue(ASI_TARGET_TEMP, native, 0)
+        if (result == ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
+            _targetTempTenths.value = clamped
+            FileLogger.i(TAG, "Target temp ${clamped / 10.0}C native=$native")
+        } else {
+            FileLogger.w(TAG, "setTargetTemperature failed: $result")
+        }
+    }
+
+    override fun startCoolDown(targetTenths: Int, durationMinutes: Int) {
+        stopRamp()
+        val ci = _coolingInfo.value ?: return
+        if (!ci.canSetTarget) return
+        if (!_coolerOn.value) setCoolerOn(true)
+        val clamped = targetTenths.coerceIn(ci.targetMinTenths, ci.targetMaxTenths)
+        if (durationMinutes <= 0) {
+            setTargetTemperature(clamped)
+            return
+        }
+        val startTemp = _sensorTempTenths.value
+        val totalSteps = (durationMinutes * 60 / 5).coerceAtLeast(1)
+        val stepSize = (clamped - startTemp).toFloat() / totalSteps
+        rampRunning.set(true)
+        rampThread = Thread({
+            for (step in 1..totalSteps) {
+                if (!rampRunning.get()) break
+                val intermediate = (startTemp + stepSize * step).toInt()
+                    .coerceIn(ci.targetMinTenths, ci.targetMaxTenths)
+                setTargetTemperature(intermediate)
+                val remaining = durationMinutes * 60 - step * 5
+                _rampStatus.value =
+                    "Cooling: ${"%.1f".format(intermediate / 10.0)}°C (${remaining / 60}m${remaining % 60}s)"
+                try {
+                    Thread.sleep(5000)
+                } catch (_: InterruptedException) {
+                    break
+                }
+            }
+            if (rampRunning.get()) {
+                setTargetTemperature(clamped)
+                _rampStatus.value = ""
+            }
+            rampRunning.set(false)
+        }, "ZWO-TEC-Ramp").apply { isDaemon = true; start() }
+    }
+
+    override fun startWarmUp(durationMinutes: Int) {
+        stopRamp()
+        val ci = _coolingInfo.value ?: return
+        if (!ci.canSetTarget) return
+        if (durationMinutes <= 0) {
+            setCoolerOn(false)
+            return
+        }
+        val startTemp = _sensorTempTenths.value
+        val ambientTarget = ci.targetMaxTenths.coerceAtMost(200)
+        val totalSteps = (durationMinutes * 60 / 5).coerceAtLeast(1)
+        val stepSize = (ambientTarget - startTemp).toFloat() / totalSteps
+        rampRunning.set(true)
+        rampThread = Thread({
+            for (step in 1..totalSteps) {
+                if (!rampRunning.get()) break
+                val intermediate = (startTemp + stepSize * step).toInt()
+                    .coerceIn(ci.targetMinTenths, ci.targetMaxTenths)
+                setTargetTemperature(intermediate)
+                val remaining = durationMinutes * 60 - step * 5
+                _rampStatus.value =
+                    "Warming: ${"%.1f".format(intermediate / 10.0)}°C (${remaining / 60}m${remaining % 60}s)"
+                try {
+                    Thread.sleep(5000)
+                } catch (_: InterruptedException) {
+                    break
+                }
+            }
+            if (rampRunning.get()) {
+                setCoolerOn(false)
+                _rampStatus.value = ""
+            }
+            rampRunning.set(false)
+        }, "ZWO-TEC-Warmup").apply { isDaemon = true; start() }
+    }
+
+    override fun stopRamp() {
+        rampRunning.set(false)
+        rampThread?.interrupt()
+        rampThread?.join(3000)
+        rampThread = null
+        _rampStatus.value = ""
+    }
+
     override fun recycleBuffer(buf: ByteArray) {
-        if (bufferPool.size < 8) bufferPool.offer(buf)
+        val cap = ZwoSdk.maxPooledFrameBuffers(buf.size)
+        while (bufferPool.size >= cap) {
+            bufferPool.poll()
+        }
+        if (bufferPool.size < cap) bufferPool.offer(buf)
     }
 
     private fun getBuffer(size: Int): ByteArray {
@@ -487,30 +749,68 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
     private fun captureLoop() {
         val cam = zwoCamera ?: return
         var frameSeq = 0L
-        val maxBufSize = sensorW * sensorH * 3
-        val imgBuf = ASIImageBuffer.allocate(maxBufSize)
+        var bufCapacity = 0
+        var imgBuf: ASIImageBuffer? = null
+        var timeouts = 0
+        var emptyReturns = 0
+        var lastTimeoutLogMs = 0L
+        var lastEmptyLogMs = 0L
 
         while (running.get()) {
             try {
                 val w = currentRoi.width
                 val h = currentRoi.height
                 val frameBpp = currentPixelFormat.bytesPerPixel
-                val expectedSize = w * h * frameBpp
+                val imageBytes = ZwoSdk.captureDirectBufferBytes(w, h, frameBpp)
+                val grabBytes = ZwoSdk.captureGrabBufferBytes(w, h, frameBpp)
+                if (imgBuf == null || bufCapacity < grabBytes) {
+                    imgBuf = ASIImageBuffer.allocate(grabBytes)
+                    bufCapacity = grabBytes
+                    FileLogger.i(TAG, "Grab buffer allocated: image=$imageBytes grab=$grabBytes ${w}x${h} bpp=$frameBpp")
+                }
+                val grabBuf = imgBuf ?: continue
+                val bb = grabBuf.getmByteBuffer()
+                bb.clear()
 
-                val ret = cam.getVideoData(imgBuf, expectedSize, GRAB_TIMEOUT_MS)
+                val timeoutMs = ZwoSdk.grabTimeoutMs(currentExposureUs, imageBytes)
+                val ret = cam.getVideoData(grabBuf, imageBytes, timeoutMs)
+                if (ret == null) {
+                    emptyReturns++
+                    val now = System.currentTimeMillis()
+                    if (now - lastEmptyLogMs >= 2000L) {
+                        lastEmptyLogMs = now
+                        FileLogger.w(
+                            TAG,
+                            "getVideoData null x$emptyReturns wait=${timeoutMs}ms " +
+                                "roi=${w}x${h} bytes=$imageBytes exp=${currentExposureUs.toInt()}us"
+                        )
+                    }
+                    Thread.sleep(20)
+                    continue
+                }
                 if (ret.intVal != ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
                     if (ret.intVal == ASIConstants.ASI_ERROR_CODE.ASI_ERROR_TIMEOUT) {
-                        Thread.sleep(1)
+                        timeouts++
+                        val now = System.currentTimeMillis()
+                        if (now - lastTimeoutLogMs >= 2000L) {
+                            lastTimeoutLogMs = now
+                            FileLogger.w(
+                                TAG,
+                                "getVideoData timeout x$timeouts wait=${timeoutMs}ms " +
+                                    "roi=${w}x${h} bytes=$imageBytes exp=${currentExposureUs.toInt()}us"
+                            )
+                        }
+                        Thread.sleep(50)
                     } else {
                         FileLogger.w(TAG, "getVideoData error: ${ret.intVal}")
+                        Thread.sleep(20)
                     }
                     continue
                 }
 
-                val bb = imgBuf.getmByteBuffer()
                 bb.position(0)
-                val outData = getBuffer(expectedSize)
-                bb.get(outData, 0, expectedSize.coerceAtMost(outData.size))
+                val outData = getBuffer(imageBytes)
+                bb.get(outData, 0, imageBytes.coerceAtMost(outData.size).coerceAtMost(bb.remaining()))
 
                 val pixFmt = asiImgTypeToPixelFormat(currentImgType)
 
@@ -529,117 +829,96 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
                 )
                 frameCallback?.onFrame(frame)
 
+            } catch (e: OutOfMemoryError) {
+                FileLogger.e(TAG, "Capture OOM roi=${currentRoi.width}x${currentRoi.height}", e)
+                bufferPool.clear()
+                try { Thread.sleep(200) } catch (_: InterruptedException) {}
             } catch (e: Exception) {
                 FileLogger.e(TAG, "Capture error: ${e.message}")
                 if (!running.get()) break
                 try { Thread.sleep(10) } catch (_: InterruptedException) {}
             }
         }
-        FileLogger.i(TAG, "Capture loop ended, $frameSeq frames captured")
+        FileLogger.i(TAG, "Capture loop ended, $frameSeq frames captured, timeouts=$timeouts empty=$emptyReturns")
     }
 
     private fun readExposureRange(cam: ZwoCamera) {
-        val capRet = cam.getControlCaps(ASI_EXPOSURE)
-        if (capRet.errorCode.intVal == ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
-            val cap = capRet.obj as ASIControlCap
-            val min = cap.minValue.toFloat().coerceAtLeast(1f)
-            val max = cap.maxValue.toFloat()
-            val def = cap.defaultValue.toFloat().coerceIn(min, max)
-            hwExposureMaxUs = max
-            exposureRange = FloatRange(min, max, def)
-            currentExposureUs = def
-            FileLogger.i(TAG, "Exposure range: ${min.toInt()}-${max.toInt()} us")
-        }
+        val cap = findControlCap(cam, ASI_EXPOSURE) ?: return
+        val min = cap.minValue.toFloat().coerceAtLeast(1f)
+        val max = cap.maxValue.toFloat()
+        val def = cap.defaultValue.toFloat().coerceIn(min, max)
+        hwExposureMaxUs = max
+        exposureRange = FloatRange(min, max, def)
+        currentExposureUs = def
+        FileLogger.i(TAG, "Exposure range: ${min.toInt()}-${max.toInt()} us")
     }
 
     private fun readGainRange(cam: ZwoCamera) {
-        val capRet = cam.getControlCaps(ASI_GAIN)
-        if (capRet.errorCode.intVal == ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
-            val cap = capRet.obj as ASIControlCap
-            val minGain = cap.minValue.toFloat()
-            val maxGain = cap.maxValue.toFloat()
-            val defaultGain = cap.defaultValue.toFloat().coerceIn(minGain, maxGain)
-            val currentRet = cam.getControlValue(ASI_GAIN)
-            val current = if (currentRet.errorCode.intVal == ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
-                currentRet.extraLongVal1.toFloat().coerceIn(minGain, maxGain)
-            } else {
-                defaultGain
-            }
-            gainRange = FloatRange(minGain, maxGain, current)
-            gainCapability = GainCapability(
-                min = minGain,
-                max = maxGain,
-                step = 1f,
-                defaultValue = defaultGain,
-                decimalPlaces = 0
-            )
-            currentGain = GainValueNormalizer.normalize(gainCapability, current)
-            FileLogger.i(TAG, "Gain range: $minGain-$maxGain native (current=$currentGain, default=$defaultGain)")
-        }
+        val cap = findControlCap(cam, ASI_GAIN) ?: return
+        val minGain = cap.minValue.toFloat()
+        val maxGain = cap.maxValue.toFloat()
+        val defaultGain = cap.defaultValue.toFloat().coerceIn(minGain, maxGain)
+        val current = asiLong(cam.getControlValue(ASI_GAIN))?.toFloat()?.coerceIn(minGain, maxGain)
+            ?: defaultGain
+        gainRange = FloatRange(minGain, maxGain, current)
+        gainCapability = GainCapability(
+            min = minGain,
+            max = maxGain,
+            step = 1f,
+            defaultValue = defaultGain,
+            decimalPlaces = 0
+        )
+        currentGain = GainValueNormalizer.normalize(gainCapability, current)
+        FileLogger.i(TAG, "Gain range: $minGain-$maxGain native (current=$currentGain, default=$defaultGain)")
     }
 
     private fun readOffsetRange(cam: ZwoCamera) {
-        val capRet = cam.getControlCaps(ASI_BRIGHTNESS)
-        if (capRet.errorCode.intVal != ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) return
-
-        val cap = capRet.obj as ASIControlCap
+        val cap = findControlCap(cam, ASI_BRIGHTNESS) ?: return
         if (cap.isWritable == 0) return
 
         val min = cap.minValue.toFloat()
         val max = cap.maxValue.toFloat()
-        val valueRet = cam.getControlValue(ASI_BRIGHTNESS)
-        if (valueRet.errorCode.intVal != ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) return
+        val value = asiLong(cam.getControlValue(ASI_BRIGHTNESS)) ?: return
 
         offsetSupported = true
-        currentOffset = valueRet.extraLongVal1.toFloat().coerceIn(min, max)
+        currentOffset = value.toFloat().coerceIn(min, max)
         offsetRange = FloatRange(min, max, currentOffset)
         FileLogger.i(TAG, "Offset range: $min-$max (current=$currentOffset)")
     }
 
     private fun configureUsbBandwidth(cam: ZwoCamera, imgType: Int) {
-        val countRet = cam.getNumOfControls() ?: return
-        if (countRet.errorCode.intVal != ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) return
-        val controlCount = (countRet.obj as? Number)?.toInt() ?: return
-        for (index in 0 until controlCount) {
-            val capRet = cam.getControlCapsByIndex(index) ?: continue
-            if (capRet.errorCode.intVal != ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) continue
-            val cap = capRet.obj as? ASIControlCap ?: continue
-            if (cap.controlType != ASI_BANDWIDTH_OVERLOAD) continue
-
-            if (cap.isWritable == 0) {
-                usbBandwidthRange = null
-                currentUsbBandwidth = null
-                FileLogger.i(TAG, "USB bandwidth control is read-only")
-                return
-            }
-
-            val min = cap.minValue.toInt()
-            val max = cap.maxValue.toInt()
-            if (min > max) return
-            usbBandwidthRange = min..max
-
-            val currentRet = cam.getControlValue(ASI_BANDWIDTH_OVERLOAD)
-            val current = if (currentRet?.errorCode?.intVal == ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
-                currentRet.extraLongVal1
-            } else {
-                cap.defaultValue
-            }
-            val target = if (imgType == ASI_IMG_RAW16) {
-                50.coerceIn(min, max)
-            } else {
-                80.coerceIn(min, max)
-            }
-            val result = setUsbBandwidth(target)
-            FileLogger.i(
-                TAG,
-                "USB bandwidth: range=${cap.minValue}-${cap.maxValue} default=${cap.defaultValue} " +
-                    "current=$current target=$target result=$result"
-            )
+        val cap = findControlCap(cam, ASI_BANDWIDTH_OVERLOAD)
+        if (cap == null) {
+            usbBandwidthRange = null
+            currentUsbBandwidth = null
+            FileLogger.i(TAG, "USB bandwidth control unavailable")
             return
         }
-        usbBandwidthRange = null
-        currentUsbBandwidth = null
-        FileLogger.i(TAG, "USB bandwidth control unavailable")
+
+        if (cap.isWritable == 0) {
+            usbBandwidthRange = null
+            currentUsbBandwidth = null
+            FileLogger.i(TAG, "USB bandwidth control is read-only")
+            return
+        }
+
+        val min = cap.minValue.toInt()
+        val max = cap.maxValue.toInt()
+        if (min > max) return
+        usbBandwidthRange = min..max
+
+        val current = asiLong(cam.getControlValue(ASI_BANDWIDTH_OVERLOAD)) ?: cap.defaultValue
+        val target = if (imgType == ASI_IMG_RAW16) {
+            50.coerceIn(min, max)
+        } else {
+            80.coerceIn(min, max)
+        }
+        val result = setUsbBandwidth(target)
+        FileLogger.i(
+            TAG,
+            "USB bandwidth: range=${cap.minValue}-${cap.maxValue} default=${cap.defaultValue} " +
+                "current=$current target=$target result=$result"
+        )
     }
 
     private fun readSupportedFormats(prop: com.zwo.ASICameraProperty) {
@@ -666,13 +945,7 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
             emptyList()
         }.distinct().sorted()
         supportedHardwareBins = parsed.ifEmpty { listOf(1, 2) }
-        hardwareBinControlAvailable = try {
-            val capRet = cam.getControlCaps(ASI_HARDWARE_BIN)
-            capRet.errorCode.intVal == ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS &&
-                (capRet.obj as? ASIControlCap)?.isWritable != 0
-        } catch (_: Throwable) {
-            false
-        }
+        hardwareBinControlAvailable = findControlCap(cam, ASI_HARDWARE_BIN)?.isWritable != 0
         FileLogger.i(
             TAG,
             "Supported bins: ${supportedHardwareBins.joinToString()} hardwareControl=$hardwareBinControlAvailable"
@@ -687,22 +960,151 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
         }
     }
 
+    private fun ignoreJni(step: String, block: () -> Unit) {
+        try {
+            block()
+        } catch (e: Throwable) {
+            FileLogger.w(TAG, "$step failed: ${e.message}")
+        }
+    }
+
+    private fun failOpen(step: String, code: Int): Boolean {
+        val name = try {
+            ASIConstants.ASI_ERROR_CODE.getErrorString(code)
+        } catch (_: Throwable) {
+            "error"
+        }
+        lastOpenError = "$step: $name ($code)"
+        FileLogger.e(TAG, lastOpenError!!)
+        return false
+    }
+
+    private fun asiOk(ret: ASIReturnType?): Boolean =
+        ZwoSdk.returnSucceeded(ret?.errorCode?.intVal)
+
+    private fun asiCode(ret: ASIReturnType?): Int =
+        ret?.errorCode?.intVal ?: -1
+
+    private fun asiLong(ret: ASIReturnType?): Long? =
+        ret?.takeIf { asiOk(it) }?.extraLongVal1
+
+    private fun findControlCap(cam: ZwoCamera, controlType: Int): ASIControlCap? {
+        return try {
+            val countRet = cam.getNumOfControls()
+            if (!asiOk(countRet)) return null
+            val controlCount = (countRet?.obj as? Number)?.toInt() ?: return null
+            for (index in 0 until controlCount) {
+                val capRet = cam.getControlCapsByIndex(index) ?: continue
+                if (!asiOk(capRet)) continue
+                val cap = capRet.obj as? ASIControlCap ?: continue
+                if (cap.controlType == controlType) return cap
+            }
+            null
+        } catch (e: Throwable) {
+            FileLogger.w(TAG, "findControlCap($controlType) failed: ${e.message}")
+            null
+        }
+    }
+
+    private fun refreshSensorSizeFromRoi(cam: ZwoCamera, modelName: String) {
+        if (ZwoSdk.sensorSizePlausible(sensorW, sensorH)) return
+        val roiFmt = try {
+            cam.getROIFormat()
+        } catch (e: Throwable) {
+            FileLogger.w(TAG, "getROIFormat failed: ${e.message}")
+            null
+        }
+        if (asiOk(roiFmt)) {
+            val roi = roiFmt?.obj as? com.zwo.ASIROIFormat
+            if (roi != null) {
+                val bin = roi.getiBin().coerceAtLeast(1)
+                val width = roi.imgWidth * bin
+                val height = roi.imgHeight * bin
+                if (ZwoSdk.sensorSizePlausible(width, height)) {
+                    FileLogger.w(TAG, "Correcting sensor size from ROI $sensorW x $sensorH -> $width x $height")
+                    sensorW = width
+                    sensorH = height
+                    return
+                }
+            }
+        }
+        val fallback = ZwoSdk.fallbackSensorSize(modelName)
+        if (fallback != null) {
+            FileLogger.w(
+                TAG,
+                "Using fallback sensor size for $modelName: ${fallback.first}x${fallback.second} " +
+                    "(JNI reported ${sensorW}x${sensorH})"
+            )
+            sensorW = fallback.first
+            sensorH = fallback.second
+        }
+    }
+
+    private fun syncRoiFromCamera(cam: ZwoCamera) {
+        val roiFmt = try {
+            cam.getROIFormat()
+        } catch (_: Throwable) {
+            null
+        }
+        if (!asiOk(roiFmt)) return
+        val roi = roiFmt?.obj as? com.zwo.ASIROIFormat ?: return
+        val width = roi.imgWidth
+        val height = roi.imgHeight
+        val bin = roi.getiBin().coerceAtLeast(1)
+        if (width < roiMinWidth || height < roiMinHeight) return
+        currentBin = bin
+        currentRoi = Roi(0, 0, width, height)
+        FileLogger.i(TAG, "Camera ROI readout: ${width}x${height} bin=$bin imgType=${roi.imgType}")
+    }
+
     private fun configureInitialFormat(cam: ZwoCamera) {
         currentImgType = if (!isColor) ASI_IMG_RAW8 else ASI_IMG_RAW8
         currentPixelFormat = if (!isColor) PixelFormat.MONO8 else defaultBayer8()
 
-        val w = (sensorW / 8) * 8
-        val h = (sensorH / 2) * 2
-        cam.setRoiFormat(w, h, 1, currentImgType)
-        currentBin = 1
-        FileLogger.i(TAG, "Initial format: ${currentPixelFormat.name} (imgType=$currentImgType) ${w}x${h}")
+        val bin = ZwoSdk.defaultPreviewBin(sensorW, sensorH, supportedHardwareBins)
+        enableHardwareBinControl(cam, bin > 1)
+        val w = ((sensorW / bin) / 8) * 8
+        val h = ((sensorH / bin) / 2) * 2
+        currentBin = bin
+        currentRoi = Roi(0, 0, w.coerceAtLeast(roiMinWidth), h.coerceAtLeast(roiMinHeight))
+        cropInfo = CropInfo(0, 0, currentRoi.width, currentRoi.height)
+        val ret = cam.setRoiFormat(
+            w.coerceAtLeast(roiMinWidth),
+            h.coerceAtLeast(roiMinHeight),
+            bin,
+            currentImgType
+        )
+        if (ret?.intVal != ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
+            FileLogger.w(TAG, "Initial setRoiFormat bin=$bin failed: ${ret?.intVal}, falling back to 1x")
+            enableHardwareBinControl(cam, false)
+            currentBin = 1
+            val fullW = (sensorW / 8) * 8
+            val fullH = (sensorH / 2) * 2
+            cam.setRoiFormat(fullW, fullH, 1, currentImgType)
+            currentRoi = Roi(0, 0, fullW, fullH)
+        } else {
+            currentBin = bin
+            currentRoi = Roi(0, 0, w.coerceAtLeast(roiMinWidth), h.coerceAtLeast(roiMinHeight))
+        }
+        syncRoiFromCamera(cam)
+        val highSpeedCap = findControlCap(cam, ASI_HIGH_SPEED_MODE)
+        if (highSpeedCap != null && highSpeedCap.isWritable != 0) {
+            val hs = cam.setControlValue(ASI_HIGH_SPEED_MODE, 0L, 0)
+            FileLogger.i(TAG, "ASI_HIGH_SPEED_MODE=0 result=$hs")
+        }
+        cropInfo = CropInfo(0, 0, currentRoi.width, currentRoi.height)
+        FileLogger.i(
+            TAG,
+            "Initial format: ${currentPixelFormat.name} (imgType=$currentImgType) " +
+                "${currentRoi.width}x${currentRoi.height} bin=$currentBin"
+        )
     }
 
     private fun readSerialNumber(cam: ZwoCamera): String {
         return try {
             val idRet = cam.getID()
-            if (idRet.errorCode.intVal == ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
-                val idBytes = idRet.obj
+            if (asiOk(idRet)) {
+                val idBytes = idRet?.obj
                 if (idBytes is CharArray) {
                     idBytes.map { String.format("%02x", it.code) }.joinToString("")
                 } else if (idBytes is ByteArray) {

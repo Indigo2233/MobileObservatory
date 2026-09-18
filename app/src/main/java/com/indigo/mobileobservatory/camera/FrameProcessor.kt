@@ -1,6 +1,7 @@
 package com.indigo.mobileobservatory.camera
 
 import android.graphics.Bitmap
+import com.indigo.mobileobservatory.util.FileLogger
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -78,7 +79,7 @@ internal class HighBitLayoutDetector(
 
 class FrameProcessor {
     private companion object {
-        const val PREVIEW_BITMAP_BUFFER_COUNT = 3
+        const val PREVIEW_BITMAP_BUFFER_COUNT = 2
         const val HISTOGRAM_PUBLISH_INTERVAL_MS = 200L
         const val HIGH_BIT_LAYOUT_STABLE_FRAMES = 12
         const val HIGH_BIT_LAYOUT_MAX_SAMPLE_FRAMES = 30
@@ -132,21 +133,24 @@ class FrameProcessor {
     private var cachedW = 0
     private var cachedH = 0
     private var nextBitmapIndex = 0
+    private var previewSampleBuf: ByteArray? = null
+    private var lastPreviewScaleLogKey: String? = null
 
     fun frameToBitmap(frame: FrameData): Bitmap {
-        val w = frame.width
-        val h = frame.height
+        val preview = downsampleForPreview(frame)
+        val w = preview.width
+        val h = preview.height
         if (w <= 0 || h <= 0 || w > 20000 || h > 20000) {
             return Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
         }
 
-        val expectedBytes = w.toLong() * h * frame.pixelFormat.bytesPerPixel
-        if (frame.data.size < expectedBytes) {
+        val expectedBytes = w.toLong() * h * preview.pixelFormat.bytesPerPixel
+        if (preview.data.size < expectedBytes) {
             android.util.Log.e("FrameProcessor",
-                "Buffer too small: got ${frame.data.size}, need $expectedBytes for ${w}x${h} ${frame.pixelFormat.name}")
-            val bpp = frame.pixelFormat.bytesPerPixel
-            val safeW = (frame.data.size / bpp / h).coerceAtLeast(1)
-            return frameToBitmap(frame.copy(width = safeW.coerceAtMost(w)))
+                "Buffer too small: got ${preview.data.size}, need $expectedBytes for ${w}x${h} ${preview.pixelFormat.name}")
+            val bpp = preview.pixelFormat.bytesPerPixel
+            val safeW = (preview.data.size / bpp / h).coerceAtLeast(1)
+            return frameToBitmap(preview.copy(width = safeW.coerceAtMost(w)))
         }
 
         val bitmap: Bitmap
@@ -171,18 +175,19 @@ class FrameProcessor {
                 nextBitmapIndex = 1
             }
         } catch (e: OutOfMemoryError) {
-            android.util.Log.e("FrameProcessor", "OOM creating bitmap ${w}x${h}", e)
+            FileLogger.e("FrameProcessor", "OOM creating bitmap ${w}x${h}", e)
+            releasePreviewBitmaps()
             return Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
         }
 
-        if (frame.pixelFormat == PixelFormat.RGB48) {
-            fillRgb48Pixels(frame, pixels, w, h)
-        } else if (frame.pixelFormat == PixelFormat.RGB24) {
-            fillRgb24Pixels(frame, pixels, w, h)
-        } else if (frame.pixelFormat.isBayer) {
-            fillBayerPixels(frame, pixels, w, h)
+        if (preview.pixelFormat == PixelFormat.RGB48) {
+            fillRgb48Pixels(preview, pixels, w, h)
+        } else if (preview.pixelFormat == PixelFormat.RGB24) {
+            fillRgb24Pixels(preview, pixels, w, h)
+        } else if (preview.pixelFormat.isBayer) {
+            fillBayerPixels(preview, pixels, w, h)
         } else {
-            fillMonoPixels(frame, pixels, w, h)
+            fillMonoPixels(preview, pixels, w, h)
         }
 
         bitmap.setPixels(pixels, 0, w, 0, 0, w, h)
@@ -191,11 +196,39 @@ class FrameProcessor {
             val now = System.currentTimeMillis()
             if (now - lastFocusComputeMs >= 200) {
                 lastFocusComputeMs = now
-                _focusScore.value = computeFocusScore(frame)
+                _focusScore.value = computeFocusScore(preview)
             }
         }
 
         return bitmap
+    }
+
+    private fun downsampleForPreview(frame: FrameData): FrameData {
+        val w = frame.width
+        val h = frame.height
+        val step = PreviewScale.sampleStep(w, h, frame.pixelFormat.isBayer)
+        if (step <= 1) return frame
+        val bpp = frame.pixelFormat.bytesPerPixel.coerceAtLeast(1)
+        val est = (w / step).coerceAtLeast(1) * (h / step).coerceAtLeast(1) * bpp
+        val buf = previewSampleBuf?.takeIf { it.size >= est } ?: ByteArray(est).also { previewSampleBuf = it }
+        val (ow, oh) = PreviewScale.subsample(frame.data, w, h, bpp, step, buf)
+        val key = "${w}x${h}->${ow}x${oh} step=$step"
+        if (lastPreviewScaleLogKey != key) {
+            lastPreviewScaleLogKey = key
+            FileLogger.i("FrameProcessor", "Preview downsample $key")
+        }
+        return frame.copy(data = buf, width = ow, height = oh)
+    }
+
+    private fun releasePreviewBitmaps() {
+        cachedBitmaps?.forEach { bmp ->
+            if (!bmp.isRecycled) bmp.recycle()
+        }
+        cachedBitmaps = null
+        cachedPixels = null
+        cachedW = 0
+        cachedH = 0
+        nextBitmapIndex = 0
     }
 
     fun computeFocusScore(frame: FrameData): Float {

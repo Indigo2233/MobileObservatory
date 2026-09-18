@@ -90,6 +90,8 @@ class PreviewPipeline(
                             sequence++
                             _frame.value = PreviewFrame(bitmap, sequence)
                             onProcessed(source)
+                        } catch (oom: OutOfMemoryError) {
+                            android.util.Log.e("PreviewPipeline", "OOM rendering ${source.width}x${source.height}", oom)
                         } finally {
                             releaseFrame(source, sessionRecycler)
                         }

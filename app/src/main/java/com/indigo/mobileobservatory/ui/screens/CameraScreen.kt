@@ -215,7 +215,6 @@ fun CameraScreen(
     val allDevices by viewModel.cameraManager.devices.collectAsState()
 
     var showPanel by remember { mutableStateOf(true) }
-    var showRoiOverlay by remember { mutableStateOf(false) }
     var showOverlayPanel by remember { mutableStateOf(true) }
     var viewResetTrigger by remember { mutableIntStateOf(0) }
 
@@ -430,15 +429,6 @@ fun CameraScreen(
                             focusAssistEnabled = focusAssistEnabled
                         )
 
-                        if (showRoiOverlay) {
-                            RoiOverlay(
-                                roi = roi,
-                                sensorWidth = sensorWidth,
-                                sensorHeight = sensorHeight,
-                                onRoiChange = { viewModel.setRoi(it) }
-                            )
-                        }
-
                         if (showOverlayPanel) {
                             OverlayPanel(
                                 histogram = histogram,
@@ -495,6 +485,28 @@ fun CameraScreen(
                                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                     )
                                 }
+                            }
+
+                            SmallFloatingActionButton(
+                                onClick = { showPlateSolve = true },
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant
+                            ) {
+                                Icon(
+                                    Icons.Default.Search,
+                                    stringResource(R.string.plate_solve),
+                                    tint = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+
+                            SmallFloatingActionButton(
+                                onClick = { viewModel.openPlayer() },
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant
+                            ) {
+                                Icon(
+                                    Icons.Default.VideoLibrary,
+                                    stringResource(R.string.video_library),
+                                    tint = MaterialTheme.colorScheme.onSurface
+                                )
                             }
                         }
 
@@ -600,7 +612,7 @@ fun CameraScreen(
                     }
                 }
 
-                // Toolbar at top-right
+                // View and interface controls remain at the top-right.
                 Column(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
@@ -642,17 +654,6 @@ fun CameraScreen(
                             )
                         }
                         SmallFloatingActionButton(
-                            onClick = { showRoiOverlay = !showRoiOverlay },
-                            containerColor = if (showRoiOverlay) MaterialTheme.colorScheme.primaryContainer
-                            else MaterialTheme.colorScheme.surfaceVariant
-                        ) {
-                            Icon(
-                                Icons.Default.Crop,
-                                stringResource(R.string.toggle_roi),
-                                tint = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                        SmallFloatingActionButton(
                             onClick = { showOverlayPanel = !showOverlayPanel },
                             containerColor = if (showOverlayPanel) MaterialTheme.colorScheme.primaryContainer
                             else MaterialTheme.colorScheme.surfaceVariant
@@ -675,39 +676,8 @@ fun CameraScreen(
                             )
                         }
                     }
-                    SmallFloatingActionButton(
-                        onClick = { viewModel.openPlayer() },
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant
-                    ) {
-                        Icon(
-                            Icons.Default.VideoLibrary,
-                            stringResource(R.string.video_library),
-                            tint = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-                    SmallFloatingActionButton(
-                        onClick = { phoneNav.destination = PhonePlateSolveDestination.PHONE_CAMERA_DEBUG },
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant
-                    ) {
-                        Icon(
-                            Icons.Default.PhoneAndroid,
-                            stringResource(R.string.phone_camera_debug),
-                            tint = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-                    if (connectionState is ConnectionState.Connected) {
-                        SmallFloatingActionButton(
-                            onClick = { showPlateSolve = true },
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant
-                        ) {
-                            Icon(
-                                Icons.Default.Search,
-                                stringResource(R.string.plate_solve),
-                                tint = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                    }
                 }
+
             }
 
             // Right control panel
