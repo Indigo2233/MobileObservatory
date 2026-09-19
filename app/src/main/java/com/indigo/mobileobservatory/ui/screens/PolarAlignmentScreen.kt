@@ -38,9 +38,14 @@ import androidx.core.content.ContextCompat
 import com.indigo.mobileobservatory.astrometry.AstapRunner
 import com.indigo.mobileobservatory.astrometry.D50Manager
 import com.indigo.mobileobservatory.astrometry.FitsHeaderReader
+import com.indigo.mobileobservatory.astrometry.FitsSolveHintReader
+import com.indigo.mobileobservatory.astrometry.FitsSolveHints
+import com.indigo.mobileobservatory.astrometry.PlateSolveOptics
 import com.indigo.mobileobservatory.astrometry.PlateSolveResult
 import com.indigo.mobileobservatory.astro.ObserverSite
+import com.indigo.mobileobservatory.astro.OpticsEquipment
 import com.indigo.mobileobservatory.astro.RefractionParameters
+import com.indigo.mobileobservatory.astro.SensorSpec
 import com.indigo.mobileobservatory.mount.MountCoordinates
 import com.indigo.mobileobservatory.mount.MountSite
 import com.indigo.mobileobservatory.permissions.AppSettingsNavigator
@@ -69,6 +74,7 @@ fun PolarAlignmentScreen(
     mountSite: MountSite? = null,
     mountBusy: Boolean = false,
     mountMoveStatus: String = "",
+    cameraPixelSizeUm: Float? = null,
     onReadMountSite: () -> Unit = {},
     onSyncPhoneSiteToMount: (Double, Double) -> Unit = { _, _ -> },
     onMoveMountRaBy: (Double, Boolean, Double) -> Unit = { _, _, _ -> },
@@ -98,7 +104,16 @@ fun PolarAlignmentScreen(
     var elevationText by remember { mutableStateOf(prefs.getFloat("polar_elevation_m", 0f).toString()) }
     var temperatureText by remember { mutableStateOf(prefs.getFloat("polar_temperature_c", 15f).toString()) }
     var pressureText by remember { mutableStateOf(prefs.getFloat("polar_pressure_hpa", 0f).takeIf { it > 0f }?.toString() ?: "") }
-    var fovText by remember { mutableStateOf("1.0") }
+    var focalLengthText by remember { mutableStateOf(prefs.getFloat("plate_focal_length_mm", 0f).takeIf { it > 0f }?.toString() ?: "") }
+    var pixelSizeText by remember {
+        mutableStateOf(
+            prefs.getFloat("plate_pixel_size_um", 0f).takeIf { it > 0f }?.let { formatPixelSizeUm(it.toDouble()) }
+                ?: cameraPixelSizeUm?.takeIf { it > 0f }?.let { formatPixelSizeUm(it.toDouble()) }
+                ?: ""
+        )
+    }
+    var selectedSensorId by remember { mutableStateOf(prefs.getString("plate_sensor_id", "") ?: "") }
+    var computedFovDeg by remember { mutableStateOf<Double?>(null) }
     var manualMode by remember { mutableStateOf(prefs.getBoolean("polar_manual_mode", false)) }
     var startFromCurrent by remember { mutableStateOf(prefs.getBoolean("polar_start_current", true)) }
     var eastDirection by remember { mutableStateOf(prefs.getBoolean("polar_east_direction", true)) }
@@ -123,6 +138,59 @@ fun PolarAlignmentScreen(
     val files = remember { mutableStateListOf<File?>(null, null, null) }
     val solves = remember { mutableStateListOf<PlateSolveResult?>(null, null, null) }
     val solvedAt = remember { mutableStateListOf<Instant?>(null, null, null) }
+
+    val connectedSensorName = stringResource(R.string.connected_camera_sensor)
+    val sensors = remember(cameraPixelSizeUm, connectedSensorName) {
+        buildList {
+            cameraPixelSizeUm?.toDouble()?.takeIf { it > 0.0 }?.let { px ->
+                add(SensorSpec(OpticsEquipment.CONNECTED_SENSOR_ID, connectedSensorName, px, 0, 0))
+            }
+            addAll(OpticsEquipment.defaultSensors)
+        }
+    }
+
+    fun persistSolveOptics() {
+        prefs.edit().apply {
+            focalLengthText.toFloatOrNull()?.takeIf { it > 0f }?.let { putFloat("plate_focal_length_mm", it) }
+            pixelSizeText.toFloatOrNull()?.takeIf { it > 0f }?.let { putFloat("plate_pixel_size_um", it) }
+            putString("plate_sensor_id", selectedSensorId)
+        }.apply()
+    }
+
+    fun currentAstapFov(hints: FitsSolveHints = FitsSolveHints()): Double? {
+        val sensor = sensors.firstOrNull { it.id == selectedSensorId }
+        val typedPixel = pixelSizeText.toDoubleOrNull()?.takeIf { it > 0.0 }
+        val pixel = sensor?.let { pixelSizeForSensor(it, typedPixel) } ?: typedPixel
+        val catalogHeight = sensor?.heightPx?.takeIf {
+            sensor.id != OpticsEquipment.CUSTOM_SENSOR_ID && it > 0
+        } ?: 0
+        val focal = focalLengthText.toDoubleOrNull()?.takeIf { it > 0.0 }
+        return PlateSolveOptics.astapFovDeg(hints, focal, pixel, catalogHeight)?.coerceIn(0.2, 6.0)
+    }
+
+    LaunchedEffect(sensors, selectedSensorId, cameraPixelSizeUm) {
+        if (selectedSensorId.isNotBlank() && sensors.any { it.id == selectedSensorId }) return@LaunchedEffect
+        selectedSensorId = when {
+            cameraPixelSizeUm != null && cameraPixelSizeUm > 0f -> OpticsEquipment.CONNECTED_SENSOR_ID
+            else -> OpticsEquipment.matchCatalogSensor(pixelSizeUm = pixelSizeText.toDoubleOrNull())?.id
+                ?: OpticsEquipment.CUSTOM_SENSOR_ID
+        }
+    }
+
+    LaunchedEffect(focalLengthText, pixelSizeText, selectedSensorId, files.toList()) {
+        val file = files.getOrNull(selectedSlot)
+        val hints = if (file != null) {
+            withContext(Dispatchers.IO) { FitsSolveHintReader.read(file) }
+        } else {
+            FitsSolveHints()
+        }
+        val sensor = sensors.firstOrNull { it.id == selectedSensorId }
+        if (sensor != null && sensor.id != OpticsEquipment.CUSTOM_SENSOR_ID) {
+            val formatted = formatPixelSizeUm(sensor.pixelSizeUm)
+            if (pixelSizeText != formatted) pixelSizeText = formatted
+        }
+        computedFovDeg = currentAstapFov(hints)
+    }
 
     val manualAdvanceState = rememberUpdatedState(manualAdvanceRequested)
 
@@ -249,10 +317,21 @@ fun PolarAlignmentScreen(
                                 prefs.edit().putFloat("polar_elevation_m", value).apply()
                             }
                         }
-                        OptionField(stringResource(R.string.estimated_field_height_deg), fovText, Modifier.weight(1f)) {
-                            fovText = it.filterCoordinateText()
-                        }
                     }
+                    SolveOpticsFields(
+                        focalLengthText = focalLengthText,
+                        onFocalLengthChange = { focalLengthText = it },
+                        selectedSensorId = selectedSensorId,
+                        onSensorSelected = { sensor ->
+                            selectedSensorId = sensor.id
+                            pixelSizeText = formatPixelSizeUm(sensor.pixelSizeUm)
+                        },
+                        pixelSizeText = pixelSizeText,
+                        onPixelSizeChange = { pixelSizeText = it },
+                        sensors = sensors,
+                        computedFovHeightDeg = computedFovDeg,
+                        enabled = !runningAuto && solvingSlot == null
+                    )
                     if (mountCoordinates != null) {
                         Text(
                             "Mount hint ${mountCoordinates.formatRa()}  ${mountCoordinates.formatDec()}",
@@ -443,7 +522,12 @@ fun PolarAlignmentScreen(
                                     error = context.getString(R.string.tppa_requires_mount)
                                     return@Button
                                 }
-                                val fov = fovText.toDoubleOrNull()?.coerceIn(0.2, 6.0) ?: 1.0
+                                val fov = currentAstapFov()
+                                if (fov == null) {
+                                    error = context.getString(R.string.plate_solve_need_optics)
+                                    return@Button
+                                }
+                                persistSolveOptics()
                                 val searchRadius = searchRadiusText.toDoubleOrNull()?.coerceIn(30.0, 180.0) ?: 30.0
                                 val distance = targetDistanceText.toDoubleOrNull()?.coerceIn(1.0, 90.0) ?: 10.0
                                 val rate = moveRateText.toDoubleOrNull()?.coerceIn(0.1, 20.0) ?: 3.0
@@ -616,13 +700,13 @@ fun PolarAlignmentScreen(
                         selectedSlot = index
                         picker.launch(arrayOf("image/*", "application/fits", "application/octet-stream", "*/*"))
                     },
-                    onSolve = {
+                        onSolve = {
                         val file = files[index] ?: return@MeasurementCard
                         if (!d50Manager.status().installed) {
                             error = context.getString(R.string.database_required)
                             return@MeasurementCard
                         }
-                        val fov = fovText.toDoubleOrNull()?.coerceIn(0.2, 6.0) ?: 1.0
+                        persistSolveOptics()
                         val searchRadius = searchRadiusText.toDoubleOrNull()?.coerceIn(30.0, 180.0) ?: 10.0
                         scope.launch {
                             solvingSlot = index
@@ -630,6 +714,12 @@ fun PolarAlignmentScreen(
                             determination = null
                             currentResult = null
                             try {
+                                val hints = withContext(Dispatchers.IO) { FitsSolveHintReader.read(file) }
+                                val fov = currentAstapFov(hints)
+                                if (fov == null) {
+                                    error = context.getString(R.string.plate_solve_need_optics)
+                                    return@launch
+                                }
                                 val solved = runner.solve(file, fov, mountCoordinates, searchRadius)
                                 solves[index] = solved
                                 solvedAt[index] = exposureTimeOf(file)

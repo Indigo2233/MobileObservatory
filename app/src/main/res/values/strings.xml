@@ -235,6 +235,11 @@
     <string name="mount_hint">Mount hint</string>
     <string name="focal_length_mm">Focal length (mm)</string>
     <string name="estimated_field_height_deg">Estimated field height (deg)</string>
+    <string name="computed_field_height_deg">Computed FOV height: %1$.3f°</string>
+    <string name="plate_solve_need_optics">Enter focal length and pick a sensor (or type pixel size)</string>
+    <string name="sensor_custom">Custom</string>
+    <string name="sensor_pixel_summary">%1$.2f µm · %2$d×%3$d</string>
+    <string name="solved_focal_length_mm">Solved FL</string>
     <string name="astap_database">ASTAP star database</string>
     <string name="astap_d20_database">D20 database (suitable for most use cases)</string>
     <string name="astap_d50_database">D50 database (for narrow fields of view)</string>

@@ -76,8 +76,11 @@ fun CameraScreen(
 
     if (showPlateSolve) {
         val mountCoordinates by viewModel.mountCoordinates.collectAsState()
+        val connectionState by viewModel.connectionState.collectAsState()
         PlateSolveScreen(
             mountCoordinates = mountCoordinates,
+            cameraPixelSizeUm = (connectionState as? ConnectionState.Connected)
+                ?.info?.pixelSizeUm,
             onBack = { showPlateSolve = false }
         )
         return
@@ -88,11 +91,14 @@ fun CameraScreen(
         val mountSite by viewModel.mountSite.collectAsState()
         val mountBusy by viewModel.mountBusy.collectAsState()
         val mountMoveStatus by viewModel.mountMoveStatus.collectAsState()
+        val connectionState by viewModel.connectionState.collectAsState()
         PolarAlignmentScreen(
             mountCoordinates = mountCoordinates,
             mountSite = mountSite,
             mountBusy = mountBusy,
             mountMoveStatus = mountMoveStatus,
+            cameraPixelSizeUm = (connectionState as? ConnectionState.Connected)
+                ?.info?.pixelSizeUm,
             onReadMountSite = { viewModel.readMountSite() },
             onSyncPhoneSiteToMount = { lat, lon -> viewModel.syncPhoneSiteToMount(lat, lon) },
             onMoveMountRaBy = { distance, east, rate -> viewModel.moveMountRaBy(distance, east, rate) },

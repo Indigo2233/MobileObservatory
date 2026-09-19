@@ -14,9 +14,16 @@ data class FitsSolveHints(
 
 object FitsSolveHintReader {
     fun read(file: File): FitsSolveHints {
-        if (!file.extension.equals("fit", true) && !file.extension.equals("fits", true)) {
-            return FitsSolveHints()
+        val extension = file.extension.lowercase()
+        val looksLikeFits = extension == "fit" || extension == "fits" || RasterImageSize.isFitsMagic(file)
+        if (looksLikeFits) {
+            return readFits(file)
         }
+        val raster = RasterImageSize.read(file) ?: return FitsSolveHints()
+        return FitsSolveHints(width = raster.first, height = raster.second)
+    }
+
+    private fun readFits(file: File): FitsSolveHints {
         val header = readHeader(file)
         val width = header.intValue("NAXIS1") ?: 0
         val height = header.intValue("NAXIS2") ?: 0

@@ -40,4 +40,15 @@ object OpticsFov {
         val h = axisDegrees(pixelSizeUm, focalLengthMm, heightPx, binning) ?: return null
         return w to h
     }
+
+    /** Inverse of [plateScaleArcsecPerPixel]: measured focal length from a WCS scale. */
+    fun impliedFocalLengthMm(
+        pixelSizeUm: Double,
+        arcsecPerPixel: Double,
+        binning: Int = 1
+    ): Double? {
+        if (!pixelSizeUm.isFinite() || pixelSizeUm <= 0.0) return null
+        if (!arcsecPerPixel.isFinite() || arcsecPerPixel <= 0.0) return null
+        return 206.265 * pixelSizeUm * binning.coerceAtLeast(1) / arcsecPerPixel
+    }
 }

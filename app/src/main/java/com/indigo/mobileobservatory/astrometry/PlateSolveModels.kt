@@ -57,5 +57,6 @@ data class PlateSolveResult(
     val confidence: Double? = null,
     val usedImuPrior: Boolean = false,
     val wcsHeaderPath: String? = null,
+    val measuredFocalLengthMm: Double? = null,
     val log: String = ""
 )

@@ -375,10 +375,10 @@ fun StarMapScreen(
             .putString("star_map_custom_sensor_h", customSensorHeight)
             .putBoolean("star_map_show_fov_overlay", showFovOverlay)
             .apply()
-        customTelescopeFl.toFloatOrNull()?.takeIf { it > 0f }?.let {
-            prefs.edit().putFloat("plate_focal_length_mm", it).apply()
-        }
-        telescopeFl?.toFloat()?.takeIf { it > 0f }?.let {
+    }
+
+    fun persistImagingFocalLength(focalLengthMm: Double?) {
+        focalLengthMm?.toFloat()?.takeIf { it > 0f }?.let {
             prefs.edit().putFloat("plate_focal_length_mm", it).apply()
         }
     }
@@ -1354,6 +1354,7 @@ fun StarMapScreen(
                 selectedTelescopeId = it
                 showFovOverlay = true
                 persistFovPrefs()
+                persistImagingFocalLength(resolveTelescopeFl(telescopes, it, customTelescopeFl))
             },
             onEyepieceSelected = {
                 selectedEyepieceId = it
@@ -1368,6 +1369,7 @@ fun StarMapScreen(
             onCustomTelescopeFl = {
                 customTelescopeFl = it
                 persistFovPrefs()
+                persistImagingFocalLength(resolveTelescopeFl(telescopes, selectedTelescopeId, it))
             },
             onCustomEyepieceFl = {
                 customEyepieceFl = it

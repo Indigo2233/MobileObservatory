@@ -235,6 +235,11 @@
     <string name="mount_hint">赤道仪坐标提示</string>
     <string name="focal_length_mm">焦距（毫米）</string>
     <string name="estimated_field_height_deg">估计视场高度（度）</string>
+    <string name="computed_field_height_deg">计算视场高度：%1$.3f°</string>
+    <string name="plate_solve_need_optics">请填写焦距并选择传感器（或输入像元尺寸）</string>
+    <string name="sensor_custom">自定义</string>
+    <string name="sensor_pixel_summary">%1$.2f µm · %2$d×%3$d</string>
+    <string name="solved_focal_length_mm">解算焦距</string>
     <string name="astap_database">ASTAP 星表</string>
     <string name="astap_d20_database">D20 星表（适合大多数使用场景）</string>
     <string name="astap_d50_database">D50 星表（适合窄视场）</string>

@@ -36,7 +36,11 @@ import com.indigo.mobileobservatory.astrometry.D50Manager
 import com.indigo.mobileobservatory.astrometry.D50Status
 import com.indigo.mobileobservatory.astrometry.DownloadProgress
 import com.indigo.mobileobservatory.astrometry.FitsSolveHintReader
+import com.indigo.mobileobservatory.astrometry.FitsSolveHints
+import com.indigo.mobileobservatory.astrometry.PlateSolveOptics
 import com.indigo.mobileobservatory.astrometry.PlateSolveResult
+import com.indigo.mobileobservatory.astro.OpticsEquipment
+import com.indigo.mobileobservatory.astro.SensorSpec
 import com.indigo.mobileobservatory.mount.MountCoordinates
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -49,6 +53,7 @@ import java.util.Locale
 fun PlateSolveScreen(
     initialFile: File? = null,
     mountCoordinates: MountCoordinates? = null,
+    cameraPixelSizeUm: Float? = null,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -60,8 +65,18 @@ fun PlateSolveScreen(
     var d50Status by remember { mutableStateOf(d50Manager.status()) }
     var selectedDatabase by remember { mutableStateOf(d50Status.database ?: AstapDatabase.D20) }
     var selectedFile by remember(initialFile) { mutableStateOf(initialFile) }
-    var fovText by remember { mutableStateOf("1.0") }
+    var computedFovDeg by remember { mutableStateOf<Double?>(null) }
     var focalLengthText by remember { mutableStateOf(prefs.getFloat("plate_focal_length_mm", 0f).takeIf { it > 0f }?.toString() ?: "") }
+    var pixelSizeText by remember {
+        mutableStateOf(
+            prefs.getFloat("plate_pixel_size_um", 0f).takeIf { it > 0f }?.let { formatPixelSizeUm(it.toDouble()) }
+                ?: cameraPixelSizeUm?.takeIf { it > 0f }?.let { formatPixelSizeUm(it.toDouble()) }
+                ?: ""
+        )
+    }
+    var selectedSensorId by remember {
+        mutableStateOf(prefs.getString("plate_sensor_id", "") ?: "")
+    }
     var hintText by remember { mutableStateOf("") }
     var progress by remember { mutableStateOf(DownloadProgress()) }
     var downloadJob by remember { mutableStateOf<Job?>(null) }
@@ -84,25 +99,74 @@ fun PlateSolveScreen(
         }
     }
 
-    LaunchedEffect(selectedFile) {
-        val file = selectedFile ?: return@LaunchedEffect
-        val hints = withContext(Dispatchers.IO) { FitsSolveHintReader.read(file) }
-        val savedFocal = prefs.getFloat("plate_focal_length_mm", 0f).takeIf { it > 0f }?.toDouble()
-        val focal = hints.focalLengthMm ?: savedFocal
-        if (hints.fovHeightDeg != null) {
-            fovText = "%.4f".format(Locale.US, hints.fovHeightDeg)
-        } else if (hints.height > 0 && hints.pixelSizeUm != null && focal != null && focal > 0.0) {
-            val fov = 206.265 * hints.pixelSizeUm * hints.binning / focal * hints.height / 3600.0
-            fovText = "%.4f".format(Locale.US, fov)
+    val connectedSensorName = stringResource(R.string.connected_camera_sensor)
+    val sensors = remember(cameraPixelSizeUm, connectedSensorName) {
+        buildList {
+            cameraPixelSizeUm?.toDouble()?.takeIf { it > 0.0 }?.let { px ->
+                add(SensorSpec(OpticsEquipment.CONNECTED_SENSOR_ID, connectedSensorName, px, 0, 0))
+            }
+            addAll(OpticsEquipment.defaultSensors)
         }
-        if (hints.focalLengthMm != null) {
+    }
+
+    LaunchedEffect(sensors, selectedSensorId, cameraPixelSizeUm) {
+        if (selectedSensorId.isNotBlank() && sensors.any { it.id == selectedSensorId }) return@LaunchedEffect
+        val savedPixel = pixelSizeText.toDoubleOrNull()
+        selectedSensorId = when {
+            cameraPixelSizeUm != null && cameraPixelSizeUm > 0f -> OpticsEquipment.CONNECTED_SENSOR_ID
+            else -> OpticsEquipment.matchCatalogSensor(pixelSizeUm = savedPixel)?.id
+                ?: OpticsEquipment.CUSTOM_SENSOR_ID
+        }
+    }
+
+    LaunchedEffect(selectedFile, focalLengthText, pixelSizeText, selectedSensorId, cameraPixelSizeUm) {
+        val file = selectedFile
+        val hints = if (file != null) {
+            withContext(Dispatchers.IO) { FitsSolveHintReader.read(file) }
+        } else {
+            FitsSolveHints()
+        }
+        val sensor = sensors.firstOrNull { it.id == selectedSensorId }
+        val userFocal = focalLengthText.toDoubleOrNull()?.takeIf { it > 0.0 }
+        val typedPixel = pixelSizeText.toDoubleOrNull()?.takeIf { it > 0.0 }
+        val pixel = sensor?.let { pixelSizeForSensor(it, typedPixel) } ?: typedPixel
+            ?: hints.pixelSizeUm
+            ?: cameraPixelSizeUm?.toDouble()?.takeIf { it > 0.0 }
+        if (sensor != null && sensor.id != OpticsEquipment.CUSTOM_SENSOR_ID) {
+            val formatted = formatPixelSizeUm(sensor.pixelSizeUm)
+            if (pixelSizeText != formatted) pixelSizeText = formatted
+        } else if (pixelSizeText.isBlank() && pixel != null) {
+            pixelSizeText = formatPixelSizeUm(pixel)
+        }
+        if (focalLengthText.isBlank() && hints.focalLengthMm != null && hints.focalLengthMm > 0.0) {
             focalLengthText = "%.1f".format(Locale.US, hints.focalLengthMm)
         }
+        val catalogHeight = sensor?.heightPx?.takeIf { sensor.id != OpticsEquipment.CUSTOM_SENSOR_ID && it > 0 } ?: 0
+        val matched = if (file != null && hints.width > 0 &&
+            (selectedSensorId.isBlank() ||
+                selectedSensorId == OpticsEquipment.CUSTOM_SENSOR_ID ||
+                selectedSensorId == OpticsEquipment.CONNECTED_SENSOR_ID)
+        ) {
+            OpticsEquipment.matchCatalogSensor(hints.width, hints.height, pixel)
+        } else {
+            null
+        }
+        if (matched != null && matched.id != selectedSensorId) {
+            selectedSensorId = matched.id
+            return@LaunchedEffect
+        }
+        val scale = PlateSolveOptics.scaleHint(
+            hints = if (hints.height > 0) hints else hints.copy(height = catalogHeight),
+            userFocalLengthMm = userFocal,
+            userPixelSizeUm = pixel
+        )
+        computedFovDeg = scale.fovHeightDeg
         hintText = buildString {
-            if (hints.width > 0 && hints.height > 0) append("${hints.width}x${hints.height}")
-            if (hints.pixelSizeUm != null) append("  pixel=${"%.3f".format(Locale.US, hints.pixelSizeUm)}um")
-            append("  bin=${hints.binning}")
-            if (focal != null) append("  focal=${"%.1f".format(Locale.US, focal)}mm")
+            if (scale.width > 0 && scale.height > 0) append("${scale.width}x${scale.height}")
+            if (scale.pixelSizeUm != null) append("  pixel=${formatPixelSizeUm(scale.pixelSizeUm)}um")
+            append("  bin=${scale.binning}")
+            if (scale.focalLengthMm != null) append("  focal=${"%.1f".format(Locale.US, scale.focalLengthMm)}mm")
+            scale.fovHeightDeg?.let { append("  fovH=${"%.4f".format(Locale.US, it)}°") }
         }.trim()
     }
 
@@ -200,35 +264,66 @@ fun PlateSolveScreen(
                             )
                         }
                     }
-                    OutlinedTextField(
-                        value = focalLengthText,
-                        onValueChange = { focalLengthText = it },
-                        label = { Text(stringResource(R.string.focal_length_mm)) },
-                        singleLine = true,
-                        modifier = Modifier.widthIn(max = 260.dp)
-                    )
-                    OutlinedTextField(
-                        value = fovText,
-                        onValueChange = { fovText = it },
-                        label = { Text(stringResource(R.string.estimated_field_height_deg)) },
-                        singleLine = true,
-                        modifier = Modifier.widthIn(max = 260.dp)
+                    SolveOpticsFields(
+                        focalLengthText = focalLengthText,
+                        onFocalLengthChange = { focalLengthText = it },
+                        selectedSensorId = selectedSensorId,
+                        onSensorSelected = { sensor ->
+                            selectedSensorId = sensor.id
+                            pixelSizeText = formatPixelSizeUm(sensor.pixelSizeUm)
+                        },
+                        pixelSizeText = pixelSizeText,
+                        onPixelSizeChange = { pixelSizeText = it },
+                        sensors = sensors,
+                        computedFovHeightDeg = computedFovDeg,
+                        enabled = !progress.active && !solving
                     )
                     Button(
                         onClick = {
                             val file = selectedFile ?: return@Button
-                            val fov = fovText.toDoubleOrNull()?.coerceIn(0.2, 6.0) ?: 1.0
                             val focal = focalLengthText.toFloatOrNull()?.takeIf { it > 0f }
-                            focal?.let {
-                                prefs.edit().putFloat("plate_focal_length_mm", it).apply()
-                            }
+                            val pixel = pixelSizeText.toFloatOrNull()?.takeIf { it > 0f }
+                            prefs.edit().apply {
+                                focal?.let { putFloat("plate_focal_length_mm", it) }
+                                pixel?.let { putFloat("plate_pixel_size_um", it) }
+                                putString("plate_sensor_id", selectedSensorId)
+                            }.apply()
                             scope.launch {
                                 solving = true
                                 error = null
                                 result = null
                                 try {
+                                    val hints = withContext(Dispatchers.IO) { FitsSolveHintReader.read(file) }
+                                    val sensor = sensors.firstOrNull { it.id == selectedSensorId }
+                                    val catalogHeight = sensor?.heightPx?.takeIf {
+                                        sensor.id != OpticsEquipment.CUSTOM_SENSOR_ID && it > 0
+                                    } ?: 0
+                                    val scalePixel = sensor?.let {
+                                        pixelSizeForSensor(it, pixel?.toDouble())
+                                    } ?: pixel?.toDouble()
+                                    val fov = PlateSolveOptics.astapFovDeg(
+                                        hints = hints,
+                                        userFocalLengthMm = focal?.toDouble(),
+                                        userPixelSizeUm = scalePixel,
+                                        catalogHeightPx = catalogHeight
+                                    )?.coerceIn(0.2, 6.0)
+                                    if (fov == null) {
+                                        result = PlateSolveResult(
+                                            false,
+                                            context.getString(R.string.plate_solve_need_optics)
+                                        )
+                                        return@launch
+                                    }
+                                    computedFovDeg = fov
                                     result = if (PlateSolveRouting.select(PlateSolveInputKind.EXTERNAL_CAMERA, focal?.toDouble()) == PlateSolveEngine.ASTAP) {
-                                        runner.solve(file, fov, if (useMountHint) mountCoordinates else null)
+                                        val solved = runner.solve(file, fov, if (useMountHint) mountCoordinates else null)
+                                        solved.copy(
+                                            measuredFocalLengthMm = PlateSolveOptics.impliedFocalLengthMm(
+                                                scalePixel,
+                                                solved.arcsecPerPixel,
+                                                hints.binning
+                                            )
+                                        )
                                     } else {
                                         PlateSolveResult(false, "ASTAP requires a confirmed external focal length of at least 200 mm.")
                                     }
@@ -243,7 +338,7 @@ fun PlateSolveScreen(
                                 }
                             }
                         },
-                        enabled = selectedFile != null && d50Status.installed && !progress.active && !solving
+                        enabled = selectedFile != null && d50Status.installed && !progress.active && !solving && computedFovDeg != null
                     ) {
                         Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
@@ -348,6 +443,12 @@ private fun ResultCard(result: PlateSolveResult, showLog: Boolean, onToggleLog: 
                 ResultLine("Dec", "${result.decDms}  (${fmt(result.decDeg)} deg)")
                 ResultLine("FOV", "${fmt(result.fovWidthDeg)} x ${fmt(result.fovHeightDeg)} deg")
                 ResultLine("Scale", "${fmt(result.arcsecPerPixel)} arcsec/px")
+                result.measuredFocalLengthMm?.let {
+                    ResultLine(
+                        stringResource(R.string.solved_focal_length_mm),
+                        "%.1f mm".format(Locale.US, it)
+                    )
+                }
                 ResultLine("Rotation", "${fmt(result.rotationDeg)} deg")
                 result.wcsHeaderPath?.let { ResultLine("WCS", it) }
             }
@@ -369,7 +470,7 @@ private fun ResultCard(result: PlateSolveResult, showLog: Boolean, onToggleLog: 
 @Composable
 private fun ResultLine(label: String, value: String) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(label, fontSize = 12.sp, color = MaterialTheme.colorScheme.outline, modifier = Modifier.width(68.dp))
+        Text(label, fontSize = 12.sp, color = MaterialTheme.colorScheme.outline, modifier = Modifier.width(88.dp))
         Text(value, fontSize = 12.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.weight(1f))
     }
 }
