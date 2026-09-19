@@ -7,11 +7,24 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.input.pointer.pointerInput
 import java.util.IdentityHashMap
+import kotlin.math.max
+import kotlin.math.min
 
+
+internal object PreviewCenterMarker {
+    /** Medium circle, sized in image pixels so it tracks the frame when zooming. */
+    fun radiusPx(imageWidth: Float, imageHeight: Float): Float =
+        min(imageWidth, imageHeight) * 0.18f
+
+    fun strokePx(displayScale: Float): Float =
+        2f / max(displayScale, 0.25f)
+}
 
 @Composable
 fun LivePreview(
@@ -20,6 +33,7 @@ fun LivePreview(
     flipV: Boolean = false,
     rotationDeg: Int = 0,
     resetTrigger: Int = 0,
+    showCenterMarker: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     var scale by remember { mutableFloatStateOf(1f) }
@@ -78,6 +92,7 @@ fun LivePreview(
 
         val centerX = canvasW / 2f + offset.x
         val centerY = canvasH / 2f + offset.y
+        val displayScale = fitScale * scale
 
         withTransform({
             translate(centerX, centerY)
@@ -90,6 +105,20 @@ fun LivePreview(
             translate(-imgW / 2f, -imgH / 2f)
         }) {
             drawImage(image)
+            if (showCenterMarker) {
+                val cx = imgW / 2f
+                val cy = imgH / 2f
+                val stroke = Stroke(width = PreviewCenterMarker.strokePx(displayScale))
+                val color = Color(0xE600E5FF)
+                drawLine(color, Offset(0f, cy), Offset(imgW, cy), stroke.width)
+                drawLine(color, Offset(cx, 0f), Offset(cx, imgH), stroke.width)
+                drawCircle(
+                    color = color,
+                    radius = PreviewCenterMarker.radiusPx(imgW, imgH),
+                    center = Offset(cx, cy),
+                    style = stroke
+                )
+            }
         }
     }
 }

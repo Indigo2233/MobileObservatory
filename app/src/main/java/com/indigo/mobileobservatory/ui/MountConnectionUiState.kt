@@ -12,7 +12,8 @@ enum class MountConnectionAction {
 data class MountConnectionUiState(
     val action: MountConnectionAction,
     val actionEnabled: Boolean,
-    val showProgress: Boolean
+    val showProgress: Boolean,
+    val showSetupPanel: Boolean
 ) {
     companion object {
         fun from(
@@ -31,7 +32,8 @@ data class MountConnectionUiState(
             return MountConnectionUiState(
                 action = action,
                 actionEnabled = !busy || cancellable,
-                showProgress = busy
+                showProgress = busy,
+                showSetupPanel = !connected
             )
         }
     }

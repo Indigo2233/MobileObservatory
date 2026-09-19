@@ -44,6 +44,7 @@
     <string name="toggle_roi">Toggle ROI</string>
     <string name="toggle_overlay">Toggle overlay</string>
     <string name="focus_assist">Focus assist</string>
+    <string name="image_center_marker">Image center</string>
     <string name="video_library">Video library</string>
     <string name="plate_solve">Plate solve</string>
     <string name="plate_solve_image">Plate solve image</string>

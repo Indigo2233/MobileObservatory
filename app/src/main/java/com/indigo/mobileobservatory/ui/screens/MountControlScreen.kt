@@ -190,6 +190,7 @@ fun MountControlScreen(
                 modifier = Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
+                if (connectionUi.showSetupPanel) {
                 Row(
                     modifier = Modifier.horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -408,6 +409,7 @@ fun MountControlScreen(
                             )
                         }
                     }
+                }
                 }
 
                 Row(

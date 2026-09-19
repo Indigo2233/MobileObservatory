@@ -44,6 +44,7 @@
     <string name="toggle_roi">裁切区域</string>
     <string name="toggle_overlay">信息叠加</string>
     <string name="focus_assist">对焦辅助</string>
+    <string name="image_center_marker">图像中心</string>
     <string name="video_library">文件浏览</string>
     <string name="no_camera_connected">未连接相机</string>
     <string name="connect_camera_hint">通过 USB OTG 连接相机</string>

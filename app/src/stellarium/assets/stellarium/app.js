@@ -5,7 +5,6 @@
     const mountPositionElement = document.getElementById("mount-position");
     const fovFrameElement = document.getElementById("fov-frame");
     const eyepieceFovElement = document.getElementById("eyepiece-fov");
-    const mountReticleElement = document.getElementById("mount-reticle");
     const canvas = document.getElementById("stel-canvas");
     let stel = null;
     let lastSelectionKey = "";
@@ -78,23 +77,15 @@
         stel.observer.utc = stel.date2MJD(new Date(observer.epochMillis));
     }
 
-    function applyMountReticle(visible) {
-        if (!mountReticleElement) return;
-        mountReticleElement.style.display = visible ? "block" : "none";
-    }
-
     function applyMountCoordinates(coordinates) {
         if (!coordinates) {
             mountPositionElement.style.display = "none";
-            applyMountReticle(false);
             return;
         }
         mountPositionElement.textContent =
             "赤道仪  RA " + coordinates.raHours.toFixed(5) +
             " h  Dec " + coordinates.decDegrees.toFixed(4) + "°";
         mountPositionElement.style.display = "block";
-        // Reticle marks current pointing when the view is locked to the mount.
-        applyMountReticle(followMount);
         if (followMount && stel) {
             centerOnRaDec(coordinates.raHours, coordinates.decDegrees, 0);
         }
@@ -196,7 +187,7 @@
         fovFrameElement.style.borderRadius = "2px";
         fovFrameElement.style.display = "block";
         fovFrameElement.textContent =
-            sensorFov.widthDeg.toFixed(2) + "° × " + sensorFov.heightDeg.toFixed(2) + "°";
+            "预览 " + sensorFov.widthDeg.toFixed(2) + "° × " + sensorFov.heightDeg.toFixed(2) + "°";
     }
 
     function applyEyepieceFovOverlay(fovDeg) {
@@ -218,7 +209,7 @@
         eyepieceFovElement.style.width = diameter + "px";
         eyepieceFovElement.style.height = diameter + "px";
         eyepieceFovElement.style.display = "block";
-        eyepieceFovElement.textContent = Number(fovDeg).toFixed(2) + "°";
+        eyepieceFovElement.textContent = "望远镜 " + Number(fovDeg).toFixed(2) + "°";
     }
 
     let lastOverlayFovKey = "";
@@ -408,7 +399,6 @@
         },
         setFollowMount: function (enabled) {
             followMount = Boolean(enabled);
-            applyMountReticle(followMount && pendingMountCoordinates != null);
             if (followMount && pendingMountCoordinates) {
                 centerOnRaDec(
                     pendingMountCoordinates.raHours,
@@ -513,7 +503,6 @@
                 applyFovDegrees(pendingFovDegrees, 0);
                 applySensorFovOverlay(pendingSensorFov);
                 applyEyepieceFovOverlay(pendingEyepieceFovDeg);
-                applyMountReticle(followMount && pendingMountCoordinates != null);
                 engine.change(function () {
                     window.requestAnimationFrame(function () {
                         publishSelection();

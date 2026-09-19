@@ -216,6 +216,7 @@ fun CameraScreen(
 
     var showPanel by remember { mutableStateOf(true) }
     var showOverlayPanel by remember { mutableStateOf(true) }
+    var showCenterMarker by rememberSaveable { mutableStateOf(false) }
     var viewResetTrigger by remember { mutableIntStateOf(0) }
 
     if (showDevicePicker) {
@@ -426,7 +427,8 @@ fun CameraScreen(
                             flipV = flipV,
                             rotation = rotation,
                             resetTrigger = viewResetTrigger,
-                            focusAssistEnabled = focusAssistEnabled
+                            focusAssistEnabled = focusAssistEnabled,
+                            showCenterMarker = showCenterMarker
                         )
 
                         if (showOverlayPanel) {
@@ -672,6 +674,17 @@ fun CameraScreen(
                             Icon(
                                 Icons.Default.CenterFocusWeak,
                                 stringResource(R.string.focus_assist),
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        SmallFloatingActionButton(
+                            onClick = { showCenterMarker = !showCenterMarker },
+                            containerColor = if (showCenterMarker) MaterialTheme.colorScheme.primaryContainer
+                            else MaterialTheme.colorScheme.surfaceVariant
+                        ) {
+                            Icon(
+                                Icons.Default.FilterCenterFocus,
+                                stringResource(R.string.image_center_marker),
                                 tint = MaterialTheme.colorScheme.onSurface
                             )
                         }
@@ -1066,7 +1079,8 @@ private fun MainPreviewImage(
     flipV: Boolean,
     rotation: Int,
     resetTrigger: Int,
-    focusAssistEnabled: Boolean
+    focusAssistEnabled: Boolean,
+    showCenterMarker: Boolean
 ) {
     val bitmap by viewModel.previewBitmap.collectAsState()
     LivePreview(
@@ -1075,6 +1089,7 @@ private fun MainPreviewImage(
         flipV = flipV,
         rotationDeg = rotation,
         resetTrigger = resetTrigger,
+        showCenterMarker = showCenterMarker,
         modifier = Modifier
             .fillMaxSize()
             .then(

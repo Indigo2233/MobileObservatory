@@ -78,6 +78,7 @@ import androidx.core.view.doOnLayout
 import androidx.webkit.WebViewAssetLoader
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.astro.FovInstrumentMode
+import com.indigo.mobileobservatory.astro.StarMapFovOverlay
 import com.indigo.mobileobservatory.astro.OpticsEquipment
 import com.indigo.mobileobservatory.catalog.AssetDeepSkyCatalog
 import com.indigo.mobileobservatory.catalog.CatalogObject
@@ -334,17 +335,20 @@ fun StarMapScreen(
             customSensorHeight
         )
     }
-    val fovComputation = remember(fovMode, telescopeFl, activeEyepiece, activeSensor) {
+    val eyepieceComputation = remember(telescopeFl, activeEyepiece) {
         val fl = telescopeFl ?: return@remember null
+        val ep = activeEyepiece ?: return@remember null
+        OpticsEquipment.computeEyepiece(fl, ep)
+    }
+    val sensorComputation = remember(telescopeFl, activeSensor) {
+        val fl = telescopeFl ?: return@remember null
+        val sensor = activeSensor ?: return@remember null
+        OpticsEquipment.computeSensor(fl, sensor)
+    }
+    val fovComputation = remember(fovMode, eyepieceComputation, sensorComputation) {
         when (fovMode) {
-            FovInstrumentMode.EYEPIECE -> {
-                val ep = activeEyepiece ?: return@remember null
-                OpticsEquipment.computeEyepiece(fl, ep)
-            }
-            FovInstrumentMode.SENSOR -> {
-                val sensor = activeSensor ?: return@remember null
-                OpticsEquipment.computeSensor(fl, sensor)
-            }
+            FovInstrumentMode.EYEPIECE -> eyepieceComputation
+            FovInstrumentMode.SENSOR -> sensorComputation
         }
     }
 
@@ -393,28 +397,14 @@ fun StarMapScreen(
     }
 
     fun applyFovOverlays(alsoZoom: Boolean) {
-        if (!showFovOverlay || fovComputation == null || !fovComputation.hasOverlay) {
-            evalStarMap("window.MercStarMap && window.MercStarMap.clearSensorFovOverlay();")
-            evalStarMap("window.MercStarMap && window.MercStarMap.clearEyepieceFovOverlay();")
-            return
-        }
-        when (fovComputation.mode) {
-            FovInstrumentMode.EYEPIECE -> {
-                val fov = fovComputation.circleDeg!!
-                evalStarMap("window.MercStarMap && window.MercStarMap.clearSensorFovOverlay();")
-                evalStarMap(
-                    "window.MercStarMap && window.MercStarMap.setEyepieceFovOverlay($fov,$alsoZoom);"
-                )
-            }
-            FovInstrumentMode.SENSOR -> {
-                val w = fovComputation.rectWidthDeg!!
-                val h = fovComputation.rectHeightDeg!!
-                evalStarMap("window.MercStarMap && window.MercStarMap.clearEyepieceFovOverlay();")
-                evalStarMap(
-                    "window.MercStarMap && window.MercStarMap.setSensorFovOverlay($w,$h,$alsoZoom);"
-                )
-            }
-        }
+        StarMapFovOverlay.scripts(
+            showOverlay = showFovOverlay,
+            eyepieceFovDeg = eyepieceComputation?.circleDeg,
+            sensorWidthDeg = sensorComputation?.rectWidthDeg,
+            sensorHeightDeg = sensorComputation?.rectHeightDeg,
+            alsoZoom = alsoZoom,
+            zoomMode = fovMode
+        ).forEach(::evalStarMap)
     }
 
     fun setFollowMountEnabled(enabled: Boolean) {
@@ -595,6 +585,8 @@ fun StarMapScreen(
         engineState,
         followMount,
         showFovOverlay,
+        eyepieceComputation,
+        sensorComputation,
         fovComputation,
         fovMode,
         selectedTelescopeId,

@@ -466,6 +466,7 @@ fun ControlPanel(
                 val mountConnected = mountConnectionState is MountConnectionState.Connected
                 val mountError = (mountConnectionState as? MountConnectionState.Error)?.message
                 var mountUsbExpanded by remember { mutableStateOf(false) }
+                if (!mountConnected) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -564,6 +565,7 @@ fun ControlPanel(
                         textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp),
                         label = { Text("Baud", fontSize = 10.sp) }
                     )
+                }
                 }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
