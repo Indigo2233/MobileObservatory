@@ -700,7 +700,7 @@ fun PolarAlignmentScreen(
                         selectedSlot = index
                         picker.launch(arrayOf("image/*", "application/fits", "application/octet-stream", "*/*"))
                     },
-                        onSolve = {
+                    onSolve = {
                         val file = files[index] ?: return@MeasurementCard
                         if (!d50Manager.status().installed) {
                             error = context.getString(R.string.database_required)

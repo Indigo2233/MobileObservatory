@@ -309,7 +309,7 @@ internal fun resolveSensor(
     customHeight: String
 ): SensorSpec? {
     val selected = sensors.firstOrNull { it.id == selectedId } ?: return null
-            if (selected.id != OpticsEquipment.CUSTOM_SENSOR_ID) return selected
+    if (selected.id != OpticsEquipment.CUSTOM_SENSOR_ID) return selected
     val px = customPixelUm.toDoubleOrNull() ?: return null
     val w = customWidth.toIntOrNull() ?: return null
     val h = customHeight.toIntOrNull() ?: return null
