@@ -43,6 +43,46 @@ class ObservingUiWiringTest {
         assertTrue(starMap.contains("sensorWidthDeg = sensorComputation?.rectWidthDeg"))
     }
 
+    @Test
+    fun plateSolveRecomputesJpegFovFromUserFocalLength() {
+        val screen = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/PlateSolveScreen.kt"
+        )
+        assertTrue(screen.contains("SolveOpticsFields("))
+        assertTrue(screen.contains("PlateSolveOptics.astapFovDeg"))
+        assertTrue(screen.contains("measuredFocalLengthMm"))
+        assertTrue(screen.contains("solved_focal_length_mm"))
+        assertTrue(!screen.contains("estimated_field_height_deg"))
+        val optics = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/SolveOpticsFields.kt"
+        )
+        assertTrue(optics.contains("fun pixelSizeForSensor"))
+        assertTrue(optics.contains("OpticsEquipment.CUSTOM_SENSOR_ID"))
+        val polar = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/PolarAlignmentScreen.kt"
+        )
+        assertTrue(polar.contains("SolveOpticsFields("))
+        assertTrue(!polar.contains("estimated_field_height_deg"))
+        val catalog = read(
+            "src/main/java/com/indigo/mobileobservatory/astro/OpticsEquipment.kt"
+        )
+        assertTrue(catalog.contains("Nikon D5100 (IMX071)"))
+        assertTrue(catalog.contains("IMX455"))
+        assertTrue(catalog.contains("IMX571"))
+        assertTrue(catalog.contains("IMX585"))
+        val persist = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/StarMapScreen.kt"
+        )
+        val persistStart = persist.indexOf("fun persistFovPrefs()")
+        val persistEnd = persist.indexOf("fun persistImagingFocalLength(")
+        assertTrue(persistStart >= 0 && persistEnd > persistStart)
+        assertTrue(
+            !persist.substring(persistStart, persistEnd).contains("plate_focal_length_mm")
+        )
+        assertTrue(persist.contains("onTelescopeSelected"))
+        assertTrue(persist.contains("persistImagingFocalLength("))
+    }
+
     private fun read(relative: String): String {
         val candidates = listOf(File(relative), File("app/$relative"))
         val file = candidates.firstOrNull { it.isFile }

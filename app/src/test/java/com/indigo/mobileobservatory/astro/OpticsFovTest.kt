@@ -37,4 +37,11 @@ class OpticsFovTest {
         assertNull(OpticsFov.rectangleDegrees(3.75, 0.0, 100, 100))
         assertNull(OpticsFov.rectangleDegrees(3.75, 500.0, 0, 100))
     }
+
+    @Test
+    fun impliedFocalLengthInvertsPlateScale() {
+        val scale = OpticsFov.plateScaleArcsecPerPixel(3.76, 800.0)!!
+        assertEquals(800.0, OpticsFov.impliedFocalLengthMm(3.76, scale)!!, 0.01)
+        assertEquals(528.0, OpticsFov.impliedFocalLengthMm(3.76, 1.47)!!, 1.0)
+    }
 }

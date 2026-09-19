@@ -30,7 +30,11 @@ class LocalizationResourcesTest {
             "nearby_devices_permission_required",
             "plate_solve",
             "plate_solve_image",
-            "image_center_marker"
+            "image_center_marker",
+            "solved_focal_length_mm",
+            "computed_field_height_deg",
+            "plate_solve_need_optics",
+            "sensor_custom"
         )
 
         coreKeys.forEach { key ->
