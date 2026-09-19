@@ -20,7 +20,7 @@ class LocalizationResourcesTest {
     @Test
     fun chineseCoreFlowsAreTranslatedAndContainNoMojibake() {
         val chinese = stringsFrom("src/main/res/values-zh-rCN/strings.xml")
-        val coreKeys = setOf(
+        val         coreKeys = setOf(
             "connect",
             "disconnect",
             "cancel_connection",
@@ -29,7 +29,8 @@ class LocalizationResourcesTest {
             "stop_mount",
             "nearby_devices_permission_required",
             "plate_solve",
-            "plate_solve_image"
+            "plate_solve_image",
+            "image_center_marker"
         )
 
         coreKeys.forEach { key ->
