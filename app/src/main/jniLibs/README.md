@@ -40,6 +40,8 @@ llvm-readelf -d <库文件> | grep -E "SONAME|NEEDED"
 ## 其他文件
 
 - `libtoupcam.so`：图谱官方库，自带 USB 实现，不依赖外部 libusb。
+  Java 必须一直持有对应的 `UsbDeviceConnection`；只把 `fileDescriptor` 传给 SDK 后丢掉
+  Java 引用，GC 会关掉 fd，表现为连上立刻失败或无法出图。滤镜轮已照此处理。
 - `libqhyccd.a`：QHY 静态库，由 `cpp/CMakeLists.txt` 链接进 `libqhyccd_jni.so`。
 - `libASICamera2.so` / `libzwo_camera.so`：ZWO 官方库。`libASICamera2.so` 必须保持官方
   ASISDK_ANDROID 包（2024-11 下载版）的 arm64 文件（7,042,880 字节），内含 ASI662 / 585 /

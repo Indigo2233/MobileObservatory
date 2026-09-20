@@ -160,13 +160,6 @@ try {
         "builtAtUtc=$([DateTime]::UtcNow.ToString('o'))"
     ) | Set-Content -LiteralPath $buildInfoOut -Encoding utf8
 
-    if ($Release -and $NonCommercial) {
-        & "$root\tools\Package-ReleaseSource.ps1" -OutputDirectory "$root\bin\Source"
-        if ($LASTEXITCODE -ne 0) {
-            throw "AGPL source packaging failed with exit code $LASTEXITCODE."
-        }
-    }
-
     Write-Host "Indigo Observatory APK: $versionedApkOut" -ForegroundColor Green
     Write-Host "Latest APK: $apkOut" -ForegroundColor Green
     Write-Host "SHA-256: $checksumOut" -ForegroundColor Green

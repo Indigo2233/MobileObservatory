@@ -30,6 +30,12 @@
 | [`archive/PLAYERONE_SDK_VENDOR_REQUEST.md`](archive/PLAYERONE_SDK_VENDOR_REQUEST.md) | 已解决的厂商阻塞项原信 |
 | 上表各计划的全文 | 设计过程、已勾选里程碑、接口对照表 |
 
+## 设计备忘
+
+| 文档 | 内容 |
+|---|---|
+| [`DESIGN_NOTES.md`](DESIGN_NOTES.md) | 已拍板的交互与协议决策（星图跟随、STOP、零位、EQ/地平、板解光学） |
+
 ## 发布与质量
 
 | 文档 | 内容 |

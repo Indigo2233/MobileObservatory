@@ -6,6 +6,25 @@ import org.junit.Test
 
 class PreviewScaleTest {
     @Test
+    fun typicalToupTekPreviewSizesStayFullResolution() {
+        val sizes = listOf(
+            1280 to 960,
+            1920 to 1080,
+            1920 to 1200,
+            2048 to 1536,
+            2048 to 2048
+        )
+        for ((width, height) in sizes) {
+            assertEquals(
+                "preview $width x $height should stay 1:1 under the 4MP budget",
+                1,
+                PreviewScale.sampleStep(width, height, keepBayerPhase = true)
+            )
+            assertEquals(1, PreviewScale.sampleStep(width, height, keepBayerPhase = false))
+        }
+    }
+
+    @Test
     fun bin2PreviewDownsamplesToFitBudget() {
         val step = PreviewScale.sampleStep(4784, 3194, keepBayerPhase = true)
         assertEquals(0, step % 2)

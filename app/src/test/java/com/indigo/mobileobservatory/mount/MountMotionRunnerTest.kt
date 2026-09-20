@@ -84,4 +84,15 @@ class MountMotionRunnerTest {
         )
         runner.stop()
     }
+
+    @Test
+    fun manualMotionDoesNotShowTheGlobalStopPopup() {
+        assertFalse(MountMotionState.Idle.showsGlobalStop)
+        assertFalse(
+            MountMotionState(MountMotionType.MANUAL, "Manual north").showsGlobalStop
+        )
+        assertTrue(MountMotionState(MountMotionType.GOTO, "GOTO M42").showsGlobalStop)
+        assertTrue(MountMotionState(MountMotionType.HOME, "Go home").showsGlobalStop)
+        assertTrue(MountMotionState(MountMotionType.RA_MOVE, "RA move").showsGlobalStop)
+    }
 }

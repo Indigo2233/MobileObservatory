@@ -17,6 +17,50 @@
     let pendingSensorFov = null;
     let pendingEyepieceFovDeg = null;
     let followMount = false;
+    // While a finger/mouse is down, mount RA/Dec polls must not yank the view.
+    let userPointerActive = false;
+    const PAN_PAUSE_FOLLOW_PX = 16;
+    let pendingSkyAppearance = {
+        equatorialGrid: false,
+        azimuthalGrid: false,
+        meridian: false,
+        ecliptic: false,
+        constellationLines: false,
+        constellationLabels: false,
+        constellationBounds: false,
+        starHints: false
+    };
+
+    function setChildVisible(parent, id, visible) {
+        if (!parent || !parent[id]) return;
+        try {
+            parent[id].visible = Boolean(visible);
+        } catch (_) {
+            // Engine build may omit a line id.
+        }
+    }
+
+    function applySkyAppearance() {
+        if (!stel || !stel.core) return;
+        const lines = stel.core.lines;
+        if (lines) {
+            lines.visible = true;
+            // Of-date RA/Dec matches the rest of the app (JNOW / 赤道仪坐标).
+            setChildVisible(lines, "equatorial_jnow", pendingSkyAppearance.equatorialGrid);
+            setChildVisible(lines, "azimuthal", pendingSkyAppearance.azimuthalGrid);
+            setChildVisible(lines, "meridian", pendingSkyAppearance.meridian);
+            setChildVisible(lines, "ecliptic", pendingSkyAppearance.ecliptic);
+        }
+        const constellations = stel.core.constellations;
+        if (constellations) {
+            constellations.lines_visible = Boolean(pendingSkyAppearance.constellationLines);
+            constellations.labels_visible = Boolean(pendingSkyAppearance.constellationLabels);
+            constellations.bounds_visible = Boolean(pendingSkyAppearance.constellationBounds);
+        }
+        if (stel.core.stars) {
+            stel.core.stars.hints_visible = Boolean(pendingSkyAppearance.starHints);
+        }
+    }
 
     function syncCanvasSize() {
         const width = Math.max(
@@ -86,7 +130,7 @@
             "赤道仪  RA " + coordinates.raHours.toFixed(5) +
             " h  Dec " + coordinates.decDegrees.toFixed(4) + "°";
         mountPositionElement.style.display = "block";
-        if (followMount && stel) {
+        if (followMount && stel && !userPointerActive) {
             centerOnRaDec(coordinates.raHours, coordinates.decDegrees, 0);
         }
     }
@@ -225,6 +269,71 @@
         if (coreFov != null) pendingFovDegrees = coreFov;
         applySensorFovOverlay(pendingSensorFov);
         applyEyepieceFovOverlay(pendingEyepieceFovDeg);
+    }
+
+    function pauseFollowAfterUserPan() {
+        if (!followMount) return;
+        followMount = false;
+        notifyAndroid("onFollowMountChanged", "false");
+    }
+
+    /**
+     * Follow-mount is for keeping the FOV box on the telescope. Dragging to
+     * find a target must pause it; otherwise every mount poll recenters.
+     */
+    function installFollowPauseOnPan() {
+        if (!canvas) return;
+        let startX = 0;
+        let startY = 0;
+        let moved = false;
+
+        function pointerDown(x, y) {
+            userPointerActive = true;
+            moved = false;
+            startX = x;
+            startY = y;
+        }
+
+        function pointerMove(x, y) {
+            if (!userPointerActive || moved) return;
+            const dx = x - startX;
+            const dy = y - startY;
+            if ((dx * dx) + (dy * dy) < PAN_PAUSE_FOLLOW_PX * PAN_PAUSE_FOLLOW_PX) return;
+            moved = true;
+            pauseFollowAfterUserPan();
+        }
+
+        function pointerUp() {
+            userPointerActive = false;
+        }
+
+        canvas.addEventListener("touchstart", function (event) {
+            if (event.touches.length !== 1) return;
+            pointerDown(event.touches[0].clientX, event.touches[0].clientY);
+        }, {passive: true});
+        canvas.addEventListener("touchmove", function (event) {
+            if (event.touches.length !== 1) return;
+            pointerMove(event.touches[0].clientX, event.touches[0].clientY);
+        }, {passive: true});
+        canvas.addEventListener("touchend", pointerUp, {passive: true});
+        canvas.addEventListener("touchcancel", pointerUp, {passive: true});
+        canvas.addEventListener("pointerdown", function (event) {
+            if (event.pointerType === "touch") return;
+            pointerDown(event.clientX, event.clientY);
+        });
+        canvas.addEventListener("pointermove", function (event) {
+            if (event.pointerType === "touch") return;
+            if ((event.buttons & 1) === 0) return;
+            pointerMove(event.clientX, event.clientY);
+        });
+        canvas.addEventListener("pointerup", function (event) {
+            if (event.pointerType === "touch") return;
+            pointerUp();
+        });
+        canvas.addEventListener("pointercancel", function (event) {
+            if (event.pointerType === "touch") return;
+            pointerUp();
+        });
     }
 
     /**
@@ -398,8 +507,11 @@
             applyMountCoordinates(null);
         },
         setFollowMount: function (enabled) {
+            // A drag already paused follow; ignore a stale Android re-enable
+            // until the pointer is up and the toggle callback has landed.
+            if (userPointerActive && enabled) return;
             followMount = Boolean(enabled);
-            if (followMount && pendingMountCoordinates) {
+            if (followMount && pendingMountCoordinates && !userPointerActive) {
                 centerOnRaDec(
                     pendingMountCoordinates.raHours,
                     pendingMountCoordinates.decDegrees,
@@ -410,6 +522,28 @@
         setAtmosphereVisible: function (visible) {
             pendingAtmosphereVisible = Boolean(visible);
             applyAtmosphereVisibility(pendingAtmosphereVisible);
+        },
+        setSkyAppearance: function (
+            equatorialGrid,
+            azimuthalGrid,
+            meridian,
+            ecliptic,
+            constellationLines,
+            constellationLabels,
+            constellationBounds,
+            starHints
+        ) {
+            pendingSkyAppearance = {
+                equatorialGrid: Boolean(equatorialGrid),
+                azimuthalGrid: Boolean(azimuthalGrid),
+                meridian: Boolean(meridian),
+                ecliptic: Boolean(ecliptic),
+                constellationLines: Boolean(constellationLines),
+                constellationLabels: Boolean(constellationLabels),
+                constellationBounds: Boolean(constellationBounds),
+                starHints: Boolean(starHints)
+            };
+            applySkyAppearance();
         },
         setOnlineSurveyEnabled: function (enabled) {
             applyOnlineSurveyEnabled(enabled);
@@ -479,6 +613,7 @@
     }
 
     syncCanvasSize();
+    installFollowPauseOnPan();
     window.addEventListener("resize", syncCanvasSize);
     if (window.visualViewport) {
         window.visualViewport.addEventListener("resize", syncCanvasSize);
@@ -499,6 +634,7 @@
                 applyObserver(pendingObserver);
                 applyMountCoordinates(pendingMountCoordinates);
                 applyAtmosphereVisibility(pendingAtmosphereVisible);
+                applySkyAppearance();
                 applyOnlineSurveyEnabled(pendingOnlineSurveyEnabled);
                 applyFovDegrees(pendingFovDegrees, 0);
                 applySensorFovOverlay(pendingSensorFov);

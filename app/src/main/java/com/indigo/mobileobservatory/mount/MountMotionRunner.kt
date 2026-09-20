@@ -27,6 +27,9 @@ data class MountMotionState(
 ) {
     val isActive: Boolean get() = type != MountMotionType.IDLE
 
+    /** Direction pads already have Stop; a global popup would reflow/cancel the press. */
+    val showsGlobalStop: Boolean get() = isActive && type != MountMotionType.MANUAL
+
     companion object {
         val Idle = MountMotionState()
     }

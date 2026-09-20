@@ -61,7 +61,7 @@
 **安全提示**
 
 - GOTO 与定距移动前确认周围无碰撞风险，地理位置与时间正确  
-- 运动过程中任意页面都有全局 **STOP**；异常或断开时会尽力发全轴停止  
+- GOTO / 回零 / 定距移动期间任意页面都有全局 **STOP**；方向键手动移动不弹该按钮（方向盘自带停止）。异常或断开时会尽力发全轴停止  
 
 ## 界面语言
 
@@ -106,6 +106,7 @@ SDK、星表、图像和其他第三方组件继续适用各自的许可证与�
 | [`AGPL_SOURCE_DELIVERY.md`](AGPL_SOURCE_DELIVERY.md) | Stellarium Web 非商业交付与源码义务 |
 | [`docs/QUALITY_STATUS.md`](docs/QUALITY_STATUS.md) | 自动化、真机和手机板解成熟度现状 |
 | [`docs/README.md`](docs/README.md) | 方案文档索引（进行中 / 已落地待真机 / archive） |
+| [`docs/DESIGN_NOTES.md`](docs/DESIGN_NOTES.md) | 已拍板的交互与协议决策（星图跟随、STOP、零位、EQ/地平、板解光学） |
 | [`docs/RELEASE_PROCESS.md`](docs/RELEASE_PROCESS.md) | 正式签名、发布候选与 go/no-go 门 |
 | [`docs/testing/HARDWARE_SMOKE_TESTS.md`](docs/testing/HARDWARE_SMOKE_TESTS.md) | 真机冒烟测试矩阵 |
 | [`docs/PHONE_PLATE_SOLVE_PLAN.md`](docs/PHONE_PLATE_SOLVE_PLAN.md) | 手机板解 / Push-to 方案（开放开发中） |

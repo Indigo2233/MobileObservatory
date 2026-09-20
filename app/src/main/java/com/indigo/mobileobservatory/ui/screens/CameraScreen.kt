@@ -376,6 +376,9 @@ fun CameraScreen(
                         onManualMoveStart = viewModel::startMountManualMove,
                         onManualMoveStop = { viewModel.stopMountManualMove(it) },
                         onStopMount = viewModel::stopMountMotion,
+                        onGoHome = viewModel::goMountHome,
+                        redNightMode = redNightMode,
+                        onRedNightModeChange = onRedNightModeChange,
                         onBack = { selectedTab = MainControlTab.MOUNT }
                     )
                 } else {
@@ -871,7 +874,7 @@ private fun MountMotionStopPopup(
     state: MountMotionState,
     onStop: () -> Unit
 ) {
-    if (!state.isActive) return
+    if (!state.showsGlobalStop) return
     Popup(
         alignment = Alignment.BottomStart,
         properties = PopupProperties(focusable = false)

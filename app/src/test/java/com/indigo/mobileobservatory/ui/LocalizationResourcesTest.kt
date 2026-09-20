@@ -34,7 +34,10 @@ class LocalizationResourcesTest {
             "solved_focal_length_mm",
             "computed_field_height_deg",
             "plate_solve_need_optics",
-            "sensor_custom"
+            "sensor_custom",
+            "home",
+            "go_home",
+            "set_home"
         )
 
         coreKeys.forEach { key ->
@@ -43,6 +46,13 @@ class LocalizationResourcesTest {
             assertFalse("$key contains a replacement character", text.contains('\uFFFD'))
             assertFalse("$key contains common mojibake", text.contains("瑙") || text.contains("鍥"))
         }
+        assertEquals("回零位", chinese["home"])
+        assertEquals("回零位", chinese["go_home"])
+        assertEquals("重设零位", chinese["set_home"])
+        assertTrue(chinese.getValue("mount_home_confirmation").contains("零位"))
+        assertTrue(chinese.getValue("set_home_confirmation").contains("零位"))
+        assertFalse(chinese.getValue("home").contains("原点"))
+        assertFalse(chinese.getValue("set_home").contains("原点"))
     }
 
     private fun stringsFrom(path: String): Map<String, String> {

@@ -19,8 +19,8 @@
     <string name="refresh_coordinates">Coordinates</string>
     <string name="manual_mount_control">Manual control</string>
     <string name="tracking">Tracking</string>
-    <string name="home">Home</string>
-    <string name="set_home">Set home</string>
+    <string name="home">Go to zero</string>
+    <string name="set_home">Reset zero</string>
     <string name="star_map">Star map</string>
     <string name="polar_alignment">Polar alignment</string>
     <string name="guiding">Guiding</string>
@@ -266,12 +266,12 @@
     <string name="select_guide_camera">Select guide camera</string>
     <string name="no_guide_camera_found">No guide camera found</string>
     <string name="telescope">Telescope</string>
-    <string name="go_home">Go home</string>
+    <string name="go_home">Go to zero</string>
     <string name="bluetooth">Bluetooth</string>
     <string name="paired_devices">Paired devices</string>
     <string name="synscan_app_address">Mount Wi-Fi address</string>
     <string name="udp_port">UDP port</string>
-    <string name="synscan_connection_hint">Join the mount hotspot (SSID SynScan_xxxx), then connect. Default is 192.168.4.1:11880. Choose equatorial or alt-azimuth mode before connecting. Set site coordinates on the polar-alignment page, power on at home, or sync a star after connecting.</string>
+    <string name="synscan_connection_hint">Join the mount hotspot (SSID SynScan_xxxx), then connect. Default is 192.168.4.1:11880. Choose equatorial or alt-azimuth mode before connecting. Set site coordinates on the polar-alignment page, power on at zero, or sync a star after connecting.</string>
     <string name="synscan_mode_equatorial">Equatorial</string>
     <string name="synscan_mode_altaz">Alt-azimuth</string>
     <string name="guiding_module">Guiding module</string>
@@ -322,6 +322,19 @@
     <string name="star_map_load_failed">Star map failed to load: %1$s</string>
     <string name="star_map_renderer_crashed">Star map renderer crashed. Tap reload to recover.</string>
     <string name="star_map_settings">Star map settings</string>
+    <string name="star_map_observing_panel">Observing tools</string>
+    <string name="star_map_sky_panel">Sky drawing</string>
+    <string name="star_map_equatorial_grid">RA / Dec grid</string>
+    <string name="star_map_azimuthal_grid">Horizon grid</string>
+    <string name="star_map_meridian">Meridian</string>
+    <string name="star_map_ecliptic">Ecliptic</string>
+    <string name="star_map_constellation_lines">Constellation lines</string>
+    <string name="star_map_constellation_labels">Constellation names</string>
+    <string name="star_map_constellation_bounds">Constellation bounds</string>
+    <string name="star_map_star_labels">Star labels</string>
+    <string name="star_map_sky_section_grids">Grids and lines</string>
+    <string name="star_map_sky_section_constellations">Constellations</string>
+    <string name="star_map_sky_section_display">Display</string>
     <string name="star_map_search">Search sky</string>
     <string name="star_map_search_hint">Name or catalog id</string>
     <string name="star_map_search_empty">No matching objects</string>
@@ -361,8 +374,8 @@
     <string name="brightness_value">Brightness %1$d / %2$d</string>
     <string name="rotator_status">%1$s  Angle: %2$.2f°  Steps: %3$d%4$s</string>
     <string name="moving_suffix">  Moving</string>
-    <string name="mount_home_confirmation">Move mount to the configured home position?</string>
-    <string name="set_home_confirmation">Set current mount position as home?</string>
+    <string name="mount_home_confirmation">Move the mount to the configured zero position?</string>
+    <string name="set_home_confirmation">Set the current mount position as zero?</string>
     <string name="log_file_summary">Log file: %1$s (%2$d KB)</string>
 
     <string name="guide_camera">Guide camera</string>

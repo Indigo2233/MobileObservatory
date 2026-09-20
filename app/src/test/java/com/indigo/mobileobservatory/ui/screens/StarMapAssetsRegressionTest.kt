@@ -38,6 +38,31 @@ class StarMapAssetsRegressionTest {
         assertTrue(js.contains("\"望远镜 \""))
     }
 
+    @Test
+    fun draggingPausesFollowMountInsteadOfRecentering() {
+        val js = read("app.js")
+        assertTrue(js.contains("function pauseFollowAfterUserPan()"))
+        assertTrue(js.contains("function installFollowPauseOnPan()"))
+        assertTrue(js.contains("userPointerActive"))
+        assertTrue(js.contains("notifyAndroid(\"onFollowMountChanged\", \"false\")"))
+        assertTrue(js.contains("if (followMount && stel && !userPointerActive)"))
+        assertTrue(js.contains("if (userPointerActive && enabled) return;"))
+        assertTrue(js.contains("let followMount = false;"))
+    }
+
+    @Test
+    fun skyAppearanceControlsEquatorialAndHorizonGrids() {
+        val js = read("app.js")
+        assertTrue(js.contains("function applySkyAppearance()"))
+        assertTrue(js.contains("setSkyAppearance:"))
+        assertTrue(js.contains("equatorial_jnow"))
+        assertTrue(js.contains("azimuthal"))
+        assertTrue(js.contains("lines_visible"))
+        assertTrue(js.contains("labels_visible"))
+        assertTrue(js.contains("hints_visible"))
+        assertTrue(js.contains("applySkyAppearance();"))
+    }
+
     private fun read(name: String): String {
         val candidates = listOf(
             File("src/stellarium/assets/stellarium/$name"),

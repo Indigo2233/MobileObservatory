@@ -44,6 +44,64 @@ class ObservingUiWiringTest {
     }
 
     @Test
+    fun starMapDoesNotFollowMountByDefaultAndSyncsPanPause() {
+        val starMap = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/StarMapScreen.kt"
+        )
+        assertTrue(
+            starMap.contains("prefs.getBoolean(\"star_map_follow_mount\", false)")
+        )
+        assertTrue(!starMap.contains("prefs.getBoolean(\"star_map_follow_mount\", true)"))
+        assertTrue(starMap.contains("fun onFollowMountChanged(enabled: String)"))
+        assertTrue(starMap.contains("onFollowChanged = { enabled -> setFollowMountEnabled(enabled) }"))
+        assertTrue(starMap.contains("stringResource(R.string.center_on_mount)"))
+    }
+
+    @Test
+    fun starMapChromeUsesTwoHideableCornerPanels() {
+        val starMap = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/StarMapScreen.kt"
+        )
+        val hud = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/StarMapHud.kt"
+        )
+        assertTrue(starMap.contains("StarMapCornerControls("))
+        assertTrue(starMap.contains("StarMapCornerPanel.NONE"))
+        assertTrue(starMap.contains("if (!overlaysVisible) cornerPanel = StarMapCornerPanel.NONE"))
+        assertTrue(hud.contains("StarMapCornerPanel.OBSERVING"))
+        assertTrue(hud.contains("StarMapCornerPanel.SKY"))
+        assertTrue(hud.contains("stringResource(R.string.star_map_equatorial_grid)"))
+        assertTrue(hud.contains("stringResource(R.string.star_map_azimuthal_grid)"))
+        assertTrue(hud.contains("stringResource(R.string.star_map_constellation_lines)"))
+        assertTrue(hud.contains("stringResource(R.string.red_night_mode)"))
+        assertTrue(starMap.contains("redNightMode: Boolean"))
+        assertTrue(starMap.contains("MercStarMap.setSkyAppearance("))
+        assertTrue(!starMap.contains("Icons.Default.MoreVert"))
+    }
+
+    @Test
+    fun starMapDirectionPadCanGoHomeAndManualMoveDoesNotSpawnGlobalStop() {
+        val starMap = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/StarMapScreen.kt"
+        )
+        val hud = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/StarMapHud.kt"
+        )
+        val camera = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/CameraScreen.kt"
+        )
+        val motion = read(
+            "src/main/java/com/indigo/mobileobservatory/mount/MountMotionRunner.kt"
+        )
+        assertTrue(starMap.contains("onGoHome: () -> Unit"))
+        assertTrue(hud.contains("stringResource(R.string.home)"))
+        assertTrue(starMap.contains("onGoHome()"))
+        assertTrue(camera.contains("onGoHome = viewModel::goMountHome"))
+        assertTrue(camera.contains("if (!state.showsGlobalStop) return"))
+        assertTrue(motion.contains("type != MountMotionType.MANUAL"))
+    }
+
+    @Test
     fun plateSolveRecomputesJpegFovFromUserFocalLength() {
         val screen = read(
             "src/main/java/com/indigo/mobileobservatory/ui/screens/PlateSolveScreen.kt"
@@ -81,6 +139,63 @@ class ObservingUiWiringTest {
         )
         assertTrue(persist.contains("onTelescopeSelected"))
         assertTrue(persist.contains("persistImagingFocalLength("))
+    }
+
+    @Test
+    fun toupTekCameraKeepsTheUsbConnectionAlive() {
+        val manager = read(
+            "src/main/java/com/indigo/mobileobservatory/camera/DahengCameraManager.kt"
+        )
+        val openStart = manager.indexOf("private fun openToupcamDevice")
+        val openEnd = manager.indexOf("private fun closeToupcamUsbConnection")
+        assertTrue("openToupcamDevice missing", openStart >= 0 && openEnd > openStart)
+        val open = manager.substring(openStart, openEnd)
+        val successStart = open.indexOf("if (camera.open(")
+        val elseStart = open.indexOf("} else {", successStart)
+        assertTrue("ToupTek success branch missing", successStart >= 0 && elseStart > successStart)
+        val success = open.substring(successStart, elseStart)
+        assertTrue(
+            "open() success must keep UsbDeviceConnection; dropping it lets GC close the fd",
+            success.contains("toupcamUsbConnection = connection")
+        )
+        assertTrue(
+            "open() success must not close the USB connection",
+            !success.contains("connection.close()")
+        )
+        val closeStart = manager.indexOf("fun closeCamera()")
+        val closeEnd = manager.indexOf("fun connectFilterWheel(")
+        assertTrue("closeCamera missing", closeStart >= 0 && closeEnd > closeStart)
+        assertTrue(
+            manager.substring(closeStart, closeEnd).contains("closeToupcamUsbConnection()")
+        )
+        assertTrue(manager.contains("ToupTekDevices.classify(isfw, iseaf)"))
+        assertTrue(manager.contains("ToupTekDevices.Kind.CAMERA"))
+        assertTrue(
+            "unknown ToupTek PIDs must still enumerate as cameras",
+            !manager.contains("else if (modelName != null)")
+        )
+        val eaf = read(
+            "src/main/java/com/indigo/mobileobservatory/camera/toupcam/EAFController.kt"
+        )
+        assertTrue(eaf.contains("usbConnection = connection"))
+    }
+
+    @Test
+    fun previewDownsampleIsDisplayOnly() {
+        val processor = read(
+            "src/main/java/com/indigo/mobileobservatory/camera/FrameProcessor.kt"
+        )
+        val bitmapStart = processor.indexOf("fun frameToBitmap(")
+        val downStart = processor.indexOf("private fun downsampleForPreview(")
+        assertTrue(bitmapStart >= 0 && downStart > bitmapStart)
+        assertTrue(
+            processor.substring(bitmapStart, downStart).contains("downsampleForPreview(")
+        )
+        val capture = read(
+            "src/main/java/com/indigo/mobileobservatory/recording/FITSWriter.kt"
+        )
+        assertTrue(!capture.contains("downsampleForPreview"))
+        assertTrue(!capture.contains("PreviewScale"))
     }
 
     private fun read(relative: String): String {

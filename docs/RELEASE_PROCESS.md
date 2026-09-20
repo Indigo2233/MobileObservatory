@@ -46,9 +46,11 @@ The build produces:
 
 - signed, versioned APK and latest-name APK;
 - SHA-256 checksum;
-- build information containing version, commit, variant, timestamp, and hash;
-- application Corresponding Source, including the pinned libusb source;
-- Stellarium Web Engine source fixed to the integrated upstream commit.
+- build information containing version, commit, variant, timestamp, and hash.
+
+GitHub Releases attach only those installer artifacts. Application and Stellarium
+source stay in this repository at the release tag; do not upload
+`MobileObservatory_Source_*.zip` or `StellariumWebEngine_*.zip`.
 
 The workflow uploads a 14-day release-candidate artifact. It does not publish a
 GitHub Release. Publication remains a separate go/no-go decision after validation.
@@ -61,8 +63,7 @@ GitHub Release. Publication remains a separate go/no-go decision after validatio
 - Required rows in `docs/testing/HARDWARE_SMOKE_TESTS.md` have dated evidence.
 - Camera, mount, guide, accessory, STOP, reconnect, and permission paths pass on
   the affected hardware families.
-- APK, checksum, build information, application source, and Stellarium source are
-  uploaded together.
+- APK, checksum, and build information are uploaded together.
 - Release notes state unresolved hardware coverage and phone-solver validation.
 
 ## R8 status

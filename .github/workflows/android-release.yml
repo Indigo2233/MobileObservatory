@@ -42,7 +42,7 @@ jobs:
             [Convert]::FromBase64String($env:ANDROID_RELEASE_KEYSTORE_BASE64)
           )
 
-      - name: Build signed release and source delivery
+      - name: Build signed release
         shell: pwsh
         env:
           ANDROID_RELEASE_KEYSTORE: ${{ runner.temp }}\indigo-release.jks
@@ -55,8 +55,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: indigo-observatory-release-candidate-${{ github.sha }}
-          path: |
-            bin/Installer/
-            bin/Source/
+          path: bin/Installer/
           if-no-files-found: error
           retention-days: 14

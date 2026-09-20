@@ -59,3 +59,7 @@ symbol under `app/src/main/cpp`.
 
 Camera, mount and accessory connections are independent. Keep protocol-specific
 behavior behind the existing adapters and preserve the unified ViewModel/UI state.
+
+Product and interaction decisions that must not regress (star-map follow, global
+STOP vs manual pad, zero-position wording, equatorial vs alt-az, plate-solve
+optics) are in `docs/DESIGN_NOTES.md`.

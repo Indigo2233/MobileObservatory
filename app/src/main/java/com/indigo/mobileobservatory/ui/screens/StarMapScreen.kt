@@ -18,42 +18,31 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.OpenWith
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -72,7 +61,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.doOnLayout
 import androidx.webkit.WebViewAssetLoader
@@ -140,6 +128,7 @@ private class StarMapJavascriptBridge(
     private val onReady: () -> Unit,
     private val onError: (String) -> Unit,
     private val onSelected: (StarMapTarget?) -> Unit,
+    private val onFollowChanged: (Boolean) -> Unit,
     private val fallbackTargetName: String,
     private val parseError: (Throwable) -> String
 ) {
@@ -176,6 +165,12 @@ private class StarMapJavascriptBridge(
     fun onSelectionCleared(@Suppress("UNUSED_PARAMETER") ignored: String) {
         mainHandler.post { onSelected(null) }
     }
+
+    @JavascriptInterface
+    fun onFollowMountChanged(enabled: String) {
+        val follow = enabled.equals("true", ignoreCase = true)
+        mainHandler.post { onFollowChanged(follow) }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -198,6 +193,9 @@ fun StarMapScreen(
     onManualMoveStart: (MountDirection) -> Unit = {},
     onManualMoveStop: (MountDirection) -> Unit = {},
     onStopMount: () -> Unit = {},
+    onGoHome: () -> Unit = {},
+    redNightMode: Boolean = false,
+    onRedNightModeChange: (Boolean) -> Unit = {},
     onBack: () -> Unit
 ) {
     var webView by remember { mutableStateOf<WebView?>(null) }
@@ -211,11 +209,11 @@ fun StarMapScreen(
     var overlaysVisible by remember { mutableStateOf(true) }
     var overlaysLocked by remember { mutableStateOf(false) }
     var targetExpanded by remember { mutableStateOf(false) }
-    var settingsExpanded by remember { mutableStateOf(false) }
     var searchDialogVisible by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var searchResults by remember { mutableStateOf<List<CatalogObject>>(emptyList()) }
-    var directionPadExpanded by remember { mutableStateOf(false) }
+    var cornerPanel by remember { mutableStateOf(StarMapCornerPanel.NONE) }
+    var confirmHome by remember { mutableStateOf(false) }
     var fovDialogVisible by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val prefs = remember {
@@ -230,7 +228,7 @@ fun StarMapScreen(
         mutableStateOf(HipsTileCache.formatCacheSize(hipsCache.cacheSizeBytes()))
     }
     var followMount by remember {
-        mutableStateOf(prefs.getBoolean("star_map_follow_mount", true))
+        mutableStateOf(prefs.getBoolean("star_map_follow_mount", false))
     }
     var fovMode by remember {
         mutableStateOf(
@@ -277,6 +275,30 @@ fun StarMapScreen(
     }
     var showFovOverlay by remember {
         mutableStateOf(prefs.getBoolean("star_map_show_fov_overlay", true))
+    }
+    var equatorialGrid by remember {
+        mutableStateOf(prefs.getBoolean("star_map_equatorial_grid", false))
+    }
+    var azimuthalGrid by remember {
+        mutableStateOf(prefs.getBoolean("star_map_azimuthal_grid", false))
+    }
+    var meridianLine by remember {
+        mutableStateOf(prefs.getBoolean("star_map_meridian", false))
+    }
+    var eclipticLine by remember {
+        mutableStateOf(prefs.getBoolean("star_map_ecliptic", false))
+    }
+    var constellationLines by remember {
+        mutableStateOf(prefs.getBoolean("star_map_constellation_lines", false))
+    }
+    var constellationLabels by remember {
+        mutableStateOf(prefs.getBoolean("star_map_constellation_labels", false))
+    }
+    var constellationBounds by remember {
+        mutableStateOf(prefs.getBoolean("star_map_constellation_bounds", false))
+    }
+    var starHints by remember {
+        mutableStateOf(prefs.getBoolean("star_map_star_labels", false))
     }
     val moveEnabled = mountConnected && !mountBusy
 
@@ -374,7 +396,23 @@ fun StarMapScreen(
             .putString("star_map_custom_sensor_w", customSensorWidth)
             .putString("star_map_custom_sensor_h", customSensorHeight)
             .putBoolean("star_map_show_fov_overlay", showFovOverlay)
+            .putBoolean("star_map_equatorial_grid", equatorialGrid)
+            .putBoolean("star_map_azimuthal_grid", azimuthalGrid)
+            .putBoolean("star_map_meridian", meridianLine)
+            .putBoolean("star_map_ecliptic", eclipticLine)
+            .putBoolean("star_map_constellation_lines", constellationLines)
+            .putBoolean("star_map_constellation_labels", constellationLabels)
+            .putBoolean("star_map_constellation_bounds", constellationBounds)
+            .putBoolean("star_map_star_labels", starHints)
             .apply()
+    }
+
+    fun applySkyAppearance() {
+        evalStarMap(
+            "window.MercStarMap && window.MercStarMap.setSkyAppearance(" +
+                "$equatorialGrid,$azimuthalGrid,$meridianLine,$eclipticLine," +
+                "$constellationLines,$constellationLabels,$constellationBounds,$starHints);"
+        )
     }
 
     fun persistImagingFocalLength(focalLengthMm: Double?) {
@@ -414,6 +452,11 @@ fun StarMapScreen(
             "window.MercStarMap && window.MercStarMap.setFollowMount(${if (enabled) "true" else "false"});"
         )
         overlaysVisible = true
+    }
+
+    fun persistAndApplySkyAppearance() {
+        persistFovPrefs()
+        applySkyAppearance()
     }
 
     fun centerOnMount() {
@@ -468,10 +511,6 @@ fun StarMapScreen(
         }
     }
 
-    LaunchedEffect(mountConnected) {
-        if (!mountConnected) directionPadExpanded = false
-    }
-
     fun destroyWebView(current: WebView?) {
         current?.apply {
             // AndroidView.onRelease has already detached us from the parent.
@@ -491,7 +530,7 @@ fun StarMapScreen(
     fun reloadStarMap() {
         selectedTarget = null
         targetExpanded = false
-        settingsExpanded = false
+        cornerPanel = StarMapCornerPanel.NONE
         engineState = StarMapEngineState.Loading
         overlaysVisible = true
         webView = null
@@ -513,6 +552,7 @@ fun StarMapScreen(
                 targetExpanded = false
                 overlaysVisible = true
             },
+            onFollowChanged = { enabled -> setFollowMountEnabled(enabled) },
             fallbackTargetName = context.getString(R.string.selected_target),
             parseError = { context.getString(R.string.star_target_parse_error, it.message.orEmpty()) }
         )
@@ -537,10 +577,10 @@ fun StarMapScreen(
         syncConfirmation,
         precisionConfirmation,
         precisionGotoProgress.isActive,
-        settingsExpanded,
         searchDialogVisible,
-        directionPadExpanded,
-        fovDialogVisible
+        cornerPanel,
+        fovDialogVisible,
+        confirmHome
     ) {
         if (!overlaysVisible ||
             overlaysLocked ||
@@ -549,10 +589,10 @@ fun StarMapScreen(
             syncConfirmation != null ||
             precisionConfirmation != null ||
             precisionGotoProgress.isActive ||
-            settingsExpanded ||
             searchDialogVisible ||
-            directionPadExpanded ||
-            fovDialogVisible
+            cornerPanel != StarMapCornerPanel.NONE ||
+            fovDialogVisible ||
+            confirmHome
         ) {
             return@LaunchedEffect
         }
@@ -648,6 +688,26 @@ fun StarMapScreen(
             "window.MercStarMap && window.MercStarMap.setOnlineSurveyEnabled($enabled);",
             null
         )
+    }
+
+    LaunchedEffect(
+        webView,
+        engineState,
+        equatorialGrid,
+        azimuthalGrid,
+        meridianLine,
+        eclipticLine,
+        constellationLines,
+        constellationLabels,
+        constellationBounds,
+        starHints
+    ) {
+        if (engineState !is StarMapEngineState.Ready) return@LaunchedEffect
+        applySkyAppearance()
+    }
+
+    LaunchedEffect(overlaysVisible) {
+        if (!overlaysVisible) cornerPanel = StarMapCornerPanel.NONE
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -760,12 +820,17 @@ fun StarMapScreen(
             )
         }
 
-        Card(
+        AnimatedVisibility(
+            visible = overlaysVisible || engineState !is StarMapEngineState.Ready,
+            enter = fadeIn(),
+            exit = fadeOut(),
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .padding(8.dp)
         ) {
-            StarMapBackButton(onBack = onBack)
+            Card {
+                StarMapBackButton(onBack = onBack)
+            }
         }
 
         AnimatedVisibility(
@@ -786,159 +851,21 @@ fun StarMapScreen(
                 }
                 StarMapEngineState.Ready -> {
                     Card(modifier = Modifier.padding(8.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            IconButton(
-                                onClick = {
-                                    searchQuery = ""
-                                    searchDialogVisible = true
-                                    overlaysVisible = true
-                                },
-                                modifier = Modifier.semantics {
-                                    contentDescription =
-                                        context.getString(R.string.star_map_search)
-                                }
-                            ) {
-                                Icon(
-                                    Icons.Default.Search,
-                                    contentDescription = stringResource(R.string.star_map_search)
-                                )
+                        IconButton(
+                            onClick = {
+                                searchQuery = ""
+                                searchDialogVisible = true
+                                overlaysVisible = true
+                            },
+                            modifier = Modifier.semantics {
+                                contentDescription =
+                                    context.getString(R.string.star_map_search)
                             }
-                            Box {
-                            IconButton(
-                                onClick = {
-                                    refreshHipsCacheLabel()
-                                    settingsExpanded = true
-                                },
-                                modifier = Modifier.semantics {
-                                    contentDescription =
-                                        context.getString(R.string.star_map_settings)
-                                }
-                            ) {
-                                Icon(
-                                    Icons.Default.MoreVert,
-                                    contentDescription = stringResource(R.string.star_map_settings)
-                                )
-                            }
-                            DropdownMenu(
-                                expanded = settingsExpanded,
-                                onDismissRequest = { settingsExpanded = false }
-                            ) {
-                                DropdownMenuItem(
-                                    text = {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                                        ) {
-                                            Text(stringResource(R.string.atmosphere))
-                                            Switch(
-                                                checked = atmosphereVisible,
-                                                onCheckedChange = { atmosphereVisible = it }
-                                            )
-                                        }
-                                    },
-                                    onClick = { atmosphereVisible = !atmosphereVisible }
-                                )
-                                DropdownMenuItem(
-                                    text = {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                                        ) {
-                                            Text(stringResource(R.string.online_dss_survey))
-                                            Switch(
-                                                checked = onlineDssEnabled,
-                                                onCheckedChange = ::setOnlineDssEnabled
-                                            )
-                                        }
-                                    },
-                                    onClick = { setOnlineDssEnabled(!onlineDssEnabled) }
-                                )
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            stringResource(
-                                                R.string.hips_cache_size,
-                                                hipsCacheSizeLabel
-                                            )
-                                        )
-                                    },
-                                    onClick = { refreshHipsCacheLabel() },
-                                    trailingIcon = {
-                                        TextButton(
-                                            onClick = {
-                                                hipsCache.clearCache()
-                                                refreshHipsCacheLabel()
-                                            }
-                                        ) {
-                                            Text(stringResource(R.string.clear_hips_cache))
-                                        }
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                                        ) {
-                                            Text(stringResource(R.string.lock_star_map_overlays))
-                                            Switch(
-                                                checked = overlaysLocked,
-                                                onCheckedChange = {
-                                                    overlaysLocked = it
-                                                    if (it) overlaysVisible = true
-                                                }
-                                            )
-                                        }
-                                    },
-                                    onClick = {
-                                        overlaysLocked = !overlaysLocked
-                                        if (overlaysLocked) overlaysVisible = true
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                                        ) {
-                                            Text(stringResource(R.string.follow_mount_pointing))
-                                            Switch(
-                                                checked = followMount,
-                                                onCheckedChange = { setFollowMountEnabled(it) }
-                                            )
-                                        }
-                                    },
-                                    onClick = { setFollowMountEnabled(!followMount) },
-                                    enabled = mountConnected
-                                )
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.star_map_fov)) },
-                                    onClick = {
-                                        settingsExpanded = false
-                                        fovDialogVisible = true
-                                        overlaysVisible = true
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.center_on_mount)) },
-                                    enabled = mountConnected && mountCoordinates != null,
-                                    onClick = {
-                                        settingsExpanded = false
-                                        centerOnMount()
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.reload_star_map)) },
-                                    onClick = {
-                                        settingsExpanded = false
-                                        reloadStarMap()
-                                    },
-                                    leadingIcon = {
-                                        Icon(Icons.Default.Refresh, contentDescription = null)
-                                    }
-                                )
-                            }
-                            }
+                        ) {
+                            Icon(
+                                Icons.Default.Search,
+                                contentDescription = stringResource(R.string.star_map_search)
+                            )
                         }
                     }
                 }
@@ -973,123 +900,93 @@ fun StarMapScreen(
             exit = fadeOut(),
             modifier = Modifier.align(Alignment.BottomStart)
         ) {
-            Column(
-                modifier = Modifier.padding(8.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                if (directionPadExpanded && mountConnected) {
-                    Card(modifier = Modifier.widthIn(max = 280.dp)) {
-                        Column(
-                            modifier = Modifier.padding(10.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .horizontalScroll(rememberScrollState()),
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                MountSlewRate.entries.forEach { rate ->
-                                    FilterChip(
-                                        selected = rate == mountSlewRate,
-                                        onClick = { onSlewRateChange(rate) },
-                                        enabled = moveEnabled,
-                                        label = {
-                                            Text(rate.label, fontSize = 10.sp)
-                                        },
-                                        modifier = Modifier.height(28.dp)
-                                    )
-                                }
-                            }
-                            StarMapMountDirectionButton(
-                                label = "N",
-                                contentDescription = stringResource(R.string.move_north),
-                                direction = MountDirection.NORTH,
-                                enabled = moveEnabled,
-                                onMoveStart = onManualMoveStart,
-                                onMoveStop = onManualMoveStop
-                            )
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                StarMapMountDirectionButton(
-                                    label = "W",
-                                    contentDescription = stringResource(R.string.move_west),
-                                    direction = MountDirection.WEST,
-                                    enabled = moveEnabled,
-                                    onMoveStart = onManualMoveStart,
-                                    onMoveStop = onManualMoveStop
-                                )
-                                FilledTonalButton(
-                                    onClick = onStopMount,
-                                    enabled = mountConnected,
-                                    modifier = Modifier.size(width = 64.dp, height = 44.dp)
-                                ) {
-                                    Icon(
-                                        Icons.Default.Stop,
-                                        contentDescription = stringResource(R.string.stop_mount)
-                                    )
-                                }
-                                StarMapMountDirectionButton(
-                                    label = "E",
-                                    contentDescription = stringResource(R.string.move_east),
-                                    direction = MountDirection.EAST,
-                                    enabled = moveEnabled,
-                                    onMoveStart = onManualMoveStart,
-                                    onMoveStop = onManualMoveStop
-                                )
-                            }
-                            StarMapMountDirectionButton(
-                                label = "S",
-                                contentDescription = stringResource(R.string.move_south),
-                                direction = MountDirection.SOUTH,
-                                enabled = moveEnabled,
-                                onMoveStart = onManualMoveStart,
-                                onMoveStop = onManualMoveStop
-                            )
-                        }
-                    }
-                }
-                Card {
-                    IconButton(
-                        onClick = {
-                            if (!mountConnected) return@IconButton
-                            directionPadExpanded = !directionPadExpanded
-                            if (directionPadExpanded) overlaysVisible = true
-                        },
-                        enabled = mountConnected,
-                        modifier = Modifier.semantics {
-                            contentDescription = context.getString(
-                                if (directionPadExpanded) {
-                                    R.string.close_mount_direction_pad
-                                } else {
-                                    R.string.open_mount_direction_pad
-                                }
-                            )
-                        }
-                    ) {
-                        Icon(
-                            Icons.Default.OpenWith,
-                            contentDescription = null,
-                            tint = if (mountConnected) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                            }
-                        )
-                    }
-                }
-                if (!mountConnected) {
-                    Text(
-                        stringResource(R.string.connect_mount_for_manual_move),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline,
-                        modifier = Modifier.padding(horizontal = 4.dp)
-                    )
-                }
-            }
+            StarMapCornerControls(
+                panel = cornerPanel,
+                onPanelChange = {
+                    cornerPanel = it
+                    overlaysVisible = true
+                    if (it == StarMapCornerPanel.SKY) refreshHipsCacheLabel()
+                },
+                mountConnected = mountConnected,
+                moveEnabled = moveEnabled,
+                mountSlewRate = mountSlewRate,
+                followMount = followMount,
+                showFovOverlay = showFovOverlay,
+                equatorialGrid = equatorialGrid,
+                azimuthalGrid = azimuthalGrid,
+                meridian = meridianLine,
+                ecliptic = eclipticLine,
+                constellationLines = constellationLines,
+                constellationLabels = constellationLabels,
+                constellationBounds = constellationBounds,
+                starHints = starHints,
+                atmosphereVisible = atmosphereVisible,
+                redNightMode = redNightMode,
+                onlineDssEnabled = onlineDssEnabled,
+                overlaysLocked = overlaysLocked,
+                hipsCacheSizeLabel = hipsCacheSizeLabel,
+                onSlewRateChange = onSlewRateChange,
+                onManualMoveStart = onManualMoveStart,
+                onManualMoveStop = onManualMoveStop,
+                onStopMount = onStopMount,
+                onConfirmHome = { confirmHome = true },
+                onFollowMountChange = ::setFollowMountEnabled,
+                onCenterOnMount = ::centerOnMount,
+                onOpenFov = {
+                    fovDialogVisible = true
+                    overlaysVisible = true
+                },
+                onShowFovOverlayChange = {
+                    showFovOverlay = it
+                    persistFovPrefs()
+                    applyFovOverlays(alsoZoom = false)
+                },
+                onEquatorialGridChange = {
+                    equatorialGrid = it
+                    persistAndApplySkyAppearance()
+                },
+                onAzimuthalGridChange = {
+                    azimuthalGrid = it
+                    persistAndApplySkyAppearance()
+                },
+                onMeridianChange = {
+                    meridianLine = it
+                    persistAndApplySkyAppearance()
+                },
+                onEclipticChange = {
+                    eclipticLine = it
+                    persistAndApplySkyAppearance()
+                },
+                onConstellationLinesChange = {
+                    constellationLines = it
+                    persistAndApplySkyAppearance()
+                },
+                onConstellationLabelsChange = {
+                    constellationLabels = it
+                    persistAndApplySkyAppearance()
+                },
+                onConstellationBoundsChange = {
+                    constellationBounds = it
+                    persistAndApplySkyAppearance()
+                },
+                onStarHintsChange = {
+                    starHints = it
+                    persistAndApplySkyAppearance()
+                },
+                onAtmosphereChange = { atmosphereVisible = it },
+                onRedNightModeChange = onRedNightModeChange,
+                onOnlineDssChange = ::setOnlineDssEnabled,
+                onOverlaysLockedChange = {
+                    overlaysLocked = it
+                    if (it) overlaysVisible = true
+                },
+                onRefreshHipsCache = ::refreshHipsCacheLabel,
+                onClearHipsCache = {
+                    hipsCache.clearCache()
+                    refreshHipsCacheLabel()
+                },
+                onReloadStarMap = ::reloadStarMap
+            )
         }
 
         AnimatedVisibility(
@@ -1266,6 +1163,23 @@ fun StarMapScreen(
         )
     }
 
+    if (confirmHome) {
+        AlertDialog(
+            onDismissRequest = { confirmHome = false },
+            title = { Text(stringResource(R.string.go_home)) },
+            text = { Text(stringResource(R.string.mount_home_confirmation)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmHome = false
+                    onGoHome()
+                }) { Text(stringResource(R.string.go)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmHome = false }) { Text(stringResource(R.string.cancel)) }
+            }
+        )
+    }
+
     if (searchDialogVisible) {
         AlertDialog(
             onDismissRequest = { searchDialogVisible = false },
@@ -1405,7 +1319,7 @@ fun StarMapScreen(
 }
 
 @Composable
-private fun StarMapMountDirectionButton(
+internal fun StarMapMountDirectionButton(
     label: String,
     contentDescription: String,
     direction: MountDirection,

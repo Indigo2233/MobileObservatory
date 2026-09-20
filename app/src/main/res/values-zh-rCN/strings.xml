@@ -19,8 +19,8 @@
     <string name="refresh_coordinates">读取坐标</string>
     <string name="manual_mount_control">手动控制</string>
     <string name="tracking">跟踪</string>
-    <string name="home">回到原点</string>
-    <string name="set_home">设为原点</string>
+    <string name="home">回零位</string>
+    <string name="set_home">重设零位</string>
     <string name="star_map">星图</string>
     <string name="polar_alignment">极轴校准</string>
     <string name="guiding">导星</string>
@@ -266,12 +266,12 @@
     <string name="select_guide_camera">选择导星相机</string>
     <string name="no_guide_camera_found">未找到导星相机</string>
     <string name="telescope">赤道仪</string>
-    <string name="go_home">回到原点</string>
+    <string name="go_home">回零位</string>
     <string name="bluetooth">蓝牙</string>
     <string name="paired_devices">已配对设备</string>
     <string name="synscan_app_address">赤道仪 Wi‑Fi 地址</string>
     <string name="udp_port">UDP 端口</string>
-    <string name="synscan_connection_hint">手机先连赤道仪热点（SSID 一般为 SynScan_xxxx），再点连接，默认 192.168.4.1:11880。连接前选择赤道仪或经纬仪模式。请在极轴页填好经纬度；原点开机或连上后对一颗星同步。</string>
+    <string name="synscan_connection_hint">手机先连赤道仪热点（SSID 一般为 SynScan_xxxx），再点连接，默认 192.168.4.1:11880。连接前选择赤道仪或经纬仪模式。请在极轴页填好经纬度；零位开机或连上后对一颗星同步。</string>
     <string name="synscan_mode_equatorial">赤道仪</string>
     <string name="synscan_mode_altaz">经纬仪</string>
     <string name="guiding_module">导星模块</string>
@@ -322,6 +322,19 @@
     <string name="star_map_load_failed">星图加载失败：%1$s</string>
     <string name="star_map_renderer_crashed">星图渲染进程崩溃，请点击重新加载恢复。</string>
     <string name="star_map_settings">星图设置</string>
+    <string name="star_map_observing_panel">观测工具</string>
+    <string name="star_map_sky_panel">星图图层</string>
+    <string name="star_map_equatorial_grid">赤经赤纬网格</string>
+    <string name="star_map_azimuthal_grid">地平网格</string>
+    <string name="star_map_meridian">子午圈</string>
+    <string name="star_map_ecliptic">黄道</string>
+    <string name="star_map_constellation_lines">星座连线</string>
+    <string name="star_map_constellation_labels">星座名称</string>
+    <string name="star_map_constellation_bounds">星座边界</string>
+    <string name="star_map_star_labels">恒星标签</string>
+    <string name="star_map_sky_section_grids">网格和线条</string>
+    <string name="star_map_sky_section_constellations">星座</string>
+    <string name="star_map_sky_section_display">显示</string>
     <string name="star_map_search">搜索天体</string>
     <string name="star_map_search_hint">名称或编号</string>
     <string name="star_map_search_empty">无匹配天体</string>
@@ -361,8 +374,8 @@
     <string name="brightness_value">亮度 %1$d / %2$d</string>
     <string name="rotator_status">%1$s  角度：%2$.2f°  步数：%3$d%4$s</string>
     <string name="moving_suffix">  转动中</string>
-    <string name="mount_home_confirmation">&#23558;&#36196;&#36947;&#20202;&#31227;&#21160;&#21040;&#24050;&#37197;&#32622;&#30340;&#21407;&#28857;&#65311;</string>
-    <string name="set_home_confirmation">&#23558;&#36196;&#36947;&#20202;&#24403;&#21069;&#20301;&#32622;&#35774;&#20026;&#21407;&#28857;&#65311;</string>
+    <string name="mount_home_confirmation">将赤道仪移动到已配置的零位？</string>
+    <string name="set_home_confirmation">将赤道仪当前位置设为零位？</string>
     <string name="log_file_summary">日志文件：%1$s（%2$d KB）</string>
 
     <string name="guide_camera">导星相机</string>

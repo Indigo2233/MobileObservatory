@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbManager
 import android.os.Build
 import android.util.Log
@@ -18,6 +19,7 @@ import com.indigo.mobileobservatory.camera.qhyccd.QhyCamera
 import com.indigo.mobileobservatory.camera.qhyccd.QhyccdJni
 import com.indigo.mobileobservatory.camera.toupcam.EAFController
 import com.indigo.mobileobservatory.camera.toupcam.FilterWheelController
+import com.indigo.mobileobservatory.camera.toupcam.ToupTekDevices
 import com.indigo.mobileobservatory.camera.toupcam.ToupcamCamera
 import com.indigo.mobileobservatory.camera.toupcam.ToupcamJni
 import com.indigo.mobileobservatory.camera.zwo.ZwoAsiCamera
@@ -87,6 +89,7 @@ class DahengCameraManager(
     private var pendingEafDevice: UsbDevice? = null
 
     private var pendingToupcamDevice: UsbDevice? = null
+    private var toupcamUsbConnection: UsbDeviceConnection? = null
 
     @Suppress("DEPRECATION")
     private val usbReceiver = object : BroadcastReceiver() {
@@ -306,29 +309,32 @@ class DahengCameraManager(
 
                     Log.i(TAG, "ToupTek device: model=$modelName isfw=$isfw iseaf=$iseaf flag=0x${flag.toString(16)}")
 
-                    if (isfw) {
-                        Log.i(TAG, "Found ToupTek filter wheel: VID=0x${vid.toString(16)} PID=0x${pid.toString(16)}")
-                        if (enableAccessories && !filterWheelController.isConnected.value) {
-                            pendingFilterWheelDevice = usbDev
-                            connectFilterWheel(usbDev)
+                    when (ToupTekDevices.classify(isfw, iseaf)) {
+                        ToupTekDevices.Kind.FILTER_WHEEL -> {
+                            Log.i(TAG, "Found ToupTek filter wheel: VID=0x${vid.toString(16)} PID=0x${pid.toString(16)}")
+                            if (enableAccessories && !filterWheelController.isConnected.value) {
+                                pendingFilterWheelDevice = usbDev
+                                connectFilterWheel(usbDev)
+                            }
                         }
-                    } else if (iseaf) {
-                        Log.i(TAG, "Found ToupTek EAF: VID=0x${vid.toString(16)} PID=0x${pid.toString(16)}")
-                        if (enableAccessories && !eafController.isConnected.value) {
-                            pendingEafDevice = usbDev
-                            connectEAF(usbDev)
+                        ToupTekDevices.Kind.FOCUSER -> {
+                            Log.i(TAG, "Found ToupTek EAF: VID=0x${vid.toString(16)} PID=0x${pid.toString(16)}")
+                            if (enableAccessories && !eafController.isConnected.value) {
+                                pendingEafDevice = usbDev
+                                connectEAF(usbDev)
+                            }
                         }
-                    } else if (modelName != null) {
-                        allDevices.add(DeviceEntry(
-                            index = allDevices.size,
-                            name = modelName,
-                            serialNumber = "TC-${vid.toString(16)}-${pid.toString(16)}-${usbDev.deviceId}",
-                            brand = CameraBrand.TOUPCAM,
-                            usbDevice = usbDev
-                        ))
-                        Log.i(TAG, "Found ToupTek camera: $modelName (flag=0x${flag.toString(16)})")
-                    } else {
-                        Log.w(TAG, "ToupTek VID but model unknown: PID=0x${pid.toString(16)}")
+                        ToupTekDevices.Kind.CAMERA -> {
+                            val displayName = ToupTekDevices.cameraDisplayName(modelName)
+                            allDevices.add(DeviceEntry(
+                                index = allDevices.size,
+                                name = displayName,
+                                serialNumber = "TC-${vid.toString(16)}-${pid.toString(16)}-${usbDev.deviceId}",
+                                brand = CameraBrand.TOUPCAM,
+                                usbDevice = usbDev
+                            ))
+                            Log.i(TAG, "Found ToupTek camera: $displayName (flag=0x${flag.toString(16)})")
+                        }
                     }
                 }
             }
@@ -584,6 +590,7 @@ class DahengCameraManager(
     private fun openToupcamDevice(usbDevice: UsbDevice) {
         try {
             val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
+            closeToupcamUsbConnection()
             val connection = usbManager.openDevice(usbDevice)
             if (connection == null) {
                 Log.e(TAG, "UsbManager.openDevice returned null for ${usbDevice.deviceName}")
@@ -600,6 +607,7 @@ class DahengCameraManager(
 
             val camera = ToupcamCamera()
             if (camera.open(fd, vid, pid, modelName)) {
+                toupcamUsbConnection = connection
                 activeCamera = camera
                 _connectionState.value = ConnectionState.Connected(camera.cameraInfo!!)
                 Log.i(TAG, "ToupTek camera connected: $modelName")
@@ -610,8 +618,14 @@ class DahengCameraManager(
             }
         } catch (e: Throwable) {
             Log.e(TAG, "openToupcamDevice failed: ${e.message}", e)
+            closeToupcamUsbConnection()
             _connectionState.value = ConnectionState.Error("ToupTek open failed: ${e.message}")
         }
+    }
+
+    private fun closeToupcamUsbConnection() {
+        try { toupcamUsbConnection?.close() } catch (_: Throwable) {}
+        toupcamUsbConnection = null
     }
 
     private var qhySdkInitialized = false
@@ -1071,6 +1085,7 @@ class DahengCameraManager(
     fun closeCamera() {
         activeCamera?.close()
         activeCamera = null
+        closeToupcamUsbConnection()
         closeQhyUsbConnection()
         closeZwoUsbConnection()
         _connectionState.value = ConnectionState.Disconnected

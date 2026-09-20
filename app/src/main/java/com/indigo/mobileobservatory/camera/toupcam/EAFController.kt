@@ -2,6 +2,7 @@ package com.indigo.mobileobservatory.camera.toupcam
 
 import android.content.Context
 import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbManager
 import android.util.Log
 import kotlinx.coroutines.*
@@ -46,6 +47,7 @@ class EAFController {
     private var pollingJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     @Volatile private var backlashPending = false
+    private var usbConnection: UsbDeviceConnection? = null
 
     fun open(context: Context, usbDevice: UsbDevice): Boolean {
         try {
@@ -64,6 +66,7 @@ class EAFController {
                 connection.close()
                 return false
             }
+            usbConnection = connection
 
             val modelName = ToupcamJni.getModelName(vid, pid) ?: "ToupTek EAF"
             var minPos = ToupcamJni.eafGet(ToupcamJni.AAF_RANGEMIN)
@@ -93,6 +96,8 @@ class EAFController {
             return true
         } catch (e: Throwable) {
             Log.e(TAG, "EAF open failed", e)
+            try { usbConnection?.close() } catch (_: Throwable) {}
+            usbConnection = null
             return false
         }
     }
@@ -109,6 +114,8 @@ class EAFController {
             _temperature.value = null
             Log.i(TAG, "EAF disconnected")
         }
+        try { usbConnection?.close() } catch (_: Throwable) {}
+        usbConnection = null
     }
 
     fun moveTo(position: Int) {
