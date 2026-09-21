@@ -45,6 +45,7 @@
     <string name="toggle_overlay">Toggle overlay</string>
     <string name="focus_assist">Focus assist</string>
     <string name="image_center_marker">Image center</string>
+    <string name="camera_preview_tools">Preview tools</string>
     <string name="video_library">Video library</string>
     <string name="plate_solve">Plate solve</string>
     <string name="plate_solve_image">Plate solve image</string>
@@ -432,6 +433,10 @@
     <string name="center_on_target">Center view</string>
     <string name="center_on_mount">Center on mount</string>
     <string name="star_map_fov">Field of view</string>
+    <string name="star_map_train_primary">Primary</string>
+    <string name="star_map_train_secondary">Guider</string>
+    <string name="star_map_fov_current">Current</string>
+    <string name="star_map_fov_target">Target</string>
     <string name="fov_simulator_title">Field of view simulator</string>
     <string name="fov_mode_eyepiece">Eyepiece</string>
     <string name="fov_mode_sensor">Camera / sensor</string>

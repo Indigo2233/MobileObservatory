@@ -47,6 +47,27 @@ object FovOverlayLayout {
         }
     }
 
+    data class ViewportPoint(val xPx: Double, val yPx: Double)
+
+    /**
+     * Map an angular offset from the view centre onto CSS pixels.
+     * [offsetRightDeg] is toward screen right; [offsetUpDeg] toward screen top.
+     * Uses the same linear degree mapping as [sensorBoxPixels].
+     */
+    fun centerOffsetPixels(
+        viewWidthPx: Double,
+        viewHeightPx: Double,
+        coreFovDeg: Double,
+        offsetRightDeg: Double,
+        offsetUpDeg: Double
+    ): ViewportPoint? {
+        val fovs = viewFovsDegrees(viewWidthPx, viewHeightPx, coreFovDeg) ?: return null
+        val x = viewWidthPx * 0.5 + viewWidthPx * (offsetRightDeg / fovs.horizontalDeg)
+        val y = viewHeightPx * 0.5 - viewHeightPx * (offsetUpDeg / fovs.verticalDeg)
+        if (!x.isFinite() || !y.isFinite()) return null
+        return ViewportPoint(x, y)
+    }
+
     /**
      * Pixel size of a rectangular sensor FOV drawn centered in the viewport.
      * Returns null when inputs cannot produce a finite positive box.

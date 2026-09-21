@@ -6,75 +6,94 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class StarMapFovOverlayTest {
+    private val circle = FovComputation(
+        mode = FovInstrumentMode.EYEPIECE,
+        circleDeg = 1.5
+    )
+    private val rect = FovComputation(
+        mode = FovInstrumentMode.SENSOR,
+        rectWidthDeg = 0.8,
+        rectHeightDeg = 0.5
+    )
+
     @Test
-    fun hiddenOverlayClearsBothLayers() {
+    fun hiddenOverlayClearsCurrentAndTarget() {
         val scripts = StarMapFovOverlay.scripts(
             showOverlay = false,
-            eyepieceFovDeg = 1.2,
-            sensorWidthDeg = 0.8,
-            sensorHeightDeg = 0.6,
+            computation = rect,
+            currentLabel = "导星 当前 0.80°×0.50°",
+            targetLabel = "导星 目标 0.80°×0.50°",
             alsoZoom = true,
-            zoomMode = FovInstrumentMode.SENSOR
+            targetAnchor = FovSkyAnchor(1.0, 2.0)
         )
         assertEquals(2, scripts.size)
-        assertTrue(scripts[0].contains("clearEyepieceFovOverlay"))
-        assertTrue(scripts[1].contains("clearSensorFovOverlay"))
+        assertTrue(scripts[0].contains("clearCurrentFovOverlay"))
+        assertTrue(scripts[1].contains("clearTargetFovOverlay"))
+        assertFalse(scripts.any { it.contains("setCurrent") })
+        assertFalse(scripts.any { it.contains("setTarget") && !it.contains("clearTarget") })
     }
 
     @Test
-    fun bothLayersArePushedAndOnlyTheActiveModeZooms() {
+    fun eyepieceTrainAlwaysPushesDashedTargetAtScreenCentre() {
         val scripts = StarMapFovOverlay.scripts(
             showOverlay = true,
-            eyepieceFovDeg = 1.5,
-            sensorWidthDeg = 0.8,
-            sensorHeightDeg = 0.5,
-            alsoZoom = true,
-            zoomMode = FovInstrumentMode.EYEPIECE
+            computation = circle,
+            currentLabel = "主镜 当前 1.50°",
+            targetLabel = "主镜 目标 1.50°",
+            alsoZoom = true
         )
-        assertTrue(scripts[0].contains("setEyepieceFovOverlay(1.50000000,true)"))
-        assertTrue(scripts[1].contains("setSensorFovOverlay(0.80000000,0.50000000,false)"))
+        assertTrue(scripts[0].contains("setCurrentCircleFovOverlay(1.50000000,true,\"主镜 当前 1.50°\")"))
+        assertTrue(scripts[1].contains("setTargetCircleFovOverlay(1.50000000,\"主镜 目标 1.50°\")"))
+        assertFalse(scripts[1].contains("clearTargetFovOverlay"))
+        assertFalse(scripts.any { it.contains("setCurrentRect") })
     }
 
     @Test
-    fun missingEyepieceClearsTheTelescopeCircle() {
+    fun sensorTrainKeepsDashedTargetCenteredAndCurrentOnMount() {
         val scripts = StarMapFovOverlay.scripts(
             showOverlay = true,
-            eyepieceFovDeg = null,
-            sensorWidthDeg = 1.0,
-            sensorHeightDeg = 0.7,
+            computation = rect,
+            currentLabel = "导星 当前 0.80°×0.50°",
+            targetLabel = "导星 目标 0.80°×0.50°",
             alsoZoom = false,
-            zoomMode = FovInstrumentMode.SENSOR
+            currentAnchor = FovSkyAnchor(5.0, 10.0, "JNOW")
         )
-        assertTrue(scripts[0].contains("clearEyepieceFovOverlay"))
-        assertTrue(scripts[1].contains("setSensorFovOverlay(1.00000000,0.70000000,false)"))
-        assertFalse(scripts[1].contains(",true)"))
+        assertTrue(
+            scripts[0].contains(
+                "setCurrentRectFovOverlay(0.80000000,0.50000000,false,\"导星 当前 0.80°×0.50°\",5.00000000,10.00000000,\"JNOW\")"
+            )
+        )
+        assertTrue(
+            scripts[1].contains(
+                "setTargetRectFovOverlay(0.80000000,0.50000000,\"导星 目标 0.80°×0.50°\")"
+            )
+        )
+        assertFalse(scripts[1].contains("12.00000000"))
+        assertFalse(scripts.any { it.contains("setCurrentCircle") })
     }
 
     @Test
-    fun sensorModeZoomsPreviewOnly() {
+    fun incompleteComputationClearsBothLayers() {
         val scripts = StarMapFovOverlay.scripts(
             showOverlay = true,
-            eyepieceFovDeg = 2.0,
-            sensorWidthDeg = 0.4,
-            sensorHeightDeg = 0.3,
-            alsoZoom = true,
-            zoomMode = FovInstrumentMode.SENSOR
+            computation = FovComputation(mode = FovInstrumentMode.SENSOR),
+            currentLabel = "",
+            targetLabel = "",
+            alsoZoom = true
         )
-        assertTrue(scripts[0].contains("setEyepieceFovOverlay(2.00000000,false)"))
-        assertTrue(scripts[1].contains("setSensorFovOverlay(0.40000000,0.30000000,true)"))
+        assertTrue(scripts[0].contains("clearCurrentFovOverlay"))
+        assertTrue(scripts[1].contains("clearTargetFovOverlay"))
     }
 
     @Test
-    fun missingSensorClearsThePreviewFrame() {
-        val scripts = StarMapFovOverlay.scripts(
-            showOverlay = true,
-            eyepieceFovDeg = 1.1,
-            sensorWidthDeg = null,
-            sensorHeightDeg = null,
-            alsoZoom = true,
-            zoomMode = FovInstrumentMode.SENSOR
+    fun overlayCaptionUsesTrainRoleAndShape() {
+        assertEquals(
+            "主镜 当前 1.50°",
+            StarMapFovOverlay.overlayCaption("主镜", "当前", circle)
         )
-        assertTrue(scripts[0].contains("setEyepieceFovOverlay(1.10000000,false)"))
-        assertTrue(scripts[1].contains("clearSensorFovOverlay"))
+        assertEquals(
+            "导星 目标 0.80°×0.50°",
+            StarMapFovOverlay.overlayCaption("导星", "目标", rect)
+        )
     }
 }

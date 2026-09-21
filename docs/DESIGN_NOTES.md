@@ -18,7 +18,7 @@
 | 按下期间 | 坐标轮询不得抢居中，否则一拖就弹回。 |
 | 需要看指向时 | 打开「跟随赤道仪指向」，或点「居中到赤道仪」。 |
 
-视场框是 CSS `position:fixed` 钉在屏幕正中，不是钉在天空坐标上。跟随曾被当成「框=望远镜」的默认，但会让找星无法完成。不跟随模式下框仍停在屏幕中央，这是已知限制（见 `TODO.md` 6c）。
+视场框按天空坐标投影：当前框跟赤道仪指向，目标黄虚线钉在屏幕中央构图。未接赤道仪时当前框也在屏幕中央。跟随曾被当成「框=望远镜」的默认，但会让找星无法完成。
 
 **代码：** `StarMapScreen.kt`（`followMount`、`onFollowMountChanged`）、`app/src/stellarium/assets/stellarium/app.js`（`followMount`、`userPointerActive`、`pauseFollowAfterUserPan`）
 
@@ -43,11 +43,23 @@
 
 ---
 
-- 预览 / 相机矩形：`#fov-frame`，黄色虚线。
-- 望远镜 / 目镜圆形：`#eyepiece-fov`，绿色实线。
-- 不要屏幕中心十字丝（`mount-reticle` 已去掉）。指向改用跟随或「居中到赤道仪」。
+## 星图：视场框样式
 
-**代码：** `stellarium/styles.css`、`app.js` 叠加层标签
+两条光路（主镜 / 导星），同一时刻只画**激活那一条**的视场。两框同一形状：绿实线 = 当前，黄虚线 = 目标。
+
+| 点 | 约定 |
+|---|---|
+| 光路 | 各有焦距 + 终端（目镜圆或相机矩），互不覆盖。默认显示**导星**。 |
+| 当前框 | `#fov-current`，绿实线。已连接赤道仪时钉在指向的 RA/Dec；未连接则钉屏幕中央。 |
+| 目标框 | `#fov-target`，黄虚线。只要开着视场叠加就一直显示，钉在屏幕中央（构图/GOTO 这块天）。不需要先点选天体。 |
+| 标签 | `主镜 当前 0.42°` / `导星 目标 1.20°×0.80°`，不再写「预览」「望远镜」。 |
+| 十字丝 | 不要屏幕中心十字丝（`mount-reticle` 已去掉）。指向改用跟随或「居中到赤道仪」。 |
+| 板解焦距 | 仅当**导星且为相机**时，在视场设置里改焦距才写 `plate_focal_length_mm`。主镜目视不改板解焦距。`persistFovPrefs()` 不得顺手覆盖该键。 |
+| 旧安装 | 现有 `star_map_*` 键迁到主镜。 |
+
+**代码：** `StarMapOpticsTrain.kt`、`StarMapFovOverlay.kt`、`StarMapFovSheet.kt`、`StarMapHud.kt`、`stellarium/styles.css`、`app.js` `projectRaDecToScreen`
+
+**回归：** `StarMapOpticsTrainTest`、`StarMapFovOverlayTest`、`FovOverlayLayoutTest.skyOffsetUsesTheSameLinearDegreeMappingAsTheBox`、`StarMapAssetsRegressionTest.overlayApiUsesCurrentAndTargetRoles`
 
 ---
 
@@ -112,7 +124,7 @@
 | 用户填的焦距 | 解算输入以用户当前值为准，不得用上一次解出的 525 mm 之类结果粘住下一次。 |
 | 解算后 | 可显示**实测焦距**（由 ″/px 反推），那是结果，不是下次输入。 |
 | 传感器目录 | 用画幅区分相近像元（如 IMX455 vs IMX571）。 |
-| 星图 | `persistFovPrefs()` 不得覆盖 `plate_focal_length_mm`；只有用户在星图里明确选了望远镜焦距才写入。 |
+| 星图 | `persistFovPrefs()` 不得覆盖 `plate_focal_length_mm`。只有在**导星且为相机**的视场设置里明确改焦距时才写入。 |
 
 **代码：** `PlateSolveOptics.kt`、`SolveOpticsFields.kt`、`OpticsEquipment.defaultSensors`、`FitsSolveHints.kt`、极轴页同一套光学栏
 
@@ -130,6 +142,23 @@
 **代码：** `DahengCameraManager.openToupcamDevice`、`ToupTekDevices`
 
 **回归：** `ObservingUiWiringTest.toupTekCameraKeepsTheUsbConnectionAlive`、`previewDownsampleIsDisplayOnly`、`PreviewScaleTest.typicalToupTekPreviewSizesStayFullResolution`、`ToupTekDevicesTest`
+
+---
+
+## 相机：预览浮层不要竖排堆按钮
+
+横屏预览高度不够把「适应、夜间、面板、叠加、对焦辅助、中心十字」六个 SmallFAB 竖排在右上角。最下面两颗会压住右下角对焦辅助窗。
+
+| 点 | 约定 |
+|---|---|
+| 常驻 | 仅面板开关（连着相机时）+ 一个「预览工具」菜单。左上只留暂停和 REC。 |
+| 菜单里 | 适应窗口、夜间红光、信息叠加、对焦辅助、图像中心、图像解析、文件浏览。 |
+| 对焦辅助打开时 | 自动收起菜单，避免挡住放大窗。 |
+| 对焦窗 | 约 220×160 dp，默认展开；需要时再收成分数条。 |
+
+**代码：** `CameraPreviewTools.kt`、`FocusAssistOverlay.kt`、`CameraScreen.kt`
+
+**回归：** `ObservingUiWiringTest.cameraPreviewChromeUsesOverflowMenuInsteadOfVerticalFabStack`
 
 ---
 

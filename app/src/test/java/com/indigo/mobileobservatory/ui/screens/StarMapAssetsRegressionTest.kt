@@ -15,27 +15,41 @@ class StarMapAssetsRegressionTest {
         assertFalse(css.contains("mount-reticle"))
         assertFalse(js.contains("applyMountReticle"))
         assertFalse(js.contains("mountReticle"))
-        assertTrue(html.contains("id=\"fov-frame\""))
-        assertTrue(html.contains("id=\"eyepiece-fov\""))
+        assertTrue(html.contains("id=\"fov-current\""))
+        assertTrue(html.contains("id=\"fov-target\""))
+        assertFalse(html.contains("fov-frame"))
+        assertFalse(html.contains("eyepiece-fov"))
     }
 
     @Test
-    fun telescopeFovIsSolidAndPreviewFovIsDashed() {
+    fun currentFovIsSolidAndTargetFovIsDashed() {
         val css = read("styles.css")
-        val fovFrame = cssBlock(css, "#fov-frame")
-        val eyepiece = cssBlock(css, "#eyepiece-fov")
-        assertTrue(fovFrame.contains("dashed"))
-        assertFalse(fovFrame.contains("solid"))
-        assertTrue(eyepiece.contains("solid"))
-        assertFalse(eyepiece.contains("dashed"))
-        assertTrue(eyepiece.contains("border-radius: 50%"))
+        val current = cssBlock(css, "#fov-current")
+        val target = cssBlock(css, "#fov-target")
+        assertTrue(current.contains("solid"))
+        assertFalse(current.contains("dashed"))
+        assertTrue(target.contains("dashed"))
+        assertFalse(target.contains("solid"))
+        assertTrue(css.contains("#fov-current.fov-circle"))
+        assertTrue(css.contains("#fov-target.fov-circle"))
     }
 
     @Test
-    fun overlayLabelsDistinguishTelescopeAndPreview() {
+    fun overlayApiUsesCurrentAndTargetRoles() {
         val js = read("app.js")
-        assertTrue(js.contains("\"预览 \""))
-        assertTrue(js.contains("\"望远镜 \""))
+        assertTrue(js.contains("setCurrentCircleFovOverlay:"))
+        assertTrue(js.contains("setCurrentRectFovOverlay:"))
+        assertTrue(js.contains("clearCurrentFovOverlay:"))
+        assertTrue(js.contains("setTargetCircleFovOverlay:"))
+        assertTrue(js.contains("setTargetRectFovOverlay:"))
+        assertTrue(js.contains("function projectRaDecToScreen("))
+        assertTrue(js.contains("convertFrame"))
+        assertTrue(js.contains("\"VIEW\""))
+        assertFalse(js.contains("setEyepieceFovOverlay"))
+        assertFalse(js.contains("setSensorFovOverlay"))
+        assertFalse(js.contains("\"预览 \""))
+        assertFalse(js.contains("\"望远镜 \""))
+        assertTrue(js.contains("spec.label"))
     }
 
     @Test

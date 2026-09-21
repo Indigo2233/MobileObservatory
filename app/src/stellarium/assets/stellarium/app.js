@@ -3,8 +3,8 @@
 
     const statusElement = document.getElementById("engine-status");
     const mountPositionElement = document.getElementById("mount-position");
-    const fovFrameElement = document.getElementById("fov-frame");
-    const eyepieceFovElement = document.getElementById("eyepiece-fov");
+    const fovCurrentElement = document.getElementById("fov-current");
+    const fovTargetElement = document.getElementById("fov-target");
     const canvas = document.getElementById("stel-canvas");
     let stel = null;
     let lastSelectionKey = "";
@@ -14,8 +14,8 @@
     let pendingOnlineSurveyEnabled = false;
     let onlineSurveyAdded = false;
     let pendingFovDegrees = null;
-    let pendingSensorFov = null;
-    let pendingEyepieceFovDeg = null;
+    let pendingCurrentFov = null;
+    let pendingTargetFov = null;
     let followMount = false;
     // While a finger/mouse is down, mount RA/Dec polls must not yank the view.
     let userPointerActive = false;
@@ -75,8 +75,8 @@
         );
         canvas.style.width = width + "px";
         canvas.style.height = height + "px";
-        applySensorFovOverlay(pendingSensorFov);
-        applyEyepieceFovOverlay(pendingEyepieceFovDeg);
+        applyFovOverlay(fovCurrentElement, pendingCurrentFov);
+        applyFovOverlay(fovTargetElement, pendingTargetFov);
     }
 
     function notifyAndroid(method, value) {
@@ -163,8 +163,8 @@
         pendingFovDegrees = Number(fovDegrees);
         // zoomTo animates; keep the overlay in sync on every engine tick via
         // refreshFovOverlaysFromEngine, and paint once with the target FOV now.
-        applySensorFovOverlay(pendingSensorFov);
-        applyEyepieceFovOverlay(pendingEyepieceFovDeg);
+        applyFovOverlay(fovCurrentElement, pendingCurrentFov);
+        applyFovOverlay(fovTargetElement, pendingTargetFov);
     }
 
     /**
@@ -199,76 +199,190 @@
         };
     }
 
-    function applySensorFovOverlay(sensorFov) {
-        if (!fovFrameElement) return;
-        if (!sensorFov || !(sensorFov.widthDeg > 0) || !(sensorFov.heightDeg > 0)) {
-            fovFrameElement.style.display = "none";
-            return;
-        }
+    function skyOffsetToPixels(offsetRightDeg, offsetUpDeg) {
         const viewW = Math.max(window.innerWidth || 1, 1);
         const viewH = Math.max(window.innerHeight || 1, 1);
         const coreFov = coreFovDegrees();
-        const fovs = coreFov != null ? viewFovsDegrees(viewW, viewH, coreFov) : null;
-        let boxW;
-        let boxH;
-        if (fovs) {
-            boxW = viewW * (sensorFov.widthDeg / fovs.horizontalDeg);
-            boxH = viewH * (sensorFov.heightDeg / fovs.verticalDeg);
-        } else {
-            // Engine not ready yet — keep a proportional placeholder.
-            const aspect = sensorFov.widthDeg / sensorFov.heightDeg;
-            boxW = viewW * 0.72;
-            boxH = boxW / aspect;
-            if (boxH > viewH * 0.72) {
-                boxH = viewH * 0.72;
-                boxW = boxH * aspect;
-            }
+        if (coreFov == null) {
+            return {x: viewW * 0.5, y: viewH * 0.5};
         }
-        boxW = Math.max(24, Math.min(boxW, viewW * 0.98));
-        boxH = Math.max(24, Math.min(boxH, viewH * 0.98));
-        fovFrameElement.style.width = boxW + "px";
-        fovFrameElement.style.height = boxH + "px";
-        fovFrameElement.style.borderRadius = "2px";
-        fovFrameElement.style.display = "block";
-        fovFrameElement.textContent =
-            "预览 " + sensorFov.widthDeg.toFixed(2) + "° × " + sensorFov.heightDeg.toFixed(2) + "°";
+        const fovs = viewFovsDegrees(viewW, viewH, coreFov);
+        if (!fovs) return {x: viewW * 0.5, y: viewH * 0.5};
+        return {
+            x: viewW * 0.5 + viewW * (offsetRightDeg / fovs.horizontalDeg),
+            y: viewH * 0.5 - viewH * (offsetUpDeg / fovs.verticalDeg)
+        };
     }
 
-    function applyEyepieceFovOverlay(fovDeg) {
-        if (!eyepieceFovElement) return;
-        if (fovDeg == null || !(fovDeg > 0)) {
-            eyepieceFovElement.style.display = "none";
+    function viewForwardSign(observer) {
+        if (!stel || !observer) return -1;
+        try {
+            const yaw = observer.yaw;
+            const pitch = observer.pitch;
+            if (yaw == null || pitch == null) return -1;
+            const look = stel.s2c(yaw, pitch);
+            const view = stel.convertFrame(observer, "OBSERVED", "VIEW", look);
+            if (!view) return -1;
+            return view[2] >= 0 ? 1 : -1;
+        } catch (_) {
+            return -1;
+        }
+    }
+
+    function projectRaDecToScreen(raHours, decDegrees, frame) {
+        if (!stel) return null;
+        const ra = Number(raHours) * Math.PI / 12;
+        const dec = Number(decDegrees) * stel.D2R;
+        if (!isFinite(ra) || !isFinite(dec)) return null;
+        const observer = (stel.core && stel.core.observer) || stel.observer;
+        if (!observer || typeof stel.convertFrame !== "function") return null;
+        const source = frame === "ICRF" ? "ICRF" : "JNOW";
+        let view;
+        try {
+            view = stel.convertFrame(observer, source, "VIEW", stel.s2c(ra, dec));
+        } catch (_) {
+            try {
+                view = stel.convertFrame(observer, source, "view", stel.s2c(ra, dec));
+            } catch (__) {
+                return null;
+            }
+        }
+        if (view && typeof view[0] !== "number" && typeof view.x === "number") {
+            view = [view.x, view.y, view.z];
+        }
+        if (!view) return null;
+        const depth = view[2] * viewForwardSign(observer);
+        if (!(depth > 1e-6)) return null;
+        const offsetRightDeg = Math.atan2(view[0], depth) * 180 / Math.PI;
+        const offsetUpDeg = Math.atan2(view[1], depth) * 180 / Math.PI;
+        return skyOffsetToPixels(offsetRightDeg, offsetUpDeg);
+    }
+
+    function overlayCenter(spec) {
+        const viewW = Math.max(window.innerWidth || 1, 1);
+        const viewH = Math.max(window.innerHeight || 1, 1);
+        if (spec.raHours == null || spec.decDegrees == null ||
+            !isFinite(spec.raHours) || !isFinite(spec.decDegrees)) {
+            return {x: viewW * 0.5, y: viewH * 0.5};
+        }
+        return projectRaDecToScreen(spec.raHours, spec.decDegrees, spec.frame);
+    }
+
+    function parseAnchor(raHours, decDegrees, frame) {
+        if (raHours == null || raHours === "" || decDegrees == null || decDegrees === "") {
+            return {raHours: null, decDegrees: null, frame: "JNOW"};
+        }
+        return {
+            raHours: Number(raHours),
+            decDegrees: Number(decDegrees),
+            frame: frame || "JNOW"
+        };
+    }
+
+    function applyFovOverlay(element, spec) {
+        if (!element) return;
+        if (!spec) {
+            element.style.display = "none";
             return;
         }
         const viewW = Math.max(window.innerWidth || 1, 1);
         const viewH = Math.max(window.innerHeight || 1, 1);
         const coreFov = coreFovDegrees();
-        let diameter;
-        if (coreFov != null && coreFov > 0) {
-            diameter = Math.min(viewW, viewH) * (Number(fovDeg) / coreFov);
+        element.classList.toggle("fov-circle", spec.shape === "circle");
+        element.classList.toggle("fov-rect", spec.shape === "rect");
+        let boxW;
+        let boxH;
+        if (spec.shape === "circle") {
+            const fovDeg = Number(spec.circleDeg);
+            if (!(fovDeg > 0)) {
+                element.style.display = "none";
+                return;
+            }
+            let diameter;
+            if (coreFov != null && coreFov > 0) {
+                diameter = Math.min(viewW, viewH) * (fovDeg / coreFov);
+            } else {
+                diameter = Math.min(viewW, viewH) * 0.72;
+            }
+            diameter = Math.max(24, Math.min(diameter, Math.min(viewW, viewH) * 0.98));
+            boxW = diameter;
+            boxH = diameter;
         } else {
-            diameter = Math.min(viewW, viewH) * 0.72;
+            const widthDeg = Number(spec.widthDeg);
+            const heightDeg = Number(spec.heightDeg);
+            if (!(widthDeg > 0) || !(heightDeg > 0)) {
+                element.style.display = "none";
+                return;
+            }
+            const fovs = coreFov != null ? viewFovsDegrees(viewW, viewH, coreFov) : null;
+            if (fovs) {
+                boxW = viewW * (widthDeg / fovs.horizontalDeg);
+                boxH = viewH * (heightDeg / fovs.verticalDeg);
+            } else {
+                const aspect = widthDeg / heightDeg;
+                boxW = viewW * 0.72;
+                boxH = boxW / aspect;
+                if (boxH > viewH * 0.72) {
+                    boxH = viewH * 0.72;
+                    boxW = boxH * aspect;
+                }
+            }
+            boxW = Math.max(24, Math.min(boxW, viewW * 0.98));
+            boxH = Math.max(24, Math.min(boxH, viewH * 0.98));
         }
-        diameter = Math.max(24, Math.min(diameter, Math.min(viewW, viewH) * 0.98));
-        eyepieceFovElement.style.width = diameter + "px";
-        eyepieceFovElement.style.height = diameter + "px";
-        eyepieceFovElement.style.display = "block";
-        eyepieceFovElement.textContent = "望远镜 " + Number(fovDeg).toFixed(2) + "°";
+        const pos = overlayCenter(spec);
+        if (!pos) {
+            element.style.display = "none";
+            return;
+        }
+        element.style.width = boxW + "px";
+        element.style.height = boxH + "px";
+        element.style.left = pos.x + "px";
+        element.style.top = pos.y + "px";
+        element.style.display = "block";
+        element.textContent = spec.label || "";
+    }
+
+    function zoomToCurrentFov() {
+        if (!pendingCurrentFov) return;
+        if (pendingCurrentFov.shape === "circle" && pendingCurrentFov.circleDeg > 0) {
+            applyFovDegrees(pendingCurrentFov.circleDeg * 1.05, 1);
+            return;
+        }
+        if (pendingCurrentFov.shape === "rect") {
+            const maxDim = Math.max(pendingCurrentFov.widthDeg, pendingCurrentFov.heightDeg);
+            if (maxDim > 0) applyFovDegrees(maxDim * 1.35, 1);
+        }
     }
 
     let lastOverlayFovKey = "";
+    function fovSpecKey(spec) {
+        if (!spec) return "";
+        const shape = spec.shape === "circle"
+            ? "c" + spec.circleDeg
+            : "r" + spec.widthDeg + "x" + spec.heightDeg;
+        const ra = spec.raHours != null ? spec.raHours : "";
+        const dec = spec.decDegrees != null ? spec.decDegrees : "";
+        return shape + "@" + ra + "," + dec + "," + (spec.frame || "");
+    }
     function refreshFovOverlaysFromEngine() {
         const coreFov = coreFovDegrees();
+        const observer = stel && ((stel.core && stel.core.observer) || stel.observer);
+        const yaw = observer && observer.yaw;
+        const pitch = observer && observer.pitch;
         const key = String(coreFov) + "|" +
-            (pendingSensorFov
-                ? pendingSensorFov.widthDeg + "x" + pendingSensorFov.heightDeg
-                : "") + "|" +
-            (pendingEyepieceFovDeg != null ? pendingEyepieceFovDeg : "");
-        if (key === lastOverlayFovKey) return;
+            (yaw != null ? Number(yaw).toFixed(5) : "") + "|" +
+            (pitch != null ? Number(pitch).toFixed(5) : "") + "|" +
+            fovSpecKey(pendingCurrentFov) + "|" +
+            fovSpecKey(pendingTargetFov);
+        const hasSkyAnchor =
+            (pendingCurrentFov && pendingCurrentFov.raHours != null) ||
+            (pendingTargetFov && pendingTargetFov.raHours != null);
+        if (key === lastOverlayFovKey && !(hasSkyAnchor && yaw == null)) return;
         lastOverlayFovKey = key;
         if (coreFov != null) pendingFovDegrees = coreFov;
-        applySensorFovOverlay(pendingSensorFov);
-        applyEyepieceFovOverlay(pendingEyepieceFovDeg);
+        applyFovOverlay(fovCurrentElement, pendingCurrentFov);
+        applyFovOverlay(fovTargetElement, pendingTargetFov);
     }
 
     function pauseFollowAfterUserPan() {
@@ -574,33 +688,71 @@
         setFovDegrees: function (fovDegrees, duration) {
             applyFovDegrees(Number(fovDegrees), duration);
         },
-        setEyepieceFovOverlay: function (fovDegrees, alsoZoom) {
-            pendingEyepieceFovDeg = Number(fovDegrees);
-            if (alsoZoom) {
-                applyFovDegrees(pendingEyepieceFovDeg * 1.05, 1);
-            } else {
-                applyEyepieceFovOverlay(pendingEyepieceFovDeg);
-            }
-        },
-        clearEyepieceFovOverlay: function () {
-            pendingEyepieceFovDeg = null;
-            applyEyepieceFovOverlay(null);
-        },
-        setSensorFovOverlay: function (widthDeg, heightDeg, alsoZoom) {
-            pendingSensorFov = {
-                widthDeg: Number(widthDeg),
-                heightDeg: Number(heightDeg)
+        setCurrentCircleFovOverlay: function (fovDegrees, alsoZoom, label, raHours, decDegrees, frame) {
+            const anchor = parseAnchor(raHours, decDegrees, frame);
+            pendingCurrentFov = {
+                shape: "circle",
+                circleDeg: Number(fovDegrees),
+                label: label || "",
+                raHours: anchor.raHours,
+                decDegrees: anchor.decDegrees,
+                frame: anchor.frame
             };
-            if (alsoZoom !== false) {
-                const maxDim = Math.max(pendingSensorFov.widthDeg, pendingSensorFov.heightDeg);
-                applyFovDegrees(maxDim * 1.35, 1);
+            if (alsoZoom) {
+                zoomToCurrentFov();
             } else {
-                applySensorFovOverlay(pendingSensorFov);
+                applyFovOverlay(fovCurrentElement, pendingCurrentFov);
             }
         },
-        clearSensorFovOverlay: function () {
-            pendingSensorFov = null;
-            applySensorFovOverlay(null);
+        setCurrentRectFovOverlay: function (widthDeg, heightDeg, alsoZoom, label, raHours, decDegrees, frame) {
+            const anchor = parseAnchor(raHours, decDegrees, frame);
+            pendingCurrentFov = {
+                shape: "rect",
+                widthDeg: Number(widthDeg),
+                heightDeg: Number(heightDeg),
+                label: label || "",
+                raHours: anchor.raHours,
+                decDegrees: anchor.decDegrees,
+                frame: anchor.frame
+            };
+            if (alsoZoom) {
+                zoomToCurrentFov();
+            } else {
+                applyFovOverlay(fovCurrentElement, pendingCurrentFov);
+            }
+        },
+        clearCurrentFovOverlay: function () {
+            pendingCurrentFov = null;
+            applyFovOverlay(fovCurrentElement, null);
+        },
+        setTargetCircleFovOverlay: function (fovDegrees, label, raHours, decDegrees, frame) {
+            const anchor = parseAnchor(raHours, decDegrees, frame);
+            pendingTargetFov = {
+                shape: "circle",
+                circleDeg: Number(fovDegrees),
+                label: label || "",
+                raHours: anchor.raHours,
+                decDegrees: anchor.decDegrees,
+                frame: anchor.frame
+            };
+            applyFovOverlay(fovTargetElement, pendingTargetFov);
+        },
+        setTargetRectFovOverlay: function (widthDeg, heightDeg, label, raHours, decDegrees, frame) {
+            const anchor = parseAnchor(raHours, decDegrees, frame);
+            pendingTargetFov = {
+                shape: "rect",
+                widthDeg: Number(widthDeg),
+                heightDeg: Number(heightDeg),
+                label: label || "",
+                raHours: anchor.raHours,
+                decDegrees: anchor.decDegrees,
+                frame: anchor.frame
+            };
+            applyFovOverlay(fovTargetElement, pendingTargetFov);
+        },
+        clearTargetFovOverlay: function () {
+            pendingTargetFov = null;
+            applyFovOverlay(fovTargetElement, null);
         }
     };
 
@@ -637,8 +789,8 @@
                 applySkyAppearance();
                 applyOnlineSurveyEnabled(pendingOnlineSurveyEnabled);
                 applyFovDegrees(pendingFovDegrees, 0);
-                applySensorFovOverlay(pendingSensorFov);
-                applyEyepieceFovOverlay(pendingEyepieceFovDeg);
+                applyFovOverlay(fovCurrentElement, pendingCurrentFov);
+                applyFovOverlay(fovTargetElement, pendingTargetFov);
                 engine.change(function () {
                     window.requestAnimationFrame(function () {
                         publishSelection();

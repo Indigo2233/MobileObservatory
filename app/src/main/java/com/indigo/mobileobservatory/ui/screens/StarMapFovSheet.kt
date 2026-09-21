@@ -33,41 +33,27 @@ import com.indigo.mobileobservatory.astro.EyepieceSpec
 import com.indigo.mobileobservatory.astro.FovComputation
 import com.indigo.mobileobservatory.astro.FovInstrumentMode
 import com.indigo.mobileobservatory.astro.OpticsEquipment
+import com.indigo.mobileobservatory.astro.OpticsTrainConfig
+import com.indigo.mobileobservatory.astro.OpticsTrainId
 import com.indigo.mobileobservatory.astro.SensorSpec
 import com.indigo.mobileobservatory.astro.TelescopeSpec
 
 /**
- * Stellarium Plus–style FOV simulator: pick telescope + eyepiece/sensor;
- * the star map keeps showing behind the sheet so overlays update live.
+ * Stellarium Plus–style FOV simulator: pick telescope + eyepiece/sensor
+ * for the selected optical train. The sky map stays visible behind the sheet.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun StarMapFovSheet(
-    mode: FovInstrumentMode,
+    editingTrain: OpticsTrainId,
+    config: OpticsTrainConfig,
     telescopes: List<TelescopeSpec>,
     eyepieces: List<EyepieceSpec>,
     sensors: List<SensorSpec>,
-    selectedTelescopeId: String,
-    selectedEyepieceId: String,
-    selectedSensorId: String,
-    customTelescopeFl: String,
-    customEyepieceFl: String,
-    customEyepieceAfov: String,
-    customSensorPixelUm: String,
-    customSensorWidth: String,
-    customSensorHeight: String,
     showOverlay: Boolean,
     computation: FovComputation?,
-    onModeChange: (FovInstrumentMode) -> Unit,
-    onTelescopeSelected: (String) -> Unit,
-    onEyepieceSelected: (String) -> Unit,
-    onSensorSelected: (String) -> Unit,
-    onCustomTelescopeFl: (String) -> Unit,
-    onCustomEyepieceFl: (String) -> Unit,
-    onCustomEyepieceAfov: (String) -> Unit,
-    onCustomSensorPixelUm: (String) -> Unit,
-    onCustomSensorWidth: (String) -> Unit,
-    onCustomSensorHeight: (String) -> Unit,
+    onEditingTrainChange: (OpticsTrainId) -> Unit,
+    onConfigChange: (OpticsTrainConfig) -> Unit,
     onShowOverlayChange: (Boolean) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -92,13 +78,26 @@ fun StarMapFovSheet(
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(
-                    selected = mode == FovInstrumentMode.EYEPIECE,
-                    onClick = { onModeChange(FovInstrumentMode.EYEPIECE) },
+                    selected = editingTrain == OpticsTrainId.PRIMARY,
+                    onClick = { onEditingTrainChange(OpticsTrainId.PRIMARY) },
+                    label = { Text(stringResource(R.string.star_map_train_primary)) }
+                )
+                FilterChip(
+                    selected = editingTrain == OpticsTrainId.SECONDARY,
+                    onClick = { onEditingTrainChange(OpticsTrainId.SECONDARY) },
+                    label = { Text(stringResource(R.string.star_map_train_secondary)) }
+                )
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = config.mode == FovInstrumentMode.EYEPIECE,
+                    onClick = { onConfigChange(config.copy(mode = FovInstrumentMode.EYEPIECE)) },
                     label = { Text(stringResource(R.string.fov_mode_eyepiece)) }
                 )
                 FilterChip(
-                    selected = mode == FovInstrumentMode.SENSOR,
-                    onClick = { onModeChange(FovInstrumentMode.SENSOR) },
+                    selected = config.mode == FovInstrumentMode.SENSOR,
+                    onClick = { onConfigChange(config.copy(mode = FovInstrumentMode.SENSOR)) },
                     label = { Text(stringResource(R.string.fov_mode_sensor)) }
                 )
             }
@@ -110,16 +109,16 @@ fun StarMapFovSheet(
             ChipRow {
                 telescopes.forEach { scope ->
                     FilterChip(
-                        selected = selectedTelescopeId == scope.id,
-                        onClick = { onTelescopeSelected(scope.id) },
+                        selected = config.telescopeId == scope.id,
+                        onClick = { onConfigChange(config.copy(telescopeId = scope.id)) },
                         label = { Text(scope.name) }
                     )
                 }
             }
-            if (selectedTelescopeId == "scope_custom") {
+            if (config.telescopeId == "scope_custom") {
                 OutlinedTextField(
-                    value = customTelescopeFl,
-                    onValueChange = onCustomTelescopeFl,
+                    value = config.customTelescopeFl,
+                    onValueChange = { onConfigChange(config.copy(customTelescopeFl = it)) },
                     label = { Text(stringResource(R.string.focal_length_mm)) },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
@@ -127,7 +126,7 @@ fun StarMapFovSheet(
                 )
             }
 
-            when (mode) {
+            when (config.mode) {
                 FovInstrumentMode.EYEPIECE -> {
                     Text(
                         stringResource(R.string.fov_eyepiece),
@@ -136,24 +135,24 @@ fun StarMapFovSheet(
                     ChipRow {
                         eyepieces.forEach { ep ->
                             FilterChip(
-                                selected = selectedEyepieceId == ep.id,
-                                onClick = { onEyepieceSelected(ep.id) },
+                                selected = config.eyepieceId == ep.id,
+                                onClick = { onConfigChange(config.copy(eyepieceId = ep.id)) },
                                 label = { Text(ep.name) }
                             )
                         }
                     }
-                    if (selectedEyepieceId == "ep_custom") {
+                    if (config.eyepieceId == "ep_custom") {
                         OutlinedTextField(
-                            value = customEyepieceFl,
-                            onValueChange = onCustomEyepieceFl,
+                            value = config.customEyepieceFl,
+                            onValueChange = { onConfigChange(config.copy(customEyepieceFl = it)) },
                             label = { Text(stringResource(R.string.eyepiece_focal_length_mm)) },
                             singleLine = true,
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                             modifier = Modifier.fillMaxWidth()
                         )
                         OutlinedTextField(
-                            value = customEyepieceAfov,
-                            onValueChange = onCustomEyepieceAfov,
+                            value = config.customEyepieceAfov,
+                            onValueChange = { onConfigChange(config.copy(customEyepieceAfov = it)) },
                             label = { Text(stringResource(R.string.eyepiece_apparent_fov)) },
                             singleLine = true,
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
@@ -170,16 +169,16 @@ fun StarMapFovSheet(
                     ChipRow {
                         sensors.forEach { sensor ->
                             FilterChip(
-                                selected = selectedSensorId == sensor.id,
-                                onClick = { onSensorSelected(sensor.id) },
+                                selected = config.sensorId == sensor.id,
+                                onClick = { onConfigChange(config.copy(sensorId = sensor.id)) },
                                 label = { Text(sensor.name) }
                             )
                         }
                     }
-                    if (selectedSensorId == OpticsEquipment.CUSTOM_SENSOR_ID) {
+                    if (config.sensorId == OpticsEquipment.CUSTOM_SENSOR_ID) {
                         OutlinedTextField(
-                            value = customSensorPixelUm,
-                            onValueChange = onCustomSensorPixelUm,
+                            value = config.customSensorPixelUm,
+                            onValueChange = { onConfigChange(config.copy(customSensorPixelUm = it)) },
                             label = { Text(stringResource(R.string.sensor_pixel_size_um)) },
                             singleLine = true,
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
@@ -187,16 +186,16 @@ fun StarMapFovSheet(
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedTextField(
-                                value = customSensorWidth,
-                                onValueChange = onCustomSensorWidth,
+                                value = config.customSensorWidth,
+                                onValueChange = { onConfigChange(config.copy(customSensorWidth = it)) },
                                 label = { Text(stringResource(R.string.sensor_width_px)) },
                                 singleLine = true,
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                 modifier = Modifier.weight(1f)
                             )
                             OutlinedTextField(
-                                value = customSensorHeight,
-                                onValueChange = onCustomSensorHeight,
+                                value = config.customSensorHeight,
+                                onValueChange = { onConfigChange(config.copy(customSensorHeight = it)) },
                                 label = { Text(stringResource(R.string.sensor_height_px)) },
                                 singleLine = true,
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -273,45 +272,4 @@ private fun LiveFovSummary(computation: FovComputation?) {
             MaterialTheme.colorScheme.outline
         }
     )
-}
-
-internal fun resolveTelescopeFl(
-    telescopes: List<TelescopeSpec>,
-    selectedId: String,
-    customFl: String
-): Double? {
-    val selected = telescopes.firstOrNull { it.id == selectedId } ?: return null
-    return if (selected.id == "scope_custom") {
-        customFl.toDoubleOrNull()
-    } else {
-        selected.focalLengthMm
-    }
-}
-
-internal fun resolveEyepiece(
-    eyepieces: List<EyepieceSpec>,
-    selectedId: String,
-    customFl: String,
-    customAfov: String
-): EyepieceSpec? {
-    val selected = eyepieces.firstOrNull { it.id == selectedId } ?: return null
-    if (selected.id != "ep_custom") return selected
-    val fl = customFl.toDoubleOrNull() ?: return null
-    val afov = customAfov.toDoubleOrNull() ?: return null
-    return selected.copy(focalLengthMm = fl, apparentFovDeg = afov)
-}
-
-internal fun resolveSensor(
-    sensors: List<SensorSpec>,
-    selectedId: String,
-    customPixelUm: String,
-    customWidth: String,
-    customHeight: String
-): SensorSpec? {
-    val selected = sensors.firstOrNull { it.id == selectedId } ?: return null
-    if (selected.id != OpticsEquipment.CUSTOM_SENSOR_ID) return selected
-    val px = customPixelUm.toDoubleOrNull() ?: return null
-    val w = customWidth.toIntOrNull() ?: return null
-    val h = customHeight.toIntOrNull() ?: return null
-    return selected.copy(pixelSizeUm = px, widthPx = w, heightPx = h)
 }

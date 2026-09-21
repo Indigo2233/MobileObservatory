@@ -497,28 +497,6 @@ fun CameraScreen(
                                     )
                                 }
                             }
-
-                            SmallFloatingActionButton(
-                                onClick = { showPlateSolve = true },
-                                containerColor = MaterialTheme.colorScheme.surfaceVariant
-                            ) {
-                                Icon(
-                                    Icons.Default.Search,
-                                    stringResource(R.string.plate_solve),
-                                    tint = MaterialTheme.colorScheme.onSurface
-                                )
-                            }
-
-                            SmallFloatingActionButton(
-                                onClick = { viewModel.openPlayer() },
-                                containerColor = MaterialTheme.colorScheme.surfaceVariant
-                            ) {
-                                Icon(
-                                    Icons.Default.VideoLibrary,
-                                    stringResource(R.string.video_library),
-                                    tint = MaterialTheme.colorScheme.onSurface
-                                )
-                            }
                         }
 
                         if (statusMessage.isNotEmpty()) {
@@ -623,82 +601,23 @@ fun CameraScreen(
                     }
                 }
 
-                // View and interface controls remain at the top-right.
-                Column(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    if (connectionState is ConnectionState.Connected) {
-                        SmallFloatingActionButton(
-                            onClick = { viewResetTrigger++ },
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant
-                        ) {
-                            Icon(
-                                Icons.Default.FitScreen,
-                                stringResource(R.string.fit_to_view),
-                                tint = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                    }
-                    SmallFloatingActionButton(
-                        onClick = { onRedNightModeChange(!redNightMode) },
-                        containerColor = if (redNightMode) MaterialTheme.colorScheme.primaryContainer
-                        else MaterialTheme.colorScheme.surfaceVariant
-                    ) {
-                        Icon(
-                            if (redNightMode) Icons.Default.Nightlight else Icons.Default.NightlightRound,
-                            stringResource(R.string.red_night_mode),
-                            tint = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-                    if (connectionState is ConnectionState.Connected) {
-                        SmallFloatingActionButton(
-                            onClick = { showPanel = !showPanel },
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant
-                        ) {
-                            Icon(
-                                if (showPanel) Icons.Default.ChevronRight else Icons.Default.ChevronLeft,
-                                stringResource(R.string.toggle_panel),
-                                tint = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                        SmallFloatingActionButton(
-                            onClick = { showOverlayPanel = !showOverlayPanel },
-                            containerColor = if (showOverlayPanel) MaterialTheme.colorScheme.primaryContainer
-                            else MaterialTheme.colorScheme.surfaceVariant
-                        ) {
-                            Icon(
-                                if (showOverlayPanel) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                                stringResource(R.string.toggle_overlay),
-                                tint = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                        SmallFloatingActionButton(
-                            onClick = { viewModel.toggleFocusAssist() },
-                            containerColor = if (focusAssistEnabled) MaterialTheme.colorScheme.primaryContainer
-                            else MaterialTheme.colorScheme.surfaceVariant
-                        ) {
-                            Icon(
-                                Icons.Default.CenterFocusWeak,
-                                stringResource(R.string.focus_assist),
-                                tint = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                        SmallFloatingActionButton(
-                            onClick = { showCenterMarker = !showCenterMarker },
-                            containerColor = if (showCenterMarker) MaterialTheme.colorScheme.primaryContainer
-                            else MaterialTheme.colorScheme.surfaceVariant
-                        ) {
-                            Icon(
-                                Icons.Default.FilterCenterFocus,
-                                stringResource(R.string.image_center_marker),
-                                tint = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                    }
-                }
+                CameraPreviewTools(
+                    connected = connectionState is ConnectionState.Connected,
+                    redNightMode = redNightMode,
+                    showPanel = showPanel,
+                    showOverlayPanel = showOverlayPanel,
+                    focusAssistEnabled = focusAssistEnabled,
+                    showCenterMarker = showCenterMarker,
+                    onFitToView = { viewResetTrigger++ },
+                    onRedNightModeChange = onRedNightModeChange,
+                    onTogglePanel = { showPanel = !showPanel },
+                    onToggleOverlay = { showOverlayPanel = !showOverlayPanel },
+                    onToggleFocusAssist = { viewModel.toggleFocusAssist() },
+                    onToggleCenterMarker = { showCenterMarker = !showCenterMarker },
+                    onPlateSolve = { showPlateSolve = true },
+                    onOpenLibrary = { viewModel.openPlayer() },
+                    modifier = Modifier.align(Alignment.TopEnd)
+                )
 
             }
 

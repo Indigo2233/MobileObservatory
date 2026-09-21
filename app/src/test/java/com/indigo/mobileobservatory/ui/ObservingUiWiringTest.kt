@@ -25,22 +25,75 @@ class ObservingUiWiringTest {
         val camera = read(
             "src/main/java/com/indigo/mobileobservatory/ui/screens/CameraScreen.kt"
         )
+        val tools = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/components/CameraPreviewTools.kt"
+        )
         val transformIndex = preview.indexOf("withTransform")
         val markerIndex = preview.indexOf("if (showCenterMarker)")
         assertTrue(transformIndex >= 0)
         assertTrue(markerIndex > transformIndex)
         assertTrue(camera.contains("showCenterMarker = showCenterMarker"))
-        assertTrue(camera.contains("R.string.image_center_marker"))
+        assertTrue(tools.contains("R.string.image_center_marker"))
     }
 
     @Test
-    fun starMapPushesBothFovLayersTogether() {
+    fun cameraPreviewChromeUsesOverflowMenuInsteadOfVerticalFabStack() {
+        val camera = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/CameraScreen.kt"
+        )
+        val tools = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/components/CameraPreviewTools.kt"
+        )
+        val focus = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/components/FocusAssistOverlay.kt"
+        )
+        assertTrue(camera.contains("CameraPreviewTools("))
+        assertTrue(camera.contains(".align(Alignment.BottomEnd)"))
+        assertTrue(tools.contains("R.string.camera_preview_tools"))
+        assertTrue(tools.contains("Icons.Default.MoreVert"))
+        assertTrue(tools.contains("R.string.focus_assist"))
+        assertTrue(tools.contains("R.string.image_center_marker"))
+        assertTrue(tools.contains("R.string.plate_solve"))
+        assertTrue(tools.contains("if (focusAssistEnabled) menuOpen = false"))
+        assertTrue(focus.contains(".width(220.dp)"))
+        assertTrue(focus.contains(".height(160.dp)"))
+    }
+
+    @Test
+    fun starMapPushesOnlyTheActiveTrainOverlay() {
         val starMap = read(
             "src/main/java/com/indigo/mobileobservatory/ui/screens/StarMapScreen.kt"
         )
         assertTrue(starMap.contains("StarMapFovOverlay.scripts"))
-        assertTrue(starMap.contains("eyepieceFovDeg = eyepieceComputation?.circleDeg"))
-        assertTrue(starMap.contains("sensorWidthDeg = sensorComputation?.rectWidthDeg"))
+        assertTrue(starMap.contains("computation = activeComputation"))
+        assertTrue(starMap.contains("currentLabel = overlayCurrentLabel"))
+        assertTrue(starMap.contains("targetLabel = overlayTargetLabel"))
+        assertTrue(starMap.contains("currentAnchor = currentAnchor"))
+        assertTrue(!starMap.contains("targetAnchor = targetAnchor"))
+        assertTrue(starMap.contains("FovSkyAnchor("))
+        assertTrue(!starMap.contains("eyepieceFovDeg = eyepieceComputation"))
+        assertTrue(!starMap.contains("sensorWidthDeg = sensorComputation"))
+    }
+
+    @Test
+    fun starMapOpticsTrainsAreSwitchedFromTheObservingPanel() {
+        val hud = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/StarMapHud.kt"
+        )
+        val sheet = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/StarMapFovSheet.kt"
+        )
+        val camera = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/StarMapScreen.kt"
+        )
+        assertTrue(hud.contains("R.string.star_map_train_primary"))
+        assertTrue(hud.contains("R.string.star_map_train_secondary"))
+        assertTrue(hud.contains("onActiveTrainChange"))
+        assertTrue(sheet.contains("onEditingTrainChange"))
+        assertTrue(sheet.contains("R.string.star_map_train_primary"))
+        assertTrue(camera.contains("maybeWritePlateFocalLength("))
+        assertTrue(camera.contains("StarMapOpticsPrefs.loadPrimary"))
+        assertTrue(camera.contains("star_map_secondary_fov_mode"))
     }
 
     @Test
@@ -137,8 +190,9 @@ class ObservingUiWiringTest {
         assertTrue(
             !persist.substring(persistStart, persistEnd).contains("plate_focal_length_mm")
         )
-        assertTrue(persist.contains("onTelescopeSelected"))
+        assertTrue(persist.contains("maybeWritePlateFocalLength("))
         assertTrue(persist.contains("persistImagingFocalLength("))
+        assertTrue(persist.contains("StarMapOpticsPrefs.shouldWritePlateFocalLength"))
     }
 
     @Test

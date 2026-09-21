@@ -47,7 +47,7 @@ fun FocusAssistOverlay(
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var expanded by rememberSaveable { mutableStateOf(false) }
+    var expanded by rememberSaveable { mutableStateOf(true) }
 
     if (!expanded) {
         CompactFocusBar(
@@ -140,7 +140,7 @@ private fun FocusZoomWindow(
     val shape = RoundedCornerShape(6.dp)
     Column(
         modifier = Modifier
-            .width(168.dp)
+            .width(220.dp)
             .clip(shape)
             .background(Color(0xCC000000))
             .border(1.5.dp, Color(0xAAFFFFFF), shape)
@@ -212,7 +212,7 @@ private fun FocusZoomWindow(
             Canvas(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(120.dp)
+                    .height(160.dp)
             ) {
                 drawImage(
                     image = imageBitmap,
@@ -226,7 +226,7 @@ private fun FocusZoomWindow(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(120.dp),
+                    .height(160.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Text(stringResource(R.string.no_preview), color = Color(0x88FFFFFF), fontSize = 10.sp)
@@ -243,8 +243,8 @@ private fun FocusCurve(
     val shape = RoundedCornerShape(6.dp)
     Box(
         modifier = Modifier
-            .width(168.dp)
-            .height(48.dp)
+            .width(220.dp)
+            .height(56.dp)
             .clip(shape)
             .background(Color(0xCC000000))
             .border(1.5.dp, Color(0xAA666666), shape)

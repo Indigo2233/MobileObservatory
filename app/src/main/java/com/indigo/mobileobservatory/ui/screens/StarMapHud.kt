@@ -41,6 +41,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.indigo.mobileobservatory.R
+import com.indigo.mobileobservatory.astro.OpticsTrainId
 import com.indigo.mobileobservatory.mount.MountDirection
 import com.indigo.mobileobservatory.mount.MountSlewRate
 
@@ -60,6 +61,7 @@ internal fun StarMapCornerControls(
     moveEnabled: Boolean,
     mountSlewRate: MountSlewRate,
     followMount: Boolean,
+    activeTrain: OpticsTrainId,
     showFovOverlay: Boolean,
     equatorialGrid: Boolean,
     azimuthalGrid: Boolean,
@@ -81,6 +83,7 @@ internal fun StarMapCornerControls(
     onConfirmHome: () -> Unit,
     onFollowMountChange: (Boolean) -> Unit,
     onCenterOnMount: () -> Unit,
+    onActiveTrainChange: (OpticsTrainId) -> Unit,
     onOpenFov: () -> Unit,
     onShowFovOverlayChange: (Boolean) -> Unit,
     onEquatorialGridChange: (Boolean) -> Unit,
@@ -212,6 +215,21 @@ internal fun StarMapCornerControls(
                         modifier = Modifier.fillMaxWidth().height(36.dp)
                     ) {
                         Text(stringResource(R.string.center_on_mount), fontSize = 12.sp)
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilterChip(
+                            selected = activeTrain == OpticsTrainId.PRIMARY,
+                            onClick = { onActiveTrainChange(OpticsTrainId.PRIMARY) },
+                            label = { Text(stringResource(R.string.star_map_train_primary)) }
+                        )
+                        FilterChip(
+                            selected = activeTrain == OpticsTrainId.SECONDARY,
+                            onClick = { onActiveTrainChange(OpticsTrainId.SECONDARY) },
+                            label = { Text(stringResource(R.string.star_map_train_secondary)) }
+                        )
                     }
                     StarMapFlagSwitch(
                         label = stringResource(R.string.fov_show_overlay),

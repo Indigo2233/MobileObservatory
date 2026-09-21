@@ -41,8 +41,8 @@ body {
     display: none;
 }
 
-#fov-frame,
-#eyepiece-fov {
+#fov-current,
+#fov-target {
     position: fixed;
     left: 50%;
     top: 50%;
@@ -58,15 +58,24 @@ body {
     box-sizing: border-box;
 }
 
-#fov-frame {
+#fov-current {
+    border: 2px solid rgba(80, 220, 160, 0.95);
+    background: rgba(80, 220, 160, 0.04);
+    color: rgba(180, 255, 220, 0.95);
+}
+
+#fov-target {
     border: 2px dashed rgba(255, 196, 72, 0.95);
     background: rgba(255, 196, 72, 0.05);
     color: rgba(255, 220, 140, 0.95);
 }
 
-#eyepiece-fov {
-    border: 2px solid rgba(80, 220, 160, 0.95);
-    background: rgba(80, 220, 160, 0.04);
+#fov-current.fov-circle,
+#fov-target.fov-circle {
     border-radius: 50%;
-    color: rgba(180, 255, 220, 0.95);
+}
+
+#fov-current.fov-rect,
+#fov-target.fov-rect {
+    border-radius: 2px;
 }

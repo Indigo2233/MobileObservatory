@@ -101,4 +101,25 @@ class FovOverlayLayoutTest {
         assertEquals(1600.0 * (3.0 / fovs.horizontalDeg), box.widthPx, 1e-6)
         assertTrue(abs(fovs.horizontalDeg - 45.0) > 1.0)
     }
+
+    @Test
+    fun skyOffsetUsesTheSameLinearDegreeMappingAsTheBox() {
+        val point = FovOverlayLayout.centerOffsetPixels(
+            viewWidthPx = 1000.0,
+            viewHeightPx = 1000.0,
+            coreFovDeg = 40.0,
+            offsetRightDeg = 10.0,
+            offsetUpDeg = 5.0
+        )!!
+        // Square view, core FOV 40° on both axes. +10° right → 250 px right of centre.
+        assertEquals(750.0, point.xPx, 1e-6)
+        assertEquals(375.0, point.yPx, 1e-6)
+    }
+
+    @Test
+    fun viewCentreOffsetStaysAtViewportCentre() {
+        val point = FovOverlayLayout.centerOffsetPixels(1920.0, 1080.0, 60.0, 0.0, 0.0)!!
+        assertEquals(960.0, point.xPx, 1e-9)
+        assertEquals(540.0, point.yPx, 1e-9)
+    }
 }

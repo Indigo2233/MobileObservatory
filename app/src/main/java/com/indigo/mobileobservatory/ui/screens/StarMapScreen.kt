@@ -66,8 +66,14 @@ import androidx.core.view.doOnLayout
 import androidx.webkit.WebViewAssetLoader
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.astro.FovInstrumentMode
-import com.indigo.mobileobservatory.astro.StarMapFovOverlay
+import com.indigo.mobileobservatory.astro.FovSkyAnchor
 import com.indigo.mobileobservatory.astro.OpticsEquipment
+import com.indigo.mobileobservatory.astro.OpticsPrefReader
+import com.indigo.mobileobservatory.astro.OpticsTrainConfig
+import com.indigo.mobileobservatory.astro.OpticsTrainId
+import com.indigo.mobileobservatory.astro.StarMapFovOverlay
+import com.indigo.mobileobservatory.astro.StarMapOpticsPrefs
+import com.indigo.mobileobservatory.astro.resolveTelescopeFl
 import com.indigo.mobileobservatory.catalog.AssetDeepSkyCatalog
 import com.indigo.mobileobservatory.catalog.CatalogObject
 import com.indigo.mobileobservatory.mount.MountCoordinates
@@ -230,52 +236,6 @@ fun StarMapScreen(
     var followMount by remember {
         mutableStateOf(prefs.getBoolean("star_map_follow_mount", false))
     }
-    var fovMode by remember {
-        mutableStateOf(
-            if (prefs.getString("star_map_fov_mode", "SENSOR") == "EYEPIECE") {
-                FovInstrumentMode.EYEPIECE
-            } else {
-                FovInstrumentMode.SENSOR
-            }
-        )
-    }
-    var selectedTelescopeId by remember {
-        mutableStateOf(prefs.getString("star_map_telescope_id", "scope_80_500") ?: "scope_80_500")
-    }
-    var selectedEyepieceId by remember {
-        mutableStateOf(prefs.getString("star_map_eyepiece_id", "ep_25_50") ?: "ep_25_50")
-    }
-    var selectedSensorId by remember {
-        mutableStateOf(
-            prefs.getString("star_map_sensor_id", OpticsEquipment.CONNECTED_SENSOR_ID)
-                ?: OpticsEquipment.CONNECTED_SENSOR_ID
-        )
-    }
-    var customTelescopeFl by remember {
-        mutableStateOf(
-            prefs.getFloat("plate_focal_length_mm", 500f).takeIf { it > 0f }?.let {
-                "%.1f".format(Locale.US, it)
-            } ?: (prefs.getString("star_map_custom_scope_fl", "500") ?: "500")
-        )
-    }
-    var customEyepieceFl by remember {
-        mutableStateOf(prefs.getString("star_map_custom_ep_fl", "25") ?: "25")
-    }
-    var customEyepieceAfov by remember {
-        mutableStateOf(prefs.getString("star_map_custom_ep_afov", "50") ?: "50")
-    }
-    var customSensorPixelUm by remember {
-        mutableStateOf(prefs.getString("star_map_custom_sensor_um", "3.75") ?: "3.75")
-    }
-    var customSensorWidth by remember {
-        mutableStateOf(prefs.getString("star_map_custom_sensor_w", "1920") ?: "1920")
-    }
-    var customSensorHeight by remember {
-        mutableStateOf(prefs.getString("star_map_custom_sensor_h", "1080") ?: "1080")
-    }
-    var showFovOverlay by remember {
-        mutableStateOf(prefs.getBoolean("star_map_show_fov_overlay", true))
-    }
     var equatorialGrid by remember {
         mutableStateOf(prefs.getBoolean("star_map_equatorial_grid", false))
     }
@@ -324,54 +284,71 @@ fun StarMapScreen(
             addAll(OpticsEquipment.defaultSensors)
         }
     }
-    LaunchedEffect(sensors, selectedSensorId) {
-        if (sensors.none { it.id == selectedSensorId }) {
-            selectedSensorId = sensors.firstOrNull()?.id
-                ?: OpticsEquipment.defaultSensors.first().id
-        }
+    val opticsPrefs = remember { SharedOpticsPrefs(prefs) }
+    var primaryTrain by remember {
+        mutableStateOf(StarMapOpticsPrefs.loadPrimary(opticsPrefs))
     }
-
-    val telescopeFl = remember(selectedTelescopeId, customTelescopeFl, telescopes) {
-        resolveTelescopeFl(telescopes, selectedTelescopeId, customTelescopeFl)
-    }
-    val activeEyepiece = remember(
-        selectedEyepieceId,
-        customEyepieceFl,
-        customEyepieceAfov,
-        eyepieces
-    ) {
-        resolveEyepiece(eyepieces, selectedEyepieceId, customEyepieceFl, customEyepieceAfov)
-    }
-    val activeSensor = remember(
-        selectedSensorId,
-        customSensorPixelUm,
-        customSensorWidth,
-        customSensorHeight,
-        sensors
-    ) {
-        resolveSensor(
-            sensors,
-            selectedSensorId,
-            customSensorPixelUm,
-            customSensorWidth,
-            customSensorHeight
+    var secondaryTrain by remember {
+        mutableStateOf(
+            StarMapOpticsPrefs.loadSecondary(
+                opticsPrefs,
+                hasConnectedCamera = connectedSensor != null
+            )
         )
     }
-    val eyepieceComputation = remember(telescopeFl, activeEyepiece) {
-        val fl = telescopeFl ?: return@remember null
-        val ep = activeEyepiece ?: return@remember null
-        OpticsEquipment.computeEyepiece(fl, ep)
+    var activeTrain by remember {
+        mutableStateOf(StarMapOpticsPrefs.loadActive(opticsPrefs))
     }
-    val sensorComputation = remember(telescopeFl, activeSensor) {
-        val fl = telescopeFl ?: return@remember null
-        val sensor = activeSensor ?: return@remember null
-        OpticsEquipment.computeSensor(fl, sensor)
+    var editingTrain by remember { mutableStateOf(activeTrain) }
+    var showFovOverlay by remember {
+        mutableStateOf(prefs.getBoolean(StarMapOpticsPrefs.SHOW_OVERLAY, true))
     }
-    val fovComputation = remember(fovMode, eyepieceComputation, sensorComputation) {
-        when (fovMode) {
-            FovInstrumentMode.EYEPIECE -> eyepieceComputation
-            FovInstrumentMode.SENSOR -> sensorComputation
+    LaunchedEffect(connectedSensor) {
+        if (!prefs.contains("star_map_secondary_fov_mode")) {
+            secondaryTrain = StarMapOpticsPrefs.defaultSecondary(
+                hasConnectedCamera = connectedSensor != null,
+                plateFocalLengthMm = prefs.getFloat("plate_focal_length_mm", 0f).takeIf { it > 0f }
+            )
         }
+    }
+    LaunchedEffect(sensors, primaryTrain.sensorId, secondaryTrain.sensorId, primaryTrain.mode, secondaryTrain.mode) {
+        fun fallback(train: OpticsTrainConfig) =
+            if (
+                train.mode == FovInstrumentMode.SENSOR &&
+                train.sensorId != OpticsEquipment.CONNECTED_SENSOR_ID &&
+                sensors.none { it.id == train.sensorId }
+            ) {
+                train.copy(
+                    sensorId = sensors.firstOrNull()?.id
+                        ?: OpticsEquipment.defaultSensors.first().id
+                )
+            } else {
+                train
+            }
+        val nextPrimary = fallback(primaryTrain)
+        val nextSecondary = fallback(secondaryTrain)
+        if (nextPrimary != primaryTrain) primaryTrain = nextPrimary
+        if (nextSecondary != secondaryTrain) secondaryTrain = nextSecondary
+    }
+
+    val activeConfig = if (activeTrain == OpticsTrainId.PRIMARY) primaryTrain else secondaryTrain
+    val editingConfig = if (editingTrain == OpticsTrainId.PRIMARY) primaryTrain else secondaryTrain
+    val activeComputation = remember(activeConfig, sensors) {
+        activeConfig.compute(telescopes, eyepieces, sensors)
+    }
+    val editingComputation = remember(editingConfig, sensors) {
+        editingConfig.compute(telescopes, eyepieces, sensors)
+    }
+    val trainPrimaryLabel = stringResource(R.string.star_map_train_primary)
+    val trainSecondaryLabel = stringResource(R.string.star_map_train_secondary)
+    val fovCurrentWord = stringResource(R.string.star_map_fov_current)
+    val fovTargetWord = stringResource(R.string.star_map_fov_target)
+    val trainName = if (activeTrain == OpticsTrainId.PRIMARY) trainPrimaryLabel else trainSecondaryLabel
+    val overlayCurrentLabel = remember(trainName, fovCurrentWord, activeComputation) {
+        StarMapFovOverlay.overlayCaption(trainName, fovCurrentWord, activeComputation)
+    }
+    val overlayTargetLabel = remember(trainName, fovTargetWord, activeComputation) {
+        StarMapFovOverlay.overlayCaption(trainName, fovTargetWord, activeComputation)
     }
 
     fun evalStarMap(script: String) {
@@ -379,23 +356,18 @@ fun StarMapScreen(
     }
 
     fun persistFovPrefs() {
-        prefs.edit()
+        val optics = StarMapOpticsPrefs.snapshot(
+            primaryTrain,
+            secondaryTrain,
+            activeTrain,
+            showFovOverlay
+        )
+        val editor = prefs.edit()
             .putBoolean("star_map_follow_mount", followMount)
             .putBoolean(HipsTileCache.PREFS_ONLINE_DSS, onlineDssEnabled)
-            .putString(
-                "star_map_fov_mode",
-                if (fovMode == FovInstrumentMode.EYEPIECE) "EYEPIECE" else "SENSOR"
-            )
-            .putString("star_map_telescope_id", selectedTelescopeId)
-            .putString("star_map_eyepiece_id", selectedEyepieceId)
-            .putString("star_map_sensor_id", selectedSensorId)
-            .putString("star_map_custom_scope_fl", customTelescopeFl)
-            .putString("star_map_custom_ep_fl", customEyepieceFl)
-            .putString("star_map_custom_ep_afov", customEyepieceAfov)
-            .putString("star_map_custom_sensor_um", customSensorPixelUm)
-            .putString("star_map_custom_sensor_w", customSensorWidth)
-            .putString("star_map_custom_sensor_h", customSensorHeight)
-            .putBoolean("star_map_show_fov_overlay", showFovOverlay)
+        optics.strings.forEach { (key, value) -> editor.putString(key, value) }
+        optics.bools.forEach { (key, value) -> editor.putBoolean(key, value) }
+        editor
             .putBoolean("star_map_equatorial_grid", equatorialGrid)
             .putBoolean("star_map_azimuthal_grid", azimuthalGrid)
             .putBoolean("star_map_meridian", meridianLine)
@@ -421,6 +393,13 @@ fun StarMapScreen(
         }
     }
 
+    fun maybeWritePlateFocalLength(train: OpticsTrainConfig) {
+        if (!StarMapOpticsPrefs.shouldWritePlateFocalLength(train.id, train.mode)) return
+        persistImagingFocalLength(
+            resolveTelescopeFl(telescopes, train.telescopeId, train.customTelescopeFl)
+        )
+    }
+
     fun setOnlineDssEnabled(enabled: Boolean) {
         onlineDssEnabled = enabled
         prefs.edit().putBoolean(HipsTileCache.PREFS_ONLINE_DSS, enabled).apply()
@@ -435,13 +414,18 @@ fun StarMapScreen(
     }
 
     fun applyFovOverlays(alsoZoom: Boolean) {
+        val currentAnchor = if (mountConnected) {
+            mountCoordinates?.let { FovSkyAnchor(it.raHours, it.decDeg, "JNOW") }
+        } else {
+            null
+        }
         StarMapFovOverlay.scripts(
             showOverlay = showFovOverlay,
-            eyepieceFovDeg = eyepieceComputation?.circleDeg,
-            sensorWidthDeg = sensorComputation?.rectWidthDeg,
-            sensorHeightDeg = sensorComputation?.rectHeightDeg,
+            computation = activeComputation,
+            currentLabel = overlayCurrentLabel,
+            targetLabel = overlayTargetLabel,
             alsoZoom = alsoZoom,
-            zoomMode = fovMode
+            currentAnchor = currentAnchor
         ).forEach(::evalStarMap)
     }
 
@@ -625,19 +609,13 @@ fun StarMapScreen(
         engineState,
         followMount,
         showFovOverlay,
-        eyepieceComputation,
-        sensorComputation,
-        fovComputation,
-        fovMode,
-        selectedTelescopeId,
-        selectedEyepieceId,
-        selectedSensorId,
-        customTelescopeFl,
-        customEyepieceFl,
-        customEyepieceAfov,
-        customSensorPixelUm,
-        customSensorWidth,
-        customSensorHeight,
+        activeTrain,
+        primaryTrain,
+        secondaryTrain,
+        overlayCurrentLabel,
+        overlayTargetLabel,
+        mountCoordinates,
+        mountConnected,
         cameraPixelSizeUm,
         cameraFrameWidthPx,
         cameraFrameHeightPx
@@ -648,7 +626,7 @@ fun StarMapScreen(
         )
         // Zoom once when the sheet is open so the frame fills the view; otherwise
         // only redraw overlays so pan/zoom the user already set stays put.
-        applyFovOverlays(alsoZoom = fovDialogVisible)
+        applyFovOverlays(alsoZoom = fovDialogVisible && editingTrain == activeTrain)
     }
 
     LaunchedEffect(
@@ -911,6 +889,7 @@ fun StarMapScreen(
                 moveEnabled = moveEnabled,
                 mountSlewRate = mountSlewRate,
                 followMount = followMount,
+                activeTrain = activeTrain,
                 showFovOverlay = showFovOverlay,
                 equatorialGrid = equatorialGrid,
                 azimuthalGrid = azimuthalGrid,
@@ -932,7 +911,13 @@ fun StarMapScreen(
                 onConfirmHome = { confirmHome = true },
                 onFollowMountChange = ::setFollowMountEnabled,
                 onCenterOnMount = ::centerOnMount,
+                onActiveTrainChange = {
+                    activeTrain = it
+                    persistFovPrefs()
+                    applyFovOverlays(alsoZoom = fovDialogVisible)
+                },
                 onOpenFov = {
+                    editingTrain = activeTrain
                     fovDialogVisible = true
                     overlaysVisible = true
                 },
@@ -1244,66 +1229,23 @@ fun StarMapScreen(
 
     if (fovDialogVisible) {
         StarMapFovSheet(
-            mode = fovMode,
+            editingTrain = editingTrain,
+            config = editingConfig,
             telescopes = telescopes,
             eyepieces = eyepieces,
             sensors = sensors,
-            selectedTelescopeId = selectedTelescopeId,
-            selectedEyepieceId = selectedEyepieceId,
-            selectedSensorId = selectedSensorId,
-            customTelescopeFl = customTelescopeFl,
-            customEyepieceFl = customEyepieceFl,
-            customEyepieceAfov = customEyepieceAfov,
-            customSensorPixelUm = customSensorPixelUm,
-            customSensorWidth = customSensorWidth,
-            customSensorHeight = customSensorHeight,
             showOverlay = showFovOverlay,
-            computation = fovComputation,
-            onModeChange = {
-                fovMode = it
+            computation = editingComputation,
+            onEditingTrainChange = { editingTrain = it },
+            onConfigChange = { updated ->
+                if (updated.id == OpticsTrainId.PRIMARY) {
+                    primaryTrain = updated
+                } else {
+                    secondaryTrain = updated
+                }
                 showFovOverlay = true
                 persistFovPrefs()
-            },
-            onTelescopeSelected = {
-                selectedTelescopeId = it
-                showFovOverlay = true
-                persistFovPrefs()
-                persistImagingFocalLength(resolveTelescopeFl(telescopes, it, customTelescopeFl))
-            },
-            onEyepieceSelected = {
-                selectedEyepieceId = it
-                showFovOverlay = true
-                persistFovPrefs()
-            },
-            onSensorSelected = {
-                selectedSensorId = it
-                showFovOverlay = true
-                persistFovPrefs()
-            },
-            onCustomTelescopeFl = {
-                customTelescopeFl = it
-                persistFovPrefs()
-                persistImagingFocalLength(resolveTelescopeFl(telescopes, selectedTelescopeId, it))
-            },
-            onCustomEyepieceFl = {
-                customEyepieceFl = it
-                persistFovPrefs()
-            },
-            onCustomEyepieceAfov = {
-                customEyepieceAfov = it
-                persistFovPrefs()
-            },
-            onCustomSensorPixelUm = {
-                customSensorPixelUm = it
-                persistFovPrefs()
-            },
-            onCustomSensorWidth = {
-                customSensorWidth = it
-                persistFovPrefs()
-            },
-            onCustomSensorHeight = {
-                customSensorHeight = it
-                persistFovPrefs()
+                maybeWritePlateFocalLength(updated)
             },
             onShowOverlayChange = {
                 showFovOverlay = it
@@ -1360,4 +1302,13 @@ internal fun StarMapMountDirectionButton(
             Text(label, style = MaterialTheme.typography.titleMedium)
         }
     }
+}
+
+private class SharedOpticsPrefs(
+    private val prefs: android.content.SharedPreferences
+) : OpticsPrefReader {
+    override fun getString(key: String, default: String?): String? = prefs.getString(key, default)
+    override fun getBoolean(key: String, default: Boolean): Boolean = prefs.getBoolean(key, default)
+    override fun getFloat(key: String, default: Float): Float = prefs.getFloat(key, default)
+    override fun contains(key: String): Boolean = prefs.contains(key)
 }

@@ -13,6 +13,7 @@
 | [`PHONE_WIDE_FIELD_SOLVER_IMPLEMENTATION.md`](PHONE_WIDE_FIELD_SOLVER_IMPLEMENTATION.md) | `[~]` | 持久化索引、陀螺提示、相对跟踪、实拍 P6 |
 | [`wanderer-support-plan.md`](wanderer-support-plan.md) | `[~]` Phase 1 代码已有 | 旋转器真机；Cover / 雪花轮 / Box 未做 |
 | [`OASIS_ACCESSORY_INTEGRATION_PLAN.md`](OASIS_ACCESSORY_INTEGRATION_PLAN.md) | `[~]` USB HID 已接入 | 一代电调焦、两款滤镜轮真机；BLE 不做 |
+| [`STAR_MAP_DUAL_FOV_PLAN.md`](STAR_MAP_DUAL_FOV_PLAN.md) | `[x]` M1a + 目标虚线投影 | 目镜预设库；偏轴导星偏移 |
 
 ## 代码已落地、待真机
 
@@ -34,7 +35,7 @@
 
 | 文档 | 内容 |
 |---|---|
-| [`DESIGN_NOTES.md`](DESIGN_NOTES.md) | 已拍板的交互与协议决策（星图跟随、STOP、零位、EQ/地平、板解光学） |
+| [`DESIGN_NOTES.md`](DESIGN_NOTES.md) | 已拍板的交互与协议决策（星图跟随、STOP、零位、EQ/地平、板解光学、相机预览浮层） |
 
 ## 发布与质量
 

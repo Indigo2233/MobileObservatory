@@ -45,6 +45,7 @@
     <string name="toggle_overlay">信息叠加</string>
     <string name="focus_assist">对焦辅助</string>
     <string name="image_center_marker">图像中心</string>
+    <string name="camera_preview_tools">预览工具</string>
     <string name="video_library">文件浏览</string>
     <string name="no_camera_connected">未连接相机</string>
     <string name="connect_camera_hint">通过 USB OTG 连接相机</string>
@@ -432,6 +433,10 @@
     <string name="center_on_target">视场居中</string>
     <string name="center_on_mount">居中到赤道仪</string>
     <string name="star_map_fov">视场设置</string>
+    <string name="star_map_train_primary">主镜</string>
+    <string name="star_map_train_secondary">导星</string>
+    <string name="star_map_fov_current">当前</string>
+    <string name="star_map_fov_target">目标</string>
     <string name="fov_simulator_title">视场模拟</string>
     <string name="fov_mode_eyepiece">目镜</string>
     <string name="fov_mode_sensor">相机 / 传感器</string>
