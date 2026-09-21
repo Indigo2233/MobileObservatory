@@ -40,7 +40,9 @@ class LocalizationResourcesTest {
             "sensor_custom",
             "home",
             "go_home",
-            "set_home"
+            "set_home",
+            "precision_goto_tolerance",
+            "precision_goto_warning"
         )
 
         coreKeys.forEach { key ->

@@ -33,8 +33,19 @@ data class PrecisionGotoProgress(
 }
 
 object PrecisionGotoMath {
-    const val TOLERANCE_ARCMIN = 2.0
+    const val TOLERANCE_ARCMIN = 6.0
+    const val MIN_TOLERANCE_ARCMIN = 1.0
+    const val MAX_TOLERANCE_ARCMIN = 30.0
     const val MAX_ITERATIONS = 5
+    const val PREFS_TOLERANCE_ARCMIN = "star_map_precision_tolerance_arcmin"
+
+    fun clampToleranceArcmin(value: Double): Double =
+        value.coerceIn(MIN_TOLERANCE_ARCMIN, MAX_TOLERANCE_ARCMIN)
+
+    fun withinTolerance(
+        errorArcmin: Double,
+        toleranceArcmin: Double = TOLERANCE_ARCMIN
+    ): Boolean = errorArcmin <= clampToleranceArcmin(toleranceArcmin)
 
     fun degreesToArcmin(degrees: Double): Double = degrees * 60.0
 

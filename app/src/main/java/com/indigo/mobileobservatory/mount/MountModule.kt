@@ -678,6 +678,7 @@ class MountModule(
             return false
         }
         val target = MountCoordinates(raHours = raHours, decDeg = decDeg)
+        val stopArcmin = PrecisionGotoMath.clampToleranceArcmin(toleranceArcmin)
         val started = motionRunner.start(
             state = MountMotionState(MountMotionType.GOTO, "Precision GOTO $name"),
             onError = { error ->
@@ -745,7 +746,20 @@ class MountModule(
                         message = "Sky error %.1f′ (pass $iteration/$maxIterations)"
                             .format(java.util.Locale.US, errorArcmin)
                     )
-                    if (errorArcmin <= toleranceArcmin) {
+                    if (PrecisionGotoMath.withinTolerance(errorArcmin, stopArcmin)) {
+                        if (controller.supportsSync) {
+                            publishPrecisionProgress(
+                                phase = PrecisionGotoPhase.SYNCING,
+                                name = name,
+                                iteration = iteration,
+                                maxIterations = maxIterations,
+                                errorArcmin = errorArcmin,
+                                solved = solved,
+                                message = "Syncing mount to solved sky"
+                            )
+                            controller.syncTo(solved)
+                            refreshMountCoordinatesAfterCommand()
+                        }
                         publishPrecisionProgress(
                             phase = PrecisionGotoPhase.SUCCEEDED,
                             name = name,
@@ -764,7 +778,7 @@ class MountModule(
                     if (iteration == maxIterations) {
                         error(
                             "Precision GOTO did not converge below %.0f′ (last %.1f′)."
-                                .format(java.util.Locale.US, toleranceArcmin, errorArcmin)
+                                .format(java.util.Locale.US, stopArcmin, errorArcmin)
                         )
                     }
 

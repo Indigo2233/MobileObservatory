@@ -402,7 +402,8 @@ Dob 是地平式且纯手动，这带来若干与赤道仪完全不同的性质�
 **进度**
 
 - [x] `DemoCatalog` + `TargetLibraryScreen` 壳（搜索 / 选目标进推镜）
-- [ ] OpenNGC 打包、VisibilityRanker、Stellarium 视场回读
+- [x] 目标库复用星图的 `AssetDeepSkyCatalog`
+- [ ] VisibilityRanker、Stellarium 视场回读
 
 **涉及模块**：`catalog/DeepSkyCatalog.kt`、`catalog/VisibilityRanker.kt`、`app.js`
 

@@ -27,6 +27,8 @@ import com.indigo.mobileobservatory.mount.MountSlewRate
 import com.indigo.mobileobservatory.mount.MountProtocolType
 import com.indigo.mobileobservatory.mount.MountTransportType
 import com.indigo.mobileobservatory.mount.SkyWatcherMountMode
+import com.indigo.mobileobservatory.astro.EquatorialEpoch
+import com.indigo.mobileobservatory.mount.PrecisionGotoMath
 import com.indigo.mobileobservatory.mount.PrecisionGotoProgress
 import com.indigo.mobileobservatory.ui.components.RecordLimit
 import com.indigo.mobileobservatory.ui.components.RecordLimitType
@@ -819,12 +821,33 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun readMountSite() = mountModule.readMountSite()
     fun syncPhoneSiteToMount(latitudeDeg: Double, longitudeDeg: Double) =
         mountModule.syncPhoneSiteToMount(latitudeDeg, longitudeDeg)
-    fun gotoMountTarget(name: String, raHours: Double, decDeg: Double) =
-        mountModule.gotoMountTarget(name, raHours, decDeg)
-    fun syncMountToTarget(name: String, raHours: Double, decDeg: Double) =
-        mountModule.syncMountToTarget(name, raHours, decDeg)
+    fun gotoMountTarget(
+        name: String,
+        raHours: Double,
+        decDeg: Double,
+        frame: String = "JNOW"
+    ) {
+        val (jnowRa, jnowDec) = EquatorialEpoch.toJnowHours(raHours, decDeg, frame)
+        mountModule.gotoMountTarget(name, jnowRa, jnowDec)
+    }
 
-    fun startPrecisionGoto(name: String, raHours: Double, decDeg: Double): Boolean {
+    fun syncMountToTarget(
+        name: String,
+        raHours: Double,
+        decDeg: Double,
+        frame: String = "JNOW"
+    ) {
+        val (jnowRa, jnowDec) = EquatorialEpoch.toJnowHours(raHours, decDeg, frame)
+        mountModule.syncMountToTarget(name, jnowRa, jnowDec)
+    }
+
+    fun startPrecisionGoto(
+        name: String,
+        raHours: Double,
+        decDeg: Double,
+        frame: String = "JNOW",
+        toleranceArcmin: Double = PrecisionGotoMath.TOLERANCE_ARCMIN
+    ): Boolean {
         if (connectionState.value !is ConnectionState.Connected) {
             _statusMessage.value = app.getString(R.string.precision_goto_need_camera)
             return false
@@ -833,10 +856,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             _statusMessage.value = app.getString(R.string.precision_goto_need_d50)
             return false
         }
+        val (jnowRa, jnowDec) = EquatorialEpoch.toJnowHours(raHours, decDeg, frame)
         return mountModule.startPrecisionGoto(
             name = name,
-            raHours = raHours,
-            decDeg = decDeg,
+            raHours = jnowRa,
+            decDeg = jnowDec,
+            toleranceArcmin = PrecisionGotoMath.clampToleranceArcmin(toleranceArcmin),
             captureAndSolve = { hint -> captureAndSolveForPrecisionGoto(hint) }
         )
     }
@@ -858,7 +883,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
         val raDeg = result.raDeg ?: error(app.getString(R.string.plate_solve_failed))
         val decDeg = result.decDeg ?: error(app.getString(R.string.plate_solve_failed))
-        return MountCoordinates(raHours = raDeg / 15.0, decDeg = decDeg)
+        val (jnowRa, jnowDec) = EquatorialEpoch.j2000DegToJnowHours(raDeg, decDeg)
+        return MountCoordinates(raHours = jnowRa, decDeg = jnowDec)
     }
     fun moveMountRaBy(distanceDeg: Double, east: Boolean, rateDegPerSec: Double) =
         mountModule.moveMountRaBy(distanceDeg, east, rateDegPerSec)

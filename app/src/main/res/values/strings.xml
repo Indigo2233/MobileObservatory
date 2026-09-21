@@ -419,8 +419,9 @@
     <string name="goto_label">GOTO</string>
     <string name="precision_goto_label">Point &amp; center</string>
     <string name="confirm_precision_goto">Confirm point &amp; center</string>
-    <string name="precision_goto_warning">GOTO, plate-solve, sync, and re-GOTO until sky error is within 2′. Requires a connected camera and ASTAP D20 or D50 database. Use STOP to abort.</string>
+    <string name="precision_goto_warning">GOTO, plate-solve, sync, and re-GOTO until sky error is within %1$.1f′. Requires a connected camera and ASTAP D20 or D50 database. Use STOP to abort.</string>
     <string name="execute_precision_goto">Start point &amp; center</string>
+    <string name="precision_goto_tolerance">Point &amp; center stop error (′)</string>
     <string name="precision_goto_need_camera">Connect the imaging camera before point &amp; center.</string>
     <string name="precision_goto_need_d50">Install an ASTAP D20 or D50 plate-solve database first (Plate solve screen).</string>
     <string name="precision_goto_no_frame">No fresh camera frame for plate solve.</string>
@@ -684,7 +685,7 @@
     <string name="push_to_lens_other">Rear camera</string>
 
     <string name="target_library_title">Target library</string>
-    <string name="target_library_shell_banner">Demo catalog (10 objects). OpenNGC + tonight ranking land in M7.</string>
+    <string name="target_library_shell_banner">Same deep-sky catalog as the star map. Search Messier, NGC, IC, or a common name.</string>
     <string name="target_library_search">Search</string>
     <string name="target_library_guide">Guide</string>
     <string name="target_library_meta">%1$s · mag %2$s · RA %3$.2fh Dec %4$.1f°</string>

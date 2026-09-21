@@ -355,21 +355,25 @@ fun CameraScreen(
                             viewModel.gotoMountTarget(
                                 name = target.name,
                                 raHours = target.raHours,
-                                decDeg = target.decDegrees
+                                decDeg = target.decDegrees,
+                                frame = target.frame
                             )
                         },
                         onSync = { target ->
                             viewModel.syncMountToTarget(
                                 name = target.name,
                                 raHours = target.raHours,
-                                decDeg = target.decDegrees
+                                decDeg = target.decDegrees,
+                                frame = target.frame
                             )
                         },
-                        onPrecisionGoto = { target ->
+                        onPrecisionGoto = { target, toleranceArcmin ->
                             viewModel.startPrecisionGoto(
                                 name = target.name,
                                 raHours = target.raHours,
-                                decDeg = target.decDegrees
+                                decDeg = target.decDegrees,
+                                frame = target.frame,
+                                toleranceArcmin = toleranceArcmin
                             )
                         },
                         onSlewRateChange = viewModel::setMountSlewRate,

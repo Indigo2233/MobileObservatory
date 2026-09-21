@@ -80,6 +80,7 @@ import com.indigo.mobileobservatory.mount.MountCoordinates
 import com.indigo.mobileobservatory.mount.MountDirection
 import com.indigo.mobileobservatory.mount.MountSite
 import com.indigo.mobileobservatory.mount.MountSlewRate
+import com.indigo.mobileobservatory.mount.PrecisionGotoMath
 import com.indigo.mobileobservatory.mount.PrecisionGotoPhase
 import com.indigo.mobileobservatory.mount.PrecisionGotoProgress
 import com.indigo.mobileobservatory.starmap.HipsTileCache
@@ -128,6 +129,15 @@ internal object StarMapLoadRules {
 
     fun acceptTimeout(current: StarMapEngineState, message: String): StarMapEngineState =
         if (current is StarMapEngineState.Loading) StarMapEngineState.Error(message) else current
+}
+
+private fun formatStoredTolerance(value: Float): String {
+    val asDouble = value.toDouble()
+    return if (kotlin.math.abs(asDouble - asDouble.toLong()) < 1e-6) {
+        asDouble.toLong().toString()
+    } else {
+        asDouble.toString()
+    }
 }
 
 private class StarMapJavascriptBridge(
@@ -194,7 +204,7 @@ fun StarMapScreen(
     cameraFrameHeightPx: Int = 0,
     onGoto: (StarMapTarget) -> Unit,
     onSync: (StarMapTarget) -> Unit = {},
-    onPrecisionGoto: (StarMapTarget) -> Unit = {},
+    onPrecisionGoto: (StarMapTarget, Double) -> Unit = { _, _ -> },
     onSlewRateChange: (MountSlewRate) -> Unit = {},
     onManualMoveStart: (MountDirection) -> Unit = {},
     onManualMoveStop: (MountDirection) -> Unit = {},
@@ -259,6 +269,16 @@ fun StarMapScreen(
     }
     var starHints by remember {
         mutableStateOf(prefs.getBoolean("star_map_star_labels", false))
+    }
+    var precisionToleranceText by remember {
+        mutableStateOf(
+            formatStoredTolerance(
+                prefs.getFloat(
+                    PrecisionGotoMath.PREFS_TOLERANCE_ARCMIN,
+                    PrecisionGotoMath.TOLERANCE_ARCMIN.toFloat()
+                )
+            )
+        )
     }
     val moveEnabled = mountConnected && !mountBusy
 
@@ -377,6 +397,22 @@ fun StarMapScreen(
             .putBoolean("star_map_constellation_bounds", constellationBounds)
             .putBoolean("star_map_star_labels", starHints)
             .apply()
+    }
+
+    fun persistPrecisionTolerance(raw: String) {
+        precisionToleranceText = raw.filter { it.isDigit() || it == '.' }
+        precisionToleranceText.toDoubleOrNull()?.takeIf { it > 0.0 }?.let { value ->
+            prefs.edit().putFloat(
+                PrecisionGotoMath.PREFS_TOLERANCE_ARCMIN,
+                PrecisionGotoMath.clampToleranceArcmin(value).toFloat()
+            ).apply()
+        }
+    }
+
+    fun currentPrecisionToleranceArcmin(): Double {
+        return PrecisionGotoMath.clampToleranceArcmin(
+            precisionToleranceText.toDoubleOrNull() ?: PrecisionGotoMath.TOLERANCE_ARCMIN
+        )
     }
 
     fun applySkyAppearance() {
@@ -639,7 +675,7 @@ fun StarMapScreen(
         if (engineState !is StarMapEngineState.Ready) return@LaunchedEffect
         val ra = precisionGotoProgress.solvedRaHours ?: return@LaunchedEffect
         val dec = precisionGotoProgress.solvedDecDeg ?: return@LaunchedEffect
-        centerOnRaDec(ra, dec)
+        centerOnRaDec(ra, dec, frame = "JNOW")
     }
 
     LaunchedEffect(searchDialogVisible, searchQuery) {
@@ -921,6 +957,8 @@ fun StarMapScreen(
                     fovDialogVisible = true
                     overlaysVisible = true
                 },
+                precisionToleranceText = precisionToleranceText,
+                onPrecisionToleranceChange = ::persistPrecisionTolerance,
                 onShowFovOverlayChange = {
                     showFovOverlay = it
                     persistFovPrefs()
@@ -1140,9 +1178,10 @@ fun StarMapScreen(
         StarMapPrecisionGotoConfirmation(
             targetName = target.name,
             coordinates = target.coordinatesText(),
+            toleranceArcmin = currentPrecisionToleranceArcmin(),
             onConfirm = {
                 precisionConfirmation = null
-                onPrecisionGoto(target)
+                onPrecisionGoto(target, currentPrecisionToleranceArcmin())
             },
             onDismiss = { precisionConfirmation = null }
         )

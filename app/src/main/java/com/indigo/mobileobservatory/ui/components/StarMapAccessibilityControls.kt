@@ -89,6 +89,7 @@ fun StarMapSyncConfirmation(
 fun StarMapPrecisionGotoConfirmation(
     targetName: String,
     coordinates: String,
+    toleranceArcmin: Double,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -99,7 +100,7 @@ fun StarMapPrecisionGotoConfirmation(
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(targetName)
                 Text(coordinates)
-                Text(stringResource(R.string.precision_goto_warning))
+                Text(stringResource(R.string.precision_goto_warning, toleranceArcmin))
             }
         },
         confirmButton = {

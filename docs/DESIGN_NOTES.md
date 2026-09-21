@@ -130,6 +130,24 @@
 
 ---
 
+## 指向并居中：历元与停止误差
+
+赤道仪协议与星图点击用 **JNOW**；星图目录和 ASTAP WCS 用 **J2000/ICRF**。2026 年岁差约 20′，混用会让 6′ 停止条件永远达不到，星图居中也会偏一块。
+
+| 点 | 约定 |
+|---|---|
+| 进赤道仪前 | `EquatorialEpoch.toJnowHours`：J2000/ICRF 岁差到当日，JNOW 原样。GOTO / 同步 / 指向并居中共用。 |
+| ASTAP 结果 | CRVAL 是 J2000，先转到 JNOW 再和目标比、再 sync。 |
+| 星图居中 | 解算坐标已经是 JNOW，`centerOnRaDec(..., frame = "JNOW")`。 |
+| 停止误差 | 默认 **6′**。星图「观测工具」可改，写入 `star_map_precision_tolerance_arcmin`，范围 1′–30′。 |
+| 成功当轮 | 若赤道仪支持 sync，仍要把解算位置 sync 上去，避免第一轮已够近却模型不更新。 |
+
+**代码：** `EquatorialEpoch.kt`、`PrecisionGotoMath`、`CameraViewModel.startPrecisionGoto`、`StarMapHud` 观测工具面板
+
+**回归：** `EquatorialEpochTest`、`PrecisionGotoMathTest`、`ObservingUiWiringTest.precisionGotoUnifiesEpochsAndExposesSixArcminTolerance`
+
+---
+
 ## 图谱（ToupTek）USB 连接
 
 图谱 SDK 用 Android 已经打开的 fd（`Toupcam_Open("fd-%d-%04x-%04x")`），自己不走 libusb。
@@ -159,6 +177,16 @@
 **代码：** `CameraPreviewTools.kt`、`FocusAssistOverlay.kt`、`CameraScreen.kt`
 
 **回归：** `ObservingUiWiringTest.cameraPreviewChromeUsesOverflowMenuInsteadOfVerticalFabStack`
+
+---
+
+## 天体库与星图目录
+
+目标库直接复用星图搜索的 `AssetDeepSkyCatalog`，不再另做一份演示 10 条。
+
+**代码：** `TargetLibraryScreen.kt`、`AssetDeepSkyCatalog.kt`、`StarMapScreen.kt`
+
+**回归：** `ObservingUiWiringTest.targetLibraryUsesTheStarMapCatalog`
 
 ---
 

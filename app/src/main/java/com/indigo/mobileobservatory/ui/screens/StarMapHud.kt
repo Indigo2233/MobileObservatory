@@ -28,6 +28,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -86,6 +89,8 @@ internal fun StarMapCornerControls(
     onActiveTrainChange: (OpticsTrainId) -> Unit,
     onOpenFov: () -> Unit,
     onShowFovOverlayChange: (Boolean) -> Unit,
+    precisionToleranceText: String,
+    onPrecisionToleranceChange: (String) -> Unit,
     onEquatorialGridChange: (Boolean) -> Unit,
     onAzimuthalGridChange: (Boolean) -> Unit,
     onMeridianChange: (Boolean) -> Unit,
@@ -111,7 +116,11 @@ internal fun StarMapCornerControls(
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         when (panel) {
-            StarMapCornerPanel.OBSERVING -> Card(modifier = Modifier.widthIn(max = 300.dp)) {
+            StarMapCornerPanel.OBSERVING -> Card(
+                modifier = Modifier
+                    .widthIn(max = 300.dp)
+                    .heightIn(max = 420.dp)
+            ) {
                 Column(
                     modifier = Modifier
                         .padding(10.dp)
@@ -242,6 +251,19 @@ internal fun StarMapCornerControls(
                     ) {
                         Text(stringResource(R.string.star_map_fov), fontSize = 12.sp)
                     }
+                    OutlinedTextField(
+                        value = precisionToleranceText,
+                        onValueChange = onPrecisionToleranceChange,
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        label = {
+                            Text(
+                                stringResource(R.string.precision_goto_tolerance),
+                                fontSize = 11.sp
+                            )
+                        }
+                    )
                 }
             }
             StarMapCornerPanel.SKY -> Card(

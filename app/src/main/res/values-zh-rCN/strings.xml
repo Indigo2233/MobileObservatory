@@ -419,8 +419,9 @@
     <string name="goto_label">GOTO</string>
     <string name="precision_goto_label">指向并居中</string>
     <string name="confirm_precision_goto">确认指向并居中</string>
-    <string name="precision_goto_warning">会 GOTO → 拍照解析 → 同步 → 再 GOTO，直到天空误差 ≤ 2′。需要已连接相机和 ASTAP D20 或 D50 星表。可用 STOP 中止。</string>
+    <string name="precision_goto_warning">会 GOTO → 拍照解析 → 同步 → 再 GOTO，直到天空误差 ≤ %1$.1f′。需要已连接相机和 ASTAP D20 或 D50 星表。可用 STOP 中止。</string>
     <string name="execute_precision_goto">开始指向并居中</string>
+    <string name="precision_goto_tolerance">指向并居中停止误差（′）</string>
     <string name="precision_goto_need_camera">指向并居中前请先连接成像相机。</string>
     <string name="precision_goto_need_d50">请先在「图像解析」页安装 ASTAP D20 或 D50 星表。</string>
     <string name="precision_goto_no_frame">没有可用于解析的新相机帧。</string>
@@ -684,7 +685,7 @@
     <string name="push_to_lens_other">后置摄像头</string>
 
     <string name="target_library_title">目标库</string>
-    <string name="target_library_shell_banner">演示目录（10 个）。OpenNGC + 今夜排序见 M7。</string>
+    <string name="target_library_shell_banner">与星图共用同一份深空天体表。可搜梅西耶、NGC、IC 或中文名。</string>
     <string name="target_library_search">搜索</string>
     <string name="target_library_guide">引导</string>
     <string name="target_library_meta">%1$s · 星等 %2$s · 赤经 %3$.2fh 赤纬 %4$.1f°</string>

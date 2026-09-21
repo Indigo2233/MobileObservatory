@@ -196,6 +196,17 @@ class ObservingUiWiringTest {
     }
 
     @Test
+    fun targetLibraryUsesTheStarMapCatalog() {
+        val library = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/TargetLibraryScreen.kt"
+        )
+        assertTrue(library.contains("AssetDeepSkyCatalog("))
+        assertTrue(library.contains("catalog.search(query)"))
+        assertTrue(!library.contains("DemoCatalog"))
+        assertTrue(!library.contains("catalog.featured()"))
+    }
+
+    @Test
     fun toupTekCameraKeepsTheUsbConnectionAlive() {
         val manager = read(
             "src/main/java/com/indigo/mobileobservatory/camera/DahengCameraManager.kt"
@@ -250,6 +261,40 @@ class ObservingUiWiringTest {
         )
         assertTrue(!capture.contains("downsampleForPreview"))
         assertTrue(!capture.contains("PreviewScale"))
+    }
+
+    @Test
+    fun precisionGotoUnifiesEpochsAndExposesSixArcminTolerance() {
+        val camera = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/CameraScreen.kt"
+        )
+        val viewModel = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/viewmodel/CameraViewModel.kt"
+        )
+        val starMap = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/StarMapScreen.kt"
+        )
+        val hud = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/StarMapHud.kt"
+        )
+        val mount = read(
+            "src/main/java/com/indigo/mobileobservatory/mount/MountModule.kt"
+        )
+        val math = read(
+            "src/main/java/com/indigo/mobileobservatory/mount/PrecisionGoto.kt"
+        )
+        assertTrue(camera.contains("frame = target.frame"))
+        assertTrue(camera.contains("toleranceArcmin = toleranceArcmin"))
+        assertTrue(viewModel.contains("EquatorialEpoch.toJnowHours(raHours, decDeg, frame)"))
+        assertTrue(viewModel.contains("EquatorialEpoch.j2000DegToJnowHours(raDeg, decDeg)"))
+        assertTrue(starMap.contains("PrecisionGotoMath.PREFS_TOLERANCE_ARCMIN"))
+        assertTrue(starMap.contains("centerOnRaDec(ra, dec, frame = \"JNOW\")"))
+        assertTrue(starMap.contains("onPrecisionGoto(target, currentPrecisionToleranceArcmin())"))
+        assertTrue(hud.contains("R.string.precision_goto_tolerance"))
+        assertTrue(math.contains("const val TOLERANCE_ARCMIN = 6.0"))
+        assertTrue(mount.contains("if (controller.supportsSync)"))
+        assertTrue(mount.contains("controller.syncTo(solved)"))
+        assertTrue(mount.contains("PrecisionGotoMath.withinTolerance(errorArcmin, stopArcmin)"))
     }
 
     private fun read(relative: String): String {

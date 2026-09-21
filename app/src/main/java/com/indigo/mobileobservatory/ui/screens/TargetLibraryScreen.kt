@@ -22,20 +22,24 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.indigo.mobileobservatory.R
+import com.indigo.mobileobservatory.catalog.AssetDeepSkyCatalog
 import com.indigo.mobileobservatory.catalog.CatalogObject
-import com.indigo.mobileobservatory.catalog.DemoCatalog
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
- * Target library shell. Demo catalog only; OpenNGC + VisibilityRanker come in M7.
+ * Target library. Same [AssetDeepSkyCatalog] index the star map search uses.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -43,8 +47,14 @@ fun TargetLibraryScreen(
     onBack: () -> Unit,
     onGuideTo: (CatalogObject) -> Unit = {}
 ) {
+    val context = LocalContext.current
+    val catalog = remember { AssetDeepSkyCatalog(context.applicationContext) }
     var query by remember { mutableStateOf("") }
-    val results = remember(query) { DemoCatalog.search(query) }
+    var results by remember { mutableStateOf<List<CatalogObject>>(emptyList()) }
+
+    LaunchedEffect(query) {
+        results = withContext(Dispatchers.Default) { catalog.search(query) }
+    }
 
     Scaffold(
         topBar = {
