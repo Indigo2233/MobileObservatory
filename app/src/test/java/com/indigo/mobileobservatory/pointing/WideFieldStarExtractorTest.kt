@@ -51,6 +51,16 @@ class WideFieldStarExtractorTest {
         assertTrue(result.stars.isEmpty())
     }
 
+    @Test
+    fun rejectsAnIsolatedHotPixel() {
+        val width = 96
+        val height = 96
+        val pixels = FloatArray(width * height) { 80f }
+        pixels[48 * width + 48] = 4000f
+        val result = WideFieldStarExtractor.extract(pixels, width, height, maxStars = 20)
+        assertTrue(result.stars.none { hypotDist(it.x, it.y, 48f, 48f) < 3f })
+    }
+
     private fun paintStar(pixels: FloatArray, width: Int, cx: Int, cy: Int, peak: Float) {
         for (dy in -3..3) {
             for (dx in -3..3) {

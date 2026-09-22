@@ -36,6 +36,14 @@ class PhoneBrightStarCatalog private constructor(val stars: List<PhoneCatalogSta
     companion object {
         const val ASSET_PATH = "catalog/phone_hyg_v41_m6.csv"
 
+        internal val SIRIUS = PhoneCatalogStar(
+            raDeg = 101.287155,
+            decDeg = -16.716116,
+            magnitude = -1.46,
+            hip = 32349,
+            name = "Sirius"
+        )
+
         @Volatile
         private var loadedCatalog: PhoneBrightStarCatalog? = null
 
@@ -63,7 +71,19 @@ class PhoneBrightStarCatalog private constructor(val stars: List<PhoneCatalogSta
                     )
                 }.toList()
             require(stars.isNotEmpty()) { "Phone bright-star catalog is empty" }
-            return PhoneBrightStarCatalog(stars)
+            return PhoneBrightStarCatalog(withSirius(stars))
+        }
+
+        /**
+         * Sirius (HIP 32349) is brighter than the historical HYG export floor of mag −1 and was
+         * dropped from the matching table. Re-insert it whenever a full-sky subset is missing it.
+         */
+        private fun withSirius(stars: List<PhoneCatalogStar>): List<PhoneCatalogStar> {
+            if (stars.any { it.hip == SIRIUS.hip || it.name.equals(SIRIUS.name, ignoreCase = true) }) {
+                return stars
+            }
+            if (stars.size < 100) return stars
+            return (stars + SIRIUS).sortedBy { it.magnitude }
         }
 
         internal fun of(stars: List<PhoneCatalogStar>): PhoneBrightStarCatalog {

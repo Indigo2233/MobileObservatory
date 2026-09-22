@@ -344,6 +344,7 @@ fun CameraScreen(
                         mountSite = mountSite,
                         mountConnected = mountConnectionState is
                             com.indigo.mobileobservatory.mount.MountConnectionState.Connected,
+                        mountSupportsSync = viewModel.mountSupportsSync,
                         mountBusy = mountBusy,
                         mountSlewRate = mountSlewRate,
                         precisionGotoProgress = precisionGotoProgress,

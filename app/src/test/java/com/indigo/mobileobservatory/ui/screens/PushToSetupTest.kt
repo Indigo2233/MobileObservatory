@@ -20,5 +20,35 @@ class PushToSetupTest {
         assertEquals(1.0, settings.exposureSeconds, 1e-9)
         assertEquals(800, settings.iso)
         assertTrue(settings.preferRaw)
+        assertTrue(settings.autoIso)
+        assertEquals(1, settings.burstFrameCount)
+    }
+
+    @Test
+    fun halfSecondLensDefaultsToStackedFrames() {
+        val settings = defaultPushToSettings(
+            cameraId = "uw",
+            minimumExposureSeconds = 0.01,
+            maximumExposureSeconds = 0.5,
+            minimumIso = 50,
+            maximumIso = 3200,
+            supportsRaw = false
+        )
+        assertEquals(0.5, settings.exposureSeconds, 1e-9)
+        assertEquals(4, settings.burstFrameCount)
+    }
+
+    @Test
+    fun longerLensesDefaultToOneSecondNotTwo() {
+        val settings = defaultPushToSettings(
+            cameraId = "main",
+            minimumExposureSeconds = 0.01,
+            maximumExposureSeconds = 8.0,
+            minimumIso = 50,
+            maximumIso = 3200,
+            supportsRaw = true
+        )
+        assertEquals(1.0, settings.exposureSeconds, 1e-9)
+        assertEquals(1, settings.burstFrameCount)
     }
 }

@@ -59,6 +59,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.camera.PhoneCameraCapability
 import com.indigo.mobileobservatory.camera.PhoneLensRole
+import com.indigo.mobileobservatory.camera.PhoneManualExposure
 import com.indigo.mobileobservatory.camera.PhoneSkyCapture
 import com.indigo.mobileobservatory.camera.PhoneSkyCaptureStore
 import com.indigo.mobileobservatory.permissions.AppSettingsNavigator
@@ -85,6 +86,7 @@ fun PhoneCameraDebugScreen(onBack: () -> Unit) {
     val lifecycleOwner = LocalLifecycleOwner.current
     var exposureS by remember { mutableFloatStateOf(2f) }
     var iso by remember { mutableFloatStateOf(800f) }
+    var autoIso by remember { mutableStateOf(true) }
     var preferRaw by remember { mutableStateOf(true) }
     var status by remember { mutableStateOf("") }
     var capabilityText by remember { mutableStateOf("") }
@@ -288,41 +290,57 @@ fun PhoneCameraDebugScreen(onBack: () -> Unit) {
             }
 
             val selectedLens = lenses.firstOrNull { it.cameraId == selectedCameraId }
-            val maxExposureUi = ((selectedLens?.maxExposureSeconds ?: 8.0)
-                .coerceIn(2.0, 10.0)).toFloat()
-            val minExposureUi = 0.5f
+            val exposureRange = selectedLens?.captureExposureRange() ?: 0.1f..2f
+            val minExposureUi = exposureRange.start
+            val maxExposureUi = exposureRange.endInclusive
 
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     stringResource(R.string.phone_camera_exposure_s) +
-                        ": ${"%.1f".format(exposureS.coerceIn(minExposureUi, maxExposureUi))}" +
+                        ": ${PhoneManualExposure.formatSeconds(exposureS.coerceIn(minExposureUi, maxExposureUi))}" +
                         (selectedLens?.maxExposureSeconds?.let {
-                            " (HAL max ${"%.1f".format(it)}s)"
+                            " (HAL ${PhoneManualExposure.formatSeconds(it.toFloat())}" +
+                                ", usable ${PhoneManualExposure.formatSeconds(maxExposureUi)})"
                         } ?: ""),
                     modifier = Modifier.weight(1f)
                 )
             }
             Slider(
-                value = exposureS.coerceIn(minExposureUi, maxExposureUi),
-                onValueChange = { exposureS = it },
-                valueRange = minExposureUi..maxExposureUi,
-                steps = ((maxExposureUi - minExposureUi) / 0.5f).toInt().coerceAtLeast(1) - 1,
+                value = PhoneManualExposure.toSlider(
+                    exposureS.coerceIn(minExposureUi, maxExposureUi),
+                    minExposureUi,
+                    maxExposureUi
+                ),
+                onValueChange = {
+                    exposureS = PhoneManualExposure.fromSlider(it, minExposureUi, maxExposureUi)
+                },
+                valueRange = 0f..1f,
                 enabled = !busy
             )
 
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    stringResource(R.string.phone_camera_iso) + ": ${iso.toInt()}",
-                    modifier = Modifier.weight(1f)
+                Checkbox(
+                    checked = autoIso,
+                    onCheckedChange = { autoIso = it },
+                    enabled = !busy
+                )
+                Text(stringResource(R.string.push_to_iso_auto))
+            }
+            if (!autoIso) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        stringResource(R.string.phone_camera_iso) + ": ${iso.toInt()}",
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                Slider(
+                    value = iso,
+                    onValueChange = { iso = it },
+                    valueRange = 100f..3200f,
+                    steps = 30,
+                    enabled = !busy
                 )
             }
-            Slider(
-                value = iso,
-                onValueChange = { iso = it },
-                valueRange = 100f..3200f,
-                steps = 30,
-                enabled = !busy
-            )
 
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Checkbox(
@@ -364,7 +382,7 @@ fun PhoneCameraDebugScreen(onBack: () -> Unit) {
                                             minExposureUi,
                                             maxExposureUi
                                         ).toDouble(),
-                                        iso = iso.toInt(),
+                                        iso = if (autoIso) PhoneManualExposure.ISO_AUTO else iso.toInt(),
                                         preferRaw = preferRaw,
                                         cameraId = cameraId,
                                         dngOutputFile = dngFile

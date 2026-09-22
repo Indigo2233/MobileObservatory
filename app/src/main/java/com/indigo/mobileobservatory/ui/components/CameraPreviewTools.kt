@@ -37,8 +37,8 @@ import androidx.compose.ui.unit.dp
 import com.indigo.mobileobservatory.R
 
 /**
- * Landscape preview chrome: keep panel toggle + one overflow. The old vertical
- * FAB stack overlapped the focus-assist window on typical phone heights.
+ * Landscape preview chrome: panel toggle, fit-to-view, and one overflow.
+ * Do not restack these as a vertical FAB column — it covers focus assist.
  */
 @Composable
 fun CameraPreviewTools(
@@ -79,6 +79,16 @@ fun CameraPreviewTools(
                     tint = MaterialTheme.colorScheme.onSurface
                 )
             }
+            SmallFloatingActionButton(
+                onClick = onFitToView,
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
+            ) {
+                Icon(
+                    Icons.Default.FitScreen,
+                    stringResource(R.string.fit_to_view),
+                    tint = MaterialTheme.colorScheme.onSurface
+                )
+            }
         }
         Box {
             SmallFloatingActionButton(
@@ -99,16 +109,6 @@ fun CameraPreviewTools(
                 expanded = menuOpen,
                 onDismissRequest = { menuOpen = false }
             ) {
-                if (connected) {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.fit_to_view)) },
-                        onClick = {
-                            menuOpen = false
-                            onFitToView()
-                        },
-                        leadingIcon = { Icon(Icons.Default.FitScreen, contentDescription = null) }
-                    )
-                }
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.red_night_mode)) },
                     onClick = { onRedNightModeChange(!redNightMode) },

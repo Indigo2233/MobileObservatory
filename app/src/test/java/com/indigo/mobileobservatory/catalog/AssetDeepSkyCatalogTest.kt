@@ -85,4 +85,13 @@ class AssetDeepSkyCatalogTest {
         assertEquals("M 45", CatalogSearch.search(objects, "pleiades").first().id)
         assertTrue(CatalogSearch.search(objects, "ngc 7000").any { it.id == "NGC 7000" })
     }
+
+    @Test
+    fun extrasAttachCaldwellToShippedAsset() {
+        val asset = File("src/main/assets/${AssetDeepSkyCatalog.ASSET_PATH}")
+        val objects = ObservingCatalogExtras.enrich(asset.inputStream().use(AssetDeepSkyCatalog::parse))
+        val hits = CatalogSearch.search(objects, "c33")
+        assertEquals("NGC 6992", hits.first().id)
+        assertTrue(hits.first().aliases.any { it.contains("面纱") })
+    }
 }

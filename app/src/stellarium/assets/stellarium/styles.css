@@ -79,3 +79,9 @@ body {
 #fov-target.fov-rect {
     border-radius: 2px;
 }
+
+html.night-vision #stel-canvas,
+html.night-vision #fov-current,
+html.night-vision #fov-target {
+    filter: grayscale(1) sepia(1) hue-rotate(-50deg) saturate(5) brightness(0.62);
+}

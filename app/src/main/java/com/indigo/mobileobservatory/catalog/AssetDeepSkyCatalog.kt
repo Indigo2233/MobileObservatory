@@ -1,24 +1,39 @@
 package com.indigo.mobileobservatory.catalog
 
 import android.content.Context
+import com.indigo.mobileobservatory.astro.ObserverSite
 import java.io.InputStream
+import java.time.Instant
 
 /**
- * Full offline NGC / IC / Messier / Caldwell catalog, generated from OpenNGC by
- * `scripts/generate_deepsky_catalog.py` into `assets/catalog/deepsky.csv`.
+ * Offline catalog shared by star-map search and the push-to target library.
  *
- * The asset is parsed on first use; callers should touch it off the main thread.
+ * Base table is OpenNGC (`deepsky.csv`); named HYG stars and Caldwell / Chinese
+ * aliases are merged on load so both UIs see the same objects.
  */
 class AssetDeepSkyCatalog(private val context: Context) : DeepSkyCatalog {
 
     private val entries: List<CatalogObject> by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
-        runCatching {
+        val dso = runCatching {
             context.assets.open(ASSET_PATH).use(::parse)
         }.getOrElse { DemoCatalog.all() }
+        val stars = runCatching {
+            context.assets.open(NamedStarCatalog.ASSET_PATH).bufferedReader().use { reader ->
+                NamedStarCatalog.parse(reader.readLines())
+            }
+        }.getOrDefault(emptyList())
+        ObservingCatalogExtras.enrich(dso + stars)
     }
 
     private val byId: Map<String, CatalogObject> by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
-        entries.associateBy { normalizeCatalogQuery(it.id) }
+        val index = LinkedHashMap<String, CatalogObject>()
+        for (obj in entries) {
+            index[normalizeCatalogQuery(obj.id)] = obj
+            for (alias in obj.aliases) {
+                index.putIfAbsent(normalizeCatalogQuery(alias), obj)
+            }
+        }
+        index
     }
 
     override fun all(): List<CatalogObject> = entries
@@ -26,6 +41,13 @@ class AssetDeepSkyCatalog(private val context: Context) : DeepSkyCatalog {
     override fun findById(id: String): CatalogObject? = byId[normalizeCatalogQuery(id)]
 
     override fun search(query: String): List<CatalogObject> = CatalogSearch.search(entries, query)
+
+    override fun suggest(
+        site: ObserverSite?,
+        instant: Instant,
+        limit: Int,
+        filter: CatalogBrowseFilter
+    ): List<CatalogObject> = VisibilityRanker.suggest(entries, site, instant, limit, filter)
 
     companion object {
         const val ASSET_PATH = "catalog/deepsky.csv"

@@ -19,7 +19,7 @@ $rows = Import-Csv -LiteralPath $source |
         [double]::TryParse($_.mag, [ref]$mag) -and
             [double]::TryParse($_.ra, [ref]$ra) -and
             [double]::TryParse($_.dec, [ref]$dec) -and
-            $mag -ge -1.0 -and $mag -le $MaximumMagnitude
+            $mag -ge -1.5 -and $mag -le $MaximumMagnitude
     } |
     ForEach-Object {
         [pscustomobject]@{
@@ -33,7 +33,7 @@ $rows = Import-Csv -LiteralPath $source |
     Sort-Object mag, raDeg
 
 $lines = [System.Collections.Generic.List[string]]::new()
-$lines.Add('# HYG Database v4.1 subset: -1 <= visual magnitude <= {0:F1}' -f $MaximumMagnitude)
+$lines.Add('# HYG Database v4.1 subset: -1.5 <= visual magnitude <= {0:F1} (includes Sirius)' -f $MaximumMagnitude)
 $lines.Add('# Source: https://github.com/astronexus/HYG-Database')
 $lines.Add('# License: CC BY-SA 4.0; see THIRD_PARTY_HYG.txt')
 $lines.Add('ra_deg,dec_deg,mag,hip,name')

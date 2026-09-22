@@ -51,6 +51,8 @@ class ObservingUiWiringTest {
         assertTrue(camera.contains(".align(Alignment.BottomEnd)"))
         assertTrue(tools.contains("R.string.camera_preview_tools"))
         assertTrue(tools.contains("Icons.Default.MoreVert"))
+        assertTrue(tools.contains("onClick = onFitToView"))
+        assertTrue(tools.contains("R.string.fit_to_view"))
         assertTrue(tools.contains("R.string.focus_assist"))
         assertTrue(tools.contains("R.string.image_center_marker"))
         assertTrue(tools.contains("R.string.plate_solve"))
@@ -86,11 +88,20 @@ class ObservingUiWiringTest {
         val camera = read(
             "src/main/java/com/indigo/mobileobservatory/ui/screens/StarMapScreen.kt"
         )
-        assertTrue(hud.contains("R.string.star_map_train_primary"))
-        assertTrue(hud.contains("R.string.star_map_train_secondary"))
+        assertTrue(hud.contains("primaryTrainLabel"))
+        assertTrue(hud.contains("secondaryTrainLabel"))
         assertTrue(hud.contains("onActiveTrainChange"))
         assertTrue(sheet.contains("onEditingTrainChange"))
+        assertTrue(sheet.contains("primaryTrainLabel"))
         assertTrue(sheet.contains("R.string.star_map_train_primary"))
+        assertTrue(sheet.contains("R.string.fov_equipment_name"))
+        assertTrue(sheet.contains("R.string.fov_add_equipment"))
+        assertTrue(sheet.contains("R.string.fov_delete_equipment"))
+        assertTrue(sheet.contains("onTelescopesChange"))
+        assertTrue(sheet.contains("onCamerasChange"))
+        assertTrue(camera.contains("UserOpticsCatalog.loadTelescopes"))
+        assertTrue(camera.contains("UserOpticsCatalog.loadCameras"))
+        assertTrue(hud.contains("primaryTrainLabel"))
         assertTrue(camera.contains("maybeWritePlateFocalLength("))
         assertTrue(camera.contains("StarMapOpticsPrefs.loadPrimary"))
         assertTrue(camera.contains("star_map_secondary_fov_mode"))
@@ -121,14 +132,23 @@ class ObservingUiWiringTest {
         assertTrue(starMap.contains("StarMapCornerControls("))
         assertTrue(starMap.contains("StarMapCornerPanel.NONE"))
         assertTrue(starMap.contains("if (!overlaysVisible) cornerPanel = StarMapCornerPanel.NONE"))
+        assertTrue(starMap.contains("BoxWithConstraints("))
+        assertTrue(starMap.contains("Arrangement.SpaceBetween"))
+        assertTrue(starMap.contains("val bottomSlotMax = minOf(300.dp, maxWidth / 2)"))
+        assertTrue(hud.contains("modifier: Modifier = Modifier"))
         assertTrue(hud.contains("StarMapCornerPanel.OBSERVING"))
         assertTrue(hud.contains("StarMapCornerPanel.SKY"))
         assertTrue(hud.contains("stringResource(R.string.star_map_equatorial_grid)"))
         assertTrue(hud.contains("stringResource(R.string.star_map_azimuthal_grid)"))
         assertTrue(hud.contains("stringResource(R.string.star_map_constellation_lines)"))
-        assertTrue(hud.contains("stringResource(R.string.red_night_mode)"))
+        assertTrue(!hud.contains("stringResource(R.string.red_night_mode)"))
         assertTrue(starMap.contains("redNightMode: Boolean"))
+        assertTrue(starMap.contains("Icons.Default.Nightlight"))
+        assertTrue(starMap.contains("onRedNightModeChange(!redNightMode)"))
+        assertTrue(starMap.contains("applyNightVision()"))
+        assertTrue(starMap.contains("ColorMatrixColorFilter"))
         assertTrue(starMap.contains("MercStarMap.setSkyAppearance("))
+        assertTrue(starMap.contains("MercStarMap.setNightVision("))
         assertTrue(!starMap.contains("Icons.Default.MoreVert"))
     }
 
@@ -202,8 +222,25 @@ class ObservingUiWiringTest {
         )
         assertTrue(library.contains("AssetDeepSkyCatalog("))
         assertTrue(library.contains("catalog.search(query)"))
+        assertTrue(library.contains("catalog.suggest("))
         assertTrue(!library.contains("DemoCatalog"))
-        assertTrue(!library.contains("catalog.featured()"))
+        assertTrue(library.contains("fun TargetLibraryContent("))
+    }
+
+    @Test
+    fun pushToKeepsTheScreenOnAndMapsSolveFailures() {
+        val screen = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/PushToExperienceScreen.kt"
+        )
+        assertTrue(screen.contains("FLAG_KEEP_SCREEN_ON"))
+        assertTrue(screen.contains("PhoneSolveCaptureLadder.next"))
+        assertTrue(screen.contains("ModalBottomSheet"))
+        assertTrue(screen.contains("PushToSolveCopy.messageRes"))
+        val copy = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/PushToSolveCopy.kt"
+        )
+        assertTrue(copy.contains("push_to_fail_few_stars"))
+        assertTrue(copy.contains("push_to_fail_motion"))
     }
 
     @Test
@@ -295,6 +332,42 @@ class ObservingUiWiringTest {
         assertTrue(mount.contains("if (controller.supportsSync)"))
         assertTrue(mount.contains("controller.syncTo(solved)"))
         assertTrue(mount.contains("PrecisionGotoMath.withinTolerance(errorArcmin, stopArcmin)"))
+    }
+
+    @Test
+    fun starMapExposesVisualMountSyncWithoutExpandingTarget() {
+        val starMap = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/StarMapScreen.kt"
+        )
+        val camera = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/CameraScreen.kt"
+        )
+        val viewModel = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/viewmodel/CameraViewModel.kt"
+        )
+        val mount = read(
+            "src/main/java/com/indigo/mobileobservatory/mount/MountModule.kt"
+        )
+        val gotoIndex = starMap.indexOf("R.string.goto_label")
+        val syncIndex = starMap.indexOf("R.string.sync_label")
+        val expandedIndex = starMap.indexOf("if (targetExpanded)")
+        assertTrue(gotoIndex >= 0)
+        assertTrue(syncIndex >= 0)
+        assertTrue(expandedIndex >= 0)
+        assertTrue(syncIndex < expandedIndex)
+        assertTrue(starMap.contains("defaultMinSize(minWidth = 0.dp)"))
+        assertTrue(starMap.contains("softWrap = false"))
+        assertTrue(starMap.contains("val canSyncMount = canSlewMount && mountSupportsSync"))
+        assertTrue(starMap.contains("syncConfirmation = target"))
+        assertTrue(starMap.contains("R.string.star_map_visual_sync_hint"))
+        assertTrue(!starMap.contains("R.string.star_map_sync_visual_caption"))
+        assertTrue(camera.contains("mountSupportsSync = viewModel.mountSupportsSync"))
+        assertTrue(camera.contains("frame = target.frame"))
+        assertTrue(viewModel.contains("fun syncMountToTarget("))
+        assertTrue(viewModel.contains("EquatorialEpoch.toJnowHours(raHours, decDeg, frame)"))
+        assertTrue(mount.contains("if (!controller.supportsSync)"))
+        assertTrue(mount.contains("controller.syncTo(target)"))
+        assertTrue(mount.contains("Visual sync: mount stays put"))
     }
 
     private fun read(relative: String): String {

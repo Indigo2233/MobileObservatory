@@ -637,6 +637,9 @@
             pendingAtmosphereVisible = Boolean(visible);
             applyAtmosphereVisibility(pendingAtmosphereVisible);
         },
+        setNightVision: function (enabled) {
+            document.documentElement.classList.toggle("night-vision", Boolean(enabled));
+        },
         setSkyAppearance: function (
             equatorialGrid,
             azimuthalGrid,

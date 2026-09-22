@@ -62,9 +62,25 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
     private var rawDirection: Direction3? = null
 
     @Volatile
+    private var lastRawDirection: Direction3? = null
+
+    @Volatile
+    private var lastRotationMatrix: FloatArray? = null
+
+    @Volatile
+    private var lastSensorTimestampNs: Long = 0L
+
+    @Volatile
     private var fix: SkyAttitudeFix? = null
 
+    val motionGate = MotionGate()
+    private val attitudeTimeline = AttitudeTimeline()
+
+    @Volatile
+    private var lastSensorOrientationDeg: Int = 90
+
     var onFix: ((SkyAttitudeFix) -> Unit)? = null
+    var onMotion: ((MotionPhase) -> Unit)? = null
 
     val available: Boolean get() = rotationSensor != null
     val plateSolved: Boolean get() = alignment.isCalibrated
@@ -95,6 +111,27 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
             up = -matrix[8].toDouble()
         ).unit()
         rawDirection = raw
+        lastRotationMatrix = matrix.copyOf()
+        val imageUp = CameraAttitudePrior.imageAxesEnu(matrix, lastSensorOrientationDeg).imageUp
+        attitudeTimeline.add(
+            AttitudeSnapshot(
+                timestampMs = System.currentTimeMillis(),
+                opticalAxis = raw,
+                imageUp = imageUp
+            )
+        )
+        val previous = lastRawDirection
+        val previousNs = lastSensorTimestampNs
+        lastRawDirection = raw
+        lastSensorTimestampNs = event.timestamp
+        if (previous != null && previousNs > 0L) {
+            val dtSec = (event.timestamp - previousNs) / 1_000_000_000.0
+            if (dtSec in 0.001..0.5) {
+                val rate = previous.angleDeg(raw) / dtSec
+                val phase = motionGate.ingest(rate, System.currentTimeMillis())
+                onMotion?.invoke(phase)
+            }
+        }
         publish(alignment.apply(raw), System.currentTimeMillis())
     }
 
@@ -112,6 +149,7 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
         // Plate solving remains available without a rotation-vector sensor. In that case it
         // returns the photographic solution while live push-to orientation awaits an IMU sample.
         val rawAtCapture = rawDirection
+        val matrixAtCapture = lastRotationMatrix
         val captureStartedAt = System.currentTimeMillis()
 
         return try {
@@ -129,8 +167,21 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
                 )
             }
             val capture = burst.first
+            lastSensorOrientationDeg = capture.metadata.sensorOrientation
             val stacked = withContext(Dispatchers.Default) {
-                ShortExposureStacker.stack(burst.captures.map { it.frame })
+                val poses = burst.captures.map { item ->
+                    val stamp = item.metadata.exposureMidpointEpochMs ?: item.frame.timestamp
+                    attitudeTimeline.sample(stamp)?.let { snap ->
+                        val up = snap.imageUp ?: return@let null
+                        BurstAttitude(snap.opticalAxis, up)
+                    }
+                }
+                ShortExposureStacker.stack(
+                    frames = burst.captures.map { it.frame },
+                    attitudes = poses,
+                    fovWidthDeg = capture.fovWidthDeg,
+                    fovHeightDeg = capture.fovHeightDeg
+                )
             }
             onProgress(PhoneSkySolveStage.EXTRACTING_STARS)
             val extraction = withContext(Dispatchers.Default) {
@@ -157,6 +208,26 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
                 coordinateDomain = capture.metadata.calibrationCoordinateDomain
             )
             onCapture(stacked.frame, extraction, stacked.inputFrameCount)
+            if (stacked.rejectedMotionFrames >= (burst.captures.size + 1) / 2 &&
+                extraction.stars.size < 8
+            ) {
+                val moved = WideFieldSolveResult(
+                    success = false,
+                    message = "Burst frames moved during capture",
+                    failure = WideFieldSolveFailure.DEVICE_MOTION
+                )
+                writeSolveDiagnostics(fitsFile, capture, moved, null)
+                return PhoneSkySolveResult(
+                    success = false,
+                    message = moved.message,
+                    skySolution = moved,
+                    fitsPath = fitsFile.absolutePath,
+                    frame = stacked.frame,
+                    extraction = extraction,
+                    cameraLabel = capture.capability.displayLabel,
+                    inputFrameCount = stacked.inputFrameCount
+                )
+            }
             withContext(Dispatchers.IO) {
                 FITSWriter().write(
                     file = fitsFile,
@@ -172,6 +243,14 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
             val observationTime = Instant.ofEpochMilli(
                 capture.metadata.exposureMidpointEpochMs ?: (captureStartedAt + capture.exposureNs / 2_000_000L)
             )
+            val midSnapshot = attitudeTimeline.sample(observationTime.toEpochMilli())
+            val imuDirection = midSnapshot?.opticalAxis ?: rawAtCapture
+            val imuCameraUp = midSnapshot?.imageUp ?: matrixAtCapture?.let { matrix ->
+                CameraAttitudePrior.imageAxesEnu(matrix, capture.metadata.sensorOrientation).imageUp
+            }
+            val attitudePrior = imuDirection?.let { direction ->
+                CameraAttitudePrior.fromOpticalAxis(direction, imuCameraUp, observationTime, site)
+            }
             val localSolve = withContext(Dispatchers.Default) {
                 WideFieldSolver.solve(WideFieldSolveRequest(
                     extraction = solveExtraction,
@@ -179,7 +258,9 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
                     frameHeight = stacked.frame.height,
                     initialFovWidthDeg = capture.fovWidthDeg ?: 72.0,
                     initialFovHeightDeg = capture.fovHeightDeg ?: 54.0,
-                    imuDirection = rawAtCapture,
+                    imuDirection = imuDirection,
+                    imuCameraUp = imuCameraUp,
+                    attitudePrior = attitudePrior,
                     observationTime = observationTime,
                     site = site,
                     catalog = PhoneBrightStarCatalog.load(appContext)
@@ -187,7 +268,7 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
             }
             val raDeg = localSolve.raDeg
             val decDeg = localSolve.decDeg
-            writeSolveDiagnostics(fitsFile, capture, localSolve)
+            writeSolveDiagnostics(fitsFile, capture, localSolve, attitudePrior)
             if (!localSolve.success || raDeg == null || decDeg == null) {
                 PhoneSkySolveResult(
                     success = false,
@@ -206,7 +287,7 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
                     site,
                     refraction = null
                 )
-                rawAtCapture?.let { sensorDirection ->
+                imuDirection?.let { sensorDirection ->
                     alignment.calibrate(sensorDirection, Direction3.fromAltAz(
                         horizontal.altitudeDeg,
                         horizontal.azimuthDeg
@@ -234,7 +315,8 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
     private fun writeSolveDiagnostics(
         fitsFile: File,
         capture: com.indigo.mobileobservatory.camera.PhoneSkyCaptureResult,
-        solve: WideFieldSolveResult
+        solve: WideFieldSolveResult,
+        prior: AttitudeSolvePrior?
     ) {
         val metadata = capture.metadata
         val json = JSONObject().apply {
@@ -254,6 +336,9 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
             put("exposureMidpointEpochMs", metadata.exposureMidpointEpochMs)
             put("fovWidthDeg", capture.fovWidthDeg)
             put("fovHeightDeg", capture.fovHeightDeg)
+            put("priorRaDeg", prior?.centerRaDeg)
+            put("priorDecDeg", prior?.centerDecDeg)
+            put("priorRotationDeg", prior?.rotationDeg)
             put("matchedStars", solve.quality.matchedStars)
             put("rmsResidualDeg", solve.quality.rmsResidualDeg)
             put("confidence", solve.quality.confidence)
@@ -284,6 +369,27 @@ internal data class Direction3(val east: Double, val north: Double, val up: Doub
         val length = sqrt(east * east + north * north + up * up)
         if (length <= 1e-12) return Direction3(0.0, 1.0, 0.0)
         return Direction3(east / length, north / length, up / length)
+    }
+
+    fun dot(other: Direction3): Double = east * other.east + north * other.north + up * other.up
+
+    fun cross(other: Direction3): Direction3 = Direction3(
+        east = north * other.up - up * other.north,
+        north = up * other.east - east * other.up,
+        up = east * other.north - north * other.east
+    )
+
+    operator fun plus(other: Direction3) = Direction3(east + other.east, north + other.north, up + other.up)
+
+    operator fun minus(other: Direction3) = Direction3(east - other.east, north - other.north, up - other.up)
+
+    operator fun times(scale: Double) = Direction3(east * scale, north * scale, up * scale)
+
+    fun angleDeg(other: Direction3): Double {
+        val a = unit()
+        val b = other.unit()
+        val cosine = a.dot(b).coerceIn(-1.0, 1.0)
+        return Math.toDegrees(acos(cosine))
     }
 
     fun toAltAz(): Pair<Double, Double> {

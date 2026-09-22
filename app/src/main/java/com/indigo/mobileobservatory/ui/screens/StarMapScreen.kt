@@ -20,8 +20,11 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -31,11 +34,14 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Nightlight
+import androidx.compose.material.icons.filled.NightlightRound
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -60,6 +66,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.doOnLayout
@@ -73,6 +80,7 @@ import com.indigo.mobileobservatory.astro.OpticsTrainConfig
 import com.indigo.mobileobservatory.astro.OpticsTrainId
 import com.indigo.mobileobservatory.astro.StarMapFovOverlay
 import com.indigo.mobileobservatory.astro.StarMapOpticsPrefs
+import com.indigo.mobileobservatory.astro.UserOpticsCatalog
 import com.indigo.mobileobservatory.astro.resolveTelescopeFl
 import com.indigo.mobileobservatory.catalog.AssetDeepSkyCatalog
 import com.indigo.mobileobservatory.catalog.CatalogObject
@@ -196,6 +204,7 @@ fun StarMapScreen(
     mountCoordinates: MountCoordinates?,
     mountSite: MountSite?,
     mountConnected: Boolean,
+    mountSupportsSync: Boolean = true,
     mountBusy: Boolean,
     mountSlewRate: MountSlewRate = MountSlewRate.DEFAULT,
     precisionGotoProgress: PrecisionGotoProgress = PrecisionGotoProgress(),
@@ -296,12 +305,25 @@ fun StarMapScreen(
             connectedSensorName
         )
     }
-    val telescopes = OpticsEquipment.defaultTelescopes
+    var telescopes by remember {
+        mutableStateOf(
+            UserOpticsCatalog.loadTelescopes(
+                prefs.getString(UserOpticsCatalog.TELESCOPES_KEY, null)
+            )
+        )
+    }
     val eyepieces = OpticsEquipment.defaultEyepieces
-    val sensors = remember(connectedSensor) {
+    var userCameras by remember {
+        mutableStateOf(
+            UserOpticsCatalog.loadCameras(
+                prefs.getString(UserOpticsCatalog.CAMERAS_KEY, null)
+            )
+        )
+    }
+    val sensors = remember(connectedSensor, userCameras) {
         buildList {
             connectedSensor?.let { add(it) }
-            addAll(OpticsEquipment.defaultSensors)
+            addAll(userCameras.filter { it.id != OpticsEquipment.CONNECTED_SENSOR_ID })
         }
     }
     val opticsPrefs = remember { SharedOpticsPrefs(prefs) }
@@ -353,14 +375,26 @@ fun StarMapScreen(
 
     val activeConfig = if (activeTrain == OpticsTrainId.PRIMARY) primaryTrain else secondaryTrain
     val editingConfig = if (editingTrain == OpticsTrainId.PRIMARY) primaryTrain else secondaryTrain
-    val activeComputation = remember(activeConfig, sensors) {
+    val activeComputation = remember(activeConfig, sensors, telescopes) {
         activeConfig.compute(telescopes, eyepieces, sensors)
     }
-    val editingComputation = remember(editingConfig, sensors) {
+    val editingComputation = remember(editingConfig, sensors, telescopes) {
         editingConfig.compute(telescopes, eyepieces, sensors)
     }
-    val trainPrimaryLabel = stringResource(R.string.star_map_train_primary)
-    val trainSecondaryLabel = stringResource(R.string.star_map_train_secondary)
+    val defaultPrimaryLabel = stringResource(R.string.star_map_train_primary)
+    val defaultSecondaryLabel = stringResource(R.string.star_map_train_secondary)
+    val trainPrimaryLabel = UserOpticsCatalog.displayName(
+        primaryTrain,
+        telescopes,
+        sensors,
+        defaultPrimaryLabel
+    )
+    val trainSecondaryLabel = UserOpticsCatalog.displayName(
+        secondaryTrain,
+        telescopes,
+        sensors,
+        defaultSecondaryLabel
+    )
     val fovCurrentWord = stringResource(R.string.star_map_fov_current)
     val fovTargetWord = stringResource(R.string.star_map_fov_target)
     val trainName = if (activeTrain == OpticsTrainId.PRIMARY) trainPrimaryLabel else trainSecondaryLabel
@@ -396,6 +430,14 @@ fun StarMapScreen(
             .putBoolean("star_map_constellation_labels", constellationLabels)
             .putBoolean("star_map_constellation_bounds", constellationBounds)
             .putBoolean("star_map_star_labels", starHints)
+            .putString(
+                UserOpticsCatalog.TELESCOPES_KEY,
+                UserOpticsCatalog.formatTelescopes(telescopes)
+            )
+            .putString(
+                UserOpticsCatalog.CAMERAS_KEY,
+                UserOpticsCatalog.formatCameras(userCameras)
+            )
             .apply()
     }
 
@@ -420,6 +462,32 @@ fun StarMapScreen(
             "window.MercStarMap && window.MercStarMap.setSkyAppearance(" +
                 "$equatorialGrid,$azimuthalGrid,$meridianLine,$eclipticLine," +
                 "$constellationLines,$constellationLabels,$constellationBounds,$starHints);"
+        )
+    }
+
+    fun applyNightVision() {
+        val view = webView
+        if (view != null) {
+            if (redNightMode) {
+                val paint = android.graphics.Paint()
+                paint.colorFilter = android.graphics.ColorMatrixColorFilter(
+                    android.graphics.ColorMatrix(
+                        floatArrayOf(
+                            0.80f, 0.20f, 0.05f, 0f, 0f,
+                            0.03f, 0.04f, 0f, 0f, 0f,
+                            0.01f, 0f, 0.02f, 0f, 0f,
+                            0f, 0f, 0f, 1f, 0f
+                        )
+                    )
+                )
+                view.setLayerType(View.LAYER_TYPE_HARDWARE, paint)
+            } else {
+                view.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+            }
+        }
+        val enabled = if (redNightMode) "true" else "false"
+        evalStarMap(
+            "window.MercStarMap && window.MercStarMap.setNightVision($enabled);"
         )
     }
 
@@ -695,6 +763,10 @@ fun StarMapScreen(
         webView?.evaluateJavascript(script, null)
     }
 
+    LaunchedEffect(webView, redNightMode, engineState) {
+        applyNightVision()
+    }
+
     LaunchedEffect(webView, onlineDssEnabled, engineState) {
         if (engineState !is StarMapEngineState.Ready) return@LaunchedEffect
         val enabled = if (onlineDssEnabled) "true" else "false"
@@ -864,22 +936,54 @@ fun StarMapScreen(
                     }
                 }
                 StarMapEngineState.Ready -> {
-                    Card(modifier = Modifier.padding(8.dp)) {
-                        IconButton(
-                            onClick = {
-                                searchQuery = ""
-                                searchDialogVisible = true
-                                overlaysVisible = true
-                            },
-                            modifier = Modifier.semantics {
-                                contentDescription =
-                                    context.getString(R.string.star_map_search)
+                    Column(
+                        modifier = Modifier.padding(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalAlignment = Alignment.End
+                    ) {
+                        Card {
+                            IconButton(
+                                onClick = {
+                                    searchQuery = ""
+                                    searchDialogVisible = true
+                                    overlaysVisible = true
+                                },
+                                modifier = Modifier.semantics {
+                                    contentDescription =
+                                        context.getString(R.string.star_map_search)
+                                }
+                            ) {
+                                Icon(
+                                    Icons.Default.Search,
+                                    contentDescription = stringResource(R.string.star_map_search)
+                                )
                             }
-                        ) {
-                            Icon(
-                                Icons.Default.Search,
-                                contentDescription = stringResource(R.string.star_map_search)
-                            )
+                        }
+                        Card {
+                            IconButton(
+                                onClick = {
+                                    onRedNightModeChange(!redNightMode)
+                                    overlaysVisible = true
+                                },
+                                modifier = Modifier.semantics {
+                                    contentDescription =
+                                        context.getString(R.string.red_night_mode)
+                                }
+                            ) {
+                                Icon(
+                                    if (redNightMode) {
+                                        Icons.Default.Nightlight
+                                    } else {
+                                        Icons.Default.NightlightRound
+                                    },
+                                    contentDescription = stringResource(R.string.red_night_mode),
+                                    tint = if (redNightMode) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurface
+                                    }
+                                )
+                            }
                         }
                     }
                 }
@@ -912,9 +1016,22 @@ fun StarMapScreen(
             visible = overlaysVisible && engineState is StarMapEngineState.Ready,
             enter = fadeIn(),
             exit = fadeOut(),
-            modifier = Modifier.align(Alignment.BottomStart)
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
         ) {
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                val bottomSlotMax = minOf(300.dp, maxWidth / 2)
+                val target = selectedTarget
+                val canSlewMount = mountConnected && !mountBusy
+                val canSyncMount = canSlewMount && mountSupportsSync
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.Bottom
+                ) {
             StarMapCornerControls(
+                modifier = Modifier.widthIn(max = bottomSlotMax),
                 panel = cornerPanel,
                 onPanelChange = {
                     cornerPanel = it
@@ -926,6 +1043,8 @@ fun StarMapScreen(
                 mountSlewRate = mountSlewRate,
                 followMount = followMount,
                 activeTrain = activeTrain,
+                primaryTrainLabel = trainPrimaryLabel,
+                secondaryTrainLabel = trainSecondaryLabel,
                 showFovOverlay = showFovOverlay,
                 equatorialGrid = equatorialGrid,
                 azimuthalGrid = azimuthalGrid,
@@ -936,7 +1055,6 @@ fun StarMapScreen(
                 constellationBounds = constellationBounds,
                 starHints = starHints,
                 atmosphereVisible = atmosphereVisible,
-                redNightMode = redNightMode,
                 onlineDssEnabled = onlineDssEnabled,
                 overlaysLocked = overlaysLocked,
                 hipsCacheSizeLabel = hipsCacheSizeLabel,
@@ -997,7 +1115,6 @@ fun StarMapScreen(
                     persistAndApplySkyAppearance()
                 },
                 onAtmosphereChange = { atmosphereVisible = it },
-                onRedNightModeChange = onRedNightModeChange,
                 onOnlineDssChange = ::setOnlineDssEnabled,
                 onOverlaysLockedChange = {
                     overlaysLocked = it
@@ -1010,17 +1127,12 @@ fun StarMapScreen(
                 },
                 onReloadStarMap = ::reloadStarMap
             )
-        }
-
-        AnimatedVisibility(
-            visible = overlaysVisible && engineState is StarMapEngineState.Ready,
-            enter = fadeIn(),
-            exit = fadeOut(),
-            modifier = Modifier.align(Alignment.BottomEnd)
-        ) {
-            val target = selectedTarget
             if (target == null) {
-                Card(modifier = Modifier.padding(8.dp)) {
+                Card(
+                    modifier = Modifier
+                        .padding(8.dp)
+                        .widthIn(max = bottomSlotMax)
+                ) {
                     Column(
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -1028,6 +1140,11 @@ fun StarMapScreen(
                         Text(
                             stringResource(R.string.select_celestial_target),
                             style = MaterialTheme.typography.bodySmall
+                        )
+                        Text(
+                            stringResource(R.string.star_map_visual_sync_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline
                         )
                         if (mountConnected && mountCoordinates != null) {
                             OutlinedButton(onClick = ::centerOnMount) {
@@ -1040,7 +1157,7 @@ fun StarMapScreen(
                 Card(
                     modifier = Modifier
                         .padding(8.dp)
-                        .widthIn(max = 300.dp)
+                        .widthIn(max = bottomSlotMax)
                 ) {
                     Column(
                         modifier = Modifier.padding(10.dp),
@@ -1062,26 +1179,58 @@ fun StarMapScreen(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            OutlinedButton(
-                                enabled = mountConnected && !mountBusy,
-                                onClick = {
-                                    overlaysVisible = true
-                                    precisionConfirmation = target
-                                },
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text(stringResource(R.string.precision_goto_label))
-                            }
                             Button(
-                                enabled = mountConnected && !mountBusy,
+                                enabled = canSlewMount,
                                 onClick = {
                                     overlaysVisible = true
                                     gotoConfirmation = target
                                 },
-                                modifier = Modifier.weight(1f)
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 8.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .defaultMinSize(minWidth = 0.dp)
                             ) {
-                                Text(stringResource(R.string.goto_label))
+                                Text(
+                                    stringResource(R.string.goto_label),
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Clip
+                                )
                             }
+                            FilledTonalButton(
+                                enabled = canSyncMount,
+                                onClick = {
+                                    overlaysVisible = true
+                                    syncConfirmation = target
+                                },
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 8.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .defaultMinSize(minWidth = 0.dp)
+                            ) {
+                                Text(
+                                    stringResource(R.string.sync_label),
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Clip
+                                )
+                            }
+                        }
+                        OutlinedButton(
+                            enabled = canSlewMount,
+                            onClick = {
+                                overlaysVisible = true
+                                precisionConfirmation = target
+                            },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                stringResource(R.string.precision_goto_label),
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                         if (precisionGotoProgress.isActive ||
                             precisionGotoProgress.phase == PrecisionGotoPhase.SUCCEEDED ||
@@ -1105,6 +1254,20 @@ fun StarMapScreen(
                                 maxLines = 2
                             )
                         }
+                        if (mountConnected && !mountSupportsSync) {
+                            Text(
+                                stringResource(R.string.mount_sync_unsupported),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                        }
+                        if (!mountConnected) {
+                            Text(
+                                stringResource(R.string.connect_mount_for_goto),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                        }
                         if (targetExpanded) {
                             Text(
                                 target.coordinatesText(),
@@ -1120,31 +1283,19 @@ fun StarMapScreen(
                                 ) {
                                     Text(stringResource(R.string.center_on_target))
                                 }
-                                TextButton(
-                                    enabled = mountConnected && !mountBusy,
-                                    onClick = {
-                                        overlaysVisible = true
-                                        syncConfirmation = target
-                                    },
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text(stringResource(R.string.sync_label))
+                                if (mountConnected && mountCoordinates != null) {
+                                    TextButton(
+                                        onClick = ::centerOnMount,
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text(stringResource(R.string.center_on_mount))
+                                    }
                                 }
-                            }
-                            if (mountConnected && mountCoordinates != null) {
-                                TextButton(onClick = ::centerOnMount) {
-                                    Text(stringResource(R.string.center_on_mount))
-                                }
-                            }
-                            if (!mountConnected) {
-                                Text(
-                                    stringResource(R.string.connect_mount_for_goto),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.outline
-                                )
                             }
                         }
                     }
+                }
+            }
                 }
             }
         }
@@ -1275,6 +1426,8 @@ fun StarMapScreen(
             sensors = sensors,
             showOverlay = showFovOverlay,
             computation = editingComputation,
+            primaryTrainLabel = trainPrimaryLabel,
+            secondaryTrainLabel = trainSecondaryLabel,
             onEditingTrainChange = { editingTrain = it },
             onConfigChange = { updated ->
                 if (updated.id == OpticsTrainId.PRIMARY) {
@@ -1289,6 +1442,16 @@ fun StarMapScreen(
             onShowOverlayChange = {
                 showFovOverlay = it
                 persistFovPrefs()
+            },
+            onTelescopesChange = {
+                telescopes = it
+                persistFovPrefs()
+                applyFovOverlays(alsoZoom = false)
+            },
+            onCamerasChange = {
+                userCameras = it
+                persistFovPrefs()
+                applyFovOverlays(alsoZoom = false)
             },
             onDismiss = {
                 persistFovPrefs()

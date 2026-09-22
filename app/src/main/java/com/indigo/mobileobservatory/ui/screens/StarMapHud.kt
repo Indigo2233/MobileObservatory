@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
@@ -58,6 +57,7 @@ internal enum class StarMapCornerPanel { NONE, OBSERVING, SKY }
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun StarMapCornerControls(
+    modifier: Modifier = Modifier,
     panel: StarMapCornerPanel,
     onPanelChange: (StarMapCornerPanel) -> Unit,
     mountConnected: Boolean,
@@ -65,6 +65,8 @@ internal fun StarMapCornerControls(
     mountSlewRate: MountSlewRate,
     followMount: Boolean,
     activeTrain: OpticsTrainId,
+    primaryTrainLabel: String,
+    secondaryTrainLabel: String,
     showFovOverlay: Boolean,
     equatorialGrid: Boolean,
     azimuthalGrid: Boolean,
@@ -75,7 +77,6 @@ internal fun StarMapCornerControls(
     constellationBounds: Boolean,
     starHints: Boolean,
     atmosphereVisible: Boolean,
-    redNightMode: Boolean,
     onlineDssEnabled: Boolean,
     overlaysLocked: Boolean,
     hipsCacheSizeLabel: String,
@@ -100,7 +101,6 @@ internal fun StarMapCornerControls(
     onConstellationBoundsChange: (Boolean) -> Unit,
     onStarHintsChange: (Boolean) -> Unit,
     onAtmosphereChange: (Boolean) -> Unit,
-    onRedNightModeChange: (Boolean) -> Unit,
     onOnlineDssChange: (Boolean) -> Unit,
     onOverlaysLockedChange: (Boolean) -> Unit,
     onRefreshHipsCache: () -> Unit,
@@ -112,13 +112,13 @@ internal fun StarMapCornerControls(
     }
 
     Column(
-        modifier = Modifier.padding(8.dp),
+        modifier = modifier.padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         when (panel) {
             StarMapCornerPanel.OBSERVING -> Card(
                 modifier = Modifier
-                    .widthIn(max = 300.dp)
+                    .fillMaxWidth()
                     .heightIn(max = 420.dp)
             ) {
                 Column(
@@ -232,12 +232,12 @@ internal fun StarMapCornerControls(
                         FilterChip(
                             selected = activeTrain == OpticsTrainId.PRIMARY,
                             onClick = { onActiveTrainChange(OpticsTrainId.PRIMARY) },
-                            label = { Text(stringResource(R.string.star_map_train_primary)) }
+                            label = { Text(primaryTrainLabel) }
                         )
                         FilterChip(
                             selected = activeTrain == OpticsTrainId.SECONDARY,
                             onClick = { onActiveTrainChange(OpticsTrainId.SECONDARY) },
-                            label = { Text(stringResource(R.string.star_map_train_secondary)) }
+                            label = { Text(secondaryTrainLabel) }
                         )
                     }
                     StarMapFlagSwitch(
@@ -268,7 +268,7 @@ internal fun StarMapCornerControls(
             }
             StarMapCornerPanel.SKY -> Card(
                 modifier = Modifier
-                    .widthIn(max = 300.dp)
+                    .fillMaxWidth()
                     .heightIn(max = 420.dp)
             ) {
                 Column(
@@ -340,11 +340,6 @@ internal fun StarMapCornerControls(
                         label = stringResource(R.string.atmosphere),
                         checked = atmosphereVisible,
                         onCheckedChange = onAtmosphereChange
-                    )
-                    StarMapFlagSwitch(
-                        label = stringResource(R.string.red_night_mode),
-                        checked = redNightMode,
-                        onCheckedChange = onRedNightModeChange
                     )
                     StarMapFlagSwitch(
                         label = stringResource(R.string.online_dss_survey),

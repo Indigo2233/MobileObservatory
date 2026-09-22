@@ -10,6 +10,7 @@ import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
 import androidx.core.content.ContextCompat
+import com.indigo.mobileobservatory.R
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -127,6 +128,10 @@ class MountModule(
 
     private val _mountBusy = MutableStateFlow(false)
     val mountBusy: StateFlow<Boolean> = _mountBusy.asStateFlow()
+
+    /** Protocol sync is available for LX200/OnStep/iOptron and SynScan motor/Wi‑Fi, not USB handset. */
+    val supportsSync: Boolean
+        get() = controller.isConnected && controller.supportsSync
 
     private val _mountConnectionMessage = MutableStateFlow("")
     val mountConnectionMessage: StateFlow<String> = _mountConnectionMessage.asStateFlow()
@@ -628,7 +633,11 @@ class MountModule(
     /** Visual sync: mount stays put; its reported pointing becomes [raHours]/[decDeg]. */
     fun syncMountToTarget(name: String, raHours: Double, decDeg: Double) {
         if (!controller.isConnected) {
-            _statusMessage.value = "Connect the mount before sync"
+            _statusMessage.value = application.getString(R.string.connect_mount_for_goto)
+            return
+        }
+        if (!controller.supportsSync) {
+            _statusMessage.value = application.getString(R.string.mount_sync_unsupported)
             return
         }
         val target = MountCoordinates(raHours = raHours, decDeg = decDeg)
@@ -641,12 +650,16 @@ class MountModule(
                     _mountCoordinates.value = coordinates
                 }
                 _mountConnectionState.value = MountConnectionState.Connected
-                _statusMessage.value =
-                    "Synced mount to $name (${target.formatRa()} ${target.formatDec()})"
+                _statusMessage.value = application.getString(
+                    R.string.mount_synced_to,
+                    name,
+                    target.formatRa(),
+                    target.formatDec()
+                )
             } catch (e: Throwable) {
-                _mountConnectionState.value =
-                    MountConnectionState.Error(e.message ?: "Mount sync failed")
-                _statusMessage.value = "Mount sync error: ${e.message}"
+                val detail = e.message ?: application.getString(R.string.mount_sync_failed)
+                _mountConnectionState.value = MountConnectionState.Error(detail)
+                _statusMessage.value = application.getString(R.string.mount_sync_error, detail)
             } finally {
                 _mountBusy.value = false
             }

@@ -18,6 +18,7 @@ import android.media.ImageReader
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
+import android.util.Range
 import android.util.Size
 import android.view.Surface
 import com.indigo.mobileobservatory.pointing.CameraLensCalibration
@@ -160,13 +161,18 @@ class PhoneSkyCapture(private val context: Context) {
             maxLongSide
         ) ?: throw IllegalStateException("No suitable output size")
 
-        val exposureRange = openCapability.exposureTimeRangeNs
+        val exposureRange = openChars.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
+            ?: openCapability.exposureTimeRangeNs
             ?: throw IllegalStateException("No exposure time range")
-        val isoRange = openCapability.isoRange
+        val isoRange = openChars.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+            ?: openCapability.isoRange
             ?: throw IllegalStateException("No ISO range")
+        val maxFrameDuration = openChars.get(CameraCharacteristics.SENSOR_INFO_MAX_FRAME_DURATION)
+            ?: openCapability.maxFrameDurationNs ?: 0L
+        val maxNs = PhoneManualExposure.usableMaxExposureNs(exposureRange.upper, maxFrameDuration)
         val exposureNs = (exposureSeconds * 1_000_000_000.0).toLong()
-            .coerceIn(exposureRange.lower, exposureRange.upper)
-        val sensitivity = iso.coerceIn(isoRange.lower, isoRange.upper)
+            .coerceIn(exposureRange.lower, maxNs)
+        val autoIso = iso == PhoneManualExposure.ISO_AUTO
 
         val thread = HandlerThread("PhoneSkyCapture").also { it.start() }
         val handler = Handler(thread.looper)
@@ -183,6 +189,19 @@ class PhoneSkyCapture(private val context: Context) {
             val sessionOpenLatencyMs = (System.nanoTime() - openStart) / 1_000_000
 
             val captures = ArrayList<PhoneSkyCaptureResult>(frameCount)
+            val sensitivity = if (!autoIso) {
+                iso.coerceIn(isoRange.lower, isoRange.upper)
+            } else {
+                meterSensitivity(
+                    device = device,
+                    session = session,
+                    reader = reader,
+                    handler = handler,
+                    targetExposureNs = exposureNs,
+                    isoRange = isoRange,
+                    chars = openChars
+                )
+            }
             repeat(frameCount) { index ->
                 val captureStart = System.nanoTime()
                 val (image, result) = stillCapture(
@@ -192,6 +211,7 @@ class PhoneSkyCapture(private val context: Context) {
                     handler = handler,
                     exposureNs = exposureNs,
                     iso = sensitivity,
+                    autoIso = false,
                     chars = openChars
                 )
                 val captureLatencyMs = (System.nanoTime() - captureStart) / 1_000_000
@@ -217,12 +237,14 @@ class PhoneSkyCapture(private val context: Context) {
                     val metadata = captureMetadata(
                         capability, openId, physicalId, result, frame.width, frame.height, useRaw
                     )
+                    val actualExposureNs = result.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: exposureNs
+                    val actualIso = result.get(CaptureResult.SENSOR_SENSITIVITY) ?: sensitivity
                     captures += PhoneSkyCaptureResult(
                         frame = frame,
                         capability = capability,
                         usedRaw = useRaw,
-                        exposureNs = exposureNs,
-                        iso = sensitivity,
+                        exposureNs = actualExposureNs,
+                        iso = if (actualIso > 0) actualIso else sensitivity,
                         outputSize = outputSize,
                         fovWidthDeg = metadata.fov?.widthDeg,
                         fovHeightDeg = metadata.fov?.heightDeg,
@@ -460,6 +482,41 @@ class PhoneSkyCapture(private val context: Context) {
         }
     }
 
+    private suspend fun meterSensitivity(
+        device: CameraDevice,
+        session: CameraCaptureSession,
+        reader: ImageReader,
+        handler: Handler,
+        targetExposureNs: Long,
+        isoRange: Range<Int>,
+        chars: CameraCharacteristics
+    ): Int {
+        val (image, result) = stillCapture(
+            device = device,
+            session = session,
+            reader = reader,
+            handler = handler,
+            exposureNs = targetExposureNs,
+            iso = isoRange.upper,
+            autoIso = true,
+            chars = chars
+        )
+        try {
+            val meteredIso = result.get(CaptureResult.SENSOR_SENSITIVITY) ?: isoRange.upper
+            val meteredExp = result.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L
+            if (meteredExp <= 0L) return meteredIso.coerceIn(isoRange.lower, isoRange.upper)
+            val scaled = (meteredIso.toLong() * meteredExp / targetExposureNs)
+                .toInt()
+                .coerceIn(isoRange.lower, isoRange.upper)
+            return scaled
+        } finally {
+            try {
+                image.close()
+            } catch (_: Exception) {
+            }
+        }
+    }
+
     private suspend fun stillCapture(
         device: CameraDevice,
         session: CameraCaptureSession,
@@ -467,16 +524,21 @@ class PhoneSkyCapture(private val context: Context) {
         handler: Handler,
         exposureNs: Long,
         iso: Int,
-        chars: CameraCharacteristics
+        chars: CameraCharacteristics,
+        autoIso: Boolean = false
     ): Pair<Image, TotalCaptureResult> = suspendCancellableCoroutine { cont ->
         val builder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
         builder.addTarget(reader.surface)
         builder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
         builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
-        builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
         builder.set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_OFF)
-        builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, exposureNs)
-        builder.set(CaptureRequest.SENSOR_SENSITIVITY, iso)
+        if (autoIso) {
+            builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+        } else {
+            builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
+            builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, exposureNs)
+            builder.set(CaptureRequest.SENSOR_SENSITIVITY, iso)
+        }
         // Frame duration must be ≥ exposure; 0 lets some OEM HALs clamp long exposures.
         val maxFrame = chars.get(CameraCharacteristics.SENSOR_INFO_MAX_FRAME_DURATION) ?: 0L
         val frameDuration = if (maxFrame > 0L) {

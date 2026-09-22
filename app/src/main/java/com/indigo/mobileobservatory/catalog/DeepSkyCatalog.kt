@@ -1,5 +1,7 @@
 package com.indigo.mobileobservatory.catalog
 
+import com.indigo.mobileobservatory.astro.ObserverSite
+import java.time.Instant
 import java.util.Locale
 
 /**
@@ -34,6 +36,12 @@ interface DeepSkyCatalog {
     fun all(): List<CatalogObject>
     fun findById(id: String): CatalogObject?
     fun search(query: String): List<CatalogObject>
+    fun suggest(
+        site: ObserverSite? = null,
+        instant: Instant = Instant.now(),
+        limit: Int = 40,
+        filter: CatalogBrowseFilter = CatalogBrowseFilter.ALL
+    ): List<CatalogObject> = VisibilityRanker.suggest(all(), site, instant, limit, filter)
 }
 
 /** Strip whitespace so "M 42" / "m42" match the same catalog id. */

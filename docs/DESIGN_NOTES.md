@@ -33,13 +33,15 @@
 | 按钮 | 内容 |
 |---|---|
 | 观测工具 | 赤道仪方向盘、跟随指向、居中到赤道仪、视场叠加与视场设置 |
-| 星图图层 | 赤经赤纬网格（历元网格 `equatorial_jnow`）、地平网格、子午圈、黄道、星座连线/名称/边界、恒星标签、大气、夜间红光、DSS、锁定浮层 |
+| 星图图层 | 赤经赤纬网格（历元网格 `equatorial_jnow`）、地平网格、子午圈、黄道、星座连线/名称/边界、恒星标签、大气、DSS、锁定浮层 |
 
-同时只打开其中一个面板。网格默认关闭，开关写入 `star_map_*` 偏好。
+同时只打开其中一个面板。网格默认关闭，开关写入 `star_map_*` 偏好。底栏与点选目标卡左右分栏，各不超过半屏和 300dp，避免叠在一起。
 
-**代码：** `StarMapHud.kt`、`StarMapScreen.kt`、`app.js` `setSkyAppearance`
+夜间红光不在图层里：右上角搜索按钮下方单独一颗灯钮。打开后 Material 主题变红，并且 `setNightVision` 给星图画布加上红光滤镜。
 
-**回归：** `StarMapAssetsRegressionTest.skyAppearanceControlsEquatorialAndHorizonGrids`、`ObservingUiWiringTest.starMapChromeUsesTwoHideableCornerPanels`
+**代码：** `StarMapHud.kt`、`StarMapScreen.kt`、`app.js` `setSkyAppearance` / `setNightVision`、`styles.css` `html.night-vision`
+
+**回归：** `StarMapAssetsRegressionTest.skyAppearanceControlsEquatorialAndHorizonGrids`、`StarMapAssetsRegressionTest.nightVisionTintsTheStarMapCanvas`、`ObservingUiWiringTest.starMapChromeUsesTwoHideableCornerPanels`
 
 ---
 
@@ -52,14 +54,15 @@
 | 光路 | 各有焦距 + 终端（目镜圆或相机矩），互不覆盖。默认显示**导星**。 |
 | 当前框 | `#fov-current`，绿实线。已连接赤道仪时钉在指向的 RA/Dec；未连接则钉屏幕中央。 |
 | 目标框 | `#fov-target`，黄虚线。只要开着视场叠加就一直显示，钉在屏幕中央（构图/GOTO 这块天）。不需要先点选天体。 |
-| 标签 | `主镜 当前 0.42°` / `导星 目标 1.20°×0.80°`，不再写「预览」「望远镜」。 |
+| 标签 | 用用户给主镜 / 相机起的显示名，例如 `C8 当前 0.42°` / `ASI533 目标 1.20°×0.80°`。未命名时才回退到「主镜」「导星」。 |
+| 设备库 | 视场设置可添加、删除、命名主镜和相机；芯片和叠加层都显示该显示名。已连接相机不能改名或删除。至少保留一项。 |
 | 十字丝 | 不要屏幕中心十字丝（`mount-reticle` 已去掉）。指向改用跟随或「居中到赤道仪」。 |
 | 板解焦距 | 仅当**导星且为相机**时，在视场设置里改焦距才写 `plate_focal_length_mm`。主镜目视不改板解焦距。`persistFovPrefs()` 不得顺手覆盖该键。 |
 | 旧安装 | 现有 `star_map_*` 键迁到主镜。 |
 
-**代码：** `StarMapOpticsTrain.kt`、`StarMapFovOverlay.kt`、`StarMapFovSheet.kt`、`StarMapHud.kt`、`stellarium/styles.css`、`app.js` `projectRaDecToScreen`
+**代码：** `StarMapOpticsTrain.kt`、`UserOpticsCatalog.kt`、`StarMapFovOverlay.kt`、`StarMapFovSheet.kt`、`StarMapHud.kt`、`stellarium/styles.css`、`app.js` `projectRaDecToScreen`
 
-**回归：** `StarMapOpticsTrainTest`、`StarMapFovOverlayTest`、`FovOverlayLayoutTest.skyOffsetUsesTheSameLinearDegreeMappingAsTheBox`、`StarMapAssetsRegressionTest.overlayApiUsesCurrentAndTargetRoles`
+**回归：** `StarMapOpticsTrainTest`、`UserOpticsCatalogTest`、`StarMapFovOverlayTest`、`FovOverlayLayoutTest.skyOffsetUsesTheSameLinearDegreeMappingAsTheBox`、`StarMapAssetsRegressionTest.overlayApiUsesCurrentAndTargetRoles`
 
 ---
 
@@ -148,6 +151,22 @@
 
 ---
 
+## 星图目视同步
+
+不用相机时，把天体对准目镜中心，在星图点选该天体，再按 **同步**。赤道仪不转，只把当前指向写成该天体的 JNOW 坐标。同步与 GOTO 同级显示，不必先展开目标详情。「指向并居中」仍要相机 + ASTAP，和目视同步不是同一条路。
+
+| 点 | 约定 |
+|---|---|
+| 历元 | 与 GOTO 相同：进赤道仪前 `EquatorialEpoch.toJnowHours`。 |
+| USB SynScan 手控器 | 不支持协议 sync；请在手控器对齐，或改用 Wi‑Fi / 电机协议。 |
+| OnStep / LX200 / iOptron / SynScan 电机 | `:CM#` 或电机协议 sync。 |
+
+**代码：** `StarMapScreen` 目标卡、`CameraViewModel.syncMountToTarget`、`MountModule.syncMountToTarget`、`Lx200MountController.syncTo`
+
+**回归：** `ObservingUiWiringTest.starMapExposesVisualMountSyncWithoutExpandingTarget`
+
+---
+
 ## 图谱（ToupTek）USB 连接
 
 图谱 SDK 用 Android 已经打开的 fd（`Toupcam_Open("fd-%d-%04x-%04x")`），自己不走 libusb。
@@ -169,8 +188,8 @@
 
 | 点 | 约定 |
 |---|---|
-| 常驻 | 仅面板开关（连着相机时）+ 一个「预览工具」菜单。左上只留暂停和 REC。 |
-| 菜单里 | 适应窗口、夜间红光、信息叠加、对焦辅助、图像中心、图像解析、文件浏览。 |
+| 常驻 | 面板开关、适应窗口（连着相机时）+ 一个「预览工具」菜单。左上只留暂停和 REC。仍横排，不要竖排堆 FAB。 |
+| 菜单里 | 夜间红光、信息叠加、对焦辅助、图像中心、图像解析、文件浏览。 |
 | 对焦辅助打开时 | 自动收起菜单，避免挡住放大窗。 |
 | 对焦窗 | 约 220×160 dp，默认展开；需要时再收成分数条。 |
 
@@ -182,7 +201,7 @@
 
 ## 天体库与星图目录
 
-目标库直接复用星图搜索的 `AssetDeepSkyCatalog`，不再另做一份演示 10 条。
+目标库直接复用星图搜索的 `AssetDeepSkyCatalog`（OpenNGC + 命名亮星 + Caldwell/中文别名），空搜索走今夜可见排序，不再另做一份演示 10 条。
 
 **代码：** `TargetLibraryScreen.kt`、`AssetDeepSkyCatalog.kt`、`StarMapScreen.kt`
 
@@ -190,6 +209,14 @@
 
 ---
 
-## 连接独立性
+## 推镜用法（对标 StarSense Explorer）
+
+选目标后：静止自动拍星野对齐 → 按箭头推镜（过程中不解算，IMU 跟随）→ 停手再自动拍一张校正。到位后不再连拍。仍可点「立即对齐」手动重解。
+
+**代码：** `MotionGate.kt`、`PhoneSkyAttitudeSource.kt`、`PushToExperienceScreen.kt`
+
+**回归：** `MotionGateTest`、`PushToAutoSolveTest`
+
+---
 
 相机、赤道仪、导星相机、配件各自连接、互不绑定。协议细节留在 adapter 里，UI 只看统一 ViewModel 状态。包名/JNI 符号约定见 `AGENTS.md`。

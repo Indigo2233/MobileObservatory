@@ -2,6 +2,7 @@ package com.indigo.mobileobservatory.pointing
 
 import com.indigo.mobileobservatory.astro.ObserverSite
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.Instant
@@ -30,17 +31,56 @@ class WideFieldSolverTest {
         assertEquals(53.0, result.fovHeightDeg!!, 2.0)
     }
 
-    private fun solveSynthetic(initialFovWidth: Double, initialFovHeight: Double): WideFieldSolveResult {
+    @Test
+    fun rejectsTwoEquallyGoodDistantFieldsAsAmbiguous() {
+        val result = solveTwinFields(prior = null)
+        assertFalse(result.success)
+        assertEquals(WideFieldSolveFailure.AMBIGUOUS_CANDIDATE, result.failure)
+    }
+
+    @Test
+    fun attitudePriorSelectsTheNearbyTwinField() {
+        val result = solveTwinFields(
+            prior = AttitudeSolvePrior(centerRaDeg = 40.0, centerDecDeg = 20.0, rotationDeg = 0.0)
+        )
+        assertTrue(result.message, result.success)
+        assertEquals(40.0, result.raDeg!!, 0.4)
+        assertEquals(20.0, result.decDeg!!, 0.4)
+    }
+
+    private fun solveTwinFields(prior: AttitudeSolvePrior?): WideFieldSolveResult {
+        val primary = listOf(
+            40.0 to 20.0, 30.0 to 25.0, 50.0 to 16.0, 35.0 to 10.0, 47.0 to 29.0, 55.0 to 23.0
+        )
+        val twin = primary.map { (ra, dec) -> ((ra + 180.0) % 360.0) to dec }
+        val catalogStars = (primary + twin).mapIndexed { index, (ra, dec) ->
+            PhoneCatalogStar(ra, dec, 1.0 + (index % 6) * 0.2, index, "S$index")
+        }
+        return solveSynthetic(
+            initialFovWidth = 70.0,
+            initialFovHeight = 53.0,
+            catalogStars = catalogStars,
+            imagedStars = catalogStars.take(6),
+            prior = prior
+        )
+    }
+
+    private fun solveSynthetic(
+        initialFovWidth: Double,
+        initialFovHeight: Double,
+        catalogStars: List<PhoneCatalogStar> = listOf(
+            40.0 to 20.0, 30.0 to 25.0, 50.0 to 16.0, 35.0 to 10.0, 47.0 to 29.0, 55.0 to 23.0
+        ).mapIndexed { index, (ra, dec) -> PhoneCatalogStar(ra, dec, 1.0 + index * 0.2, index, "S$index") },
+        imagedStars: List<PhoneCatalogStar> = catalogStars,
+        prior: AttitudeSolvePrior? = null
+    ): WideFieldSolveResult {
         val centerRa = 40.0
         val centerDec = 20.0
-        val catalogStars = listOf(
-            40.0 to 20.0, 30.0 to 25.0, 50.0 to 16.0, 35.0 to 10.0, 47.0 to 29.0, 55.0 to 23.0
-        ).mapIndexed { index, (ra, dec) -> PhoneCatalogStar(ra, dec, 1.0 + index * 0.2, index, "S$index") }
         val width = 1600
         val height = 1200
         val fovWidth = 70.0
         val fovHeight = 53.0
-        val stars = catalogStars.mapIndexed { index, star ->
+        val stars = imagedStars.mapIndexed { index, star ->
             val local = localCoordinates(centerRa, centerDec, star.raDeg, star.decDeg)
             ExtractedStar(
                 x = (((local.first / local.third) / tan(Math.toRadians(fovWidth / 2.0)) + 1.0) * width / 2.0).toFloat(),
@@ -52,7 +92,8 @@ class WideFieldSolverTest {
             extraction = StarExtractionResult(stars, 32, 5f, null, 10f, 1f),
             frameWidth = width, frameHeight = height, initialFovWidthDeg = initialFovWidth, initialFovHeightDeg = initialFovHeight,
             observationTime = Instant.parse("2026-08-12T14:00:00Z"), site = ObserverSite(30.0, 120.0),
-            catalog = PhoneBrightStarCatalog.of(catalogStars)
+            catalog = PhoneBrightStarCatalog.of(catalogStars),
+            attitudePrior = prior
         ))
     }
 

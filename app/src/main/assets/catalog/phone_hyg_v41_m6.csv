@@ -1,7 +1,8 @@
-# HYG Database v4.1 subset: -1 <= visual magnitude <= 6.0
+# HYG Database v4.1 subset: -1.46 <= visual magnitude <= 6.0 (includes Sirius)
 # Source: https://github.com/astronexus/HYG-Database
 # License: CC BY-SA 4.0; see THIRD_PARTY_HYG.txt
 ra_deg,dec_deg,mag,hip,name
+101.2871550,-16.7161160,-1.46,32349,Sirius
 95.9879250,-52.6956600,-0.62,30438,Canopus
 213.9154500,19.1824100,-0.05,69673,Arcturus
 219.9114750,-60.8339760,-0.01,71683,Rigil Kentaurus

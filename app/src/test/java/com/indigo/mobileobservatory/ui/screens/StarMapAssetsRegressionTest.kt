@@ -77,6 +77,16 @@ class StarMapAssetsRegressionTest {
         assertTrue(js.contains("applySkyAppearance();"))
     }
 
+    @Test
+    fun nightVisionTintsTheStarMapCanvas() {
+        val js = read("app.js")
+        val css = read("styles.css")
+        assertTrue(js.contains("setNightVision:"))
+        assertTrue(js.contains("classList.toggle(\"night-vision\""))
+        assertTrue(css.contains("html.night-vision #stel-canvas"))
+        assertTrue(css.contains("hue-rotate(-50deg)"))
+    }
+
     private fun read(name: String): String {
         val candidates = listOf(
             File("src/stellarium/assets/stellarium/$name"),

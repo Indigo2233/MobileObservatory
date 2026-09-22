@@ -45,7 +45,10 @@ data class PhoneCameraCapability(
     val lensCalibration: CameraLensCalibration? = null,
     val distortionCorrectionModes: IntArray = intArrayOf(),
     /** Non-null when this is a physical sub-camera that must be opened via its logical parent. */
-    val logicalParentId: String? = null
+    val logicalParentId: String? = null,
+    val maxFrameDurationNs: Long? = null,
+    /** Android 14+ exposure-time priority AE (manual shutter, auto ISO). */
+    val supportsAeExposurePriority: Boolean = false
 ) {
     /** Camera id that [android.hardware.camera2.CameraManager.openCamera] must be called with. */
     val openableCameraId: String
@@ -59,6 +62,15 @@ data class PhoneCameraCapability(
 
     val minExposureSeconds: Double?
         get() = exposureTimeRangeNs?.lower?.let { it / 1_000_000_000.0 }
+
+    val usableMaxExposureSeconds: Double
+        get() = PhoneManualExposure.usableMaxExposureNs(
+            advertisedNs = exposureTimeRangeNs?.upper,
+            maxFrameDurationNs = maxFrameDurationNs
+        ) / 1_000_000_000.0
+
+    fun captureExposureRange(): ClosedFloatingPointRange<Float> =
+        PhoneManualExposure.rangeSeconds(minExposureSeconds, maxExposureSeconds, maxFrameDurationNs)
 
     val displayLabel: String
         get() {
@@ -265,15 +277,28 @@ data class PhoneCameraCapability(
                     )
                 }.getOrNull()
             } else null
+            val parentChars = logicalParentId?.let { parentId ->
+                runCatching { manager.getCameraCharacteristics(parentId) }.getOrNull()
+            }
+            val ownFrame = chars.get(CameraCharacteristics.SENSOR_INFO_MAX_FRAME_DURATION)
+            val parentFrame = parentChars?.get(CameraCharacteristics.SENSOR_INFO_MAX_FRAME_DURATION)
             return PhoneCameraCapability(
                 cameraId = cameraId,
                 facing = facing,
                 lensRole = classifyLensRole(equiv),
                 equivalentFocalLengthMm = equiv,
                 supportsRaw = supportsRaw,
-                supportsManualSensor = supportsManual,
-                exposureTimeRangeNs = chars.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE),
-                isoRange = chars.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE),
+                supportsManualSensor = supportsManual || parentChars
+                    ?.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
+                    ?.contains(CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR) == true,
+                exposureTimeRangeNs = mergeLongRange(
+                    chars.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE),
+                    parentChars?.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
+                ),
+                isoRange = mergeIntRange(
+                    chars.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE),
+                    parentChars?.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+                ),
                 focalLengthMm = focalMm,
                 sensorWidthMm = sensorW,
                 sensorHeightMm = sensorH,
@@ -294,8 +319,22 @@ data class PhoneCameraCapability(
                 distortionCorrectionModes = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                     chars.get(CameraCharacteristics.DISTORTION_CORRECTION_AVAILABLE_MODES) ?: intArrayOf()
                 } else intArrayOf(),
-                logicalParentId = logicalParentId
+                logicalParentId = logicalParentId,
+                maxFrameDurationNs = listOfNotNull(ownFrame, parentFrame).maxOrNull(),
+                supportsAeExposurePriority = false
             )
+        }
+
+        private fun mergeLongRange(a: Range<Long>?, b: Range<Long>?): Range<Long>? {
+            if (a == null) return b
+            if (b == null) return a
+            return Range(minOf(a.lower, b.lower), maxOf(a.upper, b.upper))
+        }
+
+        private fun mergeIntRange(a: Range<Int>?, b: Range<Int>?): Range<Int>? {
+            if (a == null) return b
+            if (b == null) return a
+            return Range(minOf(a.lower, b.lower), maxOf(a.upper, b.upper))
         }
 
         /** Diagnostic dump when enumeration yields nothing (permission / OEM quirks). */

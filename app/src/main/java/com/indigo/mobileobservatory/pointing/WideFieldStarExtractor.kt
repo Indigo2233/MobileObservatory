@@ -2,7 +2,6 @@ package com.indigo.mobileobservatory.pointing
 
 import com.indigo.mobileobservatory.camera.FrameData
 import com.indigo.mobileobservatory.camera.PixelFormat
-import kotlin.math.hypot
 import kotlin.math.log10
 import kotlin.math.max
 import kotlin.math.min
@@ -14,7 +13,11 @@ data class ExtractedStar(
     val peak: Float,
     val flux: Float,
     val snr: Float,
-    val background: Float
+    val background: Float,
+    /** Minor/major axis of the detection window; 1 is round, ~0 is a trail or spike. */
+    val roundness: Float = 1f,
+    /** Mean Gaussian-like width in pixels. */
+    val sizePx: Float = 2f
 )
 
 data class StarExtractionResult(
@@ -36,6 +39,12 @@ object WideFieldStarExtractor {
     private const val SIGMA_K = 5f
     private const val MIN_SEPARATION_PX = 8f
     private const val CENTROID_RADIUS = 2
+    private const val SHAPE_RADIUS = 4
+    private const val MINIMUM_ROUNDNESS = 0.38f
+    private const val MINIMUM_SIZE_PX = 1.15f
+    private const val MAXIMUM_SIZE_PX = 18f
+    private const val SPREAD_COLUMNS = 4
+    private const val SPREAD_ROWS = 3
 
     fun extract(
         pixels: FloatArray,
@@ -110,18 +119,21 @@ object WideFieldStarExtractor {
                     continue
                 }
                 val (cx, cy, flux) = centroid(pixels, width, height, x, y, bg)
+                val (roundness, sizePx) = shape(pixels, width, height, cx, cy, bg)
+                if (roundness < MINIMUM_ROUNDNESS || sizePx < MINIMUM_SIZE_PX || sizePx > MAXIMUM_SIZE_PX) continue
                 val snr = ((v - bg) / sigma).coerceAtLeast(0f)
-                candidates += ExtractedStar(cx, cy, v, flux, snr, bg)
+                candidates += ExtractedStar(cx, cy, v, flux, snr, bg, roundness, sizePx)
             }
         }
 
         candidates.sortByDescending { it.snr }
-        val stars = ArrayList<ExtractedStar>(min(maxStars, candidates.size))
-        for (c in candidates) {
-            if (stars.size >= maxStars) break
-            if (stars.any { hypot(it.x - c.x, it.y - c.y) < MIN_SEPARATION_PX }) continue
-            stars += c
-        }
+        val stars = MatchStarSelector.spread(
+            stars = candidates,
+            limit = maxStars,
+            minSeparationPx = MIN_SEPARATION_PX,
+            columns = SPREAD_COLUMNS,
+            rows = SPREAD_ROWS
+        )
 
         val limiting = if (fovWidthDeg != null && fovHeightDeg != null && stars.isNotEmpty()) {
             estimateLimitingMagnitude(stars.size, fovWidthDeg, fovHeightDeg)
@@ -231,6 +243,49 @@ object WideFieldStarExtractor {
         }
         if (wSum <= 1e-6) return Triple(x.toFloat(), y.toFloat(), 0f)
         return Triple((xSum / wSum).toFloat(), (ySum / wSum).toFloat(), wSum.toFloat())
+    }
+
+    private fun shape(
+        pixels: FloatArray,
+        width: Int,
+        height: Int,
+        cx: Float,
+        cy: Float,
+        background: Float
+    ): Pair<Float, Float> {
+        var wSum = 0.0
+        var xx = 0.0
+        var yy = 0.0
+        var xy = 0.0
+        val r = SHAPE_RADIUS
+        val x0 = max(0, cx.toInt() - r)
+        val x1 = min(width - 1, cx.toInt() + r)
+        val y0 = max(0, cy.toInt() - r)
+        val y1 = min(height - 1, cy.toInt() + r)
+        for (y in y0..y1) {
+            val row = y * width
+            for (x in x0..x1) {
+                val w = (pixels[row + x] - background).toDouble().coerceAtLeast(0.0)
+                if (w <= 0.0) continue
+                val dx = x - cx
+                val dy = y - cy
+                wSum += w
+                xx += w * dx * dx
+                yy += w * dy * dy
+                xy += w * dx * dy
+            }
+        }
+        if (wSum <= 1e-6) return 0f to 0f
+        val disc = sqrt((xx - yy) * (xx - yy) + 4.0 * xy * xy)
+        val lambda1 = (xx + yy + disc) / (2.0 * wSum)
+        val lambda2 = (xx + yy - disc) / (2.0 * wSum)
+        val lo = min(lambda1, lambda2).coerceAtLeast(0.0)
+        val hi = max(lambda1, lambda2).coerceAtLeast(0.0)
+        val major = sqrt(hi * 4.0)
+        val minor = sqrt(lo * 4.0)
+        val roundness = if (major <= 1e-6) 0f else (minor / major).toFloat().coerceIn(0f, 1f)
+        val size = ((major + minor) / 2.0).toFloat()
+        return roundness to size
     }
 
     private fun medianOf(values: FloatArray, n: Int): Float {

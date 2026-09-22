@@ -484,6 +484,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val mountCoordinates = mountModule.mountCoordinates
     val mountSite = mountModule.mountSite
     val mountBusy = mountModule.mountBusy
+    val mountSupportsSync: Boolean
+        get() = mountModule.supportsSync
     val mountConnectionMessage = mountModule.mountConnectionMessage
     val mountMoveStatus = mountModule.mountMoveStatus
     val mountSlewRate = mountModule.mountSlewRate
