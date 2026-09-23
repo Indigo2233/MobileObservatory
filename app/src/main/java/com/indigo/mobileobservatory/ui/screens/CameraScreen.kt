@@ -226,8 +226,14 @@ fun CameraScreen(
     var viewResetTrigger by remember { mutableIntStateOf(0) }
 
     if (showDevicePicker) {
+        val connectable = viewModel.camerasAvailableToMain(allDevices)
         DevicePickerDialog(
-            devices = allDevices,
+            devices = connectable,
+            emptyMessage = if (allDevices.isNotEmpty() && connectable.isEmpty()) {
+                stringResource(R.string.camera_in_use_as_guide)
+            } else {
+                stringResource(R.string.no_camera_found)
+            },
             onSelect = { entry ->
                 viewModel.hideDevicePicker()
                 if (connectionState is ConnectionState.Connected) {
@@ -561,7 +567,7 @@ fun CameraScreen(
                             Icon(Icons.Default.ErrorOutline, stringResource(R.string.error), tint = Color(0xFFFF6666))
                             Text(err, color = Color(0xFFFF6666), fontSize = 13.sp)
                             Spacer(Modifier.height(8.dp))
-                            Button(onClick = { viewModel.connectCamera() }) {
+                            Button(onClick = { viewModel.requestConnect() }) {
                                 Text(stringResource(R.string.retry))
                             }
                         }
@@ -729,14 +735,8 @@ fun CameraScreen(
                         onStartCoolDown = { target, dur -> viewModel.startCoolDown(target, dur) },
                         onStartWarmUp = { dur -> viewModel.startWarmUp(dur) },
                         onStopRamp = { viewModel.stopRamp() },
-                        onSwitchCamera = {
-                            viewModel.cameraManager.enumerateDevices()
-                            viewModel.showDevicePicker()
-                        },
-                        onScanDevices = {
-                            viewModel.cameraManager.enumerateDevices()
-                            viewModel.showDevicePicker()
-                        },
+                        onSwitchCamera = { viewModel.requestConnect() },
+                        onScanDevices = { viewModel.requestConnect() },
                         onFwSetPosition = { viewModel.setFilterWheelPosition(it) },
                         onFwReset = { viewModel.resetFilterWheel() },
                         onEafMoveTo = { viewModel.eafMoveTo(it) },
@@ -864,7 +864,7 @@ private fun DisconnectedOverlay(
         Button(onClick = onConnect) {
             Icon(Icons.Default.Usb, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))
-            Text(stringResource(R.string.connect))
+            Text(stringResource(R.string.scan_devices))
         }
         OutlinedButton(onClick = onPlateSolve) {
             Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -878,22 +878,19 @@ private fun DisconnectedOverlay(
 private fun DevicePickerDialog(
     devices: List<DeviceEntry>,
     onSelect: (DeviceEntry) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    emptyMessage: String
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.select_camera)) },
         text = {
             if (devices.isEmpty()) {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
-                    Text(stringResource(R.string.searching), style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline)
-                }
+                Text(
+                    emptyMessage,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             } else {
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     items(devices) { entry ->

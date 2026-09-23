@@ -9,6 +9,8 @@ import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.indigo.mobileobservatory.camera.dslr.DslrCamera
@@ -23,10 +25,12 @@ import com.indigo.mobileobservatory.camera.toupcam.ToupTekDevices
 import com.indigo.mobileobservatory.camera.toupcam.ToupcamCamera
 import com.indigo.mobileobservatory.camera.toupcam.ToupcamJni
 import com.indigo.mobileobservatory.camera.zwo.ZwoAsiCamera
+import com.indigo.mobileobservatory.util.FileLogger
 import com.zwo.ZwoCamera
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.util.concurrent.atomic.AtomicInteger
 
 enum class CameraBrand { TOUPCAM, QHY, ZWO, PLAYERONE, NIKON, CANON, SONY }
 
@@ -83,13 +87,60 @@ class DahengCameraManager(
     var activeCamera: Camera? = null
         private set
 
+    /** USB device this session has opened, or is in the process of opening. */
+    var claimedUsbDevice: UsbDevice? = null
+        private set
+    private var reservedUsbDevice: UsbDevice? = null
+
+    fun holdsUsbDevice(device: UsbDevice?): Boolean {
+        if (device == null) return false
+        val held = claimedUsbDevice ?: reservedUsbDevice ?: return false
+        return held.deviceId == device.deviceId || held.deviceName == device.deviceName
+    }
+
+    private fun reserveUsbDevice(device: UsbDevice) {
+        reservedUsbDevice = device
+    }
+
+    private fun claimUsbDevice(device: UsbDevice) {
+        claimedUsbDevice = device
+        reservedUsbDevice = null
+    }
+
+    private fun releaseUsbHold() {
+        claimedUsbDevice = null
+        reservedUsbDevice = null
+    }
+
+    private fun abandonReservation() {
+        if (claimedUsbDevice == null) reservedUsbDevice = null
+    }
+
+    private fun dropListedDevice(usbDevice: UsbDevice) {
+        _devices.value = _devices.value.filterNot { entry ->
+            holdsSameUsb(entry.usbDevice, usbDevice)
+        }
+    }
+
+    private fun holdsSameUsb(left: UsbDevice?, right: UsbDevice?): Boolean {
+        if (left == null || right == null) return false
+        return left.deviceId == right.deviceId || left.deviceName == right.deviceName
+    }
+
     val filterWheelController = FilterWheelController()
     val eafController = EAFController()
     private var pendingFilterWheelDevice: UsbDevice? = null
     private var pendingEafDevice: UsbDevice? = null
 
     private var pendingToupcamDevice: UsbDevice? = null
-    private var toupcamUsbConnection: UsbDeviceConnection? = null
+    @Volatile private var toupcamUsbConnection: UsbDeviceConnection? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val toupcamPermissionGeneration = AtomicInteger(0)
+
+    private fun trace(message: String) {
+        Log.i(TAG, message)
+        FileLogger.i(TAG, "[$sessionName] $message")
+    }
 
     @Suppress("DEPRECATION")
     private val usbReceiver = object : BroadcastReceiver() {
@@ -97,7 +148,10 @@ class DahengCameraManager(
             when (intent.action) {
                 UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
                     val usbDevice = intent.getParcelableExtra<UsbDevice>("device") ?: return
-                    Log.i(TAG, "USB attached: VID=0x${usbDevice.vendorId.toString(16)} PID=0x${usbDevice.productId.toString(16)}")
+                    trace(
+                        "USB attached VID=0x${usbDevice.vendorId.toString(16)} " +
+                            "PID=0x${usbDevice.productId.toString(16)} state=${_connectionState.value}"
+                    )
                     if (usbDevice.vendorId == TOUPCAM_VENDOR_ID) {
                         val isAccessory = runCatching {
                             ToupcamJni.isFilterWheel(usbDevice.vendorId, usbDevice.productId) ||
@@ -115,7 +169,10 @@ class DahengCameraManager(
                     if (usbDevice.vendorId == TOUPCAM_VENDOR_ID || usbDevice.vendorId == QHY_VENDOR_ID ||
                         usbDevice.vendorId == ZWO_VENDOR_ID || usbDevice.vendorId == PLAYERONE_VENDOR_ID ||
                         DslrUsb.brandForVendor(usbDevice.vendorId) == CameraBrand.NIKON) {
-                        Log.i(TAG, "USB detached: VID=0x${usbDevice.vendorId.toString(16)}")
+                        trace(
+                            "USB detached VID=0x${usbDevice.vendorId.toString(16)} " +
+                                "PID=0x${usbDevice.productId.toString(16)} state=${_connectionState.value}"
+                        )
                         if (usbDevice.vendorId == TOUPCAM_VENDOR_ID &&
                             ToupcamJni.isFilterWheel(usbDevice.vendorId, usbDevice.productId)) {
                             filterWheelController.close()
@@ -128,6 +185,10 @@ class DahengCameraManager(
                             _accessoryDevices.value = _accessoryDevices.value.filterNot {
                                 it.usbDevice.deviceId == usbDevice.deviceId
                             }
+                        } else if (!holdsUsbDevice(usbDevice)) {
+                            // The other session (main or guide) may own this camera.
+                            // Dropping it here would disconnect a camera this session did not open.
+                            dropListedDevice(usbDevice)
                         } else if (usbDevice.vendorId == QHY_VENDOR_ID) {
                             // Device is physically gone: do NOT go through closeCamera(),
                             // whose SDK teardown issues USB transfers to a dead fd and
@@ -136,11 +197,13 @@ class DahengCameraManager(
                             if (qhy != null) {
                                 qhy.markDisconnected()
                                 activeCamera = null
+                                releaseUsbHold()
                             } else {
                                 closeCamera()
                             }
                             closeQhyUsbConnection()
                             _connectionState.value = ConnectionState.Disconnected
+                            _devices.value = emptyList()
                         } else if (usbDevice.vendorId == PLAYERONE_VENDOR_ID) {
                             // SDK already coordinates native cleanup on its own detach receiver.
                             // Only clear UI / claim state — do not issue further USB I/O.
@@ -151,7 +214,9 @@ class DahengCameraManager(
                             } else {
                                 activeCamera = null
                             }
+                            releaseUsbHold()
                             _connectionState.value = ConnectionState.Disconnected
+                            _devices.value = emptyList()
                         } else if (DslrUsb.brandForVendor(usbDevice.vendorId) == CameraBrand.NIKON) {
                             val dslr = activeCamera as? DslrCamera
                             if (dslr != null) {
@@ -160,26 +225,26 @@ class DahengCameraManager(
                             } else {
                                 activeCamera = null
                             }
+                            releaseUsbHold()
                             _connectionState.value = ConnectionState.Disconnected
+                            _devices.value = emptyList()
                         } else {
                             closeCamera()
                             _connectionState.value = ConnectionState.Disconnected
-                        }
-                        if (usbDevice.vendorId != TOUPCAM_VENDOR_ID ||
-                            (!ToupcamJni.isFilterWheel(usbDevice.vendorId, usbDevice.productId) &&
-                                !ToupcamJni.isAutoFocuser(usbDevice.vendorId, usbDevice.productId))) {
                             _devices.value = emptyList()
                         }
                     }
                 }
                 actionUsbPermission -> {
+                    toupcamPermissionGeneration.incrementAndGet()
                     val usbDevice = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
                     val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
                     if (granted && usbDevice != null) {
-                        Log.i(TAG, "USB permission granted for ${usbDevice.deviceName}")
+                        trace("USB permission granted for ${usbDevice.deviceName}")
                         openToupcamDevice(usbDevice)
                     } else {
-                        Log.w(TAG, "USB permission denied")
+                        trace("USB permission denied device=${usbDevice?.deviceName}")
+                        abandonReservation()
                         _connectionState.value = ConnectionState.Error("USB permission denied")
                     }
                 }
@@ -219,6 +284,7 @@ class DahengCameraManager(
                         }
                     } else {
                         Log.w(TAG, "QHY USB permission denied")
+                        abandonReservation()
                         _connectionState.value = ConnectionState.Error("USB permission denied")
                     }
                 }
@@ -241,6 +307,7 @@ class DahengCameraManager(
                         openZwoDevice(usbDevice)
                     } else {
                         Log.w(TAG, "ZWO USB permission denied")
+                        abandonReservation()
                         _connectionState.value = ConnectionState.Error("USB permission denied")
                     }
                 }
@@ -252,6 +319,7 @@ class DahengCameraManager(
                         openDslrDevice(usbDevice)
                     } else {
                         Log.w(TAG, "DSLR USB permission denied")
+                        abandonReservation()
                         _connectionState.value = ConnectionState.Error("USB permission denied")
                     }
                 }
@@ -333,7 +401,7 @@ class DahengCameraManager(
                                 brand = CameraBrand.TOUPCAM,
                                 usbDevice = usbDev
                             ))
-                            Log.i(TAG, "Found ToupTek camera: $displayName (flag=0x${flag.toString(16)})")
+                            trace("Found ToupTek camera: $displayName (flag=0x${flag.toString(16)})")
                         }
                     }
                 }
@@ -391,28 +459,25 @@ class DahengCameraManager(
             Log.w(TAG, "ZWO USB enumeration failed: ${e.message}")
         }
 
-        // Enumerate Player One cameras via process-wide SdkHost (includes unauthorized)
+        // List Player One from the Android USB table only. Starting the vendor
+        // SDK here resets the bus on some phones and drops other cameras.
         try {
-            val enumerated = PlayerOneSdkHost.enumerate(context)
-            for (entry in enumerated) {
-                val props = entry.properties
-                val sn = props.serialNumber?.takeIf { it.isNotBlank() }
-                    ?: "PO-${props.cameraId}"
+            val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
+            for ((_, usbDev) in usbManager.deviceList) {
+                if (usbDev.vendorId != PLAYERONE_VENDOR_ID) continue
+                val pid = usbDev.productId
+                val productName = usbDev.productName?.takeIf { it.isNotBlank() } ?: "Player One Camera"
                 allDevices.add(DeviceEntry(
                     index = allDevices.size,
-                    name = props.cameraModelName ?: "Player One Camera",
-                    serialNumber = sn,
+                    name = productName,
+                    serialNumber = "PO-${pid.toString(16)}-${usbDev.deviceId}",
                     brand = CameraBrand.PLAYERONE,
-                    usbDevice = entry.androidDevice
+                    usbDevice = usbDev
                 ))
-                Log.i(
-                    TAG,
-                    "Found Player One: ${props.cameraModelName} SN=$sn " +
-                        "id=${props.cameraId} authorized=${entry.usb?.isAuthorized}"
-                )
+                trace("Found Player One USB: $productName PID=0x${pid.toString(16)} (SDK deferred)")
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Player One enumeration failed: ${e.message}")
+            Log.w(TAG, "Player One USB enumeration failed: ${e.message}")
         }
 
         if (sessionName != "guide") {
@@ -444,9 +509,13 @@ class DahengCameraManager(
         if (allDevices.isNotEmpty()) {
             _devices.value = allDevices
         }
-        if (_connectionState.value !is ConnectionState.Connected) {
-            _connectionState.value = ConnectionState.Enumerating
-        }
+        trace(
+            "enumerate done state=${_connectionState.value} count=${allDevices.size} " +
+                allDevices.joinToString { "${it.brand}:${it.name}" }
+        )
+        // Leave Disconnected/Connecting alone. Enumerating replaced the connect
+        // button with a spinner and nothing ever cleared it, so a finished scan
+        // looked like a hung connect with no error.
     }
 
     fun scanAccessories() {
@@ -572,28 +641,37 @@ class DahengCameraManager(
 
     private fun requestToupcamPermission(usbDevice: UsbDevice) {
         if (activeCamera != null) closeCamera()
+        reserveUsbDevice(usbDevice)
         _connectionState.value = ConnectionState.Connecting
         pendingToupcamDevice = usbDevice
 
         val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
-        if (usbManager.hasPermission(usbDevice)) {
+        val permitted = usbManager.hasPermission(usbDevice)
+        trace("request ToupTek permission device=${usbDevice.deviceName} hasPermission=$permitted")
+        if (permitted) {
             openToupcamDevice(usbDevice)
+        } else if (Looper.myLooper() == Looper.getMainLooper()) {
+            showToupcamPermissionDialog(usbDevice)
         } else {
-            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
-            else PendingIntent.FLAG_UPDATE_CURRENT
-            val pi = PendingIntent.getBroadcast(context, 0, Intent(actionUsbPermission).setPackage(context.packageName), flags)
-            usbManager.requestPermission(usbDevice, pi)
+            // requestPermission from a worker thread often never shows the dialog
+            // and never delivers the result, which leaves the UI spinning.
+            mainHandler.post { showToupcamPermissionDialog(usbDevice) }
         }
     }
 
     private fun openToupcamDevice(usbDevice: UsbDevice) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            Thread({ openToupcamDevice(usbDevice) }, "ToupTek-Open").start()
+            return
+        }
+        toupcamPermissionGeneration.incrementAndGet()
         try {
             val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
             closeToupcamUsbConnection()
             val connection = usbManager.openDevice(usbDevice)
             if (connection == null) {
                 Log.e(TAG, "UsbManager.openDevice returned null for ${usbDevice.deviceName}")
+                abandonReservation()
                 _connectionState.value = ConnectionState.Error("Failed to open USB device")
                 return
             }
@@ -603,24 +681,55 @@ class DahengCameraManager(
             val pid = usbDevice.productId
             val modelName = ToupcamJni.getModelName(vid, pid) ?: "ToupTek Camera"
             val flag = ToupcamJni.getModelFlag(vid, pid)
-            Log.i(TAG, "Opening ToupTek: fd=$fd VID=0x${vid.toString(16)} PID=0x${pid.toString(16)} model=$modelName flag=0x${flag.toString(16)}")
+            trace("Opening ToupTek: fd=$fd VID=0x${vid.toString(16)} PID=0x${pid.toString(16)} model=$modelName flag=0x${flag.toString(16)}")
 
+            // Root the connection before native open. The success assignment below
+            // keeps it after open() returns; this one covers the native call itself.
+            toupcamUsbConnection = connection
             val camera = ToupcamCamera()
             if (camera.open(fd, vid, pid, modelName)) {
                 toupcamUsbConnection = connection
                 activeCamera = camera
+                claimUsbDevice(usbDevice)
                 _connectionState.value = ConnectionState.Connected(camera.cameraInfo!!)
-                Log.i(TAG, "ToupTek camera connected: $modelName")
+                trace("ToupTek camera connected: $modelName")
             } else {
-                connection.close()
+                closeToupcamUsbConnection()
+                abandonReservation()
+                trace("ToupcamCamera.open returned false for $modelName")
                 Log.e(TAG, "ToupcamCamera.open returned false for $modelName")
                 _connectionState.value = ConnectionState.Error("Failed to initialize ToupTek camera")
             }
         } catch (e: Throwable) {
             Log.e(TAG, "openToupcamDevice failed: ${e.message}", e)
             closeToupcamUsbConnection()
+            abandonReservation()
             _connectionState.value = ConnectionState.Error("ToupTek open failed: ${e.message}")
         }
+    }
+
+    private fun showToupcamPermissionDialog(usbDevice: UsbDevice) {
+        val generation = toupcamPermissionGeneration.incrementAndGet()
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+        else PendingIntent.FLAG_UPDATE_CURRENT
+        val pi = PendingIntent.getBroadcast(
+            context,
+            0,
+            Intent(actionUsbPermission).setPackage(context.packageName),
+            flags
+        )
+        val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
+        Log.i(TAG, "Requesting ToupTek USB permission for ${usbDevice.deviceName}")
+        usbManager.requestPermission(usbDevice, pi)
+        mainHandler.postDelayed({
+            if (generation != toupcamPermissionGeneration.get()) return@postDelayed
+            if (_connectionState.value !is ConnectionState.Connecting) return@postDelayed
+            trace("ToupTek USB permission did not return")
+            Log.e(TAG, "ToupTek USB permission did not return")
+            abandonReservation()
+            _connectionState.value = ConnectionState.Error("USB permission timed out")
+        }, 20_000L)
     }
 
     private fun closeToupcamUsbConnection() {
@@ -744,6 +853,7 @@ class DahengCameraManager(
             return
         }
         if (activeCamera != null) closeCamera()
+        reserveUsbDevice(usbDevice)
         _connectionState.value = ConnectionState.Connecting
 
         val pid = usbDevice.productId
@@ -773,6 +883,7 @@ class DahengCameraManager(
         val connection = usbManager.openDevice(usbDevice)
         if (connection == null) {
             Log.e(TAG, "UsbManager.openDevice returned null for QHY ${usbDevice.deviceName}")
+            abandonReservation()
             _connectionState.value = ConnectionState.Error("Failed to open QHY USB device")
             return
         }
@@ -809,6 +920,7 @@ class DahengCameraManager(
                 }
                 Log.i(TAG, "QHY scan found $numCams camera(s)")
                 if (numCams <= 0) {
+                    abandonReservation()
                     _connectionState.value = ConnectionState.Error("No QHY camera found after scan")
                     closeQhyUsbConnection()
                     return@Runnable
@@ -822,15 +934,18 @@ class DahengCameraManager(
                 camera.setUsbContext(context, usbDevice, connection)
                 if (camera.open(cameraId)) {
                     activeCamera = camera
+                    claimUsbDevice(usbDevice)
                     _connectionState.value = ConnectionState.Connected(camera.cameraInfo!!)
                     Log.i(TAG, "QHY camera connected: ${camera.cameraInfo?.name}")
                 } else {
                     Log.e(TAG, "QhyCamera.open failed for $cameraId")
+                    abandonReservation()
                     _connectionState.value = ConnectionState.Error("Failed to initialize QHY camera")
                     closeQhyUsbConnection()
                 }
             } catch (e: Throwable) {
                 Log.e(TAG, "openQhyDevice failed: ${e.message}", e)
+                abandonReservation()
                 _connectionState.value = ConnectionState.Error("QHY open failed: ${e.message}")
                 closeQhyUsbConnection()
             }
@@ -860,10 +975,12 @@ class DahengCameraManager(
             val camera = ZwoAsiCamera()
             if (camera.open(entry.index)) {
                 activeCamera = camera
+                entry.usbDevice?.let { claimUsbDevice(it) }
                 _connectionState.value = ConnectionState.Connected(camera.cameraInfo!!)
                 Log.i(TAG, "ZWO camera connected: ${camera.cameraInfo?.name}")
                 return true
             } else {
+                abandonReservation()
                 _connectionState.value = ConnectionState.Error("Failed to initialize ZWO camera")
                 return false
             }
@@ -876,6 +993,7 @@ class DahengCameraManager(
 
     private fun requestZwoPermission(usbDevice: UsbDevice) {
         if (activeCamera != null) closeCamera()
+        reserveUsbDevice(usbDevice)
         _connectionState.value = ConnectionState.Connecting
 
         val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
@@ -896,6 +1014,7 @@ class DahengCameraManager(
         try {
             if (!ZwoAsiCamera.sdkAvailable) ZwoAsiCamera.initSdk()
             if (!ZwoAsiCamera.sdkAvailable) {
+                abandonReservation()
                 _connectionState.value = ConnectionState.Error("ZWO SDK init failed")
                 return
             }
@@ -908,6 +1027,7 @@ class DahengCameraManager(
             val connection = usbManager.openDevice(usbDevice)
             if (connection == null) {
                 Log.e(TAG, "UsbManager.openDevice returned null for ZWO ${usbDevice.deviceName}")
+                abandonReservation()
                 _connectionState.value = ConnectionState.Error("Failed to open ZWO USB device")
                 return
             }
@@ -926,6 +1046,7 @@ class DahengCameraManager(
                 numCameras = ZwoCamera.getNumOfConnectedCameras()
             } catch (e: Throwable) {
                 Log.e(TAG, "ZWO getNumOfConnectedCameras crashed (SELinux/libusb?): ${e.message}", e)
+                abandonReservation()
                 closeZwoUsbConnection()
                 val pidHex = "0x${pid.toString(16).uppercase()}"
                 _connectionState.value = ConnectionState.Error(
@@ -937,6 +1058,7 @@ class DahengCameraManager(
             val pidHex = "0x${pid.toString(16).uppercase()}"
             Log.i(TAG, "ZWO connected cameras: $numCameras")
             if (numCameras <= 0) {
+                abandonReservation()
                 closeZwoUsbConnection()
                 val productName = usbDevice.productName ?: "Unknown"
                 _connectionState.value = ConnectionState.Error(
@@ -948,9 +1070,11 @@ class DahengCameraManager(
             val camera = ZwoAsiCamera()
             if (camera.open(0)) {
                 activeCamera = camera
+                claimUsbDevice(usbDevice)
                 _connectionState.value = ConnectionState.Connected(camera.cameraInfo!!)
                 Log.i(TAG, "ZWO camera connected: ${camera.cameraInfo?.name}")
             } else {
+                abandonReservation()
                 closeZwoUsbConnection()
                 _connectionState.value = ConnectionState.Error(
                     "Failed to initialize ZWO camera (PID=$pidHex)"
@@ -958,6 +1082,7 @@ class DahengCameraManager(
             }
         } catch (e: Throwable) {
             Log.e(TAG, "openZwoDevice failed: ${e.message}", e)
+            abandonReservation()
             closeZwoUsbConnection()
             val pidHex = "0x${usbDevice.productId.toString(16).uppercase()}"
             _connectionState.value = ConnectionState.Error("ZWO open failed (PID=$pidHex): ${e.message}")
@@ -972,6 +1097,7 @@ class DahengCameraManager(
 
     private fun requestDslrPermission(usbDevice: UsbDevice) {
         if (activeCamera != null) closeCamera()
+        reserveUsbDevice(usbDevice)
         _connectionState.value = ConnectionState.Connecting
         val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
         if (usbManager.hasPermission(usbDevice)) {
@@ -997,12 +1123,14 @@ class DahengCameraManager(
                 val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
                 val connection = usbManager.openDevice(usbDevice)
                 if (connection == null) {
+                    abandonReservation()
                     _connectionState.value = ConnectionState.Error("Failed to open USB device")
                     return@Thread
                 }
                 val camera = DslrCamera()
                 if (camera.open(usbDevice, connection)) {
                     activeCamera = camera
+                    claimUsbDevice(usbDevice)
                     val info = camera.cameraInfo
                     if (info == null) {
                         camera.close()
@@ -1012,12 +1140,14 @@ class DahengCameraManager(
                     _connectionState.value = ConnectionState.Connected(info)
                     Log.i(TAG, "Nikon PTP connected: ${info.name}")
                 } else {
+                    abandonReservation()
                     _connectionState.value = ConnectionState.Error(
                         "Nikon PTP OpenSession/GetDeviceInfo failed. Check USB mode is MTP/PTP."
                     )
                 }
             } catch (e: Throwable) {
                 Log.e(TAG, "openDslrDevice failed: ${e.message}", e)
+                abandonReservation()
                 _connectionState.value = ConnectionState.Error("Nikon PTP open failed: ${e.message}")
             }
         }, "Dslr-OpenThread").start()
@@ -1028,41 +1158,54 @@ class DahengCameraManager(
         _connectionState.value = ConnectionState.Connecting
 
         try {
-            PlayerOneSdkHost.ensureStarted(context)
-            val found = PlayerOneSdkHost.findDeviceBySerial(context, serialNumber)
+            val listedUsb = _devices.value.firstOrNull { it.serialNumber == serialNumber }?.usbDevice
+            if (listedUsb != null) reserveUsbDevice(listedUsb)
+            trace("Connecting Player One sn=$serialNumber usbId=${listedUsb?.deviceId}")
+            val found = if (listedUsb != null) {
+                PlayerOneSdkHost.findForAndroidDevice(context, listedUsb.deviceId, listedUsb.deviceName)
+            } else {
+                PlayerOneSdkHost.findDeviceBySerial(context, serialNumber)
+            }
             if (found == null) {
+                abandonReservation()
                 _connectionState.value = ConnectionState.Error("Player One camera $serialNumber not found")
                 return
             }
-            val usbDevice = found.usb
-            if (usbDevice == null) {
+            val sdkUsb = found.usb
+            val androidDevice = found.androidDevice ?: listedUsb
+            if (sdkUsb == null || androidDevice == null) {
+                abandonReservation()
                 _connectionState.value = ConnectionState.Error(
                     "Player One camera $serialNumber has no USB device to authorize"
                 )
                 return
             }
+            reserveUsbDevice(androidDevice)
             val cameraId = found.properties.cameraId
-            PlayerOneSdkHost.requestPermission(usbDevice) { granted ->
+            PlayerOneSdkHost.requestPermission(sdkUsb) { granted ->
                 if (!granted) {
                     Log.w(TAG, "Player One USB permission denied for $serialNumber")
+                    abandonReservation()
                     _connectionState.value = ConnectionState.Error("USB permission denied")
                     return@requestPermission
                 }
-                openPlayerOneDevice(cameraId, serialNumber)
+                openPlayerOneDevice(cameraId, serialNumber, androidDevice)
             }
         } catch (e: Throwable) {
             Log.e(TAG, "requestPlayerOnePermission failed: ${e.message}", e)
+            abandonReservation()
             _connectionState.value = ConnectionState.Error("Player One open failed: ${e.message}")
         }
     }
 
-    private fun openPlayerOneDevice(cameraId: Int, serialNumber: String) {
+    private fun openPlayerOneDevice(cameraId: Int, serialNumber: String, usbDevice: UsbDevice) {
         // open/initialize must not run on main thread
         Thread({
             try {
                 val camera = PlayerOneCamera()
                 if (camera.open(cameraId)) {
                     activeCamera = camera
+                    claimUsbDevice(usbDevice)
                     val info = camera.cameraInfo
                     if (info != null) {
                         _connectionState.value = ConnectionState.Connected(info)
@@ -1071,12 +1214,14 @@ class DahengCameraManager(
                         _connectionState.value = ConnectionState.Error("Player One opened without camera info")
                     }
                 } else {
+                    abandonReservation()
                     _connectionState.value = ConnectionState.Error(
                         "Failed to open Player One camera (SN=$serialNumber id=$cameraId)"
                     )
                 }
             } catch (e: Throwable) {
                 Log.e(TAG, "openPlayerOneDevice failed: ${e.message}", e)
+                abandonReservation()
                 _connectionState.value = ConnectionState.Error("Player One open failed: ${e.message}")
             }
         }, "PlayerOne-Open").start()
@@ -1085,6 +1230,7 @@ class DahengCameraManager(
     fun closeCamera() {
         activeCamera?.close()
         activeCamera = null
+        releaseUsbHold()
         closeToupcamUsbConnection()
         closeQhyUsbConnection()
         closeZwoUsbConnection()

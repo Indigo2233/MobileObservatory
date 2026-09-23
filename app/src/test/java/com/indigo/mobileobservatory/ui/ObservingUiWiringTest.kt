@@ -276,10 +276,82 @@ class ObservingUiWiringTest {
             "unknown ToupTek PIDs must still enumerate as cameras",
             !manager.contains("else if (modelName != null)")
         )
+        assertTrue(
+            "a finished scan must not leave the connect button under an endless spinner",
+            !manager.contains("ConnectionState.Enumerating")
+        )
+        val requestStart = manager.indexOf("private fun requestToupcamPermission")
+        val requestEnd = manager.indexOf("private fun openToupcamDevice")
+        assertTrue(requestStart >= 0 && requestEnd > requestStart)
+        assertTrue(
+            "USB permission must be requested on the main thread",
+            manager.substring(requestStart, requestEnd).contains("Looper.getMainLooper()")
+        )
+        val toupcam = read("src/main/java/com/indigo/mobileobservatory/camera/toupcam/ToupcamCamera.kt")
+        assertTrue(
+            "opening a ToupTek camera must not probe binning by writing the device",
+            !toupcam.contains("probeSupportedBins")
+        )
         val eaf = read(
             "src/main/java/com/indigo/mobileobservatory/camera/toupcam/EAFController.kt"
         )
         assertTrue(eaf.contains("usbConnection = connection"))
+    }
+
+    @Test
+    fun scanListsCamerasWithoutStartingPlayerOne() {
+        val manager = read(
+            "src/main/java/com/indigo/mobileobservatory/camera/DahengCameraManager.kt"
+        )
+        val enumStart = manager.indexOf("fun enumerateDevices()")
+        val enumEnd = manager.indexOf("fun scanAccessories()")
+        assertTrue(enumStart >= 0 && enumEnd > enumStart)
+        val scan = manager.substring(enumStart, enumEnd)
+        assertTrue(
+            "listing cameras must not start the Player One SDK",
+            !scan.contains("PlayerOneSdkHost.enumerate") && !scan.contains("PlayerOneSdkHost.ensureStarted")
+        )
+        assertTrue(scan.contains("SDK deferred"))
+        val viewModel = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/viewmodel/CameraViewModel.kt"
+        )
+        val requestStart = viewModel.indexOf("fun requestConnect()")
+        val requestEnd = viewModel.indexOf("fun disconnectCamera()")
+        assertTrue(requestStart >= 0 && requestEnd > requestStart)
+        val request = viewModel.substring(requestStart, requestEnd)
+        assertTrue(request.contains("enumerateDevices()"))
+        assertTrue(request.contains("_showDevicePicker.value = true"))
+        assertTrue(!request.contains("connectCameraBySn"))
+    }
+
+    @Test
+    fun guideCameraDoesNotTakeTheUsbDeviceHeldByMain() {
+        val manager = read(
+            "src/main/java/com/indigo/mobileobservatory/camera/DahengCameraManager.kt"
+        )
+        assertTrue(manager.contains("fun holdsUsbDevice"))
+        assertTrue(manager.contains("claimUsbDevice"))
+        val detach = manager.substring(
+            manager.indexOf("ACTION_USB_DEVICE_DETACHED"),
+            manager.indexOf("actionUsbPermission ->")
+        )
+        assertTrue(
+            "unplugging one camera must not disconnect the other session",
+            detach.contains("!holdsUsbDevice(usbDevice)")
+        )
+        val viewModel = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/viewmodel/CameraViewModel.kt"
+        )
+        val guideStart = viewModel.indexOf("fun requestGuideConnect()")
+        val guideEnd = viewModel.indexOf("fun disconnectGuideCamera()")
+        assertTrue(guideStart >= 0 && guideEnd > guideStart)
+        val guide = viewModel.substring(guideStart, guideEnd)
+        assertTrue(guide.contains("camerasAvailableToGuide"))
+        assertTrue(guide.contains("holdsUsbDevice"))
+        assertTrue(
+            "an empty guide list still scans so a guide camera can connect on its own",
+            guide.contains("listed.isEmpty()") && guide.contains("enumerateDevices()")
+        )
     }
 
     @Test

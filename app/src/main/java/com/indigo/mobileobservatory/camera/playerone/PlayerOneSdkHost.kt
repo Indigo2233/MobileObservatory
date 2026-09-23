@@ -186,6 +186,17 @@ object PlayerOneSdkHost {
         }
     }
 
+    /**
+     * Match a camera the user already picked from the Android USB list.
+     * Starts the vendor SDK; call this only when connecting that camera.
+     */
+    fun findForAndroidDevice(context: Context, deviceId: Int, deviceName: String?): EnumeratedCamera? {
+        return enumerate(context).firstOrNull { cam ->
+            val dev = cam.androidDevice ?: return@firstOrNull false
+            dev.deviceId == deviceId || (deviceName != null && dev.deviceName == deviceName)
+        }
+    }
+
     fun findDeviceBySerial(context: Context, serialNumber: String): EnumeratedCamera? {
         return enumerate(context).firstOrNull {
             playerOneIdentityMatches(

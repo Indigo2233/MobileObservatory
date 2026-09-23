@@ -52,6 +52,7 @@
     <string name="connect">连接</string>
     <string name="select_camera">选择相机</string>
     <string name="searching">搜索中…</string>
+    <string name="no_camera_found">没有找到可连接的相机</string>
     <string name="sn_label">序列号: %s</string>
     <string name="cancel">取消</string>
     <string name="save">保存</string>
@@ -505,6 +506,7 @@
     <string name="generic_error_detail">错误：%s</string>
     <string name="connecting_serial">正在连接序列号 %s…</string>
     <string name="select_different_guide_camera">请选择与主相机不同的导星相机。</string>
+    <string name="camera_in_use_as_guide">这台相机已经作为导星相机连接。</string>
     <string name="connecting_guide_serial">正在连接导星相机序列号 %s…</string>
     <string name="guide_camera_error_detail">导星相机错误：%s</string>
     <string name="guide_lock_set">已锁定 %d 个导星星点</string>

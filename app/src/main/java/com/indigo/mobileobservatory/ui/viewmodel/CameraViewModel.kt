@@ -33,6 +33,7 @@ import com.indigo.mobileobservatory.mount.PrecisionGotoProgress
 import com.indigo.mobileobservatory.ui.components.RecordLimit
 import com.indigo.mobileobservatory.ui.components.RecordLimitType
 import com.indigo.mobileobservatory.util.DeterministicResourceCleaner
+import com.indigo.mobileobservatory.util.FileLogger
 import com.indigo.mobileobservatory.util.ImageUtils
 import com.indigo.mobileobservatory.recording.FITSWriter
 import com.indigo.mobileobservatory.recording.Mp4Writer
@@ -493,7 +494,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private var frameCount = 0L
     private var fpsTimestamp = System.nanoTime()
     private var autoExpFrameSkip = 0
-    @Volatile private var pendingConnect = false
     fun setTargetName(name: String) {
         _targetName.value = name
     }
@@ -727,16 +727,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         viewModelScope.launch {
-            cameraManager.devices.collect { devs ->
-                if (pendingConnect && devs.isNotEmpty()) {
-                    pendingConnect = false
-                    kotlinx.coroutines.delay(500)
-                    requestConnect()
-                }
-            }
-        }
-
-        viewModelScope.launch {
             guideCameraManager.devices.collect { devices ->
                 if (pendingGuideConnect && devices.isNotEmpty()) {
                     pendingGuideConnect = false
@@ -777,7 +767,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         coolingJobs.clear()
         _guideRunning.value = false
         _guideCalibrating.value = false
-        pendingConnect = false
         pendingGuideConnect = false
     }
 
@@ -912,9 +901,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun connectCameraBySn(sn: String) {
+        val entry = cameraManager.devices.value.firstOrNull { it.serialNumber == sn }
+        if (entry != null && guideCameraManager.holdsUsbDevice(entry.usbDevice)) {
+            _statusMessage.value = app.getString(R.string.camera_in_use_as_guide)
+            return
+        }
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 _statusMessage.value = app.getString(R.string.connecting_serial, sn)
+                FileLogger.i(TAG, "connectCameraBySn sn=$sn")
                 cameraManager.openCameraBySn(sn)
             } catch (e: Throwable) {
                 Log.e(TAG, "connectCameraBySn failed", e)
@@ -924,19 +919,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun requestConnect() {
-        val devs = cameraManager.devices.value
-        when {
-            devs.isEmpty() -> {
-                pendingConnect = true
-                cameraManager.enumerateDevices()
-            }
-            devs.size == 1 -> {
-                connectCameraBySn(devs[0].serialNumber)
-            }
-            else -> {
-                _showDevicePicker.value = true
-            }
-        }
+        cameraManager.enumerateDevices()
+        _showDevicePicker.value = true
     }
 
     fun disconnectCamera() {
@@ -951,14 +935,24 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun showGuideDevicePicker() { _showGuideDevicePicker.value = true }
     fun hideGuideDevicePicker() { _showGuideDevicePicker.value = false }
 
+    fun camerasAvailableToMain(devices: List<DeviceEntry>): List<DeviceEntry> =
+        devices.filterNot { guideCameraManager.holdsUsbDevice(it.usbDevice) }
+
+    fun camerasAvailableToGuide(devices: List<DeviceEntry>): List<DeviceEntry> =
+        devices.filterNot { cameraManager.holdsUsbDevice(it.usbDevice) }
+
     fun requestGuideConnect() {
-        val mainSn = cameraManager.activeCamera?.cameraInfo?.serialNumber
-        val devs = guideCameraManager.devices.value
-            .filter { it.serialNumber != mainSn }
+        val listed = guideCameraManager.devices.value
+        val devs = camerasAvailableToGuide(listed)
         when {
-            devs.isEmpty() -> {
+            listed.isEmpty() -> {
                 pendingGuideConnect = true
                 guideCameraManager.enumerateDevices()
+            }
+            devs.isEmpty() -> {
+                pendingGuideConnect = false
+                _guideStatus.value = app.getString(R.string.select_different_guide_camera)
+                _showGuideDevicePicker.value = true
             }
             devs.size == 1 -> {
                 connectGuideCameraBySn(devs[0].serialNumber)
@@ -970,8 +964,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun connectGuideCameraBySn(sn: String) {
-        val mainSn = cameraManager.activeCamera?.cameraInfo?.serialNumber
-        if (sn == mainSn) {
+        val entry = guideCameraManager.devices.value.firstOrNull { it.serialNumber == sn }
+        if (entry != null && cameraManager.holdsUsbDevice(entry.usbDevice)) {
             _guideStatus.value = app.getString(R.string.select_different_guide_camera)
             return
         }

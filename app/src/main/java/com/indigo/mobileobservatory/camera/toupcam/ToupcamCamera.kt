@@ -2,6 +2,7 @@ package com.indigo.mobileobservatory.camera.toupcam
 
 import android.util.Log
 import com.indigo.mobileobservatory.camera.*
+import com.indigo.mobileobservatory.util.FileLogger
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -140,8 +141,11 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
     private var tecVoltageMax = 0
 
     fun open(fd: Int, vendorId: Int, productId: Int, modelName: String): Boolean {
+        FileLogger.i(TAG, "open begin model=$modelName fd=$fd VID=0x${vendorId.toString(16)} PID=0x${productId.toString(16)}")
         try {
-            if (!ToupcamJni.open(fd, vendorId, productId)) {
+            val opened = ToupcamJni.open(fd, vendorId, productId)
+            FileLogger.i(TAG, "ToupcamJni.open -> $opened")
+            if (!opened) {
                 Log.e(TAG, "ToupcamJni.open failed")
                 return false
             }
@@ -155,9 +159,13 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
             outputW = sensorW
             outputH = sensorH
             currentBin = 1
-            supportedHardwareBins = probeSupportedBins()
+            // Do not write OPTION_BINNING here. Probing 2/3/4 during open stalls
+            // some cameras and the connect spinner never leaves Connecting.
+            supportedHardwareBins = listOf(1, 2, 3, 4)
 
+            FileLogger.i(TAG, "open sensor ${sensorW}x${sensorH} flag=0x${modelFlag.toString(16)}")
             rawBits = ToupcamJni.getMaxBitDepth()
+            FileLogger.i(TAG, "open bitDepth=$rawBits")
             if (rawBits < 8) rawBits = 8
             baseBitDepth = rawBits
 
@@ -221,9 +229,11 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
             outputH = sensorH
             _isOpen.value = true
             initUsbBandwidth()
+            FileLogger.i(TAG, "Opened: $modelName ${sensorW}x${sensorH} ${rawBits}bit mono=$isMono px=${pixelSize}um")
             Log.i(TAG, "Opened: $modelName ${sensorW}x${sensorH} ${rawBits}bit mono=$isMono px=${pixelSize}um flag=0x${modelFlag.toString(16)}")
             return true
         } catch (e: Exception) {
+            FileLogger.e(TAG, "open failed: ${e.message}", e)
             Log.e(TAG, "open failed: ${e.message}", e)
             return false
         }
@@ -584,29 +594,6 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
         }
         if (wasCapturing && cb != null) startCapture(cb)
         return applied
-    }
-
-    private fun probeSupportedBins(): List<Int> {
-        val bins = mutableListOf(1)
-        try {
-            for (n in 2..4) {
-                if (ToupcamJni.putOption(ToupcamJni.OPTION_BINNING, n)) {
-                    bins.add(n)
-                }
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "probeSupportedBins: ${e.message}")
-        }
-        try {
-            ToupcamJni.putOption(ToupcamJni.OPTION_BINNING, 1)
-            val size = ToupcamJni.getSize()
-            if (size[0] > 0 && size[1] > 0) {
-                outputW = size[0]
-                outputH = size[1]
-            }
-        } catch (_: Exception) {}
-        Log.i(TAG, "Supported bins: ${bins.joinToString()}")
-        return bins
     }
 
     override fun recycleBuffer(buf: ByteArray) {

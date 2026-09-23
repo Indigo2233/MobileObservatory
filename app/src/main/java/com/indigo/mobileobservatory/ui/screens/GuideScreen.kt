@@ -110,9 +110,14 @@ fun GuideScreen(
     val mountBusy by viewModel.mountBusy.collectAsState()
 
     if (showDevicePicker) {
-        val mainSn = viewModel.cameraManager.activeCamera?.cameraInfo?.serialNumber
+        val connectable = viewModel.camerasAvailableToGuide(devices)
         GuideDevicePickerDialog(
-            devices = devices.filter { it.serialNumber != mainSn },
+            devices = connectable,
+            emptyMessage = if (devices.isNotEmpty() && connectable.isEmpty()) {
+                stringResource(R.string.select_different_guide_camera)
+            } else {
+                stringResource(R.string.no_guide_camera_found)
+            },
             onSelect = { entry ->
                 viewModel.hideGuideDevicePicker()
                 viewModel.connectGuideCameraBySn(entry.serialNumber)
@@ -694,14 +699,15 @@ private fun GuideToggle(
 private fun GuideDevicePickerDialog(
     devices: List<DeviceEntry>,
     onSelect: (DeviceEntry) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    emptyMessage: String
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.select_guide_camera)) },
         text = {
             if (devices.isEmpty()) {
-                Text(stringResource(R.string.no_guide_camera_found))
+                Text(emptyMessage)
             } else {
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     items(devices) { entry ->

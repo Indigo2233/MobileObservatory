@@ -54,6 +54,7 @@
     <string name="connect">Connect</string>
     <string name="select_camera">Select Camera</string>
     <string name="searching">Searching…</string>
+    <string name="no_camera_found">No connectable camera found</string>
     <string name="sn_label">SN: %s</string>
     <string name="cancel">Cancel</string>
     <string name="save">Save</string>
@@ -505,6 +506,7 @@
     <string name="generic_error_detail">Error: %s</string>
     <string name="connecting_serial">Connecting to SN %s…</string>
     <string name="select_different_guide_camera">Select a guide camera different from the main camera.</string>
+    <string name="camera_in_use_as_guide">This camera is already connected as the guide camera.</string>
     <string name="connecting_guide_serial">Connecting guide camera SN %s…</string>
     <string name="guide_camera_error_detail">Guide camera error: %s</string>
     <string name="guide_lock_set">Guide lock set: %d star(s)</string>
