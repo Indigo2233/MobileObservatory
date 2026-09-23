@@ -448,6 +448,8 @@
     <string name="fov_mode_eyepiece">Eyepiece</string>
     <string name="fov_mode_sensor">Camera / sensor</string>
     <string name="fov_telescope">Telescope</string>
+    <string name="fov_named_telescope">Telescope</string>
+    <string name="fov_named_eyepiece">Eyepiece</string>
     <string name="fov_named_camera">Camera</string>
     <string name="fov_equipment_name">Display name</string>
     <string name="fov_aperture_mm">Aperture (mm)</string>

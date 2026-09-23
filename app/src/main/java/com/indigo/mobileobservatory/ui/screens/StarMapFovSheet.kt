@@ -33,6 +33,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.astro.EyepieceSpec
@@ -60,12 +61,11 @@ fun StarMapFovSheet(
     sensors: List<SensorSpec>,
     showOverlay: Boolean,
     computation: FovComputation?,
-    primaryTrainLabel: String,
-    secondaryTrainLabel: String,
     onEditingTrainChange: (OpticsTrainId) -> Unit,
     onConfigChange: (OpticsTrainConfig) -> Unit,
     onShowOverlayChange: (Boolean) -> Unit,
     onTelescopesChange: (List<TelescopeSpec>) -> Unit,
+    onEyepiecesChange: (List<EyepieceSpec>) -> Unit,
     onCamerasChange: (List<SensorSpec>) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -83,7 +83,8 @@ fun StarMapFovSheet(
                 .padding(bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            val defaultTelescopeName = stringResource(R.string.star_map_train_primary)
+            val defaultTelescopeName = stringResource(R.string.fov_named_telescope)
+            val defaultEyepieceName = stringResource(R.string.fov_named_eyepiece)
             val defaultCameraName = stringResource(R.string.fov_named_camera)
             Text(
                 stringResource(R.string.fov_simulator_title),
@@ -94,12 +95,12 @@ fun StarMapFovSheet(
                 FilterChip(
                     selected = editingTrain == OpticsTrainId.PRIMARY,
                     onClick = { onEditingTrainChange(OpticsTrainId.PRIMARY) },
-                    label = { Text(primaryTrainLabel) }
+                    label = { Text(stringResource(R.string.star_map_train_primary), maxLines = 1) }
                 )
                 FilterChip(
                     selected = editingTrain == OpticsTrainId.SECONDARY,
                     onClick = { onEditingTrainChange(OpticsTrainId.SECONDARY) },
-                    label = { Text(secondaryTrainLabel) }
+                    label = { Text(stringResource(R.string.star_map_train_secondary), maxLines = 1) }
                 )
             }
 
@@ -187,31 +188,68 @@ fun StarMapFovSheet(
                         stringResource(R.string.fov_eyepiece),
                         style = MaterialTheme.typography.labelLarge
                     )
-                    ChipRow {
-                        eyepieces.forEach { ep ->
-                            FilterChip(
-                                selected = config.eyepieceId == ep.id,
-                                onClick = { onConfigChange(config.copy(eyepieceId = ep.id)) },
-                                label = { Text(ep.name) }
+                    NamedEquipmentChips(
+                        names = eyepieces.map { it.id to it.name },
+                        selectedId = config.eyepieceId,
+                        onSelect = { id ->
+                            val spec = eyepieces.firstOrNull { it.id == id } ?: return@NamedEquipmentChips
+                            onConfigChange(
+                                config.copy(
+                                    eyepieceId = spec.id,
+                                    customEyepieceFl = formatEquipmentNumber(spec.focalLengthMm),
+                                    customEyepieceAfov = formatEquipmentNumber(spec.apparentFovDeg)
+                                )
                             )
-                        }
-                    }
-                    if (config.eyepieceId == "ep_custom") {
-                        OutlinedTextField(
-                            value = config.customEyepieceFl,
-                            onValueChange = { onConfigChange(config.copy(customEyepieceFl = it)) },
-                            label = { Text(stringResource(R.string.eyepiece_focal_length_mm)) },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        OutlinedTextField(
-                            value = config.customEyepieceAfov,
-                            onValueChange = { onConfigChange(config.copy(customEyepieceAfov = it)) },
-                            label = { Text(stringResource(R.string.eyepiece_apparent_fov)) },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                            modifier = Modifier.fillMaxWidth()
+                        },
+                        onAdd = {
+                            val selected = eyepieces.firstOrNull { it.id == config.eyepieceId }
+                            val next = UserOpticsCatalog.addEyepiece(
+                                current = eyepieces,
+                                name = defaultEyepieceName,
+                                focalLengthMm = selected?.focalLengthMm ?: 25.0,
+                                apparentFovDeg = selected?.apparentFovDeg ?: 50.0,
+                                id = UserOpticsCatalog.newId("user_ep", System.currentTimeMillis())
+                            )
+                            val spec = next.last()
+                            onEyepiecesChange(next)
+                            onConfigChange(
+                                config.copy(
+                                    eyepieceId = spec.id,
+                                    customEyepieceFl = formatEquipmentNumber(spec.focalLengthMm),
+                                    customEyepieceAfov = formatEquipmentNumber(spec.apparentFovDeg)
+                                )
+                            )
+                        },
+                        onDelete = {
+                            val next = UserOpticsCatalog.removeEyepiece(eyepieces, config.eyepieceId)
+                            if (next === eyepieces) return@NamedEquipmentChips
+                            onEyepiecesChange(next)
+                            if (next.none { it.id == config.eyepieceId }) {
+                                val spec = next.first()
+                                onConfigChange(
+                                    config.copy(
+                                        eyepieceId = spec.id,
+                                        customEyepieceFl = formatEquipmentNumber(spec.focalLengthMm),
+                                        customEyepieceAfov = formatEquipmentNumber(spec.apparentFovDeg)
+                                    )
+                                )
+                            }
+                        },
+                        canDelete = eyepieces.size > 1
+                    )
+                    val selectedEyepiece = eyepieces.firstOrNull { it.id == config.eyepieceId }
+                    if (selectedEyepiece != null) {
+                        EyepieceEditor(
+                            spec = selectedEyepiece,
+                            onChange = { updated ->
+                                onEyepiecesChange(UserOpticsCatalog.replaceEyepiece(eyepieces, updated))
+                                onConfigChange(
+                                    config.copy(
+                                        customEyepieceFl = formatEquipmentNumber(updated.focalLengthMm),
+                                        customEyepieceAfov = formatEquipmentNumber(updated.apparentFovDeg)
+                                    )
+                                )
+                            }
                         )
                     }
                 }
@@ -340,7 +378,13 @@ private fun NamedEquipmentChips(
                 FilterChip(
                     selected = selectedId == id,
                     onClick = { onSelect(id) },
-                    label = { Text(name) }
+                    label = {
+                        Text(
+                            name,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 )
             }
         }
@@ -410,6 +454,54 @@ private fun TelescopeEditor(
             onChange(spec.copy(apertureMm = ap?.takeIf { value -> value > 0.0 }))
         },
         label = { Text(stringResource(R.string.fov_aperture_mm)) },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+        modifier = Modifier.fillMaxWidth()
+    )
+}
+
+@Composable
+private fun EyepieceEditor(
+    spec: EyepieceSpec,
+    onChange: (EyepieceSpec) -> Unit
+) {
+    var name by remember(spec.id, spec.name) { mutableStateOf(spec.name) }
+    var focalLength by remember(spec.id) {
+        mutableStateOf(formatEquipmentNumber(spec.focalLengthMm))
+    }
+    var apparentFov by remember(spec.id) {
+        mutableStateOf(formatEquipmentNumber(spec.apparentFovDeg))
+    }
+    OutlinedTextField(
+        value = name,
+        onValueChange = {
+            name = it
+            onChange(spec.copy(name = it))
+        },
+        label = { Text(stringResource(R.string.fov_equipment_name)) },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth()
+    )
+    OutlinedTextField(
+        value = focalLength,
+        onValueChange = {
+            focalLength = it
+            val fl = it.toDoubleOrNull()
+            if (fl != null && fl > 0.0) onChange(spec.copy(focalLengthMm = fl))
+        },
+        label = { Text(stringResource(R.string.eyepiece_focal_length_mm)) },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+        modifier = Modifier.fillMaxWidth()
+    )
+    OutlinedTextField(
+        value = apparentFov,
+        onValueChange = {
+            apparentFov = it
+            val afov = it.toDoubleOrNull()
+            if (afov != null && afov > 0.0) onChange(spec.copy(apparentFovDeg = afov))
+        },
+        label = { Text(stringResource(R.string.eyepiece_apparent_fov)) },
         singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
         modifier = Modifier.fillMaxWidth()

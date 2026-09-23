@@ -88,12 +88,12 @@ class StarMapFovOverlayTest {
     @Test
     fun overlayCaptionUsesTrainRoleAndShape() {
         assertEquals(
-            "主镜 当前 1.50°",
-            StarMapFovOverlay.overlayCaption("主镜", "当前", circle)
+            "C8 + 25 mm · 50° 当前 1.50°",
+            StarMapFovOverlay.overlayCaption("C8 + 25 mm · 50°", "当前", circle)
         )
         assertEquals(
-            "导星 目标 0.80°×0.50°",
-            StarMapFovOverlay.overlayCaption("导星", "目标", rect)
+            "C8 + ASI533 目标 0.80°×0.50°",
+            StarMapFovOverlay.overlayCaption("C8 + ASI533", "目标", rect)
         )
     }
 }

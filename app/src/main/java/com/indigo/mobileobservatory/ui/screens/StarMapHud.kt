@@ -6,11 +6,13 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
@@ -19,7 +21,10 @@ import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.GridOn
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
@@ -40,11 +45,13 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.astro.OpticsTrainId
 import com.indigo.mobileobservatory.mount.MountDirection
+import com.indigo.mobileobservatory.mount.MountMotionState
 import com.indigo.mobileobservatory.mount.MountSlewRate
 
 internal enum class StarMapCornerPanel { NONE, OBSERVING, SKY }
@@ -65,8 +72,6 @@ internal fun StarMapCornerControls(
     mountSlewRate: MountSlewRate,
     followMount: Boolean,
     activeTrain: OpticsTrainId,
-    primaryTrainLabel: String,
-    secondaryTrainLabel: String,
     showFovOverlay: Boolean,
     equatorialGrid: Boolean,
     azimuthalGrid: Boolean,
@@ -232,12 +237,26 @@ internal fun StarMapCornerControls(
                         FilterChip(
                             selected = activeTrain == OpticsTrainId.PRIMARY,
                             onClick = { onActiveTrainChange(OpticsTrainId.PRIMARY) },
-                            label = { Text(primaryTrainLabel) }
+                            modifier = Modifier.weight(1f),
+                            label = {
+                                Text(
+                                    stringResource(R.string.star_map_train_primary),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         )
                         FilterChip(
                             selected = activeTrain == OpticsTrainId.SECONDARY,
                             onClick = { onActiveTrainChange(OpticsTrainId.SECONDARY) },
-                            label = { Text(secondaryTrainLabel) }
+                            modifier = Modifier.weight(1f),
+                            label = {
+                                Text(
+                                    stringResource(R.string.star_map_train_secondary),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         )
                     }
                     StarMapFlagSwitch(
@@ -441,5 +460,68 @@ private fun StarMapFlagSwitch(
             onCheckedChange = onCheckedChange,
             enabled = enabled
         )
+    }
+}
+
+/**
+ * Always-on abort chrome for GOTO / home / RA move. Keep this out of the
+ * observing tools and target card so it cannot reflow or cover them.
+ */
+@Composable
+internal fun MountMotionStopBanner(
+    state: MountMotionState,
+    onStop: () -> Unit,
+    detail: String? = null,
+    modifier: Modifier = Modifier
+) {
+    if (!state.showsGlobalStop) return
+    Card(modifier = modifier) {
+        Column(
+            modifier = Modifier.padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            if (!detail.isNullOrBlank()) {
+                Text(
+                    detail,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    state.label,
+                    style = MaterialTheme.typography.labelLarge,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Button(
+                    onClick = onStop,
+                    enabled = !state.isStopping,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError
+                    )
+                ) {
+                    if (state.isStopping) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.onError
+                        )
+                    } else {
+                        Icon(Icons.Default.Stop, contentDescription = null)
+                    }
+                    Spacer(Modifier.width(6.dp))
+                    Text(if (state.isStopping) "STOPPING" else "STOP")
+                }
+            }
+        }
     }
 }

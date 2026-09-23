@@ -86,6 +86,7 @@ import com.indigo.mobileobservatory.catalog.AssetDeepSkyCatalog
 import com.indigo.mobileobservatory.catalog.CatalogObject
 import com.indigo.mobileobservatory.mount.MountCoordinates
 import com.indigo.mobileobservatory.mount.MountDirection
+import com.indigo.mobileobservatory.mount.MountMotionState
 import com.indigo.mobileobservatory.mount.MountSite
 import com.indigo.mobileobservatory.mount.MountSlewRate
 import com.indigo.mobileobservatory.mount.PrecisionGotoMath
@@ -206,6 +207,7 @@ fun StarMapScreen(
     mountConnected: Boolean,
     mountSupportsSync: Boolean = true,
     mountBusy: Boolean,
+    mountMotionState: MountMotionState = MountMotionState.Idle,
     mountSlewRate: MountSlewRate = MountSlewRate.DEFAULT,
     precisionGotoProgress: PrecisionGotoProgress = PrecisionGotoProgress(),
     cameraPixelSizeUm: Float? = null,
@@ -290,6 +292,7 @@ fun StarMapScreen(
         )
     }
     val moveEnabled = mountConnected && !mountBusy
+    val showGlobalStop = mountMotionState.showsGlobalStop
 
     val connectedSensorName = stringResource(R.string.connected_camera_sensor)
     val connectedSensor = remember(
@@ -312,7 +315,13 @@ fun StarMapScreen(
             )
         )
     }
-    val eyepieces = OpticsEquipment.defaultEyepieces
+    var eyepieces by remember {
+        mutableStateOf(
+            UserOpticsCatalog.loadEyepieces(
+                prefs.getString(UserOpticsCatalog.EYEPIECES_KEY, null)
+            )
+        )
+    }
     var userCameras by remember {
         mutableStateOf(
             UserOpticsCatalog.loadCameras(
@@ -353,20 +362,48 @@ fun StarMapScreen(
             )
         }
     }
-    LaunchedEffect(sensors, primaryTrain.sensorId, secondaryTrain.sensorId, primaryTrain.mode, secondaryTrain.mode) {
-        fun fallback(train: OpticsTrainConfig) =
+    LaunchedEffect(
+        sensors,
+        telescopes,
+        eyepieces,
+        primaryTrain.sensorId,
+        primaryTrain.telescopeId,
+        primaryTrain.eyepieceId,
+        primaryTrain.mode,
+        secondaryTrain.sensorId,
+        secondaryTrain.telescopeId,
+        secondaryTrain.eyepieceId,
+        secondaryTrain.mode
+    ) {
+        fun fallback(train: OpticsTrainConfig): OpticsTrainConfig {
+            var next = train
+            if (telescopes.none { it.id == next.telescopeId }) {
+                val spec = telescopes.firstOrNull() ?: return next
+                next = next.copy(
+                    telescopeId = spec.id,
+                    customTelescopeFl = spec.focalLengthMm.toString().removeSuffix(".0")
+                )
+            }
+            if (eyepieces.none { it.id == next.eyepieceId }) {
+                val spec = eyepieces.firstOrNull() ?: return next
+                next = next.copy(
+                    eyepieceId = spec.id,
+                    customEyepieceFl = spec.focalLengthMm.toString().removeSuffix(".0"),
+                    customEyepieceAfov = spec.apparentFovDeg.toString().removeSuffix(".0")
+                )
+            }
             if (
-                train.mode == FovInstrumentMode.SENSOR &&
-                train.sensorId != OpticsEquipment.CONNECTED_SENSOR_ID &&
-                sensors.none { it.id == train.sensorId }
+                next.mode == FovInstrumentMode.SENSOR &&
+                next.sensorId != OpticsEquipment.CONNECTED_SENSOR_ID &&
+                sensors.none { it.id == next.sensorId }
             ) {
-                train.copy(
+                next = next.copy(
                     sensorId = sensors.firstOrNull()?.id
                         ?: OpticsEquipment.defaultSensors.first().id
                 )
-            } else {
-                train
             }
+            return next
+        }
         val nextPrimary = fallback(primaryTrain)
         val nextSecondary = fallback(secondaryTrain)
         if (nextPrimary != primaryTrain) primaryTrain = nextPrimary
@@ -375,34 +412,35 @@ fun StarMapScreen(
 
     val activeConfig = if (activeTrain == OpticsTrainId.PRIMARY) primaryTrain else secondaryTrain
     val editingConfig = if (editingTrain == OpticsTrainId.PRIMARY) primaryTrain else secondaryTrain
-    val activeComputation = remember(activeConfig, sensors, telescopes) {
+    val activeComputation = remember(activeConfig, sensors, telescopes, eyepieces) {
         activeConfig.compute(telescopes, eyepieces, sensors)
     }
-    val editingComputation = remember(editingConfig, sensors, telescopes) {
+    val editingComputation = remember(editingConfig, sensors, telescopes, eyepieces) {
         editingConfig.compute(telescopes, eyepieces, sensors)
     }
     val defaultPrimaryLabel = stringResource(R.string.star_map_train_primary)
     val defaultSecondaryLabel = stringResource(R.string.star_map_train_secondary)
-    val trainPrimaryLabel = UserOpticsCatalog.displayName(
-        primaryTrain,
+    val overlayTrainLabel = remember(
+        activeConfig,
         telescopes,
+        eyepieces,
         sensors,
-        defaultPrimaryLabel
-    )
-    val trainSecondaryLabel = UserOpticsCatalog.displayName(
-        secondaryTrain,
-        telescopes,
-        sensors,
-        defaultSecondaryLabel
-    )
+        defaultPrimaryLabel,
+        defaultSecondaryLabel,
+        activeTrain
+    ) {
+        UserOpticsCatalog.combinationName(activeConfig, telescopes, eyepieces, sensors)
+            .ifEmpty {
+                if (activeTrain == OpticsTrainId.PRIMARY) defaultPrimaryLabel else defaultSecondaryLabel
+            }
+    }
     val fovCurrentWord = stringResource(R.string.star_map_fov_current)
     val fovTargetWord = stringResource(R.string.star_map_fov_target)
-    val trainName = if (activeTrain == OpticsTrainId.PRIMARY) trainPrimaryLabel else trainSecondaryLabel
-    val overlayCurrentLabel = remember(trainName, fovCurrentWord, activeComputation) {
-        StarMapFovOverlay.overlayCaption(trainName, fovCurrentWord, activeComputation)
+    val overlayCurrentLabel = remember(overlayTrainLabel, fovCurrentWord, activeComputation) {
+        StarMapFovOverlay.overlayCaption(overlayTrainLabel, fovCurrentWord, activeComputation)
     }
-    val overlayTargetLabel = remember(trainName, fovTargetWord, activeComputation) {
-        StarMapFovOverlay.overlayCaption(trainName, fovTargetWord, activeComputation)
+    val overlayTargetLabel = remember(overlayTrainLabel, fovTargetWord, activeComputation) {
+        StarMapFovOverlay.overlayCaption(overlayTrainLabel, fovTargetWord, activeComputation)
     }
 
     fun evalStarMap(script: String) {
@@ -433,6 +471,10 @@ fun StarMapScreen(
             .putString(
                 UserOpticsCatalog.TELESCOPES_KEY,
                 UserOpticsCatalog.formatTelescopes(telescopes)
+            )
+            .putString(
+                UserOpticsCatalog.EYEPIECES_KEY,
+                UserOpticsCatalog.formatEyepieces(eyepieces)
             )
             .putString(
                 UserOpticsCatalog.CAMERAS_KEY,
@@ -576,6 +618,7 @@ fun StarMapScreen(
         centerOnRaDec(obj.raHours, obj.decDeg, frame = "ICRF")
         searchDialogVisible = false
         searchQuery = ""
+        cornerPanel = StarMapCornerPanel.NONE
         overlaysVisible = true
     }
 
@@ -638,6 +681,7 @@ fun StarMapScreen(
             onSelected = {
                 selectedTarget = it
                 targetExpanded = false
+                cornerPanel = StarMapCornerPanel.NONE
                 overlaysVisible = true
             },
             onFollowChanged = { enabled -> setFollowMountEnabled(enabled) },
@@ -654,6 +698,10 @@ fun StarMapScreen(
         val timeoutMessage = context.getString(R.string.star_map_load_timeout)
         engineState = StarMapLoadRules.acceptTimeout(engineState, timeoutMessage)
         if (engineState is StarMapEngineState.Error) overlaysVisible = true
+    }
+
+    LaunchedEffect(showGlobalStop) {
+        if (showGlobalStop) cornerPanel = StarMapCornerPanel.NONE
     }
 
     LaunchedEffect(
@@ -1013,7 +1061,9 @@ fun StarMapScreen(
         }
 
         AnimatedVisibility(
-            visible = overlaysVisible && engineState is StarMapEngineState.Ready,
+            visible = overlaysVisible &&
+                engineState is StarMapEngineState.Ready &&
+                !showGlobalStop,
             enter = fadeIn(),
             exit = fadeOut(),
             modifier = Modifier
@@ -1021,8 +1071,9 @@ fun StarMapScreen(
                 .fillMaxWidth()
         ) {
             BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                val bottomSlotMax = minOf(300.dp, maxWidth / 2)
+                val panelMax = minOf(360.dp, maxWidth - 16.dp)
                 val target = selectedTarget
+                val showTargetCard = target != null && cornerPanel == StarMapCornerPanel.NONE
                 val canSlewMount = mountConnected && !mountBusy
                 val canSyncMount = canSlewMount && mountSupportsSync
                 Row(
@@ -1031,7 +1082,7 @@ fun StarMapScreen(
                     verticalAlignment = Alignment.Bottom
                 ) {
             StarMapCornerControls(
-                modifier = Modifier.widthIn(max = bottomSlotMax),
+                modifier = Modifier.widthIn(max = panelMax),
                 panel = cornerPanel,
                 onPanelChange = {
                     cornerPanel = it
@@ -1043,8 +1094,6 @@ fun StarMapScreen(
                 mountSlewRate = mountSlewRate,
                 followMount = followMount,
                 activeTrain = activeTrain,
-                primaryTrainLabel = trainPrimaryLabel,
-                secondaryTrainLabel = trainSecondaryLabel,
                 showFovOverlay = showFovOverlay,
                 equatorialGrid = equatorialGrid,
                 azimuthalGrid = azimuthalGrid,
@@ -1127,37 +1176,11 @@ fun StarMapScreen(
                 },
                 onReloadStarMap = ::reloadStarMap
             )
-            if (target == null) {
+            if (showTargetCard && target != null) {
                 Card(
                     modifier = Modifier
                         .padding(8.dp)
-                        .widthIn(max = bottomSlotMax)
-                ) {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Text(
-                            stringResource(R.string.select_celestial_target),
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                        Text(
-                            stringResource(R.string.star_map_visual_sync_hint),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.outline
-                        )
-                        if (mountConnected && mountCoordinates != null) {
-                            OutlinedButton(onClick = ::centerOnMount) {
-                                Text(stringResource(R.string.center_on_mount))
-                            }
-                        }
-                    }
-                }
-            } else {
-                Card(
-                    modifier = Modifier
-                        .padding(8.dp)
-                        .widthIn(max = bottomSlotMax)
+                        .widthIn(max = panelMax)
                 ) {
                     Column(
                         modifier = Modifier.padding(10.dp),
@@ -1167,6 +1190,7 @@ fun StarMapScreen(
                             target.name,
                             style = MaterialTheme.typography.titleSmall,
                             maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable { targetExpanded = !targetExpanded }
@@ -1270,6 +1294,11 @@ fun StarMapScreen(
                         }
                         if (targetExpanded) {
                             Text(
+                                stringResource(R.string.star_map_visual_sync_hint),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                            Text(
                                 target.coordinatesText(),
                                 style = MaterialTheme.typography.bodySmall
                             )
@@ -1298,6 +1327,19 @@ fun StarMapScreen(
             }
                 }
             }
+        }
+
+        if (showGlobalStop) {
+            val stopDetail = precisionGotoProgress.message.takeIf { it.isNotBlank() }
+            MountMotionStopBanner(
+                state = mountMotionState,
+                onStop = onStopMount,
+                detail = stopDetail,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(12.dp)
+            )
         }
     }
 
@@ -1426,8 +1468,6 @@ fun StarMapScreen(
             sensors = sensors,
             showOverlay = showFovOverlay,
             computation = editingComputation,
-            primaryTrainLabel = trainPrimaryLabel,
-            secondaryTrainLabel = trainSecondaryLabel,
             onEditingTrainChange = { editingTrain = it },
             onConfigChange = { updated ->
                 if (updated.id == OpticsTrainId.PRIMARY) {
@@ -1445,6 +1485,11 @@ fun StarMapScreen(
             },
             onTelescopesChange = {
                 telescopes = it
+                persistFovPrefs()
+                applyFovOverlays(alsoZoom = false)
+            },
+            onEyepiecesChange = {
+                eyepieces = it
                 persistFovPrefs()
                 applyFovOverlays(alsoZoom = false)
             },

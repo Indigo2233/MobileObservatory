@@ -64,10 +64,12 @@ fun CameraScreen(
     }
     RememberAppOrientation(orientationMode)
 
-    MountMotionStopPopup(
-        state = globalMountMotionState,
-        onStop = viewModel::stopMountMotion
-    )
+    if (selectedTab != MainControlTab.STAR_MAP || !BuildConfig.STELLARIUM_ENABLED) {
+        MountMotionStopPopup(
+            state = globalMountMotionState,
+            onStop = viewModel::stopMountMotion
+        )
+    }
 
     if (phoneNav.destination != null) {
         PhonePlateSolveScreens(phoneNav)
@@ -352,6 +354,7 @@ fun CameraScreen(
                             com.indigo.mobileobservatory.mount.MountConnectionState.Connected,
                         mountSupportsSync = viewModel.mountSupportsSync,
                         mountBusy = mountBusy,
+                        mountMotionState = globalMountMotionState,
                         mountSlewRate = mountSlewRate,
                         precisionGotoProgress = precisionGotoProgress,
                         cameraPixelSizeUm = (connectionState as? ConnectionState.Connected)
@@ -803,35 +806,11 @@ private fun MountMotionStopPopup(
         alignment = Alignment.BottomStart,
         properties = PopupProperties(focusable = false)
     ) {
-        Card(modifier = Modifier.padding(12.dp)) {
-            Row(
-                modifier = Modifier.padding(8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(state.label, style = MaterialTheme.typography.labelLarge)
-                Button(
-                    onClick = onStop,
-                    enabled = !state.isStopping,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error,
-                        contentColor = MaterialTheme.colorScheme.onError
-                    )
-                ) {
-                    if (state.isStopping) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.onError
-                        )
-                    } else {
-                        Icon(Icons.Default.Stop, contentDescription = null)
-                    }
-                    Spacer(Modifier.width(6.dp))
-                    Text(if (state.isStopping) "STOPPING" else "STOP")
-                }
-            }
-        }
+        MountMotionStopBanner(
+            state = state,
+            onStop = onStop,
+            modifier = Modifier.padding(12.dp)
+        )
     }
 }
 @Composable

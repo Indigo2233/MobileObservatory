@@ -9,6 +9,7 @@ class UserOpticsCatalogTest {
     @Test
     fun blankStorageFallsBackToBuiltInCatalogs() {
         assertEquals(OpticsEquipment.defaultTelescopes, UserOpticsCatalog.loadTelescopes(null))
+        assertEquals(OpticsEquipment.defaultEyepieces, UserOpticsCatalog.loadEyepieces(""))
         assertEquals(OpticsEquipment.defaultSensors, UserOpticsCatalog.loadCameras(""))
     }
 
@@ -31,11 +32,19 @@ class UserOpticsCatalogTest {
     }
 
     @Test
+    fun eyepiecesRoundTripNameAndOptics() {
+        val named = EyepieceSpec("user_ep_1", "Nagler 13", 13.0, 82.0)
+        val encoded = UserOpticsCatalog.formatEyepieces(listOf(named))
+        assertEquals(listOf(named), UserOpticsCatalog.parseEyepieces(encoded))
+        assertEquals(listOf(named), UserOpticsCatalog.loadEyepieces(encoded))
+    }
+
+    @Test
     fun addRenameAndDeleteTelescope() {
         val start = listOf(TelescopeSpec("scope_80_500", "80 mm f/6.3", 500.0, 80.0))
-        val added = UserOpticsCatalog.addTelescope(start, "主镜", 800.0, 102.0, "user_scope_2")
+        val added = UserOpticsCatalog.addTelescope(start, "望远镜", 800.0, 102.0, "user_scope_2")
         assertEquals(2, added.size)
-        assertEquals("主镜", added.last().name)
+        assertEquals("望远镜", added.last().name)
         val renamed = UserOpticsCatalog.replaceTelescope(
             added,
             added.last().copy(name = "80ED")
@@ -54,22 +63,51 @@ class UserOpticsCatalogTest {
     }
 
     @Test
-    fun displayNameUsesNamedEquipment() {
+    fun addRenameAndDeleteEyepiece() {
+        val start = listOf(EyepieceSpec("ep_25_50", "25 mm · 50°", 25.0, 50.0))
+        val added = UserOpticsCatalog.addEyepiece(start, "目镜", 13.0, 82.0, "user_ep_2")
+        assertEquals(2, added.size)
+        assertEquals("目镜", added.last().name)
+        val renamed = UserOpticsCatalog.replaceEyepiece(
+            added,
+            added.last().copy(name = "Nagler 13")
+        )
+        assertEquals("Nagler 13", renamed.last().name)
+        assertEquals(82.0, renamed.last().apparentFovDeg, 0.0)
+        val removed = UserOpticsCatalog.removeEyepiece(renamed, "user_ep_2")
+        assertEquals(start, removed)
+        assertEquals(start, UserOpticsCatalog.removeEyepiece(start, "ep_25_50"))
+    }
+
+    @Test
+    fun combinationNameJoinsTelescopeAndTerminal() {
         val scope = TelescopeSpec("scope_80_500", "C8", 500.0, 80.0)
         val camera = SensorSpec("ccd_imx533", "ASI533", 3.76, 3008, 3008)
-        val eyepiece = OpticsTrainConfig(
+        val eyepiece = EyepieceSpec("ep_25_50", "25 mm · 50°", 25.0, 50.0)
+        val visual = OpticsTrainConfig(
             id = OpticsTrainId.PRIMARY,
             mode = FovInstrumentMode.EYEPIECE,
-            telescopeId = "scope_80_500"
+            telescopeId = "scope_80_500",
+            eyepieceId = "ep_25_50"
         )
         val sensor = OpticsTrainConfig(
             id = OpticsTrainId.SECONDARY,
             mode = FovInstrumentMode.SENSOR,
+            telescopeId = "scope_80_500",
             sensorId = "ccd_imx533"
         )
-        assertEquals("C8", UserOpticsCatalog.displayName(eyepiece, listOf(scope), listOf(camera), "主镜"))
-        assertEquals("ASI533", UserOpticsCatalog.displayName(sensor, listOf(scope), listOf(camera), "导星"))
-        assertEquals("主镜", UserOpticsCatalog.displayName(eyepiece, emptyList(), emptyList(), "主镜"))
+        assertEquals(
+            "C8 + 25 mm · 50°",
+            UserOpticsCatalog.combinationName(visual, listOf(scope), listOf(eyepiece), listOf(camera))
+        )
+        assertEquals(
+            "C8 + ASI533",
+            UserOpticsCatalog.combinationName(sensor, listOf(scope), listOf(eyepiece), listOf(camera))
+        )
+        assertEquals(
+            "",
+            UserOpticsCatalog.combinationName(visual, emptyList(), emptyList(), emptyList())
+        )
     }
 
     @Test

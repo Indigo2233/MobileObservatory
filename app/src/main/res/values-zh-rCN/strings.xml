@@ -448,6 +448,8 @@
     <string name="fov_mode_eyepiece">目镜</string>
     <string name="fov_mode_sensor">相机 / 传感器</string>
     <string name="fov_telescope">望远镜</string>
+    <string name="fov_named_telescope">望远镜</string>
+    <string name="fov_named_eyepiece">目镜</string>
     <string name="fov_named_camera">相机</string>
     <string name="fov_equipment_name">显示名</string>
     <string name="fov_aperture_mm">口径（mm）</string>
