@@ -19,6 +19,11 @@
     <string name="refresh_coordinates">Coordinates</string>
     <string name="manual_mount_control">Manual control</string>
     <string name="tracking">Tracking</string>
+    <string name="tracking_rate">Tracking rate</string>
+    <string name="tracking_stopped">Stop</string>
+    <string name="tracking_sidereal">Sidereal</string>
+    <string name="tracking_solar">Solar</string>
+    <string name="tracking_lunar">Lunar</string>
     <string name="home">Go to zero</string>
     <string name="set_home">Reset zero</string>
     <string name="star_map">Star map</string>

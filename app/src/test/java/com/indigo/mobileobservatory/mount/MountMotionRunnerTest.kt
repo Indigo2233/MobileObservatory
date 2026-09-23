@@ -91,7 +91,14 @@ class MountMotionRunnerTest {
         assertFalse(
             MountMotionState(MountMotionType.MANUAL, "Manual north").showsGlobalStop
         )
-        assertTrue(MountMotionState(MountMotionType.GOTO, "GOTO M42").showsGlobalStop)
+        assertFalse(MountMotionState(MountMotionType.GOTO, "GOTO M42").showsGlobalStop)
+        assertTrue(
+            MountMotionState(MountMotionType.GOTO, "GOTO M42", slewing = true).showsGlobalStop
+        )
+        assertTrue(
+            MountMotionState(MountMotionType.GOTO, "Precision GOTO M42", holdStop = true)
+                .showsGlobalStop
+        )
         assertTrue(MountMotionState(MountMotionType.HOME, "Go home").showsGlobalStop)
         assertTrue(MountMotionState(MountMotionType.RA_MOVE, "RA move").showsGlobalStop)
     }

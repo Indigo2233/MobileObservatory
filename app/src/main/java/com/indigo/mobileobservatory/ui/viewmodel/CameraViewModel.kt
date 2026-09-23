@@ -24,6 +24,7 @@ import com.indigo.mobileobservatory.mount.MountCoordinates
 import com.indigo.mobileobservatory.mount.MountDirection
 import com.indigo.mobileobservatory.mount.MountMotionState
 import com.indigo.mobileobservatory.mount.MountSlewRate
+import com.indigo.mobileobservatory.mount.MountTrackingRate
 import com.indigo.mobileobservatory.mount.MountProtocolType
 import com.indigo.mobileobservatory.mount.MountTransportType
 import com.indigo.mobileobservatory.mount.SkyWatcherMountMode
@@ -491,6 +492,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val mountMoveStatus = mountModule.mountMoveStatus
     val mountSlewRate = mountModule.mountSlewRate
     val mountTrackingEnabled = mountModule.mountTrackingEnabled
+    val mountTrackingRate = mountModule.mountTrackingRate
     private var frameCount = 0L
     private var fpsTimestamp = System.nanoTime()
     private var autoExpFrameSkip = 0
@@ -885,6 +887,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun stopMountManualMove(direction: MountDirection? = null) = mountModule.stopMountManualMove(direction)
     fun setMountSlewRate(rate: MountSlewRate) = mountModule.setMountSlewRate(rate)
     fun setMountTracking(enabled: Boolean) = mountModule.setMountTracking(enabled)
+    fun setMountTrackingRate(rate: MountTrackingRate) = mountModule.setMountTrackingRate(rate)
     fun goMountHome() = mountModule.goMountHome()
     fun setMountHomeHere() = mountModule.setMountHomeHere()
     fun readMountCoordinates() = mountModule.readMountCoordinates()

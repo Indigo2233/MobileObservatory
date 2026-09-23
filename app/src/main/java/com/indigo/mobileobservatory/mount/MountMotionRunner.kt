@@ -23,12 +23,21 @@ enum class MountMotionType {
 data class MountMotionState(
     val type: MountMotionType = MountMotionType.IDLE,
     val label: String = "",
-    val isStopping: Boolean = false
+    val isStopping: Boolean = false,
+    /** Plain GOTO sets this only after the axes actually start moving. */
+    val slewing: Boolean = false,
+    /** Precision GOTO, home, and RA moves keep STOP even between slews. */
+    val holdStop: Boolean = false
 ) {
     val isActive: Boolean get() = type != MountMotionType.IDLE
 
     /** Direction pads already have Stop; a global popup would reflow/cancel the press. */
-    val showsGlobalStop: Boolean get() = isActive && type != MountMotionType.MANUAL
+    val showsGlobalStop: Boolean
+        get() = when (type) {
+            MountMotionType.IDLE, MountMotionType.MANUAL -> false
+            MountMotionType.GOTO -> holdStop || slewing
+            else -> isActive
+        }
 
     companion object {
         val Idle = MountMotionState()
@@ -78,6 +87,13 @@ class MountMotionRunner(
             operationJob = job
             job.start()
             return true
+        }
+    }
+
+    fun update(transform: (MountMotionState) -> MountMotionState) {
+        synchronized(lock) {
+            if (operationJob?.isActive != true) return
+            _state.value = transform(_state.value)
         }
     }
 

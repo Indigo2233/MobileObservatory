@@ -37,7 +37,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -63,6 +62,7 @@ import com.indigo.mobileobservatory.mount.MountConnectionState
 import com.indigo.mobileobservatory.mount.MountDirection
 import com.indigo.mobileobservatory.mount.MountProtocolType
 import com.indigo.mobileobservatory.mount.MountSlewRate
+import com.indigo.mobileobservatory.mount.MountTrackingRate
 import com.indigo.mobileobservatory.mount.MountTransportType
 import com.indigo.mobileobservatory.mount.SkyWatcherMountMode
 import com.indigo.mobileobservatory.permissions.AppSettingsNavigator
@@ -101,7 +101,7 @@ fun MountControlScreen(
     val connectionMessage by viewModel.mountConnectionMessage.collectAsState()
     val moveStatus by viewModel.mountMoveStatus.collectAsState()
     val slewRate by viewModel.mountSlewRate.collectAsState()
-    val tracking by viewModel.mountTrackingEnabled.collectAsState()
+    val trackingRate by viewModel.mountTrackingRate.collectAsState()
     val connected = connectionState is MountConnectionState.Connected
     val connectionUi = MountConnectionUiState.from(
         connection = connectionState,
@@ -529,15 +529,39 @@ fun MountControlScreen(
                     if (moveStatus.isNotBlank()) {
                         Text(moveStatus, color = MaterialTheme.colorScheme.primary)
                     }
+                    Text(
+                        stringResource(R.string.tracking_rate),
+                        style = MaterialTheme.typography.labelLarge,
+                        modifier = Modifier.fillMaxWidth()
+                    )
                     Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Text(stringResource(R.string.tracking))
-                        Switch(
-                            checked = tracking,
-                            onCheckedChange = viewModel::setMountTracking
+                        TrackingRateChip(
+                            selected = trackingRate == MountTrackingRate.OFF,
+                            label = stringResource(R.string.tracking_stopped),
+                            onClick = { viewModel.setMountTrackingRate(MountTrackingRate.OFF) }
                         )
+                        TrackingRateChip(
+                            selected = trackingRate == MountTrackingRate.SIDEREAL,
+                            label = stringResource(R.string.tracking_sidereal),
+                            onClick = { viewModel.setMountTrackingRate(MountTrackingRate.SIDEREAL) }
+                        )
+                        TrackingRateChip(
+                            selected = trackingRate == MountTrackingRate.LUNAR,
+                            label = stringResource(R.string.tracking_lunar),
+                            onClick = { viewModel.setMountTrackingRate(MountTrackingRate.LUNAR) }
+                        )
+                        TrackingRateChip(
+                            selected = trackingRate == MountTrackingRate.SOLAR,
+                            label = stringResource(R.string.tracking_solar),
+                            onClick = { viewModel.setMountTrackingRate(MountTrackingRate.SOLAR) }
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(onClick = viewModel::goMountHome) {
                             Icon(Icons.Default.Home, contentDescription = null)
                             Text(stringResource(R.string.home))
@@ -596,6 +620,20 @@ fun MountControlScreen(
         }
         Spacer(Modifier.height(8.dp))
     }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TrackingRateChip(
+    selected: Boolean,
+    label: String,
+    onClick: () -> Unit
+) {
+    FilterChip(
+        selected = selected,
+        onClick = onClick,
+        label = { Text(label, maxLines = 1) }
+    )
 }
 
 @Composable

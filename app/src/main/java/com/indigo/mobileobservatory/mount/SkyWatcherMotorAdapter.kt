@@ -19,6 +19,7 @@ internal class SkyWatcherMotorAdapter(
     private lateinit var geometry: SkyWatcherMountGeometry
     private var slewRate = MountSlewRate.DEFAULT
     private var trackingEnabled = false
+    private var trackingRate = MountTrackingRate.OFF
     private var pierSide = SkyWatcherPierSide.WEST
     private var homeCoordinates: MountCoordinates? = null
     private val axisMotionSign = mutableMapOf<SkyWatcherAxis, Int>()
@@ -134,8 +135,13 @@ internal class SkyWatcherMotorAdapter(
     }
 
     override fun setTracking(enabled: Boolean) {
-        trackingEnabled = enabled
-        applyTracking(enabled)
+        setTrackingRate(if (enabled) MountTrackingRate.SIDEREAL else MountTrackingRate.OFF)
+    }
+
+    override fun setTrackingRate(rate: MountTrackingRate) {
+        trackingEnabled = rate.tracks
+        trackingRate = rate
+        applyTracking(trackingEnabled)
     }
 
     override fun readSite(): MountSite = site
@@ -192,7 +198,7 @@ internal class SkyWatcherMotorAdapter(
             applyAltazTracking(restart = true)
             return
         }
-        var rate = SkyWatcherEquatorialMath.SIDEREAL_ARCSEC_PER_SEC
+        var rate = SkyWatcherEquatorialMath.SIDEREAL_ARCSEC_PER_SEC * trackingRate.siderealFraction
         if (site.latitudeDeg < 0.0) rate = -rate
         slewAxisAtRate(SkyWatcherAxis.RA, rate)
     }

@@ -187,7 +187,8 @@ class ObservingUiWiringTest {
         assertTrue(starMap.contains("mountMotionState.showsGlobalStop"))
         assertTrue(starMap.contains("MountMotionStopBanner("))
         assertTrue(starMap.contains("!showGlobalStop"))
-        assertTrue(motion.contains("type != MountMotionType.MANUAL"))
+        assertTrue(motion.contains("MountMotionType.MANUAL -> false"))
+        assertTrue(motion.contains("holdStop || slewing"))
     }
 
     @Test

@@ -19,6 +19,11 @@
     <string name="refresh_coordinates">读取坐标</string>
     <string name="manual_mount_control">手动控制</string>
     <string name="tracking">跟踪</string>
+    <string name="tracking_rate">跟踪速率</string>
+    <string name="tracking_stopped">停止</string>
+    <string name="tracking_sidereal">恒星</string>
+    <string name="tracking_solar">太阳</string>
+    <string name="tracking_lunar">月球</string>
     <string name="home">回零位</string>
     <string name="set_home">重设零位</string>
     <string name="star_map">星图</string>

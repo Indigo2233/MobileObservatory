@@ -12,6 +12,9 @@ interface SkyWatcherMountSession {
     fun stopMove(direction: MountDirection?)
     fun setMoveRate(rate: MountSlewRate)
     fun setTracking(enabled: Boolean)
+    fun setTrackingRate(rate: MountTrackingRate) {
+        setTracking(rate.tracks)
+    }
     fun readSite(): MountSite
     fun setSite(site: MountSite)
     fun setHomeHere()

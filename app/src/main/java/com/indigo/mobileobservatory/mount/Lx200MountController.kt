@@ -687,16 +687,37 @@ class Lx200MountController {
         }
     }
 
-    suspend fun setTracking(enabled: Boolean) = withContext(Dispatchers.IO) {
-        FileLogger.i(TAG, "Mount tracking ${if (enabled) "on" else "off"}")
+    suspend fun setTracking(enabled: Boolean) = setTrackingRate(
+        if (enabled) MountTrackingRate.SIDEREAL else MountTrackingRate.OFF
+    )
+
+    suspend fun setTrackingRate(rate: MountTrackingRate) = withContext(Dispatchers.IO) {
+        FileLogger.i(TAG, "Mount tracking $rate")
         skyWatcherAdapter?.let {
-            it.setTracking(enabled)
+            it.setTrackingRate(rate)
             return@withContext
         }
         if (activeProtocol == MountProtocolType.IOPTRON) {
-            sendFixedCommand(if (enabled) ":ST1#" else ":ST0#", 1)
+            if (rate == MountTrackingRate.OFF) {
+                if (!sendIoptronOk(":ST0#")) error("iOptron mount rejected tracking off.")
+            } else {
+                val select = when (rate) {
+                    MountTrackingRate.SIDEREAL -> ":RT0#"
+                    MountTrackingRate.LUNAR -> ":RT1#"
+                    MountTrackingRate.SOLAR -> ":RT2#"
+                    MountTrackingRate.OFF -> ":ST0#"
+                }
+                if (!sendIoptronOk(select) || !sendIoptronOk(":ST1#")) {
+                    error("iOptron mount rejected tracking rate.")
+                }
+            }
+            return@withContext
+        }
+        if (rate == MountTrackingRate.OFF) {
+            if (!sendBooleanCommand(":Td#")) error("Mount rejected tracking off.")
         } else {
-            sendNoReplyCommand(if (enabled) ":Te#" else ":Td#")
+            sendNoReplyCommand(rate.lx200SelectCommand)
+            if (!sendBooleanCommand(":Te#")) error("Mount rejected tracking.")
         }
     }
 

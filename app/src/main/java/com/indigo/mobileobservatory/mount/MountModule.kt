@@ -32,10 +32,8 @@ class MountModule(
         const val ACTION_MOUNT_USB_PERMISSION = "com.indigo.mobileobservatory.MOUNT_USB_PERMISSION"
         const val DEFAULT_SYNSCAN_HOST = "192.168.4.1"
         const val DEFAULT_SYNSCAN_PORT = 11880
-        const val GOTO_TOLERANCE_DEG = 0.05
-        const val GOTO_STABLE_SAMPLES = 2
-        const val MOTION_STABLE_TOLERANCE_DEG = 0.01
-        const val MOTION_STABLE_SAMPLES = 3
+        const val MOTION_STABLE_TOLERANCE_DEG = GotoArrival.MOTION_STABLE_DEG
+        const val MOTION_STABLE_SAMPLES = GotoArrival.MOTION_STABLE_SAMPLES
         const val TAG = "MountModule"
 
         internal fun migratedSynScanEndpoint(host: String, port: Int): Pair<String, Int> {
@@ -147,6 +145,9 @@ class MountModule(
         MountSlewRate.fromStoredName(prefs.getString("mount_slew_rate", MountSlewRate.DEFAULT.name))
     )
     val mountSlewRate: StateFlow<MountSlewRate> = _mountSlewRate.asStateFlow()
+
+    private val _mountTrackingRate = MutableStateFlow(MountTrackingRate.OFF)
+    val mountTrackingRate: StateFlow<MountTrackingRate> = _mountTrackingRate.asStateFlow()
 
     private val _mountTrackingEnabled = MutableStateFlow(false)
     val mountTrackingEnabled: StateFlow<Boolean> = _mountTrackingEnabled.asStateFlow()
@@ -633,7 +634,12 @@ class MountModule(
         }
         val target = MountCoordinates(raHours = raHours, decDeg = decDeg)
         val started = motionRunner.start(
-            state = MountMotionState(MountMotionType.GOTO, "GOTO $name"),
+            state = MountMotionState(
+                type = MountMotionType.GOTO,
+                label = "GOTO $name",
+                slewing = false,
+                holdStop = false
+            ),
             onError = { error ->
                 _mountConnectionState.value =
                     MountConnectionState.Error(error.message ?: "Mount GOTO failed")
@@ -723,7 +729,11 @@ class MountModule(
         val target = MountCoordinates(raHours = raHours, decDeg = decDeg)
         val stopArcmin = PrecisionGotoMath.clampToleranceArcmin(toleranceArcmin)
         val started = motionRunner.start(
-            state = MountMotionState(MountMotionType.GOTO, "Precision GOTO $name"),
+            state = MountMotionState(
+                type = MountMotionType.GOTO,
+                label = "Precision GOTO $name",
+                holdStop = true
+            ),
             onError = { error ->
                 val message = error.message ?: "Precision GOTO failed"
                 _mountConnectionState.value = MountConnectionState.Error(message)
@@ -887,7 +897,8 @@ class MountModule(
 
     private suspend fun awaitGotoTarget(name: String, target: MountCoordinates) {
         val deadline = System.currentTimeMillis() + 300_000L
-        var stableSamples = 0
+        var arrival = GotoArrival.State()
+        var previous: MountCoordinates? = null
         while (System.currentTimeMillis() < deadline) {
             kotlinx.coroutines.delay(750)
             val coordinates = controller.readCoordinates()
@@ -896,15 +907,17 @@ class MountModule(
             val angularError = PrecisionGotoMath.angularSeparationDeg(target, coordinates)
             _mountMoveStatus.value = "GOTO $name  error %.2f deg"
                 .format(java.util.Locale.US, angularError)
-            stableSamples = if (angularError <= GOTO_TOLERANCE_DEG) {
-                stableSamples + 1
-            } else {
-                0
+            val moved = previous?.let { last ->
+                PrecisionGotoMath.angularSeparationDeg(last, coordinates)
             }
-            if (stableSamples >= GOTO_STABLE_SAMPLES) {
-                if (_mountTrackingEnabled.value) {
-                    runCatching { controller.setTracking(true) }
-                }
+            val (next, decision) = GotoArrival.step(arrival, angularError, moved)
+            arrival = next
+            previous = coordinates
+            if (arrival.sawSlewMotion) {
+                motionRunner.update { it.copy(slewing = true) }
+            }
+            if (decision == GotoArrival.Decision.ARRIVED) {
+                restoreTrackingAfterSlew()
                 return
             }
         }
@@ -1047,13 +1060,22 @@ class MountModule(
     }
 
     fun setMountTracking(enabled: Boolean) {
+        setMountTrackingRate(if (enabled) MountTrackingRate.SIDEREAL else MountTrackingRate.OFF)
+    }
+
+    fun setMountTrackingRate(rate: MountTrackingRate) {
         if (!controller.isConnected) return
         scope.launch {
             _mountBusy.value = true
             try {
-                controller.setTracking(enabled)
-                _mountTrackingEnabled.value = enabled
-                _mountMoveStatus.value = if (enabled) "Tracking enabled" else "Tracking disabled"
+                controller.setTrackingRate(rate)
+                _mountTrackingRate.value = rate
+                _mountTrackingEnabled.value = rate.tracks
+                _mountMoveStatus.value = if (rate.tracks) {
+                    "Tracking ${rate.name.lowercase(java.util.Locale.US)}"
+                } else {
+                    "Tracking stopped"
+                }
                 _statusMessage.value = _mountMoveStatus.value
                 refreshMountCoordinatesAfterCommand()
             } catch (e: Throwable) {
@@ -1063,6 +1085,12 @@ class MountModule(
                 _mountBusy.value = false
             }
         }
+    }
+
+    private suspend fun restoreTrackingAfterSlew() {
+        val rate = _mountTrackingRate.value
+        if (!rate.tracks) return
+        runCatching { controller.setTrackingRate(rate) }
     }
 
     fun goMountHome() {
