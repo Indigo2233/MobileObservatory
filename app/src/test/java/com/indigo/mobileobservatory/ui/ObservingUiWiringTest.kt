@@ -355,6 +355,20 @@ class ObservingUiWiringTest {
     }
 
     @Test
+    fun wiredOnStepConnectIsLoggedAndDoesNotRaceThePreviousClose() {
+        val module = read("src/main/java/com/indigo/mobileobservatory/mount/MountModule.kt")
+        assertTrue(module.contains("transportLock.withLock"))
+        assertTrue(module.contains("FileLogger.i(TAG, \"disconnectMount\")"))
+        assertTrue(module.contains("FileLogger.e(TAG, \"connectUsb failed\", e)"))
+        val controller = read(
+            "src/main/java/com/indigo/mobileobservatory/mount/Lx200MountController.kt"
+        )
+        assertTrue(controller.contains("fun handshakeLx200WithoutReset"))
+        assertTrue(controller.contains("port.setDTR(false)"))
+        assertTrue(controller.contains("FileLogger.i"))
+    }
+
+    @Test
     fun previewDownsampleIsDisplayOnly() {
         val processor = read(
             "src/main/java/com/indigo/mobileobservatory/camera/FrameProcessor.kt"

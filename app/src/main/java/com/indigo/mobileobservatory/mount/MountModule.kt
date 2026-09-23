@@ -19,6 +19,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import com.indigo.mobileobservatory.util.FileLogger
 
 /** Owns mount state, transport lifecycle, permissions, and mutually exclusive motion. */
 class MountModule(
@@ -33,6 +36,7 @@ class MountModule(
         const val GOTO_STABLE_SAMPLES = 2
         const val MOTION_STABLE_TOLERANCE_DEG = 0.01
         const val MOTION_STABLE_SAMPLES = 3
+        const val TAG = "MountModule"
 
         internal fun migratedSynScanEndpoint(host: String, port: Int): Pair<String, Int> {
             return if (host == "127.0.0.1" && port == 11882) {
@@ -153,6 +157,7 @@ class MountModule(
     @Volatile private var pendingMountUsbConnect = false
     private var mountCoordinatePollingJob: kotlinx.coroutines.Job? = null
     private var mountConnectJob: kotlinx.coroutines.Job? = null
+    private val transportLock = Mutex()
     private var mountConnectionGeneration = 0L
 
     private val mountUsbPermissionReceiver = object : BroadcastReceiver() {
@@ -267,6 +272,8 @@ class MountModule(
             return
         }
         scope.launch {
+            transportLock.withLock {
+            FileLogger.i(TAG, "connectTcp host=$host port=$port protocol=${_mountProtocol.value}")
             _mountBusy.value = true
             _mountConnectionState.value = MountConnectionState.Connecting
             try {
@@ -293,10 +300,12 @@ class MountModule(
                 _mountCoordinates.value = null
                 _mountSite.value = null
                 _mountDetectedInfo.value = ""
+                FileLogger.e(TAG, "connectTcp failed", e)
                 _mountConnectionState.value = MountConnectionState.Error(e.message ?: "Mount connection failed")
                 _statusMessage.value = "Mount error: ${e.message}"
             } finally {
                 _mountBusy.value = false
+            }
             }
         }
 
@@ -307,6 +316,7 @@ class MountModule(
         scanMountUsbDevices()
         val devices = _mountUsbDevices.value
         if (devices.isEmpty()) {
+            FileLogger.w(TAG, "connectUsb found no serial device")
             _mountConnectionState.value = MountConnectionState.Error("No USB serial mount found")
             _statusMessage.value = "Mount error: no USB serial device"
             return
@@ -341,6 +351,11 @@ class MountModule(
             return
         }
         scope.launch {
+            transportLock.withLock {
+            FileLogger.i(
+                TAG,
+                "connectUsb id=${selected.deviceId} name=${selected.label} baud=$baudRate protocol=${_mountProtocol.value}"
+            )
             _mountBusy.value = true
             _mountConnectionState.value = MountConnectionState.Connecting
             try {
@@ -364,7 +379,9 @@ class MountModule(
                 _mountConnectionState.value = MountConnectionState.Connected
                 updateDetectedMountInfo()
                 _statusMessage.value = "Mount connected USB: ${coordinates.formatRa()} ${coordinates.formatDec()}"
+                FileLogger.i(TAG, "connectUsb ok ${_statusMessage.value} model=${controller.mountModel}")
             } catch (e: Throwable) {
+                FileLogger.e(TAG, "connectUsb failed", e)
                 controller.disconnect()
                 _activeUsbMountDeviceId.value = null
                 _mountCoordinates.value = null
@@ -374,6 +391,7 @@ class MountModule(
                 _statusMessage.value = "Mount USB error: ${e.message}"
             } finally {
                 _mountBusy.value = false
+            }
             }
         }
     }
@@ -392,6 +410,8 @@ class MountModule(
         mountConnectJob?.cancel()
         controller.cancelPendingBluetoothConnection()
         mountConnectJob = scope.launch {
+            transportLock.withLock {
+            FileLogger.i(TAG, "connectBluetooth address=$address protocol=${_mountProtocol.value}")
             _mountBusy.value = true
             _mountConnectionState.value = MountConnectionState.Connecting
             _mountConnectionMessage.value = "\u6807\u51c6\u6a21\u5f0f\u8fde\u63a5\u4e2d"
@@ -435,6 +455,7 @@ class MountModule(
                 throw cancelled
             } catch (error: Throwable) {
                 if (generation != mountConnectionGeneration) return@launch
+                FileLogger.e(TAG, "connectBluetooth failed", error)
                 controller.disconnect()
                 _activeUsbMountDeviceId.value = null
                 _mountCoordinates.value = null
@@ -454,6 +475,7 @@ class MountModule(
                     mountConnectJob = null
                 }
             }
+            }
         }
     }
 
@@ -462,6 +484,8 @@ class MountModule(
         val port = _synScanPort.value.toIntOrNull() ?: DEFAULT_SYNSCAN_PORT
         val site = _mountSite.value ?: storedObservatorySite()
         scope.launch {
+            transportLock.withLock {
+            FileLogger.i(TAG, "connectSynScan host=$host port=$port")
             _mountBusy.value = true
             _mountConnectionState.value = MountConnectionState.Connecting
             try {
@@ -491,6 +515,7 @@ class MountModule(
                 _statusMessage.value =
                     "Sky-Watcher connected: ${coordinates.formatRa()} ${coordinates.formatDec()}"
             } catch (e: Throwable) {
+                FileLogger.e(TAG, "connectSynScan failed", e)
                 controller.disconnect()
                 _mountCoordinates.value = null
                 _mountSite.value = null
@@ -500,6 +525,7 @@ class MountModule(
                 _statusMessage.value = "SynScan Wi-Fi error: ${e.message}"
             } finally {
                 _mountBusy.value = false
+            }
             }
         }
     }
@@ -543,6 +569,8 @@ class MountModule(
         }
         stopMountCoordinatePolling()
         scope.launch {
+            transportLock.withLock {
+            FileLogger.i(TAG, "disconnectMount")
             _mountBusy.value = true
             try {
                 val motionStopped = motionRunner.stop()
@@ -555,6 +583,8 @@ class MountModule(
                 _mountDetectedInfo.value = ""
                 _mountConnectionState.value = MountConnectionState.Disconnected
                 _mountBusy.value = false
+                FileLogger.i(TAG, "disconnectMount done")
+            }
             }
         }
     }

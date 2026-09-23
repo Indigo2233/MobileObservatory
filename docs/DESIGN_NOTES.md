@@ -175,6 +175,7 @@
 - 枚举结束不要把连接状态设成 `Enumerating`。那个状态会用转圈盖住连接按钮，而且没有超时和报错。USB 权限弹窗必须在主线程申请；打开相机不要在 `open()` 里写 binning。
 - 扫描只按 Android USB 列表列出相机，不要在扫描时启动 Player One SDK。点中某一台后才连接，Player One 的 SDK 只在这时启动。
 - 导星相机不打开主相机已经占用的那台 USB 设备。主相机没连接时，导星相机可以单独连接，例如主镜目视、导星镜负责指向。拔掉其中一台时，另一个会话不要跟着断开。
+- 有线 OnStep 先在 DTR/RTS 拉低时轮询 `:GR#`，不要一连接就翻转 DTR。翻转会复位控制板，断开后立刻重连就会在启动完成前失败。断开必须等串口关完，再开始下一次打开。
 - SDK 型号表没有的 PID 仍当作相机列出，不要因为 `getModelName` 为空就忽略（VID 仍是 0x0547）。
 - 预览降采样只发生在 `FrameProcessor.frameToBitmap`，且仅当帧超过约 4MP；拍摄/FITS 走原图。常见图谱行星相机尺寸应保持 `sampleStep = 1`。
 - 工业 overlay 覆盖 `DahengCameraManager.kt` 时必须带上 USB 句柄持有和未知 PID 枚举，否则会把公有树修复盖掉。

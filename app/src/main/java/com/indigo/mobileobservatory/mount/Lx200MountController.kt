@@ -11,6 +11,7 @@ import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbManager
 import android.os.Build
 import android.util.Log
+import com.indigo.mobileobservatory.util.FileLogger
 import com.hoho.android.usbserial.driver.UsbSerialPort
 import com.hoho.android.usbserial.driver.UsbSerialProber
 import kotlinx.coroutines.Dispatchers
@@ -252,7 +253,13 @@ class Lx200MountController {
             serialConnection = connection
             serialPort = port
             try {
-                Log.i(TAG, "Opening USB serial mount ${driver.device.deviceName} vid=${driver.device.vendorId} pid=${driver.device.productId} baud=$candidateBaud ports=${driver.ports.size}")
+                FileLogger.i(
+                    TAG,
+                    "Opening USB serial mount ${driver.device.deviceName} " +
+                        "vid=${driver.device.vendorId} pid=${driver.device.productId} " +
+                        "id=${driver.device.deviceId} baud=$candidateBaud protocol=$protocol " +
+                        "ports=${driver.ports.size}"
+                )
                 port.open(connection)
                 port.setParameters(
                     candidateBaud,
@@ -261,6 +268,16 @@ class Lx200MountController {
                     UsbSerialPort.PARITY_NONE
                 )
                 check(!permanentlyClosed) { "Mount controller is closed." }
+
+                if (protocol == MountProtocolType.AUTO ||
+                    protocol == MountProtocolType.LX200_ONSTEP
+                ) {
+                    if (handshakeLx200WithoutReset(port)) {
+                        FileLogger.i(TAG, "USB OnStep ready baud=$candidateBaud model=$mountModel")
+                        return@withContext readCoordinates()
+                    }
+                    FileLogger.i(TAG, "USB quick LX200 handshake missed baud=$candidateBaud")
+                }
 
                 if (protocol != MountProtocolType.LX200_ONSTEP &&
                     protocol != MountProtocolType.SKYWATCHER) {
@@ -301,13 +318,16 @@ class Lx200MountController {
                 return@withContext readCoordinates()
             } catch (e: Throwable) {
                 failures += "$candidateBaud: ${e.message}"
+                FileLogger.w(TAG, "USB serial baud $candidateBaud failed: ${e.message}")
                 runCatching { port.close() }
                 runCatching { connection.close() }
                 serialPort = null
                 serialConnection = null
             }
         }
-        error("Mount USB protocol detection failed. ${failures.joinToString("; ")}")
+        val summary = failures.joinToString("; ")
+        FileLogger.e(TAG, "USB serial protocol detection failed. $summary")
+        error("Mount USB protocol detection failed. $summary")
     }
 
     suspend fun connectSynScanWifi(
@@ -543,7 +563,7 @@ class Lx200MountController {
         val commands = MountProtocolCodec.encodeLx200Goto(coordinates)
         val raCommand = commands.ra
         val decCommand = commands.dec
-        Log.i(
+        FileLogger.i(
             TAG,
             "Mount GOTO RA=${coordinates.formatRa()} Dec=${coordinates.formatDec()}"
         )
@@ -565,7 +585,7 @@ class Lx200MountController {
             it.syncTo(coordinates)
             return@withContext
         }
-        Log.i(
+        FileLogger.i(
             TAG,
             "Mount SYNC RA=${coordinates.formatRa()} Dec=${coordinates.formatDec()} " +
                 "protocol=$activeProtocol"
@@ -600,7 +620,7 @@ class Lx200MountController {
     }
 
     suspend fun startMove(direction: MountDirection) = withContext(Dispatchers.IO) {
-        Log.i(TAG, "Mount manual move start ${direction.name} command=${direction.command}")
+        FileLogger.i(TAG, "Mount manual move start ${direction.name} command=${direction.command}")
         skyWatcherAdapter?.let {
             it.startMove(direction)
             return@withContext
@@ -632,7 +652,7 @@ class Lx200MountController {
     }
 
     private fun stopMoveBlocking(direction: MountDirection? = null) {
-        Log.i(TAG, "Mount manual move stop ${direction?.name ?: "ALL"}")
+        FileLogger.i(TAG, "Mount manual move stop ${direction?.name ?: "ALL"}")
         skyWatcherAdapter?.let {
             it.stopMove(direction)
             return
@@ -652,7 +672,7 @@ class Lx200MountController {
     }
 
     suspend fun setMoveRate(rate: MountSlewRate) = withContext(Dispatchers.IO) {
-        Log.i(TAG, "Mount move rate ${rate.name} command=${rate.command}")
+        FileLogger.i(TAG, "Mount move rate ${rate.name} command=${rate.command}")
         skyWatcherAdapter?.let {
             it.setMoveRate(rate)
             return@withContext
@@ -668,7 +688,7 @@ class Lx200MountController {
     }
 
     suspend fun setTracking(enabled: Boolean) = withContext(Dispatchers.IO) {
-        Log.i(TAG, "Mount tracking ${if (enabled) "on" else "off"}")
+        FileLogger.i(TAG, "Mount tracking ${if (enabled) "on" else "off"}")
         skyWatcherAdapter?.let {
             it.setTracking(enabled)
             return@withContext
@@ -925,7 +945,7 @@ class Lx200MountController {
             val buffer = ByteArray(1)
             val count = runCatching { port.read(buffer, OPTIONAL_REPLY_TIMEOUT_MS) }.getOrDefault(0)
             if (count > 0 && buffer[0].toInt() != '#'.code) {
-                Log.w(TAG, "Unexpected byte after GOTO acknowledgement: ${buffer[0]}")
+                FileLogger.w(TAG, "Unexpected byte after GOTO acknowledgement: ${buffer[0]}")
             }
             return
         }
@@ -935,7 +955,7 @@ class Lx200MountController {
             tcpSocket.soTimeout = OPTIONAL_REPLY_TIMEOUT_MS
             val value = runCatching { input?.read() ?: -1 }.getOrDefault(-1)
             if (value >= 0 && value != '#'.code) {
-                Log.w(TAG, "Unexpected byte after GOTO acknowledgement: $value")
+                FileLogger.w(TAG, "Unexpected byte after GOTO acknowledgement: $value")
             }
         } finally {
             tcpSocket.soTimeout = previousTimeout
@@ -1008,13 +1028,41 @@ class Lx200MountController {
         return inp.read()
     }
 
+    /**
+     * OnStep USB boards reboot when DTR is toggled. Poll `:GR#` with DTR and RTS
+     * held low so a reconnect is not killed by another reset, and so the first
+     * connect does not wait out iOptron and SynScan probes.
+     */
+    private fun handshakeLx200WithoutReset(port: UsbSerialPort): Boolean {
+        runCatching { port.setDTR(false) }
+        runCatching { port.setRTS(false) }
+        val deadline = System.currentTimeMillis() + USB_BOOT_WAIT_MS
+        while (System.currentTimeMillis() < deadline) {
+            check(!permanentlyClosed) { "Mount controller is closed." }
+            Thread.sleep(200)
+            drainSerialInput(port)
+            val reply = runCatching { sendCommand(":GR#", USB_POLL_TIMEOUT_MS) }.getOrNull()
+            if (!reply.isNullOrBlank()) {
+                activeProtocol = MountProtocolType.LX200_ONSTEP
+                mountModel = runCatching { sendCommand(":GVP#", HANDSHAKE_TIMEOUT_MS) }
+                    .getOrNull()
+                    ?.takeIf { it.isNotBlank() }
+                    ?: "LX200 / OnStep"
+                FileLogger.i(TAG, "USB LX200 handshake ok reply=$reply model=$mountModel")
+                return true
+            }
+        }
+        FileLogger.w(TAG, "USB LX200 quick handshake timed out after ${USB_BOOT_WAIT_MS}ms")
+        return false
+    }
+
     private fun verifySerialHandshake(
         port: UsbSerialPort,
         preferred: MountProtocolType
     ) {
         val failures = ArrayList<String>()
         for (mode in SERIAL_LINE_MODES) {
-            Log.i(TAG, "USB serial handshake try mode=${mode.name}")
+            FileLogger.i(TAG, "USB serial handshake try mode=${mode.name}")
             runCatching { port.setDTR(mode.dtr) }
             runCatching { port.setRTS(mode.rts) }
             Thread.sleep(mode.delayMs)
@@ -1034,10 +1082,10 @@ class Lx200MountController {
                 drainSerialInput(port)
             }
             for (command in HANDSHAKE_COMMANDS) {
-                Log.i(TAG, "USB serial handshake send $command mode=${mode.name}")
+                FileLogger.i(TAG, "USB serial handshake send $command mode=${mode.name}")
                 val result = runCatching { sendCommand(command, HANDSHAKE_TIMEOUT_MS) }
                 if (result.isSuccess) {
-                    Log.i(TAG, "USB serial mount handshake ok mode=${mode.name} command=$command reply=${result.getOrNull()}")
+                    FileLogger.i(TAG, "USB serial mount handshake ok mode=${mode.name} command=$command reply=${result.getOrNull()}")
                     activeProtocol = MountProtocolType.LX200_ONSTEP
                     mountModel = if (command == ":GVP#") {
                         result.getOrNull()
@@ -1080,11 +1128,11 @@ class Lx200MountController {
             val count = runCatching { port.read(buffer, 100) }.getOrDefault(0)
             if (count <= 0) break
             val chunk = buffer.copyOf(count)
-            Log.i(TAG, "USB serial drain rx ${chunk.toHexString()} ${chunk.toPrintableString()}")
+            FileLogger.i(TAG, "USB serial drain rx ${chunk.toHexString()} ${chunk.toPrintableString()}")
             total += count
         }
         if (total > 0) {
-            Log.i(TAG, "USB serial drained $total bytes")
+            FileLogger.i(TAG, "USB serial drained $total bytes")
         }
     }
 
@@ -1111,6 +1159,8 @@ class Lx200MountController {
         private const val BLUETOOTH_CONNECT_TIMEOUT_MS = 15_000L
         private const val OPTIONAL_REPLY_TIMEOUT_MS = 150
         private const val HANDSHAKE_TIMEOUT_MS = 1500
+        private const val USB_BOOT_WAIT_MS = 5_000L
+        private const val USB_POLL_TIMEOUT_MS = 400
         private const val SERIAL_DRAIN_MAX_MS = 700L
         private const val SERIAL_DRAIN_MAX_BYTES = 4096
         private val SPP_UUID: UUID =
