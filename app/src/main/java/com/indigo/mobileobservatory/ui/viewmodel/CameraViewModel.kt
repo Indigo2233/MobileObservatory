@@ -37,6 +37,7 @@ import com.indigo.mobileobservatory.util.DeterministicResourceCleaner
 import com.indigo.mobileobservatory.util.FileLogger
 import com.indigo.mobileobservatory.util.ImageUtils
 import com.indigo.mobileobservatory.recording.FITSWriter
+import com.indigo.mobileobservatory.recording.FitsSequenceWriter
 import com.indigo.mobileobservatory.recording.Mp4Writer
 import com.indigo.mobileobservatory.recording.PSERWriter
 import com.indigo.mobileobservatory.recording.SERWriter
@@ -71,7 +72,7 @@ import kotlin.math.hypot
 import kotlin.math.roundToInt
 
 enum class CaptureFormat { FITS, JPG }
-enum class RecordFormat { SER, PSER, MP4 }
+enum class RecordFormat { SER, PSER, MP4, FITS }
 
 typealias GuideStar = com.indigo.mobileobservatory.guide.GuideStar
 typealias GuideCorrection = com.indigo.mobileobservatory.guide.GuideCorrection
@@ -444,6 +445,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     @Volatile private var serWriter: SERWriter? = null
     @Volatile private var pserWriter: PSERWriter? = null
     @Volatile private var mp4Writer: Mp4Writer? = null
+    @Volatile private var fitsSequenceWriter: FitsSequenceWriter? = null
     @Volatile private var currentRecordingFile: File? = null
     private var recordingStartTime: Long = 0
     private val recordWriteQueue = LinkedBlockingQueue<FrameData>(RECORD_QUEUE_CAPACITY)
@@ -518,6 +520,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _recordFormat.value = when (label) {
             "PSER" -> RecordFormat.PSER
             "MP4" -> RecordFormat.MP4
+            "FITS" -> RecordFormat.FITS
             else -> RecordFormat.SER
         }
     }
@@ -526,7 +529,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _recordFormat.value = when (_recordFormat.value) {
             RecordFormat.SER -> RecordFormat.PSER
             RecordFormat.PSER -> RecordFormat.MP4
-            RecordFormat.MP4 -> RecordFormat.SER
+            RecordFormat.MP4 -> RecordFormat.FITS
+            RecordFormat.FITS -> RecordFormat.SER
         }
     }
 
@@ -1468,6 +1472,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             val ser = serWriter
                             val pser = pserWriter
                             val mp4 = mp4Writer
+                            val fits = fitsSequenceWriter
                             when {
                                 ser != null && ser.isOpen -> {
                                     ser.writeFrame(frame)
@@ -1486,6 +1491,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                                     mp4.writeFrame(frame)
                                     _recordingFrameCount.value = mp4.currentFrameCount
                                     _recordingBytes.value = mp4.totalBytesWritten
+                                }
+                                fits != null && fits.isOpen -> {
+                                    applyFitsRecordingMeta(fits)
+                                    fits.writeFrame(frame)
+                                    _recordingFrameCount.value = fits.currentFrameCount
+                                    _recordingBytes.value = fits.totalBytesWritten
                                 }
                                 else -> writerAvailable = false
                             }
@@ -1509,7 +1520,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             break
                         }
                     }
-                    if (serWriter?.isOpen != true && pserWriter?.isOpen != true && mp4Writer?.isOpen != true) break
+                    if (!hasOpenRecorder()) break
                 } catch (_: InterruptedException) {
                     break
                 } catch (e: Throwable) {
@@ -1533,10 +1544,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 val ser = serWriter
                 val pser = pserWriter
                 val mp4 = mp4Writer
+                val fits = fitsSequenceWriter
                 when {
                     ser != null && ser.isOpen -> ser.writeFrame(frame)
                     pser != null && pser.isOpen -> pser.writeFrame(frame)
                     mp4 != null && mp4.isOpen -> mp4.writeFrame(frame)
+                    fits != null && fits.isOpen -> {
+                        applyFitsRecordingMeta(fits)
+                        fits.writeFrame(frame)
+                    }
                 }
             } catch (_: Throwable) {
                 writeSucceeded = false
@@ -2220,6 +2236,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 useSERForPser8bit -> "ser"
                 fmt == RecordFormat.MP4 -> "mp4"
                 fmt == RecordFormat.PSER -> "pser"
+                fmt == RecordFormat.FITS -> "fits"
                 else -> "ser"
             }
             val dir = File(
@@ -2227,7 +2244,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 effectiveExt.uppercase()
             )
             dir.mkdirs()
-            val file = File(dir, "$ts-$target$filterPart-$cameraShort.$effectiveExt")
+            val sessionName = "$ts-$target$filterPart-$cameraShort"
+            val file = if (fmt == RecordFormat.FITS) {
+                File(dir, sessionName)
+            } else {
+                File(dir, "$sessionName.$effectiveExt")
+            }
 
             when {
                 fmt == RecordFormat.SER || useSERForPser8bit -> {
@@ -2249,6 +2271,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     mp4.open(roi.width, roi.height, recordFps)
                     mp4Writer = mp4
                 }
+                fmt == RecordFormat.FITS -> {
+                    val fits = FitsSequenceWriter(file)
+                    applyFitsRecordingMeta(fits)
+                    fits.configuredFormat = pixFmt
+                    fits.open()
+                    fitsSequenceWriter = fits
+                }
             }
 
             currentRecordingFile = file
@@ -2268,7 +2297,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             Log.i(TAG, "Recording started ($effectiveExt ${pixFmt.name}): ${file.absolutePath}")
         } catch (e: Throwable) {
             Log.e(TAG, "startRecording failed", e)
-            _statusMessage.value = app.getString(R.string.record_error_detail, e.message.orEmpty())
+            closeRecordingResources(saveToGallery = false)
+            val detail = e.message.orEmpty()
+            _statusMessage.value = if (_recordFormat.value == RecordFormat.MP4) {
+                app.getString(R.string.record_mp4_encoder_failed, detail)
+            } else {
+                app.getString(R.string.record_error_detail, detail)
+            }
         }
     }
 
@@ -2286,6 +2321,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         pserWriter = null
         try { mp4Writer?.close() } catch (e: Throwable) { Log.e(TAG, "MP4 close error", e) }
         mp4Writer = null
+        try { fitsSequenceWriter?.close() } catch (e: Throwable) { Log.e(TAG, "FITS sequence close error", e) }
+        fitsSequenceWriter = null
 
         val recordedFile = currentRecordingFile
         currentRecordingFile = null
@@ -2295,6 +2332,30 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 saveMp4ToGallery(recordedFile)
             }
         }
+    }
+
+    private fun hasOpenRecorder(): Boolean {
+        return serWriter?.isOpen == true ||
+            pserWriter?.isOpen == true ||
+            mp4Writer?.isOpen == true ||
+            fitsSequenceWriter?.isOpen == true
+    }
+
+    private fun applyFitsRecordingMeta(writer: FitsSequenceWriter) {
+        val cam = cameraManager.activeCamera
+        writer.exposureSeconds = (cam?.currentExposureUs ?: _exposureUs.value) / 1_000_000f
+        writer.gain = cam?.currentGain ?: _gain.value
+        val cap = cam?.gainCapability
+        writer.gainKind = cap?.kind ?: GainControlKind.NATIVE_GAIN
+        writer.gainLabel = cap?.label ?: "Gain"
+        writer.gainUnit = cap?.unit
+        writer.gainDbEquivalent = cam?.gainDbEquivalent(writer.gain)
+        writer.cameraName = cam?.cameraInfo?.name ?: writer.cameraName
+        writer.filterName = currentFilterName()
+        writer.configuredFormat = cam?.currentPixelFormat ?: writer.configuredFormat
+        writer.pixelSizeUm = cam?.cameraInfo?.pixelSizeUm
+        writer.focalLengthMm = prefs.getFloat("plate_focal_length_mm", 0f).takeIf { it > 0f }
+        writer.binning = _binning.value
     }
 
     private fun saveMp4ToGallery(mp4File: File) {

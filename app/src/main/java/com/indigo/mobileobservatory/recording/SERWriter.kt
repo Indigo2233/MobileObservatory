@@ -106,6 +106,7 @@ class SERWriter(private val file: File) {
         timestamps.add(instantToFileTime(Instant.now()))
         frameCount++
         totalBytesWritten += bytesPerFrame
+        updateFrameCount(r)
     }
 
     fun close() {

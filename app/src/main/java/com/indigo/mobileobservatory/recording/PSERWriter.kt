@@ -117,6 +117,7 @@ class PSERWriter(private val file: File) {
         timestamps.add(instantToFileTime(Instant.now()))
         frameCount++
         totalBytesWritten += packedFrameSize
+        updateFrameCount(r)
     }
 
     fun close() {
