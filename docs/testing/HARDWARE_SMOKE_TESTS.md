@@ -62,3 +62,14 @@ Test on Android 12, 13, 14, and 15 where available.
 - Enable TalkBack and complete Bluetooth connect/cancel, star-map back, GOTO,
   and global STOP actions.
 - Repeat critical flows at 200% font scaling and in landscape on a small screen.
+
+## Deep-sky sequence
+
+Night check for the sequence tab. Code through the autofocus routine is in place; this section is the hardware acceptance and is still open.
+
+- One target, two filters, at least two frames each. The run finishes without anyone touching the camera page.
+- Pause during an exposure, then resume. The FITS files that were written open cleanly.
+- With guiding already calibrated, the sequence starts guiding and dithers on the chosen interval. Guiding locks again after the dither.
+- The status page shows the history strip, HFR points, mount attitude, and the target altitude curve.
+- Set the meridian threshold so the flip is due immediately. The sequence stops guiding, recenters, and takes the next frame.
+- Unplug the filter wheel and run a filter change whose failure behavior pauses. The status page stays paused with a clear device message.

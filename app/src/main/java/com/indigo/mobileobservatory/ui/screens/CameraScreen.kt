@@ -32,6 +32,7 @@ import com.indigo.mobileobservatory.ui.viewmodel.CaptureFormat
 import com.indigo.mobileobservatory.ui.viewmodel.RecordFormat
 import com.indigo.mobileobservatory.BuildConfig
 import com.indigo.mobileobservatory.R
+import com.indigo.mobileobservatory.sequence.plannedFrames
 import com.indigo.mobileobservatory.ui.AppOrientationMode
 import com.indigo.mobileobservatory.ui.RememberAppOrientation
 
@@ -39,7 +40,8 @@ private enum class MainControlTab {
     CAMERA,
     MOUNT,
     STAR_MAP,
-    ACCESSORIES
+    ACCESSORIES,
+    SEQUENCE
 }
 
 @Composable
@@ -72,7 +74,16 @@ fun CameraScreen(
     }
 
     if (phoneNav.destination != null) {
-        PhonePlateSolveScreens(phoneNav)
+        PhonePlateSolveScreens(
+            phoneNav,
+            onAddToSequence = { obj ->
+                viewModel.addSequenceSkyTarget(
+                    name = "${obj.id} · ${obj.name}",
+                    raHours = obj.raHours,
+                    decDeg = obj.decDeg
+                )
+            }
+        )
         return
     }
 
@@ -275,9 +286,10 @@ fun CameraScreen(
             .background(MaterialTheme.colorScheme.background)
     ) {
         if (selectedTab != MainControlTab.STAR_MAP || !BuildConfig.STELLARIUM_ENABLED) {
-            TabRow(
+            ScrollableTabRow(
                 selectedTabIndex = selectedTab.ordinal,
-                modifier = Modifier.height(48.dp)
+                modifier = Modifier.height(48.dp),
+                edgePadding = 8.dp
             ) {
                 Tab(
                     selected = selectedTab == MainControlTab.CAMERA,
@@ -320,6 +332,16 @@ fun CameraScreen(
                     }
                 )
                 Tab(
+                    selected = selectedTab == MainControlTab.SEQUENCE,
+                    onClick = { selectedTab = MainControlTab.SEQUENCE },
+                    text = {
+                        Text(
+                            stringResource(R.string.tab_sequence),
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                    }
+                )
+                Tab(
                     selected = false,
                     onClick = { showSettings = true },
                     text = {
@@ -330,6 +352,21 @@ fun CameraScreen(
                     }
                 )
                 }
+        }
+
+        val sequenceState by viewModel.sequenceRuntime.state.collectAsState()
+        val sequenceRunning = sequenceState.phase == com.indigo.mobileobservatory.sequence.SequencePhase.Running ||
+            sequenceState.phase == com.indigo.mobileobservatory.sequence.SequencePhase.Paused
+        if (sequenceRunning && selectedTab != MainControlTab.SEQUENCE) {
+            SequenceProgressStrip(
+                title = sequenceState.currentClassName ?: stringResource(R.string.tab_sequence),
+                detail = stringResource(R.string.sequence_progress, sequenceState.framesDone, viewModel.sequenceRuntime.draft.value.plannedFrames()),
+                paused = sequenceState.phase == com.indigo.mobileobservatory.sequence.SequencePhase.Paused,
+                onOpen = { selectedTab = MainControlTab.SEQUENCE },
+                onPause = viewModel.sequenceRuntime::pause,
+                onResume = viewModel.sequenceRuntime::resume,
+                onStop = viewModel.sequenceRuntime::stop
+            )
         }
 
         when (selectedTab) {
@@ -386,6 +423,22 @@ fun CameraScreen(
                                 toleranceArcmin = toleranceArcmin
                             )
                         },
+                        onAddToSequence = { target ->
+                            viewModel.addSequenceSkyTarget(
+                                name = target.name,
+                                raHours = target.raHours,
+                                decDeg = target.decDegrees,
+                                positionAngleDeg = target.positionAngleDeg
+                            )
+                        },
+                        onTargetSelected = { target ->
+                            viewModel.rememberSequenceSkyTarget(
+                                name = target.name,
+                                raHours = target.raHours,
+                                decDeg = target.decDegrees,
+                                positionAngleDeg = target.positionAngleDeg
+                            )
+                        },
                         onSlewRateChange = viewModel::setMountSlewRate,
                         onManualMoveStart = viewModel::startMountManualMove,
                         onManualMoveStop = { viewModel.stopMountManualMove(it) },
@@ -419,6 +472,15 @@ fun CameraScreen(
                         }
                     }
                 }
+            }
+            MainControlTab.SEQUENCE -> {
+                SequenceScreen(
+                    viewModel = viewModel,
+                    redNightMode = redNightMode,
+                    onOpenGuiding = { showGuide = true },
+                    onOpenAccessories = { selectedTab = MainControlTab.ACCESSORIES },
+                    modifier = Modifier.weight(1f)
+                )
             }
             MainControlTab.ACCESSORIES -> {
                 AccessoriesScreen(

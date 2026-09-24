@@ -14,6 +14,8 @@
 | [`wanderer-support-plan.md`](wanderer-support-plan.md) | `[~]` Phase 1 代码已有 | 旋转器真机；Cover / 雪花轮 / Box 未做 |
 | [`OASIS_ACCESSORY_INTEGRATION_PLAN.md`](OASIS_ACCESSORY_INTEGRATION_PLAN.md) | `[~]` USB HID 已接入 | 一代电调焦、两款滤镜轮真机；BLE 不做 |
 | [`STAR_MAP_DUAL_FOV_PLAN.md`](STAR_MAP_DUAL_FOV_PLAN.md) | `[x]` M1a + 目标虚线投影 | 目镜预设库；偏轴导星偏移 |
+| [`DSO_SEQUENCE_PLAN.md`](DSO_SEQUENCE_PLAN.md) | `[~]` M1–M6 代码已落地 | M7 夜间验收未做。分支 `feature/dso-sequence` |
+| [`NINA_ADVANCED_SEQUENCER_PLAN.md`](NINA_ADVANCED_SEQUENCER_PLAN.md) | `[~]` N0–N1 已落地，N2 进行中 | N2 模板拖入主树、目标块从星图取；N3–N6 |
 
 ## 代码已落地、待真机
 

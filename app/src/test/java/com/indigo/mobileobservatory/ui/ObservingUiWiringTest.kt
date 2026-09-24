@@ -474,6 +474,23 @@ class ObservingUiWiringTest {
         assertTrue(mount.contains("Visual sync: mount stays put"))
     }
 
+    @Test
+    fun sequenceHasItsOwnEditAndStatusPages() {
+        val camera = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/CameraScreen.kt"
+        )
+        val sequence = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/SequenceScreen.kt"
+        )
+        assertTrue(camera.contains("SEQUENCE"))
+        assertTrue(camera.contains("R.string.tab_sequence"))
+        assertTrue(camera.contains("SequenceScreen("))
+        assertTrue(camera.contains("SequenceProgressStrip("))
+        assertTrue(sequence.contains("R.string.sequence_edit"))
+        assertTrue(sequence.contains("R.string.sequence_status"))
+        assertTrue(!camera.contains("SequenceScreen(\n") || camera.contains("MainControlTab.SEQUENCE"))
+    }
+
     private fun read(relative: String): String {
         val candidates = listOf(File(relative), File("app/$relative"))
         val file = candidates.firstOrNull { it.isFile }

@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Nightlight
 import androidx.compose.material.icons.filled.NightlightRound
@@ -66,6 +67,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -108,7 +110,8 @@ data class StarMapTarget(
     val name: String,
     val raHours: Double,
     val decDegrees: Double,
-    val frame: String
+    val frame: String,
+    val positionAngleDeg: Double = 0.0
 ) {
     fun coordinatesText(): String {
         return "RA %.5f h  Dec %+.4f°  %s".format(
@@ -216,6 +219,8 @@ fun StarMapScreen(
     onGoto: (StarMapTarget) -> Unit,
     onSync: (StarMapTarget) -> Unit = {},
     onPrecisionGoto: (StarMapTarget, Double) -> Unit = { _, _ -> },
+    onAddToSequence: (StarMapTarget) -> Unit = {},
+    onTargetSelected: (StarMapTarget) -> Unit = {},
     onSlewRateChange: (MountSlewRate) -> Unit = {},
     onManualMoveStart: (MountDirection) -> Unit = {},
     onManualMoveStop: (MountDirection) -> Unit = {},
@@ -236,6 +241,7 @@ fun StarMapScreen(
     var overlaysVisible by remember { mutableStateOf(true) }
     var overlaysLocked by remember { mutableStateOf(false) }
     var targetExpanded by remember { mutableStateOf(false) }
+    var importAngleText by remember { mutableStateOf("0") }
     var searchDialogVisible by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var searchResults by remember { mutableStateOf<List<CatalogObject>>(emptyList()) }
@@ -702,6 +708,15 @@ fun StarMapScreen(
 
     LaunchedEffect(showGlobalStop) {
         if (showGlobalStop) cornerPanel = StarMapCornerPanel.NONE
+    }
+
+    LaunchedEffect(selectedTarget?.name, selectedTarget?.raHours, selectedTarget?.decDegrees) {
+        importAngleText = "0"
+    }
+
+    LaunchedEffect(selectedTarget, importAngleText) {
+        val current = selectedTarget ?: return@LaunchedEffect
+        onTargetSelected(current.copy(positionAngleDeg = importAngleText.toDoubleOrNull() ?: 0.0))
     }
 
     LaunchedEffect(
@@ -1251,6 +1266,33 @@ fun StarMapScreen(
                         ) {
                             Text(
                                 stringResource(R.string.precision_goto_label),
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        OutlinedTextField(
+                            value = importAngleText,
+                            onValueChange = { importAngleText = it },
+                            label = { Text(stringResource(R.string.sequence_position_angle)) },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        OutlinedButton(
+                            onClick = {
+                                overlaysVisible = true
+                                onAddToSequence(
+                                    target.copy(
+                                        positionAngleDeg = importAngleText.toDoubleOrNull() ?: 0.0
+                                    )
+                                )
+                            },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                stringResource(R.string.sequence_add_from_star_map),
                                 maxLines = 1,
                                 softWrap = false,
                                 overflow = TextOverflow.Ellipsis

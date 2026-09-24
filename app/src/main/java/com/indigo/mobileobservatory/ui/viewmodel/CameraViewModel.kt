@@ -28,7 +28,20 @@ import com.indigo.mobileobservatory.mount.MountTrackingRate
 import com.indigo.mobileobservatory.mount.MountProtocolType
 import com.indigo.mobileobservatory.mount.MountTransportType
 import com.indigo.mobileobservatory.mount.SkyWatcherMountMode
+import com.indigo.mobileobservatory.astro.CoordinateTransform
+import com.indigo.mobileobservatory.astro.EquatorialCoordinates
 import com.indigo.mobileobservatory.astro.EquatorialEpoch
+import com.indigo.mobileobservatory.astro.ObserverSite
+import com.indigo.mobileobservatory.mount.SkyWatcherEquatorialMath
+import com.indigo.mobileobservatory.sequence.AutofocusRun
+import com.indigo.mobileobservatory.sequence.DeviceUnavailable
+import com.indigo.mobileobservatory.sequence.SequenceRuntime
+import com.indigo.mobileobservatory.sequence.SequenceSkyTarget
+import com.indigo.mobileobservatory.sequence.SequenceWorld
+import com.indigo.mobileobservatory.sequence.SessionFrame
+import com.indigo.mobileobservatory.sequence.countStars
+import com.indigo.mobileobservatory.sequence.medianHalfLightRadius
+import com.indigo.mobileobservatory.sequence.monoLuma
 import com.indigo.mobileobservatory.mount.PrecisionGotoMath
 import com.indigo.mobileobservatory.mount.PrecisionGotoProgress
 import com.indigo.mobileobservatory.ui.components.RecordLimit
@@ -61,6 +74,7 @@ import android.os.Environment
 import android.provider.MediaStore
 import java.io.File
 import java.io.FileOutputStream
+import java.time.Instant
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.atomic.AtomicLong
@@ -371,6 +385,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _guideRunning = MutableStateFlow(false)
     val guideRunning: StateFlow<Boolean> = _guideRunning.asStateFlow()
+    @Volatile private var guideStarLost = false
+    private val pendingGuideDither = AtomicReference<Pair<Float, Float>?>(null)
 
     private val _guideCalibrating = MutableStateFlow(false)
     val guideCalibrating: StateFlow<Boolean> = _guideCalibrating.asStateFlow()
@@ -485,6 +501,47 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val mountDetectedInfo = mountModule.mountDetectedInfo
     val mountCoordinates = mountModule.mountCoordinates
     val mountSite = mountModule.mountSite
+    val sequenceRuntime: SequenceRuntime by lazy {
+        val files = getApplication<Application>()
+        SequenceRuntime(
+            templatesDir = File(files.filesDir, "sequences"),
+            sessionsDir = File(files.getExternalFilesDir("captures"), "Sequences"),
+            scope = viewModelScope,
+            hardware = CameraSequenceHardware(this),
+            world = object : SequenceWorld {
+                override fun altitudeDeg(): Double? = sequenceTargetAltitude()
+                override fun minutesToMeridian(): Double? = sequenceMinutesToMeridian()
+                override fun temperatureC(): Double? {
+                    if (cameraManager.activeCamera !is CoolingCapable) return null
+                    return sensorTempTenths.value / 10.0
+                }
+                override fun lastHfr(): Double? = sequenceRuntime.frames.value.lastOrNull()?.hfr
+                override fun filterName(): String? = currentFilterName()
+            }
+        )
+    }
+    private val _sequenceSkyPick = MutableStateFlow<SequenceSkyTarget?>(null)
+    val sequenceSkyPick: StateFlow<SequenceSkyTarget?> = _sequenceSkyPick.asStateFlow()
+
+    fun rememberSequenceSkyTarget(
+        name: String,
+        raHours: Double,
+        decDeg: Double,
+        positionAngleDeg: Double = 0.0
+    ) {
+        _sequenceSkyPick.value = SequenceSkyTarget(name, raHours, decDeg, positionAngleDeg)
+    }
+
+    fun addSequenceSkyTarget(
+        name: String,
+        raHours: Double,
+        decDeg: Double,
+        positionAngleDeg: Double = 0.0
+    ) {
+        rememberSequenceSkyTarget(name, raHours, decDeg, positionAngleDeg)
+        sequenceRuntime.addTarget(name, raHours, decDeg, positionAngleDeg)
+    }
+
     val mountBusy = mountModule.mountBusy
     val mountSupportsSync: Boolean
         get() = mountModule.supportsSync
@@ -1053,6 +1110,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _guideStatus.value = app.getString(R.string.guide_lock_cleared)
     }
 
+    fun guideLocked(): Boolean = _guideRunning.value && !guideStarLost
+
+    fun requestGuideDither(radiusPx: Double) {
+        val angle = Math.random() * 2.0 * Math.PI
+        val radius = Math.random() * radiusPx.coerceAtLeast(0.0)
+        pendingGuideDither.set(
+            (kotlin.math.cos(angle) * radius).toFloat() to (kotlin.math.sin(angle) * radius).toFloat()
+        )
+    }
+
     fun setGuideRunning(enabled: Boolean) {
         if (enabled) {
             if (guideCameraManager.activeCamera == null) {
@@ -1313,9 +1380,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (!_guideRunning.value) return
         val calibration = _guideCalibration.value ?: return
         if (stars.isEmpty()) {
+            guideStarLost = true
             _guideStatus.value = app.getString(R.string.guide_star_lost)
             return
         }
+        guideStarLost = false
         if (!mountModule.isConnected || guidePulseInProgress) return
 
         val now = System.currentTimeMillis()
@@ -1326,8 +1395,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             _guideStatus.value = app.getString(R.string.guide_stars_lost)
             return
         }
-        val dx = error.x
-        val dy = error.y
+        var dx = error.x
+        var dy = error.y
+        pendingGuideDither.getAndSet(null)?.let { (offsetX, offsetY) ->
+            dx += offsetX
+            dy += offsetY
+        }
         val minMove = _guideMinMovePx.value
         val axisError = projectGuideError(calibration, dx, dy) ?: run {
             _guideStatus.value = app.getString(R.string.guide_calibration_invalid)
@@ -2369,6 +2442,126 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             binning = _binning.value
         )
         file
+    }
+
+    suspend fun captureSequenceLight(
+        exposureSeconds: Double,
+        gain: Int,
+        offset: Int,
+        destDir: File
+    ): SessionFrame = withContext(Dispatchers.IO) {
+        if (!License.canRecord) throw DeviceUnavailable("trial")
+        val cam = cameraManager.activeCamera ?: throw DeviceUnavailable("camera")
+        if (!cam.recordsLiveViewAsScience || cam.currentPixelFormat == PixelFormat.RGB24) {
+            throw DeviceUnavailable("camera")
+        }
+        exposureWriteMutex.withLock {
+            val uiMax = ExposureLimits.uiMaxUs(cam, true)
+            cam.longExposureEnabled = true
+            _longExposureEnabled.value = true
+            cam.setExposureTime((exposureSeconds * 1_000_000.0).toFloat().coerceIn(cam.exposureRange.min, uiMax))
+            cam.setGain(gain.toFloat())
+            (cam as? CameraOffsetCapable)?.setOffset(offset.toFloat())
+            if (cameraManager.activeCamera === cam) {
+                _exposureUs.value = cam.currentExposureUs
+                _gain.value = cam.currentGain
+                _offset.value = (cam as? CameraOffsetCapable)?.currentOffset
+            }
+        }
+        val timeoutMs = (exposureSeconds * 1_000.0 + 20_000.0).toLong().coerceAtLeast(45_000L)
+        val frame = awaitFrameSnapshot(timeoutMs) ?: throw IllegalStateException("frame")
+        destDir.mkdirs()
+        val filterName = currentFilterName()
+        val stamp = DateTimeFormatter.ofPattern("HHmmss").format(LocalDateTime.now())
+        val filterPart = filterName?.let { "-$it" }.orEmpty()
+        val file = File(destDir, "$stamp$filterPart-${exposureSeconds.toInt()}s.fits")
+        val info = cam.cameraInfo
+        val focalLengthMm = prefs.getFloat("plate_focal_length_mm", 0f).takeIf { it > 0f }
+        fitsWriter.write(
+            file = file,
+            frame = frame,
+            exposureSeconds = cam.currentExposureUs / 1_000_000f,
+            gain = cam.currentGain,
+            gainKind = cam.gainCapability.kind,
+            gainLabel = cam.gainCapability.label,
+            gainUnit = cam.gainCapability.unit,
+            gainDbEquivalent = cam.gainDbEquivalent(cam.currentGain),
+            cameraName = info?.name,
+            filterName = filterName,
+            configuredFormat = cam.currentPixelFormat,
+            pixelSizeUm = info?.pixelSizeUm,
+            focalLengthMm = focalLengthMm,
+            binning = _binning.value
+        )
+        val luma = monoLuma(frame.data, frame.width, frame.height, frame.pixelFormat.bytesPerPixel)
+        SessionFrame(
+            name = file.name,
+            filter = filterName,
+            exposureSeconds = exposureSeconds,
+            hfr = luma?.let { image ->
+                medianHalfLightRadius(image.pixels, image.width, image.height)?.times(image.scale)
+            },
+            starCount = luma?.let { countStars(it.pixels, it.width, it.height) }
+        )
+    }
+
+    suspend fun moveFocuserAndWait(position: Int) {
+        if (!eafConnected.value) throw DeviceUnavailable("focuser")
+        eafMoveTo(position)
+        val deadline = System.currentTimeMillis() + 20_000L
+        while (System.currentTimeMillis() < deadline) {
+            if (abs(eafPosition.value - position) <= 2) return
+            delay(200)
+        }
+        throw IllegalStateException("focuser")
+    }
+
+    suspend fun runSequenceAutofocus(destDir: File): AutofocusRun {
+        if (!eafConnected.value) throw DeviceUnavailable("focuser")
+        val origin = eafPosition.value
+        val samples = mutableListOf<Pair<Int, Double>>()
+        var bestPosition = origin
+        var bestHfr = Double.POSITIVE_INFINITY
+        for (delta in listOf(-200, -100, 0, 100, 200)) {
+            val position = (origin + delta).coerceAtLeast(0)
+            moveFocuserAndWait(position)
+            val frame = captureSequenceLight(1.0, _gain.value.toInt(), _offset.value?.toInt() ?: 0, destDir)
+            val hfr = frame.hfr ?: continue
+            samples += position to hfr
+            if (hfr < bestHfr) {
+                bestHfr = hfr
+                bestPosition = position
+            }
+        }
+        if (samples.isEmpty()) throw IllegalStateException("autofocus")
+        moveFocuserAndWait(bestPosition)
+        return AutofocusRun(
+            atMillis = System.currentTimeMillis(),
+            temperatureC = (cameraManager.activeCamera as? CoolingCapable)?.let { sensorTempTenths.value / 10.0 },
+            filter = currentFilterName(),
+            position = bestPosition,
+            hfr = bestHfr,
+            curve = samples
+        )
+    }
+
+    private fun sequenceTargetAltitude(): Double? {
+        val site = mountSite.value ?: return null
+        val target = sequenceRuntime.observingTarget()
+        return CoordinateTransform.j2000ToTopocentric(
+            coordinates = EquatorialCoordinates(target.first * 15.0, target.second),
+            instant = Instant.now(),
+            site = ObserverSite(site.latitudeDeg, site.longitudeDeg),
+            refraction = null
+        ).altitudeDeg
+    }
+
+    private fun sequenceMinutesToMeridian(): Double? {
+        val site = mountSite.value ?: return null
+        val target = sequenceRuntime.observingTarget()
+        val lst = SkyWatcherEquatorialMath.localSiderealHours(site.longitudeDeg, Instant.now())
+        val hourAngle = SkyWatcherEquatorialMath.hourAngleHours(lst, target.first)
+        return -hourAngle * 60.0
     }
 
     private fun captureFits() {
