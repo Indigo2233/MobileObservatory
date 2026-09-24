@@ -2,6 +2,7 @@ package com.indigo.mobileobservatory.settings
 
 import android.content.Context
 import com.indigo.mobileobservatory.accessories.power.PowerInterfaceNames
+import com.indigo.mobileobservatory.sequence.SequenceSettings
 import com.indigo.mobileobservatory.camera.PixelFormat
 import com.indigo.mobileobservatory.camera.ReadoutMode
 
@@ -148,6 +149,32 @@ class DeviceSettingsRepository(context: Context) {
             editor.putString(keyPrefix + key, value)
         }
         editor.apply()
+    }
+
+    fun sequenceSettings(): SequenceSettings {
+        val prefix = "sequence."
+        return SequenceSettings(
+            minutesAfterMeridian = preferences.getFloat("${prefix}minutes_after_meridian", 0f).toDouble(),
+            maxMinutesAfterMeridian = preferences.getFloat("${prefix}max_minutes_after_meridian", 0f).toDouble(),
+            pauseTimeBeforeMeridian = preferences.getFloat("${prefix}pause_before_meridian", 0f).toDouble(),
+            recenterAfterFlip = preferences.getBoolean("${prefix}recenter_after_flip", true),
+            autofocusAfterFlip = preferences.getBoolean("${prefix}autofocus_after_flip", false),
+            settleTimeSeconds = preferences.getInt("${prefix}settle_seconds", 0).coerceAtLeast(0),
+            ditherPixels = preferences.getFloat("${prefix}dither_pixels", 3f).toDouble().coerceAtLeast(0.0)
+        )
+    }
+
+    fun saveSequenceSettings(settings: SequenceSettings) {
+        val prefix = "sequence."
+        preferences.edit()
+            .putFloat("${prefix}minutes_after_meridian", settings.minutesAfterMeridian.toFloat())
+            .putFloat("${prefix}max_minutes_after_meridian", settings.maxMinutesAfterMeridian.toFloat())
+            .putFloat("${prefix}pause_before_meridian", settings.pauseTimeBeforeMeridian.toFloat())
+            .putBoolean("${prefix}recenter_after_flip", settings.recenterAfterFlip)
+            .putBoolean("${prefix}autofocus_after_flip", settings.autofocusAfterFlip)
+            .putInt("${prefix}settle_seconds", settings.settleTimeSeconds.coerceAtLeast(0))
+            .putFloat("${prefix}dither_pixels", settings.ditherPixels.toFloat())
+            .apply()
     }
 
     private fun prefix(type: String, deviceId: String): String =

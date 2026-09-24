@@ -771,6 +771,7 @@
     <string name="open_device_control">打开控制</string>
     <string name="device_connect_from_connections">请在“连接”页面中连接此设备。</string>
     <string name="settings_general">常规</string>
+    <string name="settings_sequence">序列</string>
     <string name="settings_camera">相机</string>
     <string name="settings_filter_wheel">滤镜轮</string>
     <string name="settings_focuser">调焦器</string>
@@ -927,6 +928,14 @@
     <string name="sequence_track_stopped">停止</string>
     <string name="sequence_preflight_title">开始前的问题</string>
     <string name="sequence_preflight_continue">仍要开始</string>
+    <string name="sequence_meridian_flip">中天翻转</string>
+    <string name="sequence_minutes_after_meridian">过中天后几分钟开始</string>
+    <string name="sequence_max_minutes_after_meridian">过中天后最多等待几分钟</string>
+    <string name="sequence_pause_before_meridian">中天前暂停几分钟</string>
+    <string name="sequence_settle_seconds">翻转后稳定秒数</string>
+    <string name="sequence_dither_pixels">抖动像素</string>
+    <string name="sequence_recenter_after_flip">翻转后重新居中</string>
+    <string name="sequence_autofocus_after_flip">翻转后自动对焦</string>
     <string name="sequence_drop_to_delete">拖到这里删除</string>
     <string name="sequence_reset_progress">重置进度</string>
     <string name="sequence_error_continue">继续</string>

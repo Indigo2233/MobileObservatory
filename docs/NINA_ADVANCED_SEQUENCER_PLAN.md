@@ -1,6 +1,6 @@
 # 高级序列对齐 NINA 执行计划
 
-> 状态：**N0、N1 已落地，N2 主树/参数编辑/横屏目录拖入已落地，N3 日月历表与条件看门狗已落地（中天翻转设置页仍缺），N5 存为模板/目标已落地（并行仍缺），N4、N6 未开始。** 追踪 [issue #4](https://github.com/Indigo2233/MobileObservatory/issues/4)。开发分支 `feature/dso-sequence`。
+> 状态：**N0–N2 已落地；N3 历表/看门狗/中天翻转设置已落地；N4 板解同步与偏移后居中已落地（子帧不实施）；N5 模板与并行已落地；N6 真机未开始。** 追踪 [issue #4](https://github.com/Indigo2233/MobileObservatory/issues/4)。开发分支 `feature/dso-sequence`。
 >
 > 本文替代 [`DSO_SEQUENCE_PLAN.md`](DSO_SEQUENCE_PLAN.md) 第 3.2 节里的高级序列部分、第 4 节（序列模型）和第 5.2–5.3 节（主循环与失败）。简单序列、状态页、会话记录、测量仍以那份文档为准。
 >
@@ -74,7 +74,7 @@ NINA 是 MPL-2.0。本仓库只按它的 JSON 格式读写，按它的规则执�
 |---|---|---|---|---|
 | `Container.SequentialContainer` | 顺序指令集 | `Strategy`、`Name`、`IsExpanded`、`Conditions`、`Triggers`、`Items` | 执行 | N1 |
 | `Container.DeepSkyObjectContainer` | 深空目标指令集 | 同上，加 `Target`（第 6.4 节）、`ExposureInfoList`、`ExposureInfoListExpanded` | 执行 | N1 |
-| `Container.ParallelContainer` | 并行指令集 | 同顺序指令集。条件和触发器不评估 | 暂停，N5 执行 | N5 |
+| `Container.ParallelContainer` | 并行指令集 | 同顺序指令集。条件和触发器不评估 | 子项同时启动 | 执行 |
 | `Container.ConditionalContainer` | 条件指令集（暂译） | 加 `PredicateExpression` | 保留（依赖表达式求值） | — |
 | `Container.LinkedTemplateContainer` | 链接模板（暂译） | `TemplateReference`、`TargetOverride`，不写子项 | 保留 | N5 视情况 |
 | `Container.SequenceRootContainer` / `StartAreaContainer` / `TargetAreaContainer` / `EndAreaContainer` | 序列 / 开始 / 目标 / 结束 | 根只有全局触发器；三区可挂条件和触发器 | 执行 | N1 |
@@ -96,7 +96,7 @@ NINA 是 MPL-2.0。本仓库只按它的 JSON 格式读写，按它的规则执�
 | `SequenceItem.Imaging.TakeExposure` | 开始曝光 | ⓔ`ExposureTime`=60 秒 [0,3600]，ⓔ`Gain`=−1，ⓔ`Offset`=−1（−1 表示用相机当前值），`Binning`={X:1,Y:1}，`ImageType`="LIGHT"，`ExposureCount`=0 | `captureSequenceLight` | 执行 |
 | `SequenceItem.Imaging.TakeManyExposures` | 多次曝光 | 容器，内含一条开始曝光和一个循环条件；ⓔ`Iterations`=1 | 同上 | 执行 |
 | `SequenceItem.Imaging.SmartExposure` | 智能曝光 | 容器：切换滤镜、开始曝光、循环条件、曝光之后抖动；ⓔ`Iterations`=1 | 同上 | 执行 |
-| `SequenceItem.Imaging.TakeSubframeExposure` | 开始子帧曝光 | 开始曝光的字段，加 ⓔ`ROIPct`=100 等 | 相机页已有 ROI | 暂停，N4 执行 |
+| `SequenceItem.Imaging.TakeSubframeExposure` | 开始子帧曝光 | 开始曝光的字段，加 ⓔ`ROIPct`=100 等 | 深空 LIGHT 就是整幅单张，不做 ROI 裁切读出 | 保留 |
 
 `ImageType` 取值：`LIGHT`、`FLAT`、`DARK`、`BIAS`、`SNAPSHOT`。开始曝光本身没有滤镜和张数，滤镜靠前面的切换滤镜，张数靠外层的循环条件。
 
@@ -342,7 +342,7 @@ N5 实现：子项同时启动，全部结束后指令集结束，不评估条�
 
 ### 8.1 设备端口
 
-`SequenceHardware` 按第 3 节补方法：回温时长、相对调焦、跟踪模式（五种）、解析并同步、旋转器机械角与位置角、平场板灯光与亮度、防露加热、子帧曝光。适配器做不到的返回明确的「不支持」，引擎据此暂停。
+`SequenceHardware` 按第 3 节补方法：回温时长、相对调焦、跟踪模式（五种）、解析并同步、旋转器机械角与位置角、平场板灯光与亮度、防露加热。适配器做不到的返回明确的「不支持」，引擎据此暂停。子帧 ROI 读出不进入设备端口。
 
 ### 8.2 新增计算
 
@@ -521,22 +521,24 @@ N5 实现：子项同时启动，全部结束后指令集结束，不评估条�
 - 星图/目标库加入序列，目标位置角，赤经赤纬时分秒，滤镜/Binning/跟踪模式下拉，时间来源，行运行状态，曝光汇总，开始前检查。
 - 横屏从目录拖进主树。
 
-### N3 执行对齐 `[~]`
+### N3 执行对齐 `[x]`
 
 - 新引擎：顺序策略、条件看门狗、触发器、出错、运行控制。
 - 第 3–5 节多数「执行」级别的指令、条件、触发器。
 - 太阳、月球位置与晨昏时刻；时间来源。
-- 仍缺：中天翻转流程与设置页。
+- 中天翻转流程与设置页。
 
-### N4 板解与子帧 `[ ]`
+### N4 板解与子帧 `[x]`
 
-- 偏移后居中触发器（后台解析）、解析并同步、子帧曝光。
+- 偏移后居中触发器（先解析再判定偏移）、解析并同步。
+- 子帧曝光不实施：NINA 的 subframe 是相机 ROI 裁切读出（对焦/板解加快下载），不是把一次曝光拆成多张。深空 LIGHT 用 `TakeExposure` 整幅单张即可，目录默认隐藏。
 
-### N5 模板、目标与并行 `[~]`
+### N5 模板、目标与并行 `[x]`
 
 - 存为模板、存为目标；添加面板的模板页和目标页。
 - 星图选中天体后「加入序列」。
-- 仍缺：并行指令集执行、链接模板。
+- 并行指令集执行。
+- 链接模板仍为保留。
 
 ### N6 真机验收 `[ ]`
 

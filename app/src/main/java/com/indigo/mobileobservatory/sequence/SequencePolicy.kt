@@ -167,7 +167,7 @@ private fun shouldTrigger(
             if (key in memory.meridianFired) false
             else {
                 val minutes = signals.minutesToMeridian ?: return false
-                minutes <= settings.minutesAfterMeridian
+                meridianFlipDue(minutes, settings)
             }
         }
         "CenterAfterDriftTrigger" -> {

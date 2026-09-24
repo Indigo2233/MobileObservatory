@@ -42,12 +42,15 @@ interface SequenceHardware {
     suspend fun warm()
     suspend fun slew(raHours: Double, decDeg: Double)
     suspend fun center(raHours: Double, decDeg: Double)
+    suspend fun plateSolve(): Pair<Double, Double>
+    suspend fun syncMount(raHours: Double, decDeg: Double)
     suspend fun guide(enabled: Boolean)
     suspend fun dither(radiusPx: Double)
-    suspend fun tracking(enabled: Boolean)
+    suspend fun tracking(mode: Int)
     suspend fun goHome()
     suspend fun cover(open: Boolean)
     suspend fun moveFocuser(position: Int)
+    suspend fun rotateTo(angleDeg: Double)
     suspend fun autofocus(destDir: File): AutofocusRun
     suspend fun waitUntil(epochMillis: Long)
     fun guidingLocked(): Boolean
@@ -64,7 +67,7 @@ class SequenceRuntime(
     private val world: SequenceWorld = SequenceWorld.System
 ) : SequenceDevicePort {
     private var sessionDir: File? = null
-    private var guidingWanted = false
+    private var runSettings = SequenceSettings()
 
     private val _state = MutableStateFlow(SequenceRunState(SequencePhase.Idle))
     val state: StateFlow<SequenceRunState> = _state.asStateFlow()
@@ -95,6 +98,7 @@ class SequenceRuntime(
     private val engine = SequenceEngine(this, world = world) { next ->
         _state.value = next
     }
+    private var guidingWanted = false
 
     val control: SequenceControl get() = engine.control
 
@@ -240,7 +244,7 @@ class SequenceRuntime(
         _generation.value = _generation.value + 1
     }
 
-    fun start() {
+    fun start(settings: SequenceSettings = SequenceSettings()) {
         if (_state.value.phase == SequencePhase.Running || _state.value.phase == SequencePhase.Paused) return
         val root = currentDocument()
         _document.value = root
@@ -250,13 +254,13 @@ class SequenceRuntime(
         _frames.value = emptyList()
         _autofocus.value = emptyList()
         guidingWanted = false
+        runSettings = settings.copy(
+            ditherPixels = if (settings.ditherPixels > 0.0) settings.ditherPixels else _draft.value.ditherPixels
+        )
         _locked.value = true
         scope.launch {
             try {
-                val result = engine.run(
-                    root,
-                    SequenceSettings(ditherPixels = _draft.value.ditherPixels)
-                )
+                val result = engine.run(root, runSettings)
                 _state.value = result
                 writeSession(root)
             } finally {
@@ -313,7 +317,35 @@ class SequenceRuntime(
                 val dec = if (inherited) target?.second else instruction.doubleField("DecDegrees") ?: target?.second
                 hardware.slew(ra ?: hardware.raHours() ?: 0.0, dec ?: hardware.decDeg() ?: 0.0)
             }
-            "Center", "CenterAndRotate" -> hardware.center(target?.first ?: 0.0, target?.second ?: 0.0)
+            "SlewScopeToAltAz" -> {
+                val lat = world.observerLatitudeDeg() ?: throw DeviceUnavailable("site")
+                val lon = world.observerLongitudeDeg() ?: throw DeviceUnavailable("site")
+                val alt = expressionNumber(instruction, "Alt") ?: instruction.doubleField("Alt") ?: 45.0
+                val az = expressionNumber(instruction, "Az") ?: instruction.doubleField("Az") ?: 0.0
+                val equatorial = SequenceEphemeris.altAzToEquatorialHours(
+                    alt,
+                    az,
+                    com.indigo.mobileobservatory.astro.ObserverSite(lat, lon),
+                    java.time.Instant.ofEpochMilli(world.nowMillis())
+                )
+                hardware.slew(equatorial.first, equatorial.second)
+            }
+            "Center" -> hardware.center(target?.first ?: 0.0, target?.second ?: 0.0)
+            "CenterAndRotate" -> {
+                hardware.center(target?.first ?: 0.0, target?.second ?: 0.0)
+                hardware.rotateTo(instructionPositionAngle(instruction))
+            }
+            "SolveAndSync" -> {
+                val solved = hardware.plateSolve()
+                hardware.syncMount(solved.first, solved.second)
+            }
+            "SolveAndRotate" -> {
+                hardware.plateSolve()
+                hardware.rotateTo(instructionPositionAngle(instruction))
+            }
+            "MoveRotatorMechanical" -> hardware.rotateTo(
+                expressionNumber(instruction, "MechanicalAngle") ?: 0.0
+            )
             "StartGuiding" -> {
                 guidingWanted = true
                 hardware.guide(true)
@@ -322,8 +354,8 @@ class SequenceRuntime(
                 guidingWanted = false
                 hardware.guide(false)
             }
-            "Dither" -> hardware.dither(_draft.value.ditherPixels)
-            "SetTracking" -> hardware.tracking((instruction.intField("TrackingMode") ?: 0) != 5)
+            "Dither" -> hardware.dither(runSettings.ditherPixels)
+            "SetTracking" -> hardware.tracking(instruction.intField("TrackingMode") ?: 0)
             "FindHome" -> hardware.goHome()
             "OpenCover" -> hardware.cover(true)
             "CloseCover" -> hardware.cover(false)
@@ -437,6 +469,26 @@ class SequenceRuntime(
             values = (existing?.values ?: emptyList()) + NinaValue.Obj(trigger)
         )
         _document.value = root
+    }
+
+    override suspend fun measurePointing(): Pair<Double, Double>? = try {
+        hardware.plateSolve()
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun instructionPositionAngle(instruction: NinaNode): Double {
+        val inherited = (instruction.fields["Inherited"] as? NinaValue.Bool)?.value == true
+        if (!inherited) {
+            expressionNumber(instruction, "PositionAngle")?.let { return it }
+            instruction.doubleField("PositionAngle")?.let { return it }
+        }
+        val dso = _document.value
+            ?.childItems()
+            ?.getOrNull(1)
+            ?.childItems()
+            ?.firstOrNull { it.className == "DeepSkyObjectContainer" }
+        return dsoPositionAngle(dso ?: instruction) ?: expressionNumber(instruction, "PositionAngle") ?: 0.0
     }
 
     private suspend fun waitUntilCompared(

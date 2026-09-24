@@ -1,5 +1,6 @@
 package com.indigo.mobileobservatory.sequence
 
+import com.indigo.mobileobservatory.sequence.catalog.SequenceCatalog
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -278,6 +279,45 @@ class SequenceEngineTest {
         assertEquals(listOf(7.0), port.finishedExposures)
     }
 
+    @Test
+    fun `parallel instruction set runs both children`() = runTest {
+        val root = emptyAdvancedSequence("P")
+        val startId = checkNotNull(root.childItems()[0].id)
+        assertTrue(addSequenceNode(root, startId, "ParallelContainer"))
+        val parallel = root.childItems()[0].childItems().single { it.className == "ParallelContainer" }
+        val parallelId = checkNotNull(parallel.id)
+        assertTrue(addSequenceNode(root, parallelId, "TakeExposure"))
+        assertTrue(addSequenceNode(root, parallelId, "TakeExposure"))
+        val port = RecordingPort()
+        val state = SequenceEngine(port).run(root)
+        assertEquals(SequencePhase.Completed, state.phase)
+        assertEquals(2, port.exposures.size)
+    }
+
+    @Test
+    fun `center after drift recenters only when the solve is off target`() = runTest {
+        val onTarget = RecordingPort()
+        onTarget.pointing = 1.0 to 2.0
+        SequenceEngine(onTarget).run(driftedExposures())
+        assertEquals(0, onTarget.calls.count { it == "Center" })
+
+        val drifted = RecordingPort()
+        drifted.pointing = 2.0 to 2.0
+        SequenceEngine(drifted).run(driftedExposures())
+        assertTrue(drifted.calls.contains("Center"))
+    }
+
+    @Test
+    fun `solve and sync is a known instruction`() = runTest {
+        val root = emptyAdvancedSequence("Solve")
+        val startId = checkNotNull(root.childItems()[0].id)
+        assertTrue(addSequenceNode(root, startId, "SolveAndSync"))
+        val port = RecordingPort()
+        val state = SequenceEngine(port).run(root)
+        assertEquals(SequencePhase.Completed, state.phase)
+        assertEquals(listOf("SolveAndSync"), port.calls)
+    }
+
     private fun sample(endExposure: Boolean = false): NinaNode {
         val root = SimpleSequenceDraft(
             title = "M42",
@@ -327,7 +367,10 @@ private class RecordingPort(
     var beforeExposure: ((Int) -> Unit)? = null
     var afterExposure: ((Int) -> Unit)? = null
     var holdFirstExposure = false
+    var pointing: Pair<Double, Double>? = null
     private var exposureStarts = 0
+
+    override suspend fun measurePointing(): Pair<Double, Double>? = pointing
 
     override suspend fun execute(instruction: NinaNode, className: String) {
         calls += className
@@ -442,6 +485,21 @@ private fun ditheredExposures(): NinaNode {
         rows = listOf(SimpleExposureRow(null, 4.0, 0, 0, count = 2)),
         ditherEvery = 1
     ).toNinaSequence()
+    return root
+}
+
+private fun driftedExposures(): NinaNode {
+    val root = SimpleSequenceDraft(
+        title = "Drift",
+        raHours = 1.0,
+        decDegrees = 2.0,
+        rows = listOf(SimpleExposureRow(null, 4.0, 0, 0, count = 2))
+    ).toNinaSequence()
+    val target = root.childItems()[1].childItems().single()
+    val trigger = SequenceCatalog.create("CenterAfterDriftTrigger")
+    trigger.fields["Parent"] = NinaValue.Ref(checkNotNull(target.id))
+    val existing = target.fields.getValue("Triggers") as NinaValue.Collection
+    target.fields["Triggers"] = existing.copy(values = listOf(NinaValue.Obj(trigger)))
     return root
 }
 

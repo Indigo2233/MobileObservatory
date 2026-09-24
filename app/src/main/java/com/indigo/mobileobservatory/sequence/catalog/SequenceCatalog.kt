@@ -27,7 +27,7 @@ private fun buildCatalog(): List<SequenceTypeSpec> = buildList {
 
     add(setSpec("SequentialContainer", "顺序指令集", "Sequential Instruction Set", SupportLevel.Execute))
     add(deepSkySpec())
-    add(setSpec("ParallelContainer", "并行指令集", "Parallel Instruction Set", SupportLevel.Pause))
+    add(setSpec("ParallelContainer", "并行指令集", "Parallel Instruction Set", SupportLevel.Execute))
     add(
         setSpec(
             "ConditionalContainer",
@@ -100,10 +100,10 @@ private fun buildCatalog(): List<SequenceTypeSpec> = buildList {
         FieldSpec("PositionAngle", FieldKind.Expression, "位置角", "Position angle", defaultNumber = 0.0),
         FieldSpec("Inherited", FieldKind.Bool, "使用目标坐标", "Use target", defaultBool = true)))
     add(item("SequenceItem.Platesolving.SolveAndSync", "望远镜", "Telescope", "解析并同步", "Solve and Sync", SupportLevel.Execute, SequenceDevice.Mount))
-    add(item("SequenceItem.Platesolving.SolveAndRotate", "望远镜", "Telescope", "解析并旋转", "Solve and Rotate", SupportLevel.Pause, SequenceDevice.Rotator,
+    add(item("SequenceItem.Platesolving.SolveAndRotate", "望远镜", "Telescope", "解析并旋转", "Solve and Rotate", SupportLevel.Execute, SequenceDevice.Rotator,
         FieldSpec("PositionAngle", FieldKind.Expression, "位置角", "Position angle", defaultNumber = 0.0),
         FieldSpec("Inherited", FieldKind.Bool, "使用目标坐标", "Use target", defaultBool = true)))
-    add(item("SequenceItem.Rotator.MoveRotatorMechanical", "旋转器", "Rotator", "转到机械角", "Rotate to mechanical angle", SupportLevel.Pause, SequenceDevice.Rotator,
+    add(item("SequenceItem.Rotator.MoveRotatorMechanical", "旋转器", "Rotator", "转到机械角", "Rotate to mechanical angle", SupportLevel.Execute, SequenceDevice.Rotator,
         FieldSpec("MechanicalAngle", FieldKind.Expression, "机械角", "Mechanical angle", defaultNumber = 0.0)))
 
     add(item("SequenceItem.FlatDevice.OpenCover", "平场设备", "Flat Device", "打开平场镜头盖", "Open Flat Panel Cover", SupportLevel.Execute, SequenceDevice.Cover))
@@ -420,7 +420,7 @@ private fun takeExposureSpec(subframe: Boolean): SequenceTypeSpec {
         groupEn = "Camera",
         titleZh = titleZh,
         titleEn = titleEn,
-        level = if (subframe) SupportLevel.Pause else SupportLevel.Execute,
+        level = if (subframe) SupportLevel.Retain else SupportLevel.Execute,
         fields = fields,
         device = SequenceDevice.Camera
     ) {

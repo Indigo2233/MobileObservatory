@@ -97,6 +97,21 @@ object SequenceEphemeris {
         moonAltitudeDeg(instant, site)
     }
 
+    fun altAzToEquatorialHours(
+        altitudeDeg: Double,
+        azimuthDeg: Double,
+        site: ObserverSite,
+        instant: Instant
+    ): Pair<Double, Double> {
+        val equatorial = com.indigo.mobileobservatory.astro.CoordinateTransform.topocentricToJ2000(
+            coordinates = com.indigo.mobileobservatory.astro.TopocentricCoordinates(altitudeDeg, azimuthDeg),
+            instant = instant,
+            site = site,
+            refraction = null
+        )
+        return (equatorial.raDeg / 15.0).mod(24.0) to equatorial.decDeg
+    }
+
     fun nextMeridianMillis(raHours: Double, site: ObserverSite, after: Instant): Long {
         val lst = localSiderealHours(site.longitudeDeg, after)
         var ha = lst - raHours

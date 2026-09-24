@@ -4,8 +4,10 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 enum class InstructionErrorBehavior {
     ContinueOnError,
@@ -34,6 +36,7 @@ data class SequenceRunState(
 
 interface SequenceDevicePort {
     suspend fun execute(instruction: NinaNode, className: String)
+    suspend fun measurePointing(): Pair<Double, Double>? = null
 }
 
 class SequenceStopped : CancellationException("sequence stopped")
@@ -244,7 +247,6 @@ class SequenceEngine(
             status[node] = EntityStatus.SKIPPED
             return Outcome.Continue
         }
-        if (node.className == "ParallelContainer") return pauseOnUnknown(node)
         if (node.className == "ParkScope" || node.className == "UnparkScope") {
             return pauseOnUnknown(node, "mount cannot park")
         }
@@ -253,7 +255,7 @@ class SequenceEngine(
         }
         if (isContainer(node)) {
             status[node] = EntityStatus.RUNNING
-            val outcome = runContainer(node)
+            val outcome = if (node.className == "ParallelContainer") runParallel(node) else runContainer(node)
             if (status[node] == EntityStatus.RUNNING) status[node] = EntityStatus.FINISHED
             return outcome
         }
@@ -306,6 +308,19 @@ class SequenceEngine(
         }
         skipCreated(container)
         return Outcome.Continue
+    }
+
+    private suspend fun runParallel(container: NinaNode): Outcome {
+        val items = container.childItems().filter { entityStatus(it) != EntityStatus.DISABLED }
+        if (items.isEmpty()) return Outcome.Continue
+        val outcomes = coroutineScope {
+            items.map { item -> async { runNode(item) } }.awaitAll()
+        }
+        return when {
+            outcomes.contains(Outcome.Abort) -> Outcome.Abort
+            outcomes.contains(Outcome.JumpToEnd) -> Outcome.JumpToEnd
+            else -> Outcome.Continue
+        }
     }
 
     private fun canContinue(container: NinaNode): Boolean {
@@ -479,20 +494,25 @@ class SequenceEngine(
         for (trigger in due) {
             markTriggerFired(trigger, liveSignals(), triggerMemory)
             try {
+                if (trigger.className == "CenterAfterDriftTrigger" && !driftExceeded(trigger)) continue
                 val runnerItems = triggerRunnerItems(trigger)
-                if (runnerItems.isNotEmpty()) {
-                    for (item in runnerItems) {
-                        when (val outcome = runNode(item)) {
-                            Outcome.Continue -> Unit
-                            Outcome.JumpToEnd, Outcome.Abort, Outcome.SkipRest -> return
-                        }
-                    }
+                val items = if (runnerItems.isNotEmpty()) {
+                    runnerItems
                 } else {
-                    for (className in insertedInstructions(trigger, settings)) {
-                        val node = NinaNode(type = className, id = null)
-                        val outcome = executeInstruction(node)
-                        if (outcome != Outcome.Continue) return
+                    insertedInstructions(trigger, settings).map { NinaNode(type = it, id = null) }
+                }
+                for (item in items) {
+                    val outcome = if (item.id != null) runNode(item) else executeInstruction(item)
+                    when (outcome) {
+                        Outcome.Continue -> Unit
+                        Outcome.JumpToEnd, Outcome.Abort, Outcome.SkipRest -> return
                     }
+                    if (trigger.className == "MeridianFlipTrigger" && item.className == "StopGuiding") {
+                        waitMeridianWindow()
+                    }
+                }
+                if (trigger.className == "MeridianFlipTrigger" && settings.settleTimeSeconds > 0) {
+                    delay(settings.settleTimeSeconds * 1000L)
                 }
             } catch (stopped: SequenceStopped) {
                 throw stopped
@@ -501,6 +521,35 @@ class SequenceEngine(
             } catch (_: Exception) {
             }
         }
+    }
+
+    private suspend fun waitMeridianWindow() {
+        while (true) {
+            control.checkpoint()
+            val minutes = world.minutesToMeridian() ?: return
+            if (-minutes >= settings.minutesAfterMeridian) return
+            delay(1_000)
+        }
+    }
+
+    private suspend fun driftExceeded(trigger: NinaNode): Boolean {
+        val limit = expressionNumber(trigger, "DistanceArcMinutes") ?: 10.0
+        val solved = port.measurePointing() ?: return true
+        val target = inheritedTarget(trigger) ?: return true
+        return equatorialSeparationArcmin(solved.first, solved.second, target.first, target.second) >= limit
+    }
+
+    private fun inheritedTarget(node: NinaNode): Pair<Double, Double>? {
+        var current: NinaNode? = node
+        while (current != null) {
+            if (current.className == "DeepSkyObjectContainer") {
+                val ra = dsoRaHours(current) ?: return null
+                val dec = dsoDecDegrees(current) ?: return null
+                return ra to dec
+            }
+            current = parents[current]
+        }
+        return null
     }
 
     private fun skipCreated(container: NinaNode) {
@@ -582,8 +631,12 @@ private val knownInstructions = setOf(
     "CoolCamera",
     "WarmCamera",
     "SlewScopeToRaDec",
+    "SlewScopeToAltAz",
     "Center",
     "CenterAndRotate",
+    "SolveAndSync",
+    "SolveAndRotate",
+    "MoveRotatorMechanical",
     "StartGuiding",
     "StopGuiding",
     "Dither",

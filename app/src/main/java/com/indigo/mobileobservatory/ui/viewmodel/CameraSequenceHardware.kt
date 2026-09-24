@@ -2,6 +2,7 @@ package com.indigo.mobileobservatory.ui.viewmodel
 
 import com.indigo.mobileobservatory.camera.CoolingCapable
 import com.indigo.mobileobservatory.mount.MountConnectionState
+import com.indigo.mobileobservatory.mount.MountTrackingRate
 import com.indigo.mobileobservatory.mount.MountMotionType
 import com.indigo.mobileobservatory.mount.PrecisionGotoPhase
 import com.indigo.mobileobservatory.sequence.AutofocusRun
@@ -70,6 +71,12 @@ class CameraSequenceHardware(
         }
     }
 
+    override suspend fun plateSolve(): Pair<Double, Double> = viewModel.sequencePlateSolve()
+
+    override suspend fun syncMount(raHours: Double, decDeg: Double) {
+        viewModel.syncMountToTarget("sequence", raHours, decDeg, "J2000")
+    }
+
     override suspend fun guide(enabled: Boolean) {
         viewModel.setGuideRunning(enabled)
     }
@@ -78,8 +85,15 @@ class CameraSequenceHardware(
         viewModel.requestGuideDither(radiusPx)
     }
 
-    override suspend fun tracking(enabled: Boolean) {
-        viewModel.setMountTracking(enabled)
+    override suspend fun tracking(mode: Int) {
+        val rate = when (mode) {
+            1 -> MountTrackingRate.LUNAR
+            2 -> MountTrackingRate.SOLAR
+            5 -> MountTrackingRate.OFF
+            3 -> throw DeviceUnavailable("king tracking")
+            else -> MountTrackingRate.SIDEREAL
+        }
+        viewModel.setMountTrackingRate(rate)
     }
 
     override suspend fun goHome() {
@@ -97,6 +111,19 @@ class CameraSequenceHardware(
 
     override suspend fun moveFocuser(position: Int) {
         viewModel.moveFocuserAndWait(position)
+    }
+
+    override suspend fun rotateTo(angleDeg: Double) {
+        if (!viewModel.rotatorConnected.value) throw DeviceUnavailable("rotator")
+        viewModel.moveRotatorTo(angleDeg)
+        val deadline = System.currentTimeMillis() + 60_000L
+        var sawMove = false
+        while (System.currentTimeMillis() < deadline) {
+            if (viewModel.rotatorMoving.value) sawMove = true
+            if (sawMove && !viewModel.rotatorMoving.value) return
+            if (!sawMove && abs(viewModel.rotatorAngle.value - angleDeg) < 0.5) return
+            delay(200)
+        }
     }
 
     override suspend fun autofocus(destDir: File): AutofocusRun =

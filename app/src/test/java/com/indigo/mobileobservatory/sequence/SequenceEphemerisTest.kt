@@ -58,6 +58,35 @@ class SequenceEphemerisTest {
     }
 
     @Test
+    fun `alt az converts back to a nearby equatorial place`() {
+        val instant = Instant.parse("2024-06-21T12:00:00Z")
+        val sun = SequenceEphemeris.sunEquatorial(instant)
+        val topo = com.indigo.mobileobservatory.astro.CoordinateTransform.j2000ToTopocentric(
+            coordinates = sun,
+            instant = instant,
+            site = beijing,
+            refraction = null
+        )
+        val recovered = SequenceEphemeris.altAzToEquatorialHours(
+            topo.altitudeDeg,
+            topo.azimuthDeg,
+            beijing,
+            instant
+        )
+        assertEquals(sun.raDeg / 15.0, recovered.first, 0.05)
+        assertEquals(sun.decDeg, recovered.second, 0.8)
+    }
+
+    @Test
+    fun `meridian window starts after the configured delay`() {
+        val settings = SequenceSettings(minutesAfterMeridian = 10.0, maxMinutesAfterMeridian = 20.0)
+        assertTrue(!meridianFlipDue(5.0, settings))
+        assertTrue(!meridianFlipDue(-5.0, settings))
+        assertTrue(meridianFlipDue(-12.0, settings))
+        assertTrue(!meridianFlipDue(-25.0, settings))
+    }
+
+    @Test
     fun `next meridian is within a sidereal day`() {
         val now = Instant.parse("2024-06-21T12:00:00Z")
         val meridian = SequenceEphemeris.nextMeridianMillis(0.0, beijing, now)

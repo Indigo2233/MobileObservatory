@@ -68,5 +68,6 @@ class SequenceCatalogTest {
         val park = SequenceCatalog.create("ParkScope")
         assertEquals(SupportLevel.Pause, SequenceCatalog.spec("ParkScope")!!.level)
         assertTrue(validateSequenceNode(park).any { it.messageZh.contains("暂不支持") })
+        assertEquals(SupportLevel.Retain, SequenceCatalog.spec("TakeSubframeExposure")!!.level)
     }
 }

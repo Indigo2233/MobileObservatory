@@ -37,6 +37,7 @@ import com.indigo.mobileobservatory.sequence.AutofocusRun
 import com.indigo.mobileobservatory.sequence.DeviceUnavailable
 import com.indigo.mobileobservatory.sequence.SequenceEphemeris
 import com.indigo.mobileobservatory.sequence.SequenceRuntime
+import com.indigo.mobileobservatory.sequence.SequenceSettings
 import com.indigo.mobileobservatory.sequence.SequenceSkyTarget
 import com.indigo.mobileobservatory.sequence.SequenceWorld
 import com.indigo.mobileobservatory.sequence.SessionFrame
@@ -485,6 +486,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private val prefs = application.getSharedPreferences("mobile_observatory", Context.MODE_PRIVATE)
     private val deviceSettings = DeviceSettingsRepository(application)
+    private val _sequenceSettings = MutableStateFlow(deviceSettings.sequenceSettings())
+    val sequenceSettings: StateFlow<SequenceSettings> = _sequenceSettings.asStateFlow()
+
+    fun updateSequenceSettings(settings: SequenceSettings) {
+        _sequenceSettings.value = settings
+        deviceSettings.saveSequenceSettings(settings)
+    }
 
     val mountConnectionState = mountModule.mountConnectionState
     val mountHost = mountModule.mountHost
@@ -953,6 +961,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val decDeg = result.decDeg ?: error(app.getString(R.string.plate_solve_failed))
         val (jnowRa, jnowDec) = EquatorialEpoch.j2000DegToJnowHours(raDeg, decDeg)
         return MountCoordinates(raHours = jnowRa, decDeg = jnowDec)
+    }
+
+    suspend fun sequencePlateSolve(): Pair<Double, Double> {
+        val solved = captureAndSolveForPrecisionGoto(mountCoordinates.value)
+        val j2000 = EquatorialEpoch.jnowToJ2000(
+            EquatorialCoordinates(solved.raHours * 15.0, solved.decDeg)
+        )
+        return (j2000.raDeg / 15.0).mod(24.0) to j2000.decDeg
     }
     fun moveMountRaBy(distanceDeg: Double, east: Boolean, rateDegPerSec: Double) =
         mountModule.moveMountRaBy(distanceDeg, east, rateDegPerSec)

@@ -102,6 +102,7 @@ fun SequenceScreen(
     val eafConnected by viewModel.eafConnected.collectAsState()
     val coverConnected by viewModel.coverConnected.collectAsState()
     val rotatorConnected by viewModel.rotatorConnected.collectAsState()
+    val sequenceSettings by viewModel.sequenceSettings.collectAsState()
     val guideConnection by viewModel.guideConnectionState.collectAsState()
     val coolingInfo by viewModel.coolingInfo.collectAsState()
     var startIssues by remember { mutableStateOf<List<SequenceIssue>?>(null) }
@@ -165,7 +166,7 @@ fun SequenceScreen(
                             Button(onClick = { runtime.save(templateName.ifBlank { draft.title }) }, enabled = !running) {
                                 Text(stringResource(R.string.sequence_save))
                             }
-                            Button(onClick = { runtime.start() }, enabled = !running) {
+                            Button(onClick = { runtime.start(sequenceSettings) }, enabled = !running) {
                                 Text(stringResource(R.string.sequence_start))
                             }
                         }
@@ -197,7 +198,7 @@ fun SequenceScreen(
                         onClick = {
                             val root = runtime.document.value
                             val issues = root?.let { validateSequence(it, hardware) }.orEmpty()
-                            if (issues.isNotEmpty()) startIssues = issues else runtime.start()
+                            if (issues.isNotEmpty()) startIssues = issues else runtime.start(sequenceSettings)
                         },
                         enabled = !running,
                         modifier = Modifier.fillMaxWidth()
@@ -284,7 +285,7 @@ fun SequenceScreen(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { startIssues = null; runtime.start() }) {
+                TextButton(onClick = { startIssues = null; runtime.start(sequenceSettings) }) {
                     Text(stringResource(R.string.sequence_preflight_continue))
                 }
             },

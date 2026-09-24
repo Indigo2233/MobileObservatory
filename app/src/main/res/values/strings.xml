@@ -771,6 +771,7 @@
     <string name="open_device_control">Open control</string>
     <string name="device_connect_from_connections">Connect this device from the Connections page.</string>
     <string name="settings_general">General</string>
+    <string name="settings_sequence">Sequence</string>
     <string name="settings_camera">Camera</string>
     <string name="settings_filter_wheel">Filter wheel</string>
     <string name="settings_focuser">Focuser</string>
@@ -918,6 +919,14 @@
     <string name="sequence_track_stopped">Stopped</string>
     <string name="sequence_preflight_title">Issues before start</string>
     <string name="sequence_preflight_continue">Start anyway</string>
+    <string name="sequence_meridian_flip">Meridian flip</string>
+    <string name="sequence_minutes_after_meridian">Minutes after meridian</string>
+    <string name="sequence_max_minutes_after_meridian">Max minutes after meridian</string>
+    <string name="sequence_pause_before_meridian">Pause minutes before meridian</string>
+    <string name="sequence_settle_seconds">Settle seconds after flip</string>
+    <string name="sequence_dither_pixels">Dither pixels</string>
+    <string name="sequence_recenter_after_flip">Recenter after flip</string>
+    <string name="sequence_autofocus_after_flip">Autofocus after flip</string>
     <string name="sequence_drop_to_delete">Drop here to delete</string>
     <string name="sequence_reset_progress">Reset progress</string>
     <string name="sequence_error_continue">Continue</string>

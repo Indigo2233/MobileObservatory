@@ -15,7 +15,7 @@
 | [`OASIS_ACCESSORY_INTEGRATION_PLAN.md`](OASIS_ACCESSORY_INTEGRATION_PLAN.md) | `[~]` USB HID 已接入 | 一代电调焦、两款滤镜轮真机；BLE 不做 |
 | [`STAR_MAP_DUAL_FOV_PLAN.md`](STAR_MAP_DUAL_FOV_PLAN.md) | `[x]` M1a + 目标虚线投影 | 目镜预设库；偏轴导星偏移 |
 | [`DSO_SEQUENCE_PLAN.md`](DSO_SEQUENCE_PLAN.md) | `[~]` M1–M6 代码已落地 | M7 夜间验收未做。分支 `feature/dso-sequence` |
-| [`NINA_ADVANCED_SEQUENCER_PLAN.md`](NINA_ADVANCED_SEQUENCER_PLAN.md) | `[~]` N0–N2、N3 历表/看门狗、N5 模板已落地 | N3 中天翻转设置；N4 板解子帧；N5 并行；N6 真机 |
+| [`NINA_ADVANCED_SEQUENCER_PLAN.md`](NINA_ADVANCED_SEQUENCER_PLAN.md) | `[~]` N0–N5 代码已落地 | 子帧不实施；N6 真机 |
 
 ## 代码已落地、待真机
 
