@@ -18,7 +18,8 @@ data class SequenceHardwareSnapshot(
     val mountConnected: Boolean = false,
     val coverConnected: Boolean = false,
     val rotatorConnected: Boolean = false,
-    val flatPanelConnected: Boolean = false
+    val flatPanelConnected: Boolean = false,
+    val filterNames: List<String> = emptyList()
 )
 
 data class SequenceIssue(

@@ -2,8 +2,10 @@ package com.indigo.mobileobservatory.sequence
 
 import com.indigo.mobileobservatory.sequence.catalog.SequenceCatalog
 import com.indigo.mobileobservatory.sequence.catalog.SupportLevel
+import com.indigo.mobileobservatory.sequence.catalog.binningMode
 import com.indigo.mobileobservatory.sequence.catalog.catalogCollection
 import com.indigo.mobileobservatory.sequence.catalog.catalogContainer
+import com.indigo.mobileobservatory.sequence.catalog.catalogInstruction
 import com.indigo.mobileobservatory.sequence.catalog.slotElementType
 import java.util.concurrent.atomic.AtomicLong
 
@@ -198,6 +200,194 @@ fun applyDsoSkyTarget(
     return true
 }
 
+val SEQUENCE_TIME_PROVIDER_IDS = listOf(
+    "TimeProvider",
+    "SunsetProvider",
+    "SunriseProvider",
+    "CivilDuskProvider",
+    "CivilDawnProvider",
+    "NauticalDuskProvider",
+    "NauticalDawnProvider",
+    "DuskProvider",
+    "DawnProvider",
+    "MeridianProvider"
+)
+
+fun sequenceTimeProviderLabel(id: String, chinese: Boolean): String = when (id) {
+    "SunsetProvider" -> if (chinese) "日落" else "Sunset"
+    "SunriseProvider" -> if (chinese) "日出" else "Sunrise"
+    "CivilDuskProvider" -> if (chinese) "民用昏影终" else "Civil dusk"
+    "CivilDawnProvider" -> if (chinese) "民用晨光始" else "Civil dawn"
+    "NauticalDuskProvider" -> if (chinese) "航海昏影终" else "Nautical dusk"
+    "NauticalDawnProvider" -> if (chinese) "航海晨光始" else "Nautical dawn"
+    "DuskProvider" -> if (chinese) "天文昏影终" else "Astronomical dusk"
+    "DawnProvider" -> if (chinese) "天文晨光始" else "Astronomical dawn"
+    "MeridianProvider" -> if (chinese) "目标过中天" else "Meridian"
+    else -> if (chinese) "指定时刻" else "Clock time"
+}
+
+fun sequenceTimeProviderId(node: NinaNode): String =
+    ((node.fields["SelectedProvider"] as? NinaValue.Obj)?.node)?.className ?: "TimeProvider"
+
+fun setSequenceTimeProvider(root: NinaNode, id: String, className: String): Boolean {
+    val node = findSequenceNode(root, id) ?: return false
+    val type = "NINA.Sequencer.Utility.DateTimeProvider.$className, NINA.Sequencer"
+    node.fields["SelectedProvider"] = NinaValue.Obj(catalogInstruction(type, linkedMapOf()))
+    return true
+}
+
+fun sequenceInherited(node: NinaNode): Boolean =
+    (node.fields["Inherited"] as? NinaValue.Bool)?.value == true
+
+fun sequenceBinningText(node: NinaNode): String {
+    val bin = (node.fields["Binning"] as? NinaValue.Obj)?.node ?: return "1x1"
+    return "${bin.intField("X") ?: 1}x${bin.intField("Y") ?: 1}"
+}
+
+fun setSequenceBinning(root: NinaNode, id: String, text: String): Boolean {
+    val node = findSequenceNode(root, id) ?: return false
+    val parts = text.lowercase().split('x', '×')
+    val x = parts.getOrNull(0)?.toIntOrNull() ?: return false
+    val y = parts.getOrNull(1)?.toIntOrNull() ?: x
+    val existing = (node.fields["Binning"] as? NinaValue.Obj)?.node
+    val bin = existing ?: binningMode().also { node.fields["Binning"] = NinaValue.Obj(it) }
+    bin.fields["X"] = NinaValue.Num(x.toDouble(), true)
+    bin.fields["Y"] = NinaValue.Num(y.toDouble(), true)
+    return true
+}
+
+fun dsoCoordinateText(node: NinaNode, part: String): String {
+    val coordinates = dsoCoordinates(node) ?: return ""
+    val value = coordinates.fields[part]
+    return when (value) {
+        is NinaValue.Num -> if (value.integral) value.value.toLong().toString() else value.value.toString()
+        is NinaValue.Bool -> value.value.toString()
+        else -> coordinates.doubleField(part)?.toString().orEmpty()
+    }
+}
+
+fun setDsoCoordinatePart(root: NinaNode, id: String, part: String, text: String): Boolean {
+    val node = findSequenceNode(root, id) ?: return false
+    if (node.className != "DeepSkyObjectContainer") return false
+    val coordinates = dsoCoordinates(node) ?: return false
+    writeScalar(coordinates, part, text)
+    return true
+}
+
+data class SequenceExposureLine(
+    val filter: String,
+    val seconds: Double,
+    val count: Int,
+    val imageType: String
+)
+
+fun dsoExposureSummary(target: NinaNode): List<SequenceExposureLine> {
+    val lines = ArrayList<SequenceExposureLine>()
+    var filter = "—"
+    fun walk(node: NinaNode, multiplier: Int) {
+        when (node.className) {
+            "SwitchFilter" -> filter = node.textField("ComboBoxText") ?: filter
+            "TakeExposure", "TakeSubframeExposure" -> {
+                val seconds = expressionNumber(node, "ExposureTime") ?: 0.0
+                val type = node.textField("ImageType") ?: "LIGHT"
+                lines += SequenceExposureLine(filter, seconds, multiplier.coerceAtLeast(1), type)
+            }
+            else -> {
+                val loop = node.collectionNodes("Conditions")
+                    .firstOrNull { it.className == "LoopCondition" }
+                    ?.let { (expressionNumber(it, "Iterations") ?: 1.0).toInt() }
+                    ?: if (node.className == "SmartExposure" || node.className == "TakeManyExposures") {
+                        (expressionNumber(node, "Iterations") ?: 1.0).toInt()
+                    } else {
+                        1
+                    }
+                node.childItems().forEach { walk(it, multiplier * loop) }
+            }
+        }
+    }
+    walk(target, 1)
+    return lines
+}
+
+fun nextClockTimeMillis(
+    node: NinaNode,
+    nowMillis: Long,
+    latitudeDeg: Double? = null,
+    longitudeDeg: Double? = null,
+    raHours: Double? = null
+): Long? {
+    val provider = sequenceTimeProviderId(node)
+    val offset = node.intField("MinutesOffset") ?: 0
+    if (provider != "TimeProvider") {
+        return SequenceEphemeris.nextProviderMillis(
+            provider,
+            nowMillis,
+            offset,
+            latitudeDeg,
+            longitudeDeg,
+            raHours
+        )
+    }
+    val hours = (node.intField("Hours") ?: 0).coerceIn(0, 23)
+    val minutes = (node.intField("Minutes") ?: 0).coerceIn(0, 59)
+    val seconds = (node.intField("Seconds") ?: 0).coerceIn(0, 59)
+    val zone = java.time.ZoneId.systemDefault()
+    val now = java.time.Instant.ofEpochMilli(nowMillis).atZone(zone)
+    var target = now.withHour(hours).withMinute(minutes).withSecond(seconds).withNano(0)
+        .plusMinutes(offset.toLong())
+    if (!target.toInstant().isAfter(java.time.Instant.ofEpochMilli(nowMillis))) {
+        target = target.plusDays(1)
+    }
+    return target.toInstant().toEpochMilli()
+}
+
+fun sequenceFileStem(name: String): String =
+    name.trim().ifBlank { "untitled" }
+        .replace(Regex("""[\\/:*?"<>|]"""), "_")
+        .take(80)
+
+fun sequenceSlotField(slot: SequenceSlot): String = when (slot) {
+    SequenceSlot.Trigger -> "Triggers"
+    SequenceSlot.Condition -> "Conditions"
+    SequenceSlot.Item -> "Items"
+}
+
+fun insertSequenceSnippet(root: NinaNode, parentId: String, json: String, field: String? = null): Boolean {
+    val incoming = parseNinaSequence(json)
+    val parent = findSequenceNode(root, parentId) ?: return false
+    val spec = SequenceCatalog.specByClass(incoming.className)
+    val slotField = field ?: when {
+        spec?.slot == SequenceSlot.Trigger || incoming.className.contains("Trigger") -> "Triggers"
+        spec?.slot == SequenceSlot.Condition || incoming.className.endsWith("Condition") -> "Conditions"
+        else -> "Items"
+    }
+    if (parent.className == "SequenceRootContainer" && slotField != "Triggers") return false
+    val copy = cloneNode(incoming, HashMap())
+    copy.fields["Parent"] = NinaValue.Ref(parentId)
+    val slot = when (slotField) {
+        "Conditions" -> SequenceSlot.Condition
+        "Triggers" -> SequenceSlot.Trigger
+        else -> SequenceSlot.Item
+    }
+    val collection = ensureCollection(parent, slotField, slot)
+    parent.fields[slotField] = collection.copy(values = collection.values + NinaValue.Obj(copy))
+    return true
+}
+
+fun addSequenceNodeAt(
+    root: NinaNode,
+    parentId: String,
+    catalogId: String,
+    field: String,
+    index: Int
+): Boolean {
+    if (!addSequenceNode(root, parentId, catalogId)) return false
+    val added = findSequenceNode(root, parentId)?.collectionNodes(field)?.lastOrNull() ?: return true
+    val id = added.id ?: return true
+    relocateSequenceNode(root, id, parentId, field, index)
+    return true
+}
+
 fun formatRaHours(hours: Double): String {
     val sign = if (hours < 0) "-" else ""
     val abs = kotlin.math.abs(hours)
@@ -229,8 +419,12 @@ fun sequenceFieldText(node: NinaNode, path: String): String {
                 val angle = dsoPositionAngle(node) ?: return ""
                 return if (angle % 1.0 == 0.0) angle.toLong().toString() else angle.toString()
             }
+            "RAMinutes", "RASeconds", "DecMinutes", "DecSeconds" ->
+                return dsoCoordinateText(node, path)
         }
     }
+    if (path == "Binning") return sequenceBinningText(node)
+    if (path == "SelectedProvider") return sequenceTimeProviderId(node)
     val target = resolveFieldNode(node, path) ?: return ""
     val name = path.substringAfterLast('.')
     expressionDefinition(target, name)?.let { return it }
@@ -371,7 +565,12 @@ fun setSequenceField(root: NinaNode, id: String, path: String, text: String): Bo
             writeScalar(target, "PositionAngle", text)
             return true
         }
+        if (path in setOf("RAMinutes", "RASeconds", "DecMinutes", "DecSeconds")) {
+            return setDsoCoordinatePart(root, id, path, text)
+        }
     }
+    if (path == "Binning") return setSequenceBinning(root, id, text)
+    if (path == "SelectedProvider") return setSequenceTimeProvider(root, id, text)
     val target = resolveFieldNode(node, path) ?: return false
     writeScalar(target, path.substringAfterLast('.'), text)
     if (node.className in setOf("SmartExposure", "TakeManyExposures") && path == "Iterations") {

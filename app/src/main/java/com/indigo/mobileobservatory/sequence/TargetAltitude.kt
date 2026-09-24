@@ -37,7 +37,33 @@ fun targetAltitudeCurve(
     return samples
 }
 
-fun tonightWindow(now: Instant, zone: ZoneId = ZoneId.systemDefault()): Pair<Instant, Instant> {
+fun tonightWindow(
+    now: Instant,
+    latitudeDeg: Double? = null,
+    longitudeDeg: Double? = null,
+    zone: ZoneId = ZoneId.systemDefault()
+): Pair<Instant, Instant> {
+    if (latitudeDeg != null && longitudeDeg != null) {
+        val site = ObserverSite(latitudeDeg, longitudeDeg)
+        val searchFrom = now.minusSeconds(20L * 3600L)
+        val sunset = SequenceEphemeris.nextSunEvent(
+            site,
+            searchFrom,
+            SequenceEphemeris.SUNSET_ALTITUDE,
+            rising = false
+        )
+        val sunrise = sunset?.let {
+            SequenceEphemeris.nextSunEvent(
+                site,
+                Instant.ofEpochMilli(it).plusSeconds(120),
+                SequenceEphemeris.SUNSET_ALTITUDE,
+                rising = true
+            )
+        }
+        if (sunset != null && sunrise != null && sunrise > sunset) {
+            return Instant.ofEpochMilli(sunset) to Instant.ofEpochMilli(sunrise)
+        }
+    }
     val local = now.atZone(zone)
     val start = local.toLocalDate().atTime(18, 0).atZone(zone).toInstant()
     val end = local.toLocalDate().plusDays(1).atTime(6, 0).atZone(zone).toInstant()

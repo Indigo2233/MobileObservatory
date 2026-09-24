@@ -58,9 +58,14 @@ import com.indigo.mobileobservatory.sequence.SequenceRuntime
 import com.indigo.mobileobservatory.sequence.SequenceSkyTarget
 import com.indigo.mobileobservatory.sequence.SequenceSlot
 import com.indigo.mobileobservatory.sequence.addSequenceNode
+import com.indigo.mobileobservatory.sequence.addSequenceNodeAt
+import com.indigo.mobileobservatory.sequence.applyDsoSkyTarget
 import com.indigo.mobileobservatory.sequence.catalog.SequenceHardwareSnapshot
 import com.indigo.mobileobservatory.sequence.catalog.validateSequence
 import com.indigo.mobileobservatory.sequence.collectionNodes
+import com.indigo.mobileobservatory.sequence.dsoPositionAngle
+import com.indigo.mobileobservatory.sequence.dsoTargetName
+import com.indigo.mobileobservatory.sequence.findSequenceNode
 import com.indigo.mobileobservatory.sequence.setSequenceField
 import com.indigo.mobileobservatory.ui.screens.sequence.LocalSequenceDrag
 import com.indigo.mobileobservatory.ui.screens.sequence.SequenceAddPanel
@@ -82,6 +87,8 @@ fun SequenceAdvancedEditor(
     longitudeDeg: Double? = null,
     chartColor: Color = MaterialTheme.colorScheme.primary,
     skyTarget: SequenceSkyTarget? = null,
+    pointingRaHours: Double? = null,
+    pointingDecDeg: Double? = null,
     modifier: Modifier = Modifier
 ) {
     val generation by runtime.generation.collectAsState()
@@ -98,6 +105,7 @@ fun SequenceAdvancedEditor(
     val canUndo by runtime.canUndo.collectAsState()
     val canRedo by runtime.canRedo.collectAsState()
     val locked by runtime.locked.collectAsState()
+    val runState by runtime.state.collectAsState()
     val editing = enabled && !locked
     if (root == null || generation < 0) return
     drag.gapPx = with(density) { 8.dp.toPx() }
@@ -123,12 +131,36 @@ fun SequenceAdvancedEditor(
         longitudeDeg = longitudeDeg,
         chartColor = chartColor,
         skyTarget = skyTarget,
+        filterNames = hardware.filterNames,
+        pointingRaHours = pointingRaHours,
+        pointingDecDeg = pointingDecDeg,
+        runNodeId = runState.currentNodeId,
+        nodeStatus = runState.nodeStatus,
         onSelect = { selectedId = it },
         onAdd = { parent, slot -> adding = AddRequest(parent, slot) },
         onEdit = { runtime.editSequence(it) },
         onApplySkyTarget = { id ->
             if (skyTarget != null) runtime.applySkyTarget(id, skyTarget)
-        }
+        },
+        onApplyPointing = { id ->
+            val ra = pointingRaHours
+            val dec = pointingDecDeg
+            if (ra != null && dec != null) {
+                runtime.editSequence { root ->
+                    val node = findSequenceNode(root, id) ?: return@editSequence false
+                    applyDsoSkyTarget(
+                        root,
+                        id,
+                        dsoTargetName(node) ?: "Target",
+                        ra,
+                        dec,
+                        dsoPositionAngle(node) ?: 0.0
+                    )
+                }
+            }
+        },
+        onSaveTemplate = { id -> runtime.saveSetTemplate(id) },
+        onSaveTarget = { id -> runtime.saveTargetSnippet(id) }
     )
     val areas = root.collectionNodes("Items")
     val start = areas.firstOrNull { it.className == "StartAreaContainer" }
@@ -230,6 +262,22 @@ fun SequenceAdvancedEditor(
                                 )
                             }
                         },
+                        setTemplates = runtime.setTemplateNames(),
+                        savedTargets = runtime.savedTargetNames(),
+                        onInsertTemplate = { name ->
+                            val parent = adding?.parentId ?: start?.id
+                            if (parent != null && editing) runtime.insertSetTemplate(parent, name)
+                        },
+                        onInsertTarget = { name ->
+                            val parent = adding?.parentId ?: targets?.id
+                            if (parent != null && editing) runtime.insertSavedTarget(parent, name)
+                        },
+                        dragEnabled = editing,
+                        onDropCatalog = { catalogId, parent, field, index ->
+                            if (editing) {
+                                runtime.editSequence { addSequenceNodeAt(it, parent, catalogId, field, index) }
+                            }
+                        },
                         modifier = Modifier.weight(0.3f).fillMaxHeight().padding(start = 8.dp)
                     )
                 }
@@ -277,6 +325,16 @@ fun SequenceAdvancedEditor(
                     }
                     adding = null
                 },
+                setTemplates = runtime.setTemplateNames(),
+                savedTargets = runtime.savedTargetNames(),
+                onInsertTemplate = { name ->
+                    if (editing) runtime.insertSetTemplate(request.parentId, name)
+                    adding = null
+                },
+                onInsertTarget = { name ->
+                    if (editing) runtime.insertSavedTarget(request.parentId, name)
+                    adding = null
+                },
                 modifier = Modifier.fillMaxWidth().padding(16.dp)
             )
         }
@@ -318,6 +376,10 @@ private fun EditorBar(
                 contentDescription = stringResource(if (locked) R.string.sequence_unlock else R.string.sequence_lock)
             )
         }
+        TextButton(
+            onClick = { runtime.save(name.ifBlank { "sequence" }) },
+            enabled = editing
+        ) { Text(stringResource(R.string.sequence_save)) }
     }
 }
 

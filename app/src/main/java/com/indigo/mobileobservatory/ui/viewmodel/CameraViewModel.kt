@@ -35,6 +35,7 @@ import com.indigo.mobileobservatory.astro.ObserverSite
 import com.indigo.mobileobservatory.mount.SkyWatcherEquatorialMath
 import com.indigo.mobileobservatory.sequence.AutofocusRun
 import com.indigo.mobileobservatory.sequence.DeviceUnavailable
+import com.indigo.mobileobservatory.sequence.SequenceEphemeris
 import com.indigo.mobileobservatory.sequence.SequenceRuntime
 import com.indigo.mobileobservatory.sequence.SequenceSkyTarget
 import com.indigo.mobileobservatory.sequence.SequenceWorld
@@ -517,6 +518,23 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 override fun lastHfr(): Double? = sequenceRuntime.frames.value.lastOrNull()?.hfr
                 override fun filterName(): String? = currentFilterName()
+                override fun observerLatitudeDeg(): Double? = mountSite.value?.latitudeDeg
+                override fun observerLongitudeDeg(): Double? = mountSite.value?.longitudeDeg
+                override fun sunAltitudeDeg(): Double? {
+                    val site = mountSite.value ?: return null
+                    return SequenceEphemeris.sunAltitudeDeg(
+                        Instant.now(),
+                        ObserverSite(site.latitudeDeg, site.longitudeDeg)
+                    )
+                }
+                override fun moonAltitudeDeg(): Double? {
+                    val site = mountSite.value ?: return null
+                    return SequenceEphemeris.moonAltitudeDeg(
+                        Instant.now(),
+                        ObserverSite(site.latitudeDeg, site.longitudeDeg)
+                    )
+                }
+                override fun moonIlluminationPct(): Double = SequenceEphemeris.moonIlluminationPct(Instant.now())
             }
         )
     }

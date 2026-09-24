@@ -17,11 +17,15 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -60,8 +64,11 @@ import com.indigo.mobileobservatory.sequence.catalog.FieldKind
 import com.indigo.mobileobservatory.sequence.catalog.SequenceCatalog
 import com.indigo.mobileobservatory.sequence.collectionNodes
 import com.indigo.mobileobservatory.sequence.deleteSequenceNode
+import com.indigo.mobileobservatory.sequence.SEQUENCE_TIME_PROVIDER_IDS
 import com.indigo.mobileobservatory.sequence.SequenceSkyTarget
+import com.indigo.mobileobservatory.sequence.dsoCoordinateText
 import com.indigo.mobileobservatory.sequence.dsoDecDegrees
+import com.indigo.mobileobservatory.sequence.dsoExposureSummary
 import com.indigo.mobileobservatory.sequence.dsoPositionAngle
 import com.indigo.mobileobservatory.sequence.dsoRaHours
 import com.indigo.mobileobservatory.sequence.dsoTargetName
@@ -75,9 +82,12 @@ import com.indigo.mobileobservatory.sequence.resetSequenceProgress
 import com.indigo.mobileobservatory.sequence.sequenceExpanded
 import com.indigo.mobileobservatory.sequence.sequenceFieldText
 import com.indigo.mobileobservatory.sequence.sequenceHidesLoopSections
+import com.indigo.mobileobservatory.sequence.sequenceInherited
 import com.indigo.mobileobservatory.sequence.sequenceNodeDisabled
 import com.indigo.mobileobservatory.sequence.sequenceNodeTitle
 import com.indigo.mobileobservatory.sequence.sequenceParamSummary
+import com.indigo.mobileobservatory.sequence.sequenceTimeProviderLabel
+import com.indigo.mobileobservatory.sequence.setDsoCoordinatePart
 import com.indigo.mobileobservatory.sequence.setSequenceDisabled
 import com.indigo.mobileobservatory.sequence.setSequenceExpanded
 import com.indigo.mobileobservatory.sequence.setSequenceField
@@ -94,10 +104,18 @@ internal data class SequenceTreeActions(
     val longitudeDeg: Double?,
     val chartColor: Color,
     val skyTarget: SequenceSkyTarget? = null,
+    val filterNames: List<String> = emptyList(),
+    val pointingRaHours: Double? = null,
+    val pointingDecDeg: Double? = null,
+    val runNodeId: String? = null,
+    val nodeStatus: Map<String, String> = emptyMap(),
     val onSelect: (String) -> Unit,
     val onAdd: (String, SequenceSlot) -> Unit,
     val onEdit: ((NinaNode) -> Boolean) -> Unit,
-    val onApplySkyTarget: (String) -> Unit = {}
+    val onApplySkyTarget: (String) -> Unit = {},
+    val onApplyPointing: (String) -> Unit = {},
+    val onSaveTemplate: (String) -> Unit = {},
+    val onSaveTarget: (String) -> Unit = {}
 )
 
 private val nestColors = listOf(
@@ -290,26 +308,44 @@ private fun TargetBlock(target: NinaNode, depth: Int, actions: SequenceTreeActio
             )
             if (expanded && id != null) {
                 FieldEditor(target, SequenceEditField("TargetName", "目标名", "Target name"), actions)
-                FieldEditor(target, SequenceEditField("RAHours", "赤经时", "RA hours"), actions)
-                FieldEditor(target, SequenceEditField("DecDegrees", "赤纬", "Dec"), actions)
+                CoordinateHmsEditor(target, id, actions)
                 FieldEditor(target, SequenceEditField("PositionAngle", "位置角", "Position angle"), actions)
                 val sky = actions.skyTarget
-                TextButton(
-                    onClick = { actions.onApplySkyTarget(id) },
-                    enabled = actions.enabled && sky != null
-                ) {
-                    Text(
-                        if (sky == null) {
-                            stringResource(R.string.sequence_from_star_map_empty)
-                        } else {
-                            stringResource(R.string.sequence_from_star_map, sky.name)
-                        }
-                    )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(
+                        onClick = { actions.onApplySkyTarget(id) },
+                        enabled = actions.enabled && sky != null
+                    ) {
+                        Text(
+                            if (sky == null) {
+                                stringResource(R.string.sequence_from_star_map_empty)
+                            } else {
+                                stringResource(R.string.sequence_from_star_map, sky.name)
+                            }
+                        )
+                    }
+                    TextButton(
+                        onClick = { actions.onApplyPointing(id) },
+                        enabled = actions.enabled && actions.pointingRaHours != null && actions.pointingDecDeg != null
+                    ) {
+                        Text(stringResource(R.string.sequence_from_pointing))
+                    }
+                }
+                val exposures = dsoExposureSummary(target)
+                if (exposures.isNotEmpty()) {
+                    Text(stringResource(R.string.sequence_exposure_summary), style = MaterialTheme.typography.labelLarge)
+                    exposures.forEach { line ->
+                        Text(
+                            "${line.filter}  ${line.count}×${line.seconds}s  ${line.imageType}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                    }
                 }
                 val lat = actions.latitudeDeg
                 val lon = actions.longitudeDeg
                 if (lat != null && lon != null && ra != null && dec != null) {
-                    val window = tonightWindow(Instant.now())
+                    val window = tonightWindow(Instant.now(), lat, lon)
                     val curve = targetAltitudeCurve(ra, dec, lat, lon, window.first, window.second).map { it.altitudeDeg }
                     SequenceSparkline(curve, actions.chartColor, Modifier.fillMaxWidth().height(96.dp))
                 }
@@ -381,14 +417,16 @@ private fun InstructionRow(
                     modifier = Modifier.size(18.dp)
                 )
             }
+            RunStatusIcon(id?.let { actions.nodeStatus[it] }, id == actions.runNodeId)
         }
         if (selected && id != null) {
             ActionBar(node, id, actions)
             if (showFields && !disabled) {
+                val inherited = sequenceInherited(node)
                 editableFields(node).forEach { spec ->
-                    if (spec.path != "ErrorBehavior" && spec.path != "Attempts") {
-                        FieldEditor(node, spec, actions)
-                    }
+                    if (spec.path == "ErrorBehavior" || spec.path == "Attempts") return@forEach
+                    if (inherited && spec.path in setOf("RAHours", "DecDegrees")) return@forEach
+                    FieldEditor(node, spec, actions)
                 }
             }
             nodeIssues.forEach {
@@ -428,6 +466,22 @@ private fun ActionBar(node: NinaNode, id: String, actions: SequenceTreeActions) 
             TextButton(onClick = { actions.onEdit { deleteSequenceNode(it, id) } }, enabled = actions.enabled) {
                 Text(stringResource(R.string.sequence_delete))
             }
+            if (SequenceCatalog.isSet(node.className) && node.className !in setOf(
+                    "SequenceRootContainer",
+                    "StartAreaContainer",
+                    "TargetAreaContainer",
+                    "EndAreaContainer"
+                )
+            ) {
+                TextButton(onClick = { actions.onSaveTemplate(id) }, enabled = actions.enabled) {
+                    Text(stringResource(R.string.sequence_save_as_template))
+                }
+            }
+            if (node.className == "DeepSkyObjectContainer") {
+                TextButton(onClick = { actions.onSaveTarget(id) }, enabled = actions.enabled) {
+                    Text(stringResource(R.string.sequence_save_as_target))
+                }
+            }
         }
     }
 }
@@ -460,20 +514,72 @@ private fun FieldEditor(node: NinaNode, field: SequenceEditField, actions: Seque
     var text by remember(id, field.path) { mutableStateOf(sequenceFieldText(node, field.path)) }
     val label = (if (actions.chinese) field.labelZh else field.labelEn) + (spec?.unit?.let { " ($it)" } ?: "")
     if (field.path == "ImageType") {
-        val options = listOf("LIGHT", "FLAT", "DARK", "BIAS", "SNAPSHOT")
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            options.forEach { value ->
-                FilterChip(
-                    selected = text == value,
-                    onClick = {
-                        text = value
-                        if (actions.enabled) actions.onEdit { setSequenceField(it, id, field.path, value) }
-                    },
-                    label = { Text(value) },
-                    enabled = actions.enabled
-                )
+        ChoiceChips(
+            options = listOf("LIGHT", "FLAT", "DARK", "BIAS", "SNAPSHOT").map { it to it },
+            selected = text,
+            enabled = actions.enabled,
+            onPick = { value ->
+                text = value
+                actions.onEdit { setSequenceField(it, id, field.path, value) }
             }
-        }
+        )
+        return
+    }
+    if (field.path == "TrackingMode") {
+        val options = listOf(
+            "0" to stringResource(R.string.sequence_track_sidereal),
+            "1" to stringResource(R.string.sequence_track_lunar),
+            "2" to stringResource(R.string.sequence_track_solar),
+            "3" to stringResource(R.string.sequence_track_king),
+            "5" to stringResource(R.string.sequence_track_stopped)
+        )
+        ChoiceChips(
+            options = options,
+            selected = text.ifBlank { "0" },
+            enabled = actions.enabled,
+            onPick = { value ->
+                text = value
+                actions.onEdit { setSequenceField(it, id, field.path, value) }
+            }
+        )
+        return
+    }
+    if (field.path == "Binning") {
+        ChoiceChips(
+            options = listOf("1x1", "2x2", "3x3", "4x4").map { it to it },
+            selected = text.ifBlank { "1x1" },
+            enabled = actions.enabled,
+            onPick = { value ->
+                text = value
+                actions.onEdit { setSequenceField(it, id, field.path, value) }
+            }
+        )
+        return
+    }
+    if (field.path == "ComboBoxText" && actions.filterNames.isNotEmpty()) {
+        ChoiceChips(
+            options = actions.filterNames.map { name -> name to name },
+            selected = text,
+            enabled = actions.enabled,
+            onPick = { value ->
+                text = value
+                actions.onEdit { setSequenceField(it, id, field.path, value) }
+            }
+        )
+        return
+    }
+    if (field.path == "SelectedProvider") {
+        ChoiceChips(
+            options = SEQUENCE_TIME_PROVIDER_IDS.map { provider ->
+                provider to sequenceTimeProviderLabel(provider, actions.chinese)
+            },
+            selected = text.ifBlank { "TimeProvider" },
+            enabled = actions.enabled,
+            onPick = { value ->
+                text = value
+                actions.onEdit { setSequenceField(it, id, field.path, value) }
+            }
+        )
         return
     }
     if (spec?.kind == FieldKind.Bool) {
@@ -508,6 +614,74 @@ private fun FieldEditor(node: NinaNode, field: SequenceEditField, actions: Seque
             (spec?.max != null && text.toDoubleOrNull()?.let { it > spec.max } == true),
         modifier = Modifier.fillMaxWidth()
     )
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ChoiceChips(
+    options: List<Pair<String, String>>,
+    selected: String,
+    enabled: Boolean,
+    onPick: (String) -> Unit
+) {
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        options.forEach { (value, label) ->
+            FilterChip(
+                selected = selected == value,
+                onClick = { if (enabled) onPick(value) },
+                label = { Text(label) },
+                enabled = enabled
+            )
+        }
+    }
+}
+
+@Composable
+private fun CoordinateHmsEditor(target: NinaNode, id: String, actions: SequenceTreeActions) {
+    Text(stringResource(R.string.sequence_ra_hms), style = MaterialTheme.typography.labelLarge)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        CoordinatePartField(target, id, "RAHours", "h", actions, Modifier.weight(1f))
+        CoordinatePartField(target, id, "RAMinutes", "m", actions, Modifier.weight(1f))
+        CoordinatePartField(target, id, "RASeconds", "s", actions, Modifier.weight(1f))
+    }
+    Text(stringResource(R.string.sequence_dec_dms), style = MaterialTheme.typography.labelLarge)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        CoordinatePartField(target, id, "DecDegrees", "°", actions, Modifier.weight(1f))
+        CoordinatePartField(target, id, "DecMinutes", "′", actions, Modifier.weight(1f))
+        CoordinatePartField(target, id, "DecSeconds", "″", actions, Modifier.weight(1f))
+    }
+}
+
+@Composable
+private fun CoordinatePartField(
+    target: NinaNode,
+    id: String,
+    part: String,
+    unit: String,
+    actions: SequenceTreeActions,
+    modifier: Modifier = Modifier
+) {
+    var text by remember(id, part) { mutableStateOf(dsoCoordinateText(target, part)) }
+    OutlinedTextField(
+        value = text,
+        onValueChange = { next ->
+            text = next
+            if (actions.enabled) actions.onEdit { setDsoCoordinatePart(it, id, part, next) }
+        },
+        enabled = actions.enabled,
+        label = { Text(unit) },
+        modifier = modifier
+    )
+}
+
+@Composable
+private fun RunStatusIcon(status: String?, running: Boolean) {
+    when {
+        running || status == "RUNNING" -> CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+        status == "FINISHED" -> Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
+        status == "FAILED" -> Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.error)
+        status == "SKIPPED" -> Icon(Icons.Default.SkipNext, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.outline)
+    }
 }
 
 @Composable
@@ -550,6 +724,43 @@ private fun DragHandle(
         contentAlignment = Alignment.Center
     ) {
         Icon(Icons.Default.DragHandle, contentDescription = stringResource(R.string.sequence_drag), tint = MaterialTheme.colorScheme.outline)
+    }
+}
+
+internal suspend fun PointerInputScope.trackClickOrDrag(
+    slop: Float,
+    onClick: () -> Unit,
+    onStart: (Offset) -> Unit,
+    onMove: (Offset) -> Unit,
+    onEnd: () -> Unit
+) {
+    awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false)
+        down.consume()
+        val pointerId = down.id
+        var dragging = false
+        var last = down.position
+        while (true) {
+            val event = awaitPointerEvent()
+            val change = event.changes.firstOrNull { it.id == pointerId } ?: break
+            if (!change.pressed) {
+                if (dragging) onEnd() else onClick()
+                break
+            }
+            val delta = change.position - change.previousPosition
+            if (!dragging) {
+                val travel = (change.position - down.position).getDistance()
+                if (travel >= slop) {
+                    dragging = true
+                    onStart(last)
+                    onMove(change.position - last)
+                    last = change.position
+                }
+            } else if (delta != Offset.Zero) {
+                onMove(delta)
+            }
+            change.consume()
+        }
     }
 }
 

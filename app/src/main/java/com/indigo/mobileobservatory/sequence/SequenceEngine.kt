@@ -5,7 +5,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.yield
+import kotlinx.coroutines.delay
 
 enum class InstructionErrorBehavior {
     ContinueOnError,
@@ -27,7 +27,9 @@ data class SequenceRunState(
     val phase: SequencePhase,
     val currentClassName: String? = null,
     val message: String? = null,
-    val framesDone: Int = 0
+    val framesDone: Int = 0,
+    val currentNodeId: String? = null,
+    val nodeStatus: Map<String, String> = emptyMap()
 )
 
 interface SequenceDevicePort {
@@ -159,9 +161,19 @@ class SequenceEngine(
     private var filterAtAutofocus: String? = null
     private var hfrAtAutofocus: Double? = null
     private var runStartedAt = 0L
+    private var currentNodeId: String? = null
+
+    private fun snapshotStatus(): Map<String, String> =
+        status.mapNotNull { (node, value) -> node.id?.let { it to value.name } }.toMap()
+
+    private fun snapshot(
+        phase: SequencePhase,
+        className: String? = null,
+        message: String? = null
+    ) = SequenceRunState(phase, className, message, framesDone, currentNodeId, snapshotStatus())
 
     private fun publish(phase: SequencePhase, className: String? = null, message: String? = null) {
-        commit(SequenceRunState(phase, className, message, framesDone))
+        commit(snapshot(phase, className, message))
     }
 
     private fun commit(next: SequenceRunState) {
@@ -199,13 +211,14 @@ class SequenceEngine(
                     Outcome.Continue, Outcome.SkipRest -> Unit
                     Outcome.JumpToEnd -> break
                     Outcome.Abort -> {
-                        commit(SequenceRunState(SequencePhase.Failed, area.className, "AbortOnError", framesDone))
+                        commit(snapshot(SequencePhase.Failed, area.className, "AbortOnError"))
                         return state
                     }
                 }
             }
             if (end != null && status[end] != EntityStatus.FINISHED) runNode(end)
-            commit(SequenceRunState(SequencePhase.Completed, framesDone = framesDone))
+            currentNodeId = null
+            commit(snapshot(SequencePhase.Completed))
         } catch (_: SequenceSkipToEnd) {
             control.clearSkipToEnd()
             if (end != null && status[end] != EntityStatus.FINISHED && status[end] != EntityStatus.RUNNING) {
@@ -215,9 +228,11 @@ class SequenceEngine(
                 } catch (_: SequenceSkipToEnd) {
                 }
             }
-            commit(SequenceRunState(SequencePhase.Completed, framesDone = framesDone))
+            currentNodeId = null
+            commit(snapshot(SequencePhase.Completed))
         } catch (_: SequenceStopped) {
-            commit(SequenceRunState(SequencePhase.Stopped, framesDone = framesDone))
+            currentNodeId = null
+            commit(snapshot(SequencePhase.Stopped))
         }
         return state
     }
@@ -232,6 +247,9 @@ class SequenceEngine(
         if (node.className == "ParallelContainer") return pauseOnUnknown(node)
         if (node.className == "ParkScope" || node.className == "UnparkScope") {
             return pauseOnUnknown(node, "mount cannot park")
+        }
+        if (node.className == "MessageBox") {
+            return pauseOnUnknown(node, node.textField("Text") ?: "message")
         }
         if (isContainer(node)) {
             status[node] = EntityStatus.RUNNING
@@ -313,6 +331,7 @@ class SequenceEngine(
     }
 
     private suspend fun executeInstruction(node: NinaNode): Outcome {
+        currentNodeId = node.id
         status[node] = EntityStatus.RUNNING
         publish(SequencePhase.Running, node.className)
         val attempts = (node.intField("Attempts") ?: 1).coerceAtLeast(1)
@@ -325,6 +344,7 @@ class SequenceEngine(
                 return Outcome.Continue
             }
             val skippedByUser = AtomicBoolean(false)
+            val conditionBroke = AtomicBoolean(false)
             try {
                 coroutineScope {
                     val job = launch { port.execute(node, node.className) }
@@ -340,7 +360,13 @@ class SequenceEngine(
                                 job.cancel()
                                 break
                             }
-                            yield()
+                            val parent = parents[node]
+                            if (parent != null && !canContinue(parent)) {
+                                conditionBroke.set(true)
+                                job.cancel()
+                                break
+                            }
+                            delay(500)
                         }
                     }
                     job.join()
@@ -372,6 +398,10 @@ class SequenceEngine(
                     status[node] = EntityStatus.SKIPPED
                     return Outcome.Continue
                 }
+                if (conditionBroke.get()) {
+                    status[node] = EntityStatus.SKIPPED
+                    return Outcome.SkipRest
+                }
                 throw SequenceStopped()
             } catch (_: Exception) {
                 lastFailure = true
@@ -389,7 +419,8 @@ class SequenceEngine(
     }
 
     private suspend fun pauseOnUnknown(node: NinaNode, message: String = "unsupported"): Outcome {
-        commit(SequenceRunState(SequencePhase.Paused, node.className, message, framesDone))
+        currentNodeId = node.id
+        commit(snapshot(SequencePhase.Paused, node.className, message))
         control.holdUntilSkipped()
         control.checkpoint()
         control.consumeSkip()
@@ -408,6 +439,9 @@ class SequenceEngine(
             temperatureC = world.temperatureC(),
             lastHfr = world.lastHfr(),
             filterName = world.filterName(),
+            sunAltitudeDeg = world.sunAltitudeDeg(),
+            moonAltitudeDeg = world.moonAltitudeDeg(),
+            moonIlluminationPct = world.moonIlluminationPct(),
             framesDone = framesDone,
             exposuresSinceCenter = exposuresSinceCenter,
             minutesSinceAutofocus = (now - (if (lastAutofocusAt == 0L) runStartedAt else lastAutofocusAt)) / 60_000.0,
@@ -558,9 +592,15 @@ private val knownInstructions = setOf(
     "OpenCover",
     "CloseCover",
     "MoveFocuserAbsolute",
+    "MoveFocuserRelative",
     "RunAutofocus",
     "WaitForTime",
-    "WaitForAltitude"
+    "WaitForTimeSpan",
+    "WaitForAltitude",
+    "WaitUntilAboveHorizon",
+    "WaitForSunAltitude",
+    "WaitForMoonAltitude",
+    "Annotation"
 )
 
 interface SequenceWorld {
@@ -571,6 +611,11 @@ interface SequenceWorld {
     fun temperatureC(): Double? = null
     fun lastHfr(): Double? = null
     fun filterName(): String? = null
+    fun sunAltitudeDeg(): Double? = null
+    fun moonAltitudeDeg(): Double? = null
+    fun moonIlluminationPct(): Double? = null
+    fun observerLatitudeDeg(): Double? = null
+    fun observerLongitudeDeg(): Double? = null
 
     companion object {
         val System = object : SequenceWorld {}

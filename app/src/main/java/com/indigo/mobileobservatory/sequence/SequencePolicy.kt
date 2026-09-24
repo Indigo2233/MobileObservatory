@@ -8,6 +8,9 @@ data class SequenceSignals(
     val temperatureC: Double? = null,
     val lastHfr: Double? = null,
     val filterName: String? = null,
+    val sunAltitudeDeg: Double? = null,
+    val moonAltitudeDeg: Double? = null,
+    val moonIlluminationPct: Double? = null,
     val framesDone: Int = 0,
     val exposuresSinceCenter: Int = 0,
     val exposuresSinceAutofocus: Int = 0,
@@ -28,7 +31,11 @@ fun knownCondition(className: String): Boolean = className in setOf(
     "LoopCondition",
     "AltitudeCondition",
     "TimeCondition",
-    "TimeSpanCondition"
+    "TimeSpanCondition",
+    "AboveHorizonCondition",
+    "SunAltitudeCondition",
+    "MoonAltitudeCondition",
+    "MoonIlluminationCondition"
 )
 
 fun loopAllows(condition: NinaNode, completed: Int): Boolean {
@@ -38,10 +45,23 @@ fun loopAllows(condition: NinaNode, completed: Int): Boolean {
 
 fun limitAllows(condition: NinaNode, signals: SequenceSignals, startedAtMillis: Long): Boolean {
     return when (condition.className) {
-        "AltitudeCondition" -> {
+        "AltitudeCondition", "AboveHorizonCondition" -> {
             val altitude = signals.altitudeDeg ?: return true
             if (signals.altitudeRising == true) return true
             altitude >= altitudeOffset(condition)
+        }
+        "SunAltitudeCondition" -> {
+            val altitude = signals.sunAltitudeDeg ?: return true
+            !compareOrdered(altitude, altitudeOffset(condition), altitudeComparator(condition))
+        }
+        "MoonAltitudeCondition" -> {
+            val altitude = signals.moonAltitudeDeg ?: return true
+            !compareOrdered(altitude, altitudeOffset(condition), altitudeComparator(condition))
+        }
+        "MoonIlluminationCondition" -> {
+            val illumination = signals.moonIlluminationPct ?: return true
+            val limit = expressionNumber(condition, "UserMoonIllumination") ?: 0.0
+            !compareOrdered(illumination, limit, condition.intField("Comparator") ?: 3)
         }
         "TimeCondition" -> !localTimeReached(condition, signals.nowMillis)
         "TimeSpanCondition" -> {
@@ -52,6 +72,22 @@ fun limitAllows(condition: NinaNode, signals: SequenceSignals, startedAtMillis: 
         }
         else -> true
     }
+}
+
+fun altitudeComparator(node: NinaNode): Int {
+    node.intField("Comparator")?.let { return it }
+    val data = (node.fields["Data"] as? NinaValue.Obj)?.node
+    return data?.intField("Comparator") ?: 3
+}
+
+fun compareOrdered(value: Double, threshold: Double, comparator: Int): Boolean = when (comparator) {
+    0 -> kotlin.math.abs(value - threshold) < 0.5
+    1 -> value < threshold
+    2 -> value <= threshold
+    3 -> value > threshold
+    4 -> value >= threshold
+    5 -> kotlin.math.abs(value - threshold) >= 0.5
+    else -> value > threshold
 }
 
 fun altitudeOffset(condition: NinaNode): Double {

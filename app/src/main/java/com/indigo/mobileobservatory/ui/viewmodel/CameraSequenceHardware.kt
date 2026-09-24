@@ -112,6 +112,8 @@ class CameraSequenceHardware(
 
     override fun decDeg(): Double? = viewModel.mountCoordinates.value?.decDeg
 
+    override fun focuserPosition(): Int = viewModel.eafPosition.value
+
     private suspend fun awaitNear(raHours: Double, decDeg: Double, timeoutMs: Long) {
         val deadline = System.currentTimeMillis() + timeoutMs
         var sawBusy = false

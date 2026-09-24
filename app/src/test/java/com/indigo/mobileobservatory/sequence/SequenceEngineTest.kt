@@ -1,6 +1,7 @@
 package com.indigo.mobileobservatory.sequence
 
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -155,6 +156,24 @@ class SequenceEngineTest {
     }
 
     @Test
+    fun `annotation runs and a message box pauses until skip`() = runTest {
+        val root = emptyAdvancedSequence("Tonight")
+        val startId = checkNotNull(root.childItems()[0].id)
+        assertTrue(addSequenceNode(root, startId, "Annotation"))
+        assertTrue(addSequenceNode(root, startId, "MessageBox"))
+        val port = RecordingPort()
+        val engine = SequenceEngine(port)
+        val job = launch { engine.run(root) }
+        testScheduler.advanceUntilIdle()
+        assertEquals(SequencePhase.Paused, engine.state.phase)
+        assertEquals("MessageBox", engine.state.currentClassName)
+        assertEquals(listOf("Annotation"), port.calls)
+        engine.control.requestSkip()
+        job.join()
+        assertEquals(SequencePhase.Completed, engine.state.phase)
+    }
+
+    @Test
     fun `disabled exposure is skipped and later frames still run`() = runTest {
         val root = sample()
         root.find("TakeExposure").first().fields["Status"] =
@@ -234,6 +253,31 @@ class SequenceEngineTest {
         assertEquals(listOf(5.0, 7.0), port.exposures)
     }
 
+    @Test
+    fun `sun altitude condition skips a target once the sun is up`() = runTest {
+        val world = ClockWorld()
+        world.sun = 12.0
+        val port = RecordingPort()
+        val state = SequenceEngine(port, world = world).run(sunLimited())
+        assertEquals(SequencePhase.Completed, state.phase)
+        assertEquals(listOf(7.0), port.exposures)
+    }
+
+    @Test
+    fun `condition watchdog stops an in-flight exposure and the next target still runs`() = runTest {
+        val world = ClockWorld()
+        world.altitude = 50.0
+        val port = RecordingPort()
+        port.holdFirstExposure = true
+        port.beforeExposure = { world.altitude = 10.0 }
+        val engine = SequenceEngine(port, world = world)
+        val job = launch { engine.run(twoTargets()) }
+        job.join()
+        assertEquals(SequencePhase.Completed, engine.state.phase)
+        assertEquals(listOf(5.0, 7.0), port.exposures)
+        assertEquals(listOf(7.0), port.finishedExposures)
+    }
+
     private fun sample(endExposure: Boolean = false): NinaNode {
         val root = SimpleSequenceDraft(
             title = "M42",
@@ -282,6 +326,7 @@ private class RecordingPort(
     val calls = mutableListOf<String>()
     var beforeExposure: ((Int) -> Unit)? = null
     var afterExposure: ((Int) -> Unit)? = null
+    var holdFirstExposure = false
     private var exposureStarts = 0
 
     override suspend fun execute(instruction: NinaNode, className: String) {
@@ -304,6 +349,7 @@ private class RecordingPort(
                     control?.requestSkipToEnd()
                     awaitCancellation()
                 }
+                if (holdFirstExposure && exposureStarts == 1) delay(10_000)
                 finishedExposures += seconds
                 afterExposure?.invoke(finishedExposures.size)
             }
@@ -315,11 +361,40 @@ private class ClockWorld : SequenceWorld {
     var altitude: Double? = null
     var rising: Boolean? = null
     var meridianMinutes: Double? = null
+    var sun: Double? = null
     var now: Long = 0L
     override fun altitudeDeg(): Double? = altitude
     override fun altitudeRising(): Boolean? = rising
     override fun minutesToMeridian(): Double? = meridianMinutes
+    override fun sunAltitudeDeg(): Double? = sun
     override fun nowMillis(): Long = now
+}
+
+private fun sunLimited(): NinaNode {
+    val low = targetContainer("low", 5.0, altitudeOffset = null)
+    val data = NinaNode(
+        type = "NINA.Sequencer.Utility.WaitLoopData, NINA.Sequencer",
+        id = "sun-data",
+        fields = linkedMapOf(
+            "Offset" to NinaValue.Num(0.0, true),
+            "Comparator" to NinaValue.Num(3.0, true)
+        )
+    )
+    low.fields["Conditions"] = NinaValue.Collection(
+        "",
+        null,
+        listOf(
+            NinaValue.Obj(
+                NinaNode(
+                    type = "NINA.Sequencer.Conditions.SunAltitudeCondition, NINA.Sequencer",
+                    id = "sun-alt",
+                    fields = linkedMapOf("Data" to NinaValue.Obj(data))
+                )
+            )
+        )
+    )
+    val next = targetContainer("next", 7.0, altitudeOffset = null)
+    return sequenceRoot(listOf(low, next))
 }
 
 private fun twoTargets(): NinaNode {

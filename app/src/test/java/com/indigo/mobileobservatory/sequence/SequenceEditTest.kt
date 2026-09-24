@@ -58,6 +58,55 @@ class SequenceEditTest {
         assertEquals(-5.391, dsoDecDegrees(target)!!, 1e-4)
         assertEquals(15.0, dsoPositionAngle(target)!!, 1e-9)
         assertEquals("15", sequenceFieldText(target, "PositionAngle"))
+        assertTrue(setDsoCoordinatePart(root, id, "RAHours", "5"))
+        assertTrue(setDsoCoordinatePart(root, id, "RAMinutes", "35"))
+        assertTrue(setDsoCoordinatePart(root, id, "RASeconds", "17"))
+        assertEquals(5.0 + 35.0 / 60.0 + 17.0 / 3600.0, dsoRaHours(target)!!, 1e-6)
+    }
+
+    @Test
+    fun `binning time provider and exposure summary follow the nina fields`() {
+        val root = emptyAdvancedSequence("Tonight")
+        val startId = checkNotNull(root.childItems()[0].id)
+        val areaId = checkNotNull(root.childItems()[1].id)
+        assertTrue(addSequenceNode(root, areaId, "DeepSkyObjectContainer"))
+        val target = find(root, "DeepSkyObjectContainer").single()
+        assertTrue(addSequenceNode(root, checkNotNull(target.id), "SwitchFilter"))
+        assertTrue(addSequenceNode(root, checkNotNull(target.id), "TakeExposure"))
+        val exposure = find(root, "TakeExposure").single()
+        assertEquals("1x1", sequenceBinningText(exposure))
+        assertTrue(setSequenceBinning(root, checkNotNull(exposure.id), "2x2"))
+        assertEquals("2x2", sequenceBinningText(exposure))
+        val summary = dsoExposureSummary(target)
+        assertEquals(1, summary.size)
+        assertEquals("L", summary.single().filter)
+        assertTrue(addSequenceNode(root, startId, "WaitForTime"))
+        val wait = find(root, "WaitForTime").single()
+        assertEquals("TimeProvider", sequenceTimeProviderId(wait))
+        val now = 1_700_000_000_000L
+        assertTrue(setSequenceField(root, checkNotNull(wait.id), "Hours", "6"))
+        assertTrue(nextClockTimeMillis(wait, now) != null)
+        assertTrue(setSequenceTimeProvider(root, checkNotNull(wait.id), "SunsetProvider"))
+        assertEquals("SunsetProvider", sequenceTimeProviderId(wait))
+        assertEquals(null, nextClockTimeMillis(wait, now))
+        assertTrue(nextClockTimeMillis(wait, now, 39.9, 116.4) != null)
+    }
+
+    @Test
+    fun `snippets clone into a parent and catalog drops land at the hover index`() {
+        val root = emptyAdvancedSequence("Tonight")
+        val startId = checkNotNull(root.childItems()[0].id)
+        val start = root.childItems()[0]
+        assertTrue(addSequenceNode(root, startId, "Annotation"))
+        assertTrue(addSequenceNode(root, startId, "TakeExposure"))
+        val exposure = find(root, "TakeExposure").single()
+        val json = exposure.toJson()
+        assertTrue(insertSequenceSnippet(root, startId, json, "Items"))
+        val copies = find(root, "TakeExposure")
+        assertEquals(2, copies.size)
+        assertTrue(copies[0].id != copies[1].id)
+        assertTrue(addSequenceNodeAt(root, startId, "WaitForTimeSpan", "Items", 0))
+        assertEquals("WaitForTimeSpan", start.childItems().first().className)
     }
 
     @Test

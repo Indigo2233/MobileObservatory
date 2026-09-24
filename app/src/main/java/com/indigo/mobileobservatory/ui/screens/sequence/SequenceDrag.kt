@@ -25,6 +25,7 @@ internal class SequenceDragState {
     var gapPx by mutableStateOf(16f)
     var trashBounds by mutableStateOf(Rect.Zero)
     var overTrash by mutableStateOf(false)
+    var catalogId by mutableStateOf<String?>(null)
     private val forbidden = HashSet<String>()
     private val rows = mutableStateMapOf<String, DragRow>()
     private val lists = mutableStateMapOf<String, DragList>()
@@ -50,6 +51,7 @@ internal class SequenceDragState {
     fun begin(node: NinaNode, field: String, title: String, origin: Offset) {
         active = true
         nodeId = node.id
+        catalogId = null
         this.field = field
         this.title = title
         point = origin
@@ -59,9 +61,22 @@ internal class SequenceDragState {
         updateHover()
     }
 
+    fun beginCatalog(id: String, field: String, title: String, origin: Offset) {
+        active = true
+        nodeId = null
+        catalogId = id
+        this.field = field
+        this.title = title
+        point = origin
+        overTrash = false
+        forbidden.clear()
+        updateHover()
+    }
+
     fun cancel() {
         active = false
         nodeId = null
+        catalogId = null
         hoverParent = null
         overTrash = false
         forbidden.clear()

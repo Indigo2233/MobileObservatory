@@ -53,6 +53,7 @@ interface SequenceHardware {
     fun guidingLocked(): Boolean
     fun raHours(): Double?
     fun decDeg(): Double?
+    fun focuserPosition(): Int = 0
 }
 
 class SequenceRuntime(
@@ -159,16 +160,75 @@ class SequenceRuntime(
 
     fun templateNames(): List<String> {
         templatesDir.mkdirs()
-        return templatesDir.listFiles { file -> file.extension == "json" }
+        return templatesDir.listFiles { file -> file.isFile && file.extension == "json" }
             ?.map { it.nameWithoutExtension }
             ?.sorted()
             ?: emptyList()
     }
 
+    fun setTemplateNames(): List<String> = listSnippetNames(File(templatesDir, "templates"), ".template.json")
+
+    fun savedTargetNames(): List<String> = listSnippetNames(File(templatesDir, "targets"), ".json")
+
     fun save(name: String) {
         templatesDir.mkdirs()
         val root = currentDocument()
-        File(templatesDir, "$name.json").writeText(root.toJson())
+        File(templatesDir, "${sequenceFileStem(name)}.json").writeText(root.toJson())
+        _generation.value = _generation.value + 1
+    }
+
+    fun saveSetTemplate(id: String): Boolean {
+        val node = findSequenceNode(currentDocument(), id) ?: return false
+        if (sequenceStructural(node)) return false
+        val name = sequenceFileStem(node.textField("Name") ?: node.className)
+        val dir = File(templatesDir, "templates")
+        dir.mkdirs()
+        File(dir, "$name.template.json").writeText(node.toJson())
+        _generation.value = _generation.value + 1
+        return true
+    }
+
+    fun saveTargetSnippet(id: String): Boolean {
+        val node = findSequenceNode(currentDocument(), id) ?: return false
+        if (node.className != "DeepSkyObjectContainer") return false
+        val name = sequenceFileStem(dsoTargetName(node) ?: node.textField("Name") ?: "target")
+        val dir = File(templatesDir, "targets")
+        dir.mkdirs()
+        File(dir, "$name.json").writeText(node.toJson())
+        _generation.value = _generation.value + 1
+        return true
+    }
+
+    fun insertSetTemplate(parentId: String, name: String): Boolean {
+        val file = File(File(templatesDir, "templates"), "$name.template.json")
+        if (!file.isFile) return false
+        var ok = false
+        editSequence { root ->
+            ok = insertSequenceSnippet(root, parentId, file.readText())
+            ok
+        }
+        return ok
+    }
+
+    fun insertSavedTarget(parentId: String, name: String): Boolean {
+        val file = File(File(templatesDir, "targets"), "$name.json")
+        if (!file.isFile) return false
+        var ok = false
+        editSequence { root ->
+            ok = insertSequenceSnippet(root, parentId, file.readText(), "Items")
+            ok
+        }
+        return ok
+    }
+
+    private fun listSnippetNames(dir: File, suffix: String): List<String> {
+        if (!dir.isDirectory) return emptyList()
+        return dir.listFiles { file -> file.isFile && file.name.endsWith(suffix) }
+            ?.map { file ->
+                if (suffix == ".json") file.nameWithoutExtension else file.name.removeSuffix(suffix)
+            }
+            ?.sorted()
+            ?: emptyList()
     }
 
     fun load(name: String) {
@@ -247,10 +307,12 @@ class SequenceRuntime(
             "SwitchFilter" -> hardware.switchFilter(instruction.textField("ComboBoxText").orEmpty())
             "CoolCamera" -> hardware.cool(expressionNumber(instruction, "Temperature") ?: 0.0)
             "WarmCamera" -> hardware.warm()
-            "SlewScopeToRaDec" -> hardware.slew(
-                instruction.doubleField("RAHours") ?: target?.first ?: hardware.raHours() ?: 0.0,
-                instruction.doubleField("DecDegrees") ?: target?.second ?: hardware.decDeg() ?: 0.0
-            )
+            "SlewScopeToRaDec" -> {
+                val inherited = (instruction.fields["Inherited"] as? NinaValue.Bool)?.value == true
+                val ra = if (inherited) target?.first else instruction.doubleField("RAHours") ?: target?.first
+                val dec = if (inherited) target?.second else instruction.doubleField("DecDegrees") ?: target?.second
+                hardware.slew(ra ?: hardware.raHours() ?: 0.0, dec ?: hardware.decDeg() ?: 0.0)
+            }
             "Center", "CenterAndRotate" -> hardware.center(target?.first ?: 0.0, target?.second ?: 0.0)
             "StartGuiding" -> {
                 guidingWanted = true
@@ -265,13 +327,44 @@ class SequenceRuntime(
             "FindHome" -> hardware.goHome()
             "OpenCover" -> hardware.cover(true)
             "CloseCover" -> hardware.cover(false)
-            "MoveFocuserAbsolute" -> hardware.moveFocuser(instruction.intField("Position") ?: 0)
+            "MoveFocuserAbsolute" -> hardware.moveFocuser(
+                (expressionNumber(instruction, "Position") ?: 0.0).toInt()
+            )
+            "MoveFocuserRelative" -> hardware.moveFocuser(
+                hardware.focuserPosition() + (expressionNumber(instruction, "RelativePosition") ?: 0.0).toInt()
+            )
             "RunAutofocus" -> {
                 val run = hardware.autofocus(sessionDir ?: sessionsDir)
                 _autofocus.value = _autofocus.value + run
             }
-            "WaitForTime" -> hardware.waitUntil(instruction.doubleField("EpochMillis")?.toLong() ?: world.nowMillis())
-            "WaitForAltitude" -> waitForAltitude(altitudeOffset(instruction))
+            "WaitForTime" -> {
+                val deadline = nextClockTimeMillis(
+                    instruction,
+                    world.nowMillis(),
+                    world.observerLatitudeDeg(),
+                    world.observerLongitudeDeg(),
+                    target?.first
+                ) ?: throw DeviceUnavailable("time provider")
+                hardware.waitUntil(deadline)
+            }
+            "WaitForTimeSpan" -> {
+                val seconds = (expressionNumber(instruction, "Time") ?: 60.0).coerceAtLeast(0.0)
+                kotlinx.coroutines.delay((seconds * 1000.0).toLong())
+            }
+            "WaitForAltitude", "WaitUntilAboveHorizon" -> waitForAltitude(altitudeOffset(instruction))
+            "WaitForSunAltitude" -> waitUntilCompared(
+                { world.sunAltitudeDeg() },
+                altitudeOffset(instruction),
+                altitudeComparator(instruction),
+                "sun"
+            )
+            "WaitForMoonAltitude" -> waitUntilCompared(
+                { world.moonAltitudeDeg() },
+                altitudeOffset(instruction),
+                altitudeComparator(instruction),
+                "moon"
+            )
+            "Annotation" -> Unit
             else -> throw IllegalStateException(className)
         }
     }
@@ -344,6 +437,21 @@ class SequenceRuntime(
             values = (existing?.values ?: emptyList()) + NinaValue.Obj(trigger)
         )
         _document.value = root
+    }
+
+    private suspend fun waitUntilCompared(
+        sample: () -> Double?,
+        offset: Double,
+        comparator: Int,
+        missing: String
+    ) {
+        val deadline = world.nowMillis() + 18 * 60 * 60_000L
+        while (world.nowMillis() < deadline) {
+            val value = sample() ?: throw DeviceUnavailable(missing)
+            if (compareOrdered(value, offset, comparator)) return
+            kotlinx.coroutines.delay(1_000)
+        }
+        throw IllegalStateException(missing)
     }
 
     private suspend fun waitForAltitude(offset: Double) {

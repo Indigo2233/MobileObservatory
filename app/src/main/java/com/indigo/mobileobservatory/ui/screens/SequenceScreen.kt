@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilterChip
@@ -35,9 +36,14 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.indigo.mobileobservatory.R
+import com.indigo.mobileobservatory.camera.ConnectionState
+import com.indigo.mobileobservatory.mount.MountConnectionState
 import com.indigo.mobileobservatory.sequence.SequenceEditorMode
 import com.indigo.mobileobservatory.sequence.SequencePhase
 import com.indigo.mobileobservatory.sequence.SimpleExposureRow
+import com.indigo.mobileobservatory.sequence.catalog.SequenceHardwareSnapshot
+import com.indigo.mobileobservatory.sequence.catalog.SequenceIssue
+import com.indigo.mobileobservatory.sequence.catalog.validateSequence
 import com.indigo.mobileobservatory.sequence.plannedFrames
 import com.indigo.mobileobservatory.sequence.targetAltitudeCurve
 import com.indigo.mobileobservatory.sequence.tonightWindow
@@ -91,10 +97,29 @@ fun SequenceScreen(
     val guideRunning by viewModel.guideRunning.collectAsState()
     val filterNames by viewModel.filterWheelSlotNames.collectAsState()
     val skyTarget by viewModel.sequenceSkyPick.collectAsState()
+    val connection by viewModel.connectionState.collectAsState()
+    val mountConnection by viewModel.mountConnectionState.collectAsState()
+    val eafConnected by viewModel.eafConnected.collectAsState()
+    val coverConnected by viewModel.coverConnected.collectAsState()
+    val rotatorConnected by viewModel.rotatorConnected.collectAsState()
+    val guideConnection by viewModel.guideConnectionState.collectAsState()
+    val coolingInfo by viewModel.coolingInfo.collectAsState()
+    var startIssues by remember { mutableStateOf<List<SequenceIssue>?>(null) }
     var page by rememberSaveable { mutableStateOf("edit") }
     var templateName by rememberSaveable { mutableStateOf(draft.title) }
     val running = state.phase == SequencePhase.Running || state.phase == SequencePhase.Paused
     val chartColor = if (redNightMode) Color(0xFFE53935) else MaterialTheme.colorScheme.primary
+    val hardware = SequenceHardwareSnapshot(
+        cameraConnected = connection is ConnectionState.Connected,
+        coolingCapable = coolingInfo != null,
+        filterWheelConnected = filterNames.any { it.isNotBlank() },
+        focuserConnected = eafConnected,
+        guiderConnected = guideConnection is ConnectionState.Connected,
+        mountConnected = mountConnection is MountConnectionState.Connected,
+        coverConnected = coverConnected,
+        rotatorConnected = rotatorConnected,
+        filterNames = filterNames.filter { it.isNotBlank() }
+    )
 
     LaunchedEffect(state.phase) {
         if (state.phase == SequencePhase.Running || state.phase == SequencePhase.Paused) page = "status"
@@ -159,13 +184,24 @@ fun SequenceScreen(
                     SequenceAdvancedEditor(
                         runtime = runtime,
                         enabled = !running,
+                        hardware = hardware,
                         latitudeDeg = site?.latitudeDeg,
                         longitudeDeg = site?.longitudeDeg,
                         chartColor = chartColor,
                         skyTarget = skyTarget,
+                        pointingRaHours = coordinates?.raHours,
+                        pointingDecDeg = coordinates?.decDeg,
                         modifier = Modifier.weight(1f)
                     )
-                    Button(onClick = { runtime.start() }, enabled = !running, modifier = Modifier.fillMaxWidth()) {
+                    Button(
+                        onClick = {
+                            val root = runtime.document.value
+                            val issues = root?.let { validateSequence(it, hardware) }.orEmpty()
+                            if (issues.isNotEmpty()) startIssues = issues else runtime.start()
+                        },
+                        enabled = !running,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
                         Text(stringResource(R.string.sequence_start))
                     }
                 }
@@ -234,6 +270,30 @@ fun SequenceScreen(
                 }
             }
         }
+    }
+    val pendingIssues = startIssues
+    if (pendingIssues != null) {
+        AlertDialog(
+            onDismissRequest = { startIssues = null },
+            title = { Text(stringResource(R.string.sequence_preflight_title)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    pendingIssues.take(12).forEach { issue ->
+                        Text("· ${issue.messageZh}", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { startIssues = null; runtime.start() }) {
+                    Text(stringResource(R.string.sequence_preflight_continue))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { startIssues = null }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        )
     }
 }
 

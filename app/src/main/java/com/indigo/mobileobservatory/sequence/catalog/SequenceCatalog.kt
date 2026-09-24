@@ -405,7 +405,8 @@ private fun takeExposureSpec(subframe: Boolean): SequenceTypeSpec {
         FieldSpec("ExposureTime", FieldKind.Expression, "曝光秒", "Seconds", defaultNumber = 60.0, min = 0.0, max = 3600.0),
         FieldSpec("Gain", FieldKind.Expression, "增益", "Gain", defaultNumber = -1.0),
         FieldSpec("Offset", FieldKind.Expression, "偏置", "Offset", defaultNumber = -1.0),
-        FieldSpec("ImageType", FieldKind.Text, "类型", "Image type", defaultText = "LIGHT")
+        FieldSpec("ImageType", FieldKind.Text, "类型", "Image type", defaultText = "LIGHT"),
+        FieldSpec("Binning", FieldKind.Text, "像素合并", "Binning", defaultText = "1x1")
     )
     if (subframe) {
         fields += FieldSpec("ROIPct", FieldKind.Expression, "ROI %", "ROI %", defaultNumber = 100.0, min = 1.0, max = 100.0)
@@ -482,14 +483,17 @@ private fun takeManySpec(): SequenceTypeSpec {
     }
 }
 
+private fun clockFields() = listOf(
+    FieldSpec("Hours", FieldKind.Number, "时", "Hours", defaultNumber = 6.0),
+    FieldSpec("Minutes", FieldKind.Number, "分", "Minutes", defaultNumber = 0.0),
+    FieldSpec("Seconds", FieldKind.Number, "秒", "Seconds", defaultNumber = 0.0),
+    FieldSpec("MinutesOffset", FieldKind.Number, "偏移分钟", "Offset minutes", defaultNumber = 0.0),
+    FieldSpec("SelectedProvider", FieldKind.Text, "时间来源", "Time source", defaultText = "TimeProvider")
+)
+
 private fun waitForTimeSpec(): SequenceTypeSpec {
     val type = ninaType("SequenceItem.Utility.WaitForTime")
-    val fields = listOf(
-        FieldSpec("Hours", FieldKind.Number, "时", "Hours", defaultNumber = 6.0),
-        FieldSpec("Minutes", FieldKind.Number, "分", "Minutes", defaultNumber = 0.0),
-        FieldSpec("Seconds", FieldKind.Number, "秒", "Seconds", defaultNumber = 0.0),
-        FieldSpec("MinutesOffset", FieldKind.Number, "偏移分钟", "Offset minutes", defaultNumber = 0.0)
-    )
+    val fields = clockFields()
     return SequenceTypeSpec(
         id = "WaitForTime",
         type = type,
@@ -537,9 +541,12 @@ private fun sunMoonWait(id: String, titleZh: String, titleEn: String): SequenceT
         titleZh = titleZh,
         titleEn = titleEn,
         level = SupportLevel.Execute,
-        fields = listOf(FieldSpec("Offset", FieldKind.Number, "高度", "Altitude", defaultNumber = 0.0, proxyPath = "Data.Offset"))
+        fields = listOf(
+            FieldSpec("Offset", FieldKind.Number, "高度", "Altitude", defaultNumber = 0.0, proxyPath = "Data.Offset"),
+            FieldSpec("Comparator", FieldKind.Number, "比较", "Comparator", defaultNumber = 3.0, proxyPath = "Data.Comparator")
+        )
     ) {
-        catalogInstruction(type, linkedMapOf("Data" to waitLoopData(0.0)))
+        catalogInstruction(type, linkedMapOf("Data" to waitLoopData(0.0, comparator = 3)))
     }
 }
 
@@ -571,20 +578,18 @@ private fun sunMoonCondition(id: String, titleZh: String, titleEn: String, level
         titleZh = titleZh,
         titleEn = titleEn,
         level = level,
-        fields = listOf(FieldSpec("Offset", FieldKind.Number, "高度", "Altitude", defaultNumber = 0.0, proxyPath = "Data.Offset"))
+        fields = listOf(
+            FieldSpec("Offset", FieldKind.Number, "高度", "Altitude", defaultNumber = 0.0, proxyPath = "Data.Offset"),
+            FieldSpec("Comparator", FieldKind.Number, "比较", "Comparator", defaultNumber = 3.0, proxyPath = "Data.Comparator")
+        )
     ) {
-        catalogInstruction(type, linkedMapOf("Data" to waitLoopData(0.0)))
+        catalogInstruction(type, linkedMapOf("Data" to waitLoopData(0.0, comparator = 3)))
     }
 }
 
 private fun timeCondition(): SequenceTypeSpec {
     val type = ninaType("Conditions.TimeCondition")
-    val fields = listOf(
-        FieldSpec("Hours", FieldKind.Number, "时", "Hours", defaultNumber = 6.0),
-        FieldSpec("Minutes", FieldKind.Number, "分", "Minutes", defaultNumber = 0.0),
-        FieldSpec("Seconds", FieldKind.Number, "秒", "Seconds", defaultNumber = 0.0),
-        FieldSpec("MinutesOffset", FieldKind.Number, "偏移分钟", "Offset minutes", defaultNumber = 0.0)
-    )
+    val fields = clockFields()
     return SequenceTypeSpec(
         id = "TimeCondition",
         type = type,
