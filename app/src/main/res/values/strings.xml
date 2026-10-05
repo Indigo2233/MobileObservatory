@@ -258,6 +258,12 @@
     <string name="phone_gps">Phone GPS</string>
     <string name="mount_to_app">Mount → App</string>
     <string name="phone_to_mount">Phone → Mount</string>
+    <string name="sync_site">Sync site and time</string>
+    <string name="sync_site_title">Synchronize site and time</string>
+    <string name="sync_site_hint">Choose a direction for site coordinates or the mount clock. Mount time received by the app updates the star map and does not change Android system time.</string>
+    <string name="mount_time_to_app">Mount time → App star map</string>
+    <string name="phone_time_to_mount">Phone time → Mount</string>
+    <string name="mount_time_sync_unsupported">This mount protocol does not provide clock synchronization.</string>
     <string name="nina_tppa_options">NINA TPPA options</string>
     <string name="move_ra">Move RA</string>
     <string name="workflow">Workflow</string>
@@ -342,6 +348,12 @@
     <string name="star_map_sky_section_grids">Grids and lines</string>
     <string name="star_map_sky_section_constellations">Constellations</string>
     <string name="star_map_sky_section_display">Display</string>
+    <string name="star_map_time_title">Star map time</string>
+    <string name="star_map_time_label">Local date and time</string>
+    <string name="star_map_time_hint">Enter yyyy-MM-dd HH:mm in the device time zone.</string>
+    <string name="star_map_time_invalid">Use the format yyyy-MM-dd HH:mm.</string>
+    <string name="star_map_time_use_current">Use current time</string>
+    <string name="star_map_time_button">Time: %1$s</string>
     <string name="star_map_search">Search sky</string>
     <string name="star_map_search_hint">Name or catalog id</string>
     <string name="star_map_search_empty">No matching objects</string>
@@ -948,4 +960,26 @@
     <string name="sequence_drag">Drag</string>
     <string name="sequence_drag_hint">Hold the handle to drag an instruction to another place.</string>
     <string name="sequence_add_to_targets">Add instruction set</string>
+    <!-- Software update -->
+    <string name="settings_update">Software update</string>
+    <string name="update_current_version">Current version: v%1$s (build %2$d)</string>
+    <string name="update_check_button">Check for updates</string>
+    <string name="update_auto_check">Check automatically</string>
+    <string name="update_checking">Checking for updates…</string>
+    <string name="update_up_to_date">You are running the latest version.</string>
+    <string name="update_check_failed">Update check failed. Check the network connection and retry.</string>
+    <string name="update_available_short">Update available: v%1$s</string>
+    <string name="update_dialog_title">Update available</string>
+    <string name="update_new_version">New version: v%1$s (build %2$d)</string>
+    <string name="update_downloading">Downloading… %1$d%%</string>
+    <string name="update_download_button">Download and install</string>
+    <string name="update_later_button">Later</string>
+    <string name="update_open_settings_button">Open settings</string>
+    <string name="update_install_button">Install now</string>
+    <string name="update_install_started">Installer opened. Follow the system prompt to complete the update.</string>
+    <string name="update_install_failed">The system installer could not be opened.</string>
+    <string name="update_permission_required">Allow app installation for Indigo Observatory in system settings, then install again.</string>
+    <string name="update_verify_failed">The downloaded package failed verification: %1$s</string>
+    <string name="update_download_failed">Download failed: %1$s</string>
+    <string name="update_required_hint">This update is required to continue.</string>
 </resources>

@@ -1,11 +1,18 @@
 param(
     [switch]$Clean,
     [switch]$NonCommercial,
-    [switch]$Release
+    [switch]$Release,
+    [switch]$ShowSequence,
+    [switch]$HideSequence
 )
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
+if ($ShowSequence -and $HideSequence) {
+    throw "Use either -ShowSequence or -HideSequence."
+}
+# The advanced sequencer is hidden by default; opt in for development builds.
+$sequenceEnabled = $ShowSequence.IsPresent
 $buildType = if ($Release) { "release" } else { "debug" }
 $gradleTask = if ($Release) { "assembleRelease" } else { "assembleDebug" }
 $apk = Join-Path $root "app\build\outputs\apk\$buildType\app-$buildType.apk"
@@ -78,6 +85,7 @@ try {
     if ($NonCommercial) {
         $gradleArgs += "-PstellariumNonCommercial=true"
     }
+    $gradleArgs += "-PsequenceEnabled=$($sequenceEnabled.ToString().ToLowerInvariant())"
 
     & .\gradlew.bat @gradleArgs
     if ($LASTEXITCODE -ne 0) {
@@ -157,6 +165,7 @@ try {
         "sha256=$sha256"
         "signingCertificateSha256=$signingCertificateSha256"
         "stellariumIncluded=$($NonCommercial.IsPresent)"
+        "sequenceEnabled=$sequenceEnabled"
         "builtAtUtc=$([DateTime]::UtcNow.ToString('o'))"
     ) | Set-Content -LiteralPath $buildInfoOut -Encoding utf8
 

@@ -34,7 +34,8 @@ fun rememberPhonePlateSolveNavState(): PhonePlateSolveNavState =
 @Composable
 fun PhonePlateSolveScreens(
     nav: PhonePlateSolveNavState,
-    onAddToSequence: (CatalogObject) -> Unit = {}
+    onAddToSequence: (CatalogObject) -> Unit = {},
+    showSequenceActions: Boolean = true
 ) {
     when (nav.destination) {
         PhonePlateSolveDestination.PHONE_CAMERA_DEBUG ->
@@ -49,7 +50,8 @@ fun PhonePlateSolveScreens(
                     nav.targetDecDeg = obj.decDeg
                     nav.destination = PhonePlateSolveDestination.PUSH_TO
                 },
-                onAddToSequence = onAddToSequence
+                onAddToSequence = onAddToSequence,
+                showSequenceActions = showSequenceActions
             )
 
         PhonePlateSolveDestination.PUSH_TO ->

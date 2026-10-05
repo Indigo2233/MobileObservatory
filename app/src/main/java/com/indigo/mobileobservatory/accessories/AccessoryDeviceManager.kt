@@ -31,6 +31,7 @@ import com.indigo.mobileobservatory.accessories.rotator.WandererSerialRotatorAda
 import com.indigo.mobileobservatory.camera.AccessoryDeviceEntry
 import com.indigo.mobileobservatory.camera.AccessoryType
 import com.indigo.mobileobservatory.camera.toupcam.EAFController
+import com.indigo.mobileobservatory.camera.toupcam.ToupTekDevices
 import com.indigo.mobileobservatory.camera.toupcam.ToupcamJni
 import com.indigo.mobileobservatory.util.FileLogger
 import kotlinx.coroutines.CoroutineScope
@@ -52,7 +53,6 @@ import kotlin.coroutines.cancellation.CancellationException
 class AccessoryDeviceManager(context: Context) {
     companion object {
         private const val TAG = "AccessoryMgr"
-        private const val TOUPCAM_VENDOR_ID = 0x0547
         private const val ACTION_FILTER_WHEEL_PERMISSION =
             "com.indigo.mobileobservatory.ACCESSORY_FILTER_WHEEL_PERMISSION"
         private const val ACTION_FOCUSER_PERMISSION =
@@ -306,7 +306,7 @@ class AccessoryDeviceManager(context: Context) {
                     if (entry != null) discovered += entry
                     return@forEach
                 }
-                if (device.vendorId == TOUPCAM_VENDOR_ID) {
+                if (ToupTekDevices.isVendor(device.vendorId)) {
                     val type = when {
                         runCatching {
                             ToupcamJni.isFilterWheel(device.vendorId, device.productId)
@@ -331,7 +331,7 @@ class AccessoryDeviceManager(context: Context) {
             UsbSerialProber.getDefaultProber().findAllDrivers(usbManager).forEach { driver ->
                 val device = driver.device
                 if (device.deviceId in excluded ||
-                    device.vendorId == TOUPCAM_VENDOR_ID ||
+                    ToupTekDevices.isVendor(device.vendorId) ||
                     device.vendorId == OasisUsbIds.vendorId ||
                     discovered.any { it.usbDevice.deviceId == device.deviceId }) {
                     return@forEach

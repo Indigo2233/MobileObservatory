@@ -53,7 +53,8 @@ import kotlinx.coroutines.withContext
 fun TargetLibraryScreen(
     onBack: () -> Unit,
     onGuideTo: (CatalogObject) -> Unit = {},
-    onAddToSequence: (CatalogObject) -> Unit = {}
+    onAddToSequence: (CatalogObject) -> Unit = {},
+    showSequenceActions: Boolean = true
 ) {
     Scaffold(
         topBar = {
@@ -73,7 +74,8 @@ fun TargetLibraryScreen(
                 .padding(padding)
                 .padding(16.dp),
             onGuideTo = onGuideTo,
-            onAddToSequence = onAddToSequence
+            onAddToSequence = onAddToSequence,
+            showSequenceActions = showSequenceActions
         )
     }
 }
@@ -83,6 +85,7 @@ fun TargetLibraryScreen(
 fun TargetLibraryContent(
     onGuideTo: (CatalogObject) -> Unit,
     onAddToSequence: (CatalogObject) -> Unit = {},
+    showSequenceActions: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -175,8 +178,10 @@ fun TargetLibraryContent(
                             TextButton(onClick = { onGuideTo(obj) }) {
                                 Text(stringResource(R.string.target_library_guide))
                             }
-                            TextButton(onClick = { onAddToSequence(obj) }) {
-                                Text(stringResource(R.string.sequence_add_from_star_map))
+                            if (showSequenceActions) {
+                                TextButton(onClick = { onAddToSequence(obj) }) {
+                                    Text(stringResource(R.string.sequence_add_from_star_map))
+                                }
                             }
                         }
                     }

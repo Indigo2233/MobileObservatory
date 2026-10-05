@@ -83,6 +83,7 @@ internal fun StarMapCornerControls(
     starHints: Boolean,
     atmosphereVisible: Boolean,
     onlineDssEnabled: Boolean,
+    starMapTimeLabel: String,
     overlaysLocked: Boolean,
     hipsCacheSizeLabel: String,
     onSlewRateChange: (MountSlewRate) -> Unit,
@@ -94,6 +95,7 @@ internal fun StarMapCornerControls(
     onCenterOnMount: () -> Unit,
     onActiveTrainChange: (OpticsTrainId) -> Unit,
     onOpenFov: () -> Unit,
+    onOpenTimeSettings: () -> Unit,
     onShowFovOverlayChange: (Boolean) -> Unit,
     precisionToleranceText: String,
     onPrecisionToleranceChange: (String) -> Unit,
@@ -269,6 +271,17 @@ internal fun StarMapCornerControls(
                         modifier = Modifier.fillMaxWidth().height(36.dp)
                     ) {
                         Text(stringResource(R.string.star_map_fov), fontSize = 12.sp)
+                    }
+                    OutlinedButton(
+                        onClick = onOpenTimeSettings,
+                        modifier = Modifier.fillMaxWidth().height(36.dp)
+                    ) {
+                        Text(
+                            stringResource(R.string.star_map_time_button, starMapTimeLabel),
+                            fontSize = 12.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                     OutlinedTextField(
                         value = precisionToleranceText,

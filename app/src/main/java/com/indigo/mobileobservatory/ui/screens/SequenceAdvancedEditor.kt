@@ -92,7 +92,8 @@ fun SequenceAdvancedEditor(
     modifier: Modifier = Modifier
 ) {
     val generation by runtime.generation.collectAsState()
-    val root = runtime.document.value
+    val document by runtime.document.collectAsState()
+    val root = document
     val chinese = LocalConfiguration.current.locales[0].language.startsWith("zh")
     val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     val drag = remember { SequenceDragState() }

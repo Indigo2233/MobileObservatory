@@ -9,6 +9,7 @@
     let stel = null;
     let lastSelectionKey = "";
     let pendingObserver = null;
+    let pendingTimeMillis = null;
     let pendingMountCoordinates = null;
     let pendingAtmosphereVisible = false;
     let pendingOnlineSurveyEnabled = false;
@@ -115,10 +116,20 @@
     }
 
     function applyObserver(observer) {
-        if (!stel || !observer) return;
+        if (!observer) return;
+        pendingTimeMillis = Number(observer.epochMillis);
+        if (!stel) return;
         stel.observer.latitude = observer.latitudeDeg * stel.D2R;
         stel.observer.longitude = observer.longitudeDeg * stel.D2R;
-        stel.observer.utc = stel.date2MJD(new Date(observer.epochMillis));
+        applyTime(pendingTimeMillis);
+    }
+
+    function applyTime(epochMillis) {
+        const value = Number(epochMillis);
+        if (!isFinite(value)) return;
+        pendingTimeMillis = value;
+        if (!stel) return;
+        stel.observer.utc = stel.date2MJD(new Date(value));
     }
 
     function applyMountCoordinates(coordinates) {
@@ -609,6 +620,9 @@
             };
             applyObserver(pendingObserver);
         },
+        setTime: function (epochMillis) {
+            applyTime(epochMillis);
+        },
         setMountCoordinates: function (raHours, decDegrees) {
             pendingMountCoordinates = {
                 raHours: Number(raHours),
@@ -787,6 +801,7 @@
                 installTouchRecovery(engine);
                 addDataSources(engine);
                 applyObserver(pendingObserver);
+                applyTime(pendingTimeMillis);
                 applyMountCoordinates(pendingMountCoordinates);
                 applyAtmosphereVisibility(pendingAtmosphereVisible);
                 applySkyAppearance();

@@ -166,6 +166,7 @@ fun ControlPanel(
     var captureExpanded by remember { mutableStateOf(true) }
     var imageExpanded by remember { mutableStateOf(true) }
     var roiExpanded by remember { mutableStateOf(false) }
+    var mountExpanded by remember { mutableStateOf(true) }
     val decreaseCoarseFocusDescription = stringResource(R.string.decrease_coarse_focus)
     val decreaseFineFocusDescription = stringResource(R.string.decrease_fine_focus)
     val haltOrZeroFocusDescription = stringResource(R.string.halt_or_zero_focus)
@@ -460,9 +461,12 @@ fun ControlPanel(
                 }
 
                 if (showMountControls) {
+                SectionHeader(stringResource(R.string.telescope), mountExpanded) {
+                    mountExpanded = !mountExpanded
+                }
+                AnimatedVisibility(visible = mountExpanded) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 // Telescope / OnStep
-                Text(stringResource(R.string.telescope), style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
                 val mountConnected = mountConnectionState is MountConnectionState.Connected
                 val mountError = (mountConnectionState as? MountConnectionState.Error)?.message
                 var mountUsbExpanded by remember { mutableStateOf(false) }
@@ -634,6 +638,8 @@ fun ControlPanel(
                     )
                 }
 
+                    }
+                }
                 }
 
                 // Cooler

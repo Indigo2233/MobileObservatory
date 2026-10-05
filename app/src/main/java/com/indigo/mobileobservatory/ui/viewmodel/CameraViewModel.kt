@@ -510,6 +510,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val mountDetectedInfo = mountModule.mountDetectedInfo
     val mountCoordinates = mountModule.mountCoordinates
     val mountSite = mountModule.mountSite
+    val mountTime = mountModule.mountTime
     val sequenceRuntime: SequenceRuntime by lazy {
         val files = getApplication<Application>()
         SequenceRuntime(
@@ -571,6 +572,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val mountBusy = mountModule.mountBusy
     val mountSupportsSync: Boolean
         get() = mountModule.supportsSync
+    val mountSupportsTimeSync: Boolean
+        get() = mountModule.supportsTimeSync
     val mountConnectionMessage = mountModule.mountConnectionMessage
     val mountMoveStatus = mountModule.mountMoveStatus
     val mountSlewRate = mountModule.mountSlewRate
@@ -897,6 +900,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun readMountSite() = mountModule.readMountSite()
     fun syncPhoneSiteToMount(latitudeDeg: Double, longitudeDeg: Double) =
         mountModule.syncPhoneSiteToMount(latitudeDeg, longitudeDeg)
+    fun readMountTime() = mountModule.readMountTime()
+    fun syncPhoneTimeToMount(epochMillis: Long = System.currentTimeMillis()) =
+        mountModule.syncPhoneTimeToMount(epochMillis)
     fun gotoMountTarget(
         name: String,
         raHours: Double,

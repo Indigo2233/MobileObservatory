@@ -90,6 +90,7 @@ import com.indigo.mobileobservatory.mount.MountCoordinates
 import com.indigo.mobileobservatory.mount.MountDirection
 import com.indigo.mobileobservatory.mount.MountMotionState
 import com.indigo.mobileobservatory.mount.MountSite
+import com.indigo.mobileobservatory.mount.MountTime
 import com.indigo.mobileobservatory.mount.MountSlewRate
 import com.indigo.mobileobservatory.mount.PrecisionGotoMath
 import com.indigo.mobileobservatory.mount.PrecisionGotoPhase
@@ -105,6 +106,33 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.util.Locale
+import java.time.Instant
+import java.time.LocalDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeParseException
+
+private const val STAR_MAP_TIME_PREF = "star_map_epoch_millis"
+private val STAR_MAP_TIME_FORMATTER: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
+
+private fun formatStarMapTime(epochMillis: Long): String {
+    return Instant.ofEpochMilli(epochMillis)
+        .atZone(ZoneId.systemDefault())
+        .toLocalDateTime()
+        .format(STAR_MAP_TIME_FORMATTER)
+}
+
+private fun parseStarMapTime(text: String): Long? {
+    return try {
+        LocalDateTime.parse(text.trim(), STAR_MAP_TIME_FORMATTER)
+            .atZone(ZoneId.systemDefault())
+            .toInstant()
+            .toEpochMilli()
+    } catch (_: DateTimeParseException) {
+        null
+    }
+}
 
 data class StarMapTarget(
     val name: String,
@@ -207,6 +235,7 @@ private class StarMapJavascriptBridge(
 fun StarMapScreen(
     mountCoordinates: MountCoordinates?,
     mountSite: MountSite?,
+    mountTime: MountTime? = null,
     mountConnected: Boolean,
     mountSupportsSync: Boolean = true,
     mountBusy: Boolean,
@@ -220,6 +249,7 @@ fun StarMapScreen(
     onSync: (StarMapTarget) -> Unit = {},
     onPrecisionGoto: (StarMapTarget, Double) -> Unit = { _, _ -> },
     onAddToSequence: (StarMapTarget) -> Unit = {},
+    showSequenceActions: Boolean = true,
     onTargetSelected: (StarMapTarget) -> Unit = {},
     onSlewRateChange: (MountSlewRate) -> Unit = {},
     onManualMoveStart: (MountDirection) -> Unit = {},
@@ -248,6 +278,9 @@ fun StarMapScreen(
     var cornerPanel by remember { mutableStateOf(StarMapCornerPanel.NONE) }
     var confirmHome by remember { mutableStateOf(false) }
     var fovDialogVisible by remember { mutableStateOf(false) }
+    var starMapTimeDialogVisible by remember { mutableStateOf(false) }
+    var starMapTimeText by remember { mutableStateOf("") }
+    var starMapTimeError by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val prefs = remember {
         context.getSharedPreferences("mobile_observatory", android.content.Context.MODE_PRIVATE)
@@ -262,6 +295,15 @@ fun StarMapScreen(
     }
     var followMount by remember {
         mutableStateOf(prefs.getBoolean("star_map_follow_mount", false))
+    }
+    var starMapTimeManual by remember {
+        mutableStateOf(prefs.contains(STAR_MAP_TIME_PREF))
+    }
+    var starMapEpochMillis by remember {
+        mutableStateOf(
+            prefs.getLong(STAR_MAP_TIME_PREF, 0L).takeIf { it > 0L }
+                ?: System.currentTimeMillis()
+        )
     }
     var equatorialGrid by remember {
         mutableStateOf(prefs.getBoolean("star_map_equatorial_grid", false))
@@ -451,6 +493,26 @@ fun StarMapScreen(
 
     fun evalStarMap(script: String) {
         webView?.evaluateJavascript(script, null)
+    }
+
+    fun openStarMapTimeDialog() {
+        starMapTimeText = formatStarMapTime(starMapEpochMillis)
+        starMapTimeError = false
+        starMapTimeDialogVisible = true
+        overlaysVisible = true
+    }
+
+    fun applyStarMapTime(epochMillis: Long, manual: Boolean) {
+        starMapEpochMillis = epochMillis
+        starMapTimeManual = manual
+        if (manual) {
+            prefs.edit().putLong(STAR_MAP_TIME_PREF, epochMillis).apply()
+        } else {
+            prefs.edit().remove(STAR_MAP_TIME_PREF).apply()
+        }
+        evalStarMap(
+            "window.MercStarMap && window.MercStarMap.setTime($epochMillis);"
+        )
     }
 
     fun persistFovPrefs() {
@@ -731,7 +793,8 @@ fun StarMapScreen(
         searchDialogVisible,
         cornerPanel,
         fovDialogVisible,
-        confirmHome
+        confirmHome,
+        starMapTimeDialogVisible
     ) {
         if (!overlaysVisible ||
             overlaysLocked ||
@@ -743,7 +806,8 @@ fun StarMapScreen(
             searchDialogVisible ||
             cornerPanel != StarMapCornerPanel.NONE ||
             fovDialogVisible ||
-            confirmHome
+            confirmHome ||
+            starMapTimeDialogVisible
         ) {
             return@LaunchedEffect
         }
@@ -751,12 +815,30 @@ fun StarMapScreen(
         overlaysVisible = false
     }
 
-    LaunchedEffect(webView, mountSite, engineState) {
+    LaunchedEffect(webView, mountSite, starMapEpochMillis, engineState) {
         if (engineState !is StarMapEngineState.Ready) return@LaunchedEffect
         val site = mountSite ?: return@LaunchedEffect
         val script = "window.MercStarMap && window.MercStarMap.setObserver(" +
-            "${site.latitudeDeg},${site.longitudeDeg},${System.currentTimeMillis()});"
+            "${site.latitudeDeg},${site.longitudeDeg},$starMapEpochMillis);"
         webView?.evaluateJavascript(script, null)
+    }
+
+    LaunchedEffect(webView, starMapEpochMillis, engineState) {
+        if (engineState !is StarMapEngineState.Ready) return@LaunchedEffect
+        evalStarMap("window.MercStarMap && window.MercStarMap.setTime($starMapEpochMillis);")
+    }
+
+    LaunchedEffect(starMapTimeManual) {
+        if (starMapTimeManual) return@LaunchedEffect
+        while (true) {
+            starMapEpochMillis = System.currentTimeMillis()
+            delay(60_000L)
+        }
+    }
+
+    LaunchedEffect(mountTime) {
+        val synchronizedTime = mountTime?.epochMillis ?: return@LaunchedEffect
+        applyStarMapTime(synchronizedTime, manual = true)
     }
 
     LaunchedEffect(webView, mountCoordinates, engineState) {
@@ -1120,6 +1202,7 @@ fun StarMapScreen(
                 starHints = starHints,
                 atmosphereVisible = atmosphereVisible,
                 onlineDssEnabled = onlineDssEnabled,
+                starMapTimeLabel = formatStarMapTime(starMapEpochMillis),
                 overlaysLocked = overlaysLocked,
                 hipsCacheSizeLabel = hipsCacheSizeLabel,
                 onSlewRateChange = onSlewRateChange,
@@ -1139,6 +1222,7 @@ fun StarMapScreen(
                     fovDialogVisible = true
                     overlaysVisible = true
                 },
+                onOpenTimeSettings = ::openStarMapTimeDialog,
                 precisionToleranceText = precisionToleranceText,
                 onPrecisionToleranceChange = ::persistPrecisionTolerance,
                 onShowFovOverlayChange = {
@@ -1279,24 +1363,26 @@ fun StarMapScreen(
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                             modifier = Modifier.fillMaxWidth()
                         )
-                        OutlinedButton(
-                            onClick = {
-                                overlaysVisible = true
-                                onAddToSequence(
-                                    target.copy(
-                                        positionAngleDeg = importAngleText.toDoubleOrNull() ?: 0.0
+                        if (showSequenceActions) {
+                            OutlinedButton(
+                                onClick = {
+                                    overlaysVisible = true
+                                    onAddToSequence(
+                                        target.copy(
+                                            positionAngleDeg = importAngleText.toDoubleOrNull() ?: 0.0
+                                        )
                                     )
+                                },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    stringResource(R.string.sequence_add_from_star_map),
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Ellipsis
                                 )
-                            },
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                stringResource(R.string.sequence_add_from_star_map),
-                                maxLines = 1,
-                                softWrap = false,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                            }
                         }
                         if (precisionGotoProgress.isActive ||
                             precisionGotoProgress.phase == PrecisionGotoPhase.SUCCEEDED ||
@@ -1495,6 +1581,71 @@ fun StarMapScreen(
             },
             confirmButton = {
                 TextButton(onClick = { searchDialogVisible = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        )
+    }
+
+    if (starMapTimeDialogVisible) {
+        AlertDialog(
+            onDismissRequest = { starMapTimeDialogVisible = false },
+            title = { Text(stringResource(R.string.star_map_time_title)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        stringResource(R.string.star_map_time_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = starMapTimeText,
+                        onValueChange = {
+                            starMapTimeText = it
+                            starMapTimeError = false
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        isError = starMapTimeError,
+                        label = { Text(stringResource(R.string.star_map_time_label)) },
+                        supportingText = if (starMapTimeError) {
+                            { Text(stringResource(R.string.star_map_time_invalid)) }
+                        } else {
+                            null
+                        },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii)
+                    )
+                    TextButton(
+                        onClick = {
+                            val now = System.currentTimeMillis()
+                            applyStarMapTime(now, manual = false)
+                            starMapTimeText = formatStarMapTime(now)
+                            starMapTimeError = false
+                            starMapTimeDialogVisible = false
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(stringResource(R.string.star_map_time_use_current))
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val parsed = parseStarMapTime(starMapTimeText)
+                        if (parsed == null) {
+                            starMapTimeError = true
+                        } else {
+                            applyStarMapTime(parsed, manual = true)
+                            starMapTimeDialogVisible = false
+                        }
+                    }
+                ) {
+                    Text(stringResource(R.string.set))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { starMapTimeDialogVisible = false }) {
                     Text(stringResource(R.string.cancel))
                 }
             }

@@ -32,18 +32,21 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -65,11 +68,13 @@ import com.indigo.mobileobservatory.mount.MountSlewRate
 import com.indigo.mobileobservatory.mount.MountTrackingRate
 import com.indigo.mobileobservatory.mount.MountTransportType
 import com.indigo.mobileobservatory.mount.SkyWatcherMountMode
+import com.indigo.mobileobservatory.pointing.PhoneSiteProvider
 import com.indigo.mobileobservatory.permissions.AppSettingsNavigator
 import com.indigo.mobileobservatory.permissions.BluetoothPermissionPolicy
 import com.indigo.mobileobservatory.ui.MountConnectionAction
 import com.indigo.mobileobservatory.ui.MountConnectionUiState
 import com.indigo.mobileobservatory.ui.viewmodel.CameraViewModel
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -97,6 +102,7 @@ fun MountControlScreen(
     val bluetoothAddress by viewModel.mountBluetoothAddress.collectAsState()
     val protocol by viewModel.mountProtocol.collectAsState()
     val detectedInfo by viewModel.mountDetectedInfo.collectAsState()
+    val mountSite by viewModel.mountSite.collectAsState()
     val busy by viewModel.mountBusy.collectAsState()
     val connectionMessage by viewModel.mountConnectionMessage.collectAsState()
     val moveStatus by viewModel.mountMoveStatus.collectAsState()
@@ -110,6 +116,53 @@ fun MountControlScreen(
     )
     val context = LocalContext.current
     val activity = context as? Activity
+    val scope = rememberCoroutineScope()
+    var siteSyncDialogVisible by remember { mutableStateOf(false) }
+    var siteSyncBusy by remember { mutableStateOf(false) }
+    var siteSyncError by remember { mutableStateOf<String?>(null) }
+
+    fun loadPhoneSiteAndSync() {
+        if (siteSyncBusy || busy) return
+        siteSyncBusy = true
+        siteSyncError = null
+        scope.launch {
+            try {
+                val site = PhoneSiteProvider.currentSite(context.applicationContext)
+                viewModel.syncPhoneSiteToMount(site.latitudeDeg, site.longitudeDeg)
+                siteSyncDialogVisible = false
+            } catch (error: Throwable) {
+                siteSyncError = error.message ?: context.getString(R.string.location_permission_required)
+            } finally {
+                siteSyncBusy = false
+            }
+        }
+    }
+
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { grants ->
+        val granted = grants[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+            grants[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+        if (granted) {
+            loadPhoneSiteAndSync()
+        } else {
+            siteSyncError = context.getString(R.string.location_permission_required)
+        }
+    }
+
+    fun requestPhoneSiteSync() {
+        if (PhoneSiteProvider.hasPermission(context)) {
+            loadPhoneSiteAndSync()
+        } else {
+            siteSyncError = null
+            locationPermissionLauncher.launch(
+                arrayOf(
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION
+                )
+            )
+        }
+    }
     val requiredBluetoothPermissions = BluetoothPermissionPolicy.requiredPermissions(
         Build.VERSION.SDK_INT
     )
@@ -489,6 +542,36 @@ fun MountControlScreen(
                         color = MaterialTheme.colorScheme.primary
                     )
                 }
+                if (connected) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                stringResource(R.string.site),
+                                style = MaterialTheme.typography.labelLarge
+                            )
+                            mountSite?.let {
+                                Text(
+                                    it.format(),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.outline
+                                )
+                            }
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                siteSyncError = null
+                                siteSyncDialogVisible = true
+                            },
+                            enabled = !busy && !siteSyncBusy
+                        ) {
+                            Text(stringResource(R.string.sync_site))
+                        }
+                    }
+                }
             }
         }
 
@@ -572,6 +655,86 @@ fun MountControlScreen(
                     }
                 }
             }
+        }
+
+        if (siteSyncDialogVisible) {
+            AlertDialog(
+                onDismissRequest = {
+                    if (!siteSyncBusy) siteSyncDialogVisible = false
+                },
+                title = { Text(stringResource(R.string.sync_site_title)) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            stringResource(R.string.sync_site_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        FilledTonalButton(
+                            onClick = { viewModel.readMountSite(); siteSyncDialogVisible = false },
+                            enabled = connected && !busy && !siteSyncBusy,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(stringResource(R.string.mount_to_app))
+                        }
+                        FilledTonalButton(
+                            onClick = ::requestPhoneSiteSync,
+                            enabled = connected && !busy && !siteSyncBusy,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            if (siteSyncBusy) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp
+                                )
+                                Spacer(Modifier.width(6.dp))
+                            }
+                            Text(stringResource(R.string.phone_to_mount))
+                        }
+                        FilledTonalButton(
+                            onClick = { viewModel.readMountTime(); siteSyncDialogVisible = false },
+                            enabled = connected && viewModel.mountSupportsTimeSync &&
+                                !busy && !siteSyncBusy,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(stringResource(R.string.mount_time_to_app))
+                        }
+                        FilledTonalButton(
+                            onClick = {
+                                viewModel.syncPhoneTimeToMount()
+                                siteSyncDialogVisible = false
+                            },
+                            enabled = connected && viewModel.mountSupportsTimeSync &&
+                                !busy && !siteSyncBusy,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(stringResource(R.string.phone_time_to_mount))
+                        }
+                        if (connected && !viewModel.mountSupportsTimeSync) {
+                            Text(
+                                stringResource(R.string.mount_time_sync_unsupported),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                        siteSyncError?.let { message ->
+                            Text(
+                                message,
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = { siteSyncDialogVisible = false },
+                        enabled = !siteSyncBusy
+                    ) {
+                        Text(stringResource(R.string.cancel))
+                    }
+                }
+            )
         }
 
         Row(

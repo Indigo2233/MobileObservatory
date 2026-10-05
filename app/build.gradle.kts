@@ -6,6 +6,22 @@ plugins {
 val stellariumNonCommercial =
     providers.gradleProperty("stellariumNonCommercial").orNull == "true"
 
+val sequenceEnabled =
+    providers.gradleProperty("sequenceEnabled").orNull?.toBooleanStrictOrNull() ?: false
+
+val updateManifestUrl =
+    providers.gradleProperty("updateManifestUrl").orNull
+        ?.takeIf { it.isNotBlank() }
+        ?: "https://github.com/Indigo2233/MobileObservatory/releases/latest/download/update.json"
+
+val updateManifestFallbackUrl =
+    providers.gradleProperty("updateManifestFallbackUrl").orNull
+        ?.takeIf { it.isNotBlank() }
+        ?: "https://indigo2233.github.io/MobileObservatory/update.json"
+
+fun buildConfigString(value: String): String =
+    "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+
 fun releaseCredential(propertyName: String, environmentName: String): String? =
     providers.gradleProperty(propertyName)
         .orElse(providers.environmentVariable(environmentName))
@@ -38,6 +54,13 @@ android {
         versionName = "1.0.6"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("boolean", "STELLARIUM_ENABLED", stellariumNonCommercial.toString())
+        buildConfigField("boolean", "SEQUENCE_ENABLED", sequenceEnabled.toString())
+        buildConfigField("String", "UPDATE_MANIFEST_URL", buildConfigString(updateManifestUrl))
+        buildConfigField(
+            "String",
+            "UPDATE_MANIFEST_FALLBACK_URL",
+            buildConfigString(updateManifestFallbackUrl)
+        )
 
         ndk {
             abiFilters += listOf("arm64-v8a")

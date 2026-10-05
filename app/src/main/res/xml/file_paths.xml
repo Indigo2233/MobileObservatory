@@ -3,4 +3,5 @@
     <external-files-path name="recordings" path="recordings/" />
     <external-files-path name="captures" path="captures/" />
     <external-files-path name="logs" path="logs/" />
+    <cache-path name="updates" path="updates/" />
 </paths>
