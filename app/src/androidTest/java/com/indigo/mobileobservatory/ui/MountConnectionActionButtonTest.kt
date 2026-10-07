@@ -5,6 +5,8 @@ import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.test.platform.app.InstrumentationRegistry
+import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.mount.MountConnectionState
 import com.indigo.mobileobservatory.mount.MountTransportType
 import com.indigo.mobileobservatory.ui.components.MountConnectionActionButton
@@ -19,6 +21,7 @@ class MountConnectionActionButtonTest {
     @Test
     fun bluetoothConnectingButtonCancelsConnection() {
         var cancelled = false
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
         val state = MountConnectionUiState.from(
             connection = MountConnectionState.Connecting,
             transport = MountTransportType.BLUETOOTH,
@@ -36,7 +39,7 @@ class MountConnectionActionButtonTest {
             }
         }
 
-        compose.onNodeWithText("Cancel connection")
+        compose.onNodeWithText(context.getString(R.string.cancel_connection))
             .assertIsEnabled()
             .performClick()
         assertTrue(cancelled)

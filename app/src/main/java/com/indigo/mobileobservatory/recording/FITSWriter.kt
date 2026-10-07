@@ -33,7 +33,8 @@ class FITSWriter {
         pixelSizeUm: Float? = null,
         focalLengthMm: Float? = null,
         binning: Int = 1,
-        exposureStartedAt: Instant? = null
+        exposureStartedAt: Instant? = null,
+        imageType: String? = null
     ) {
         val effectiveFormat = configuredFormat ?: frame.pixelFormat
         if (effectiveFormat == PixelFormat.RGB24 || frame.pixelFormat == PixelFormat.RGB24) {
@@ -72,6 +73,9 @@ class FITSWriter {
         }
         cards.add(fitsCard("DATE-OBS", "'$dateObs'", "observation date"))
         cards.add(fitsCard("INSTRUME", "'${cameraName ?: "Camera"}'", "instrument"))
+        imageType?.takeIf { it.isNotBlank() }?.let { type ->
+            cards.add(fitsCard("IMAGETYP", "'${type.uppercase()}'", "image type"))
+        }
         if (pixelSizeUm != null && pixelSizeUm > 0f) {
             cards.add(fitsCard("XPIXSZ", "%.4f".format(pixelSizeUm), "pixel size in microns"))
             cards.add(fitsCard("YPIXSZ", "%.4f".format(pixelSizeUm), "pixel size in microns"))

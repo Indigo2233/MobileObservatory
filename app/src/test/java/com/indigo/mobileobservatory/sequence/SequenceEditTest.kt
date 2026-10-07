@@ -136,6 +136,27 @@ class SequenceEditTest {
     }
 
     @Test
+    fun `all nested sets can collapse and expand in one edit`() {
+        val root = emptyAdvancedSequence("Tonight")
+        val start = root.childItems()[0]
+        var parent = start
+        repeat(4) {
+            assertTrue(addSequenceNode(root, checkNotNull(parent.id), "SequentialContainer"))
+            parent = parent.childItems().single()
+        }
+        val sets = find(root, "SequentialContainer")
+        assertEquals(4, sets.size)
+        assertTrue(sets.all(::sequenceExpanded))
+
+        assertTrue(setAllSequenceExpanded(root, expanded = false))
+        assertTrue(sets.none(::sequenceExpanded))
+        assertFalse(setAllSequenceExpanded(root, expanded = false))
+
+        assertTrue(setAllSequenceExpanded(root, expanded = true))
+        assertTrue(sets.all(::sequenceExpanded))
+    }
+
+    @Test
     fun `drag moves an instruction across containers of the same kind`() {
         val root = emptyAdvancedSequence("Tonight")
         val start = root.childItems()[0]

@@ -52,11 +52,11 @@ private fun buildCatalog(): List<SequenceTypeSpec> = buildList {
         FieldSpec("Duration", FieldKind.Expression, "最短时长", "Duration", defaultNumber = 0.0, unit = "min")))
     add(item("SequenceItem.Camera.WarmCamera", "相机", "Camera", "相机回温", "Warm Camera", SupportLevel.Execute, SequenceDevice.CameraCooling,
         FieldSpec("Duration", FieldKind.Expression, "最短时长", "Duration", defaultNumber = 0.0, unit = "min")))
-    add(item("SequenceItem.Camera.DewHeater", "相机", "Camera", "防结露加热", "Dew Heater", SupportLevel.Pause, SequenceDevice.DewHeater,
+    add(item("SequenceItem.Camera.DewHeater", "相机", "Camera", "防结露加热", "Dew Heater", SupportLevel.Execute, SequenceDevice.DewHeater,
         FieldSpec("OnOff", FieldKind.Bool, "打开", "On", defaultBool = false)))
     add(item("SequenceItem.Camera.SetReadoutMode", "相机", "Camera", "设置读出模式", "Set Readout Mode", SupportLevel.Retain, SequenceDevice.Camera,
         FieldSpec("Mode", FieldKind.Number, "模式", "Mode", defaultNumber = 0.0)))
-    add(item("SequenceItem.Camera.SetUSBLimit", "相机", "Camera", "设置 USB 限制", "Set USB Limit", SupportLevel.Pause, SequenceDevice.Camera,
+    add(item("SequenceItem.Camera.SetUSBLimit", "相机", "Camera", "设置 USB 限制", "Set USB Limit", SupportLevel.Execute, SequenceDevice.CameraUsbBandwidth,
         FieldSpec("USBLimit", FieldKind.Number, "USB 限制", "USB limit", defaultNumber = 40.0)))
 
     add(takeExposureSpec(subframe = false))
@@ -108,9 +108,9 @@ private fun buildCatalog(): List<SequenceTypeSpec> = buildList {
 
     add(item("SequenceItem.FlatDevice.OpenCover", "平场设备", "Flat Device", "打开平场镜头盖", "Open Flat Panel Cover", SupportLevel.Execute, SequenceDevice.Cover))
     add(item("SequenceItem.FlatDevice.CloseCover", "平场设备", "Flat Device", "关闭平场镜头盖", "Close Flat Panel Cover", SupportLevel.Execute, SequenceDevice.Cover))
-    add(item("SequenceItem.FlatDevice.ToggleLight", "平场设备", "Flat Device", "切换灯光", "Toggle Light", SupportLevel.Pause, SequenceDevice.FlatPanel,
+    add(item("SequenceItem.FlatDevice.ToggleLight", "平场设备", "Flat Device", "切换灯光", "Toggle Light", SupportLevel.Execute, SequenceDevice.FlatPanel,
         FieldSpec("OnOff", FieldKind.Bool, "打开", "On", defaultBool = false)))
-    add(item("SequenceItem.FlatDevice.SetBrightness", "平场设备", "Flat Device", "设置亮度", "Set Brightness", SupportLevel.Pause, SequenceDevice.FlatPanel,
+    add(item("SequenceItem.FlatDevice.SetBrightness", "平场设备", "Flat Device", "设置亮度", "Set Brightness", SupportLevel.Execute, SequenceDevice.FlatPanel,
         FieldSpec("Brightness", FieldKind.Expression, "亮度", "Brightness", defaultNumber = 50.0)))
     add(item("SequenceItem.FlatDevice.TrainedFlatExposure", "平场设备", "Flat Device", "受过训练的平场曝光", "Trained Flat Exposure", SupportLevel.Retain, SequenceDevice.FlatPanel, isSet = true))
     add(item("SequenceItem.FlatDevice.TrainedDarkFlatExposure", "平场设备", "Flat Device", "经过训练的暗场曝光", "Trained Dark Flat Exposure", SupportLevel.Retain, SequenceDevice.FlatPanel, isSet = true))

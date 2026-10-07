@@ -3,6 +3,7 @@ package com.indigo.mobileobservatory.sequence
 import com.indigo.mobileobservatory.sequence.catalog.SequenceCatalog
 import com.indigo.mobileobservatory.sequence.catalog.SequenceHardwareSnapshot
 import com.indigo.mobileobservatory.sequence.catalog.SupportLevel
+import com.indigo.mobileobservatory.sequence.catalog.validateSequence
 import com.indigo.mobileobservatory.sequence.catalog.validateSequenceNode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -30,6 +31,28 @@ class SequenceCatalogTest {
             val node = SequenceCatalog.create(spec.id)
             assertEquals(spec.id, node.className)
             assertTrue(node.type.contains(spec.id))
+        }
+    }
+
+    @Test
+    fun `every retained type is hidden validated and lossless on round trip`() {
+        val visible = sequenceCatalog().map { it.id }.toSet()
+        val full = sequenceCatalog(includeHidden = true).map { it.id }.toSet()
+        val retained = SequenceCatalog.types.filter { it.listed && it.level == SupportLevel.Retain }
+
+        assertTrue(retained.isNotEmpty())
+        retained.forEach { spec ->
+            val original = SequenceCatalog.create(spec.id)
+            val restored = parseNinaSequence(original.toJson())
+
+            assertTrue(spec.hiddenByDefault)
+            assertFalse(spec.id in visible)
+            assertTrue(spec.id in full)
+            assertEquals(original.toJson(indent = 0), restored.toJson(indent = 0))
+            assertTrue(
+                spec.id,
+                validateSequenceNode(restored).any { it.messageEn.contains("Not supported") }
+            )
         }
     }
 
@@ -68,6 +91,41 @@ class SequenceCatalogTest {
         val park = SequenceCatalog.create("ParkScope")
         assertEquals(SupportLevel.Pause, SequenceCatalog.spec("ParkScope")!!.level)
         assertTrue(validateSequenceNode(park).any { it.messageZh.contains("暂不支持") })
+        assertEquals(SupportLevel.Execute, SequenceCatalog.spec("DewHeater")!!.level)
+        assertTrue(validateSequenceNode(SequenceCatalog.create("DewHeater"), SequenceHardwareSnapshot(cameraConnected = true)).any { it.messageEn.contains("not connected") })
+        assertTrue(validateSequenceNode(SequenceCatalog.create("DewHeater"), SequenceHardwareSnapshot(cameraConnected = true, dewHeater = true)).isEmpty())
+        assertEquals(SupportLevel.Execute, SequenceCatalog.spec("SetUSBLimit")!!.level)
+        assertTrue(validateSequenceNode(SequenceCatalog.create("SetUSBLimit"), SequenceHardwareSnapshot(cameraConnected = true)).any { it.messageEn.contains("not connected") })
+        assertTrue(validateSequenceNode(SequenceCatalog.create("SetUSBLimit"), SequenceHardwareSnapshot(cameraConnected = true, usbBandwidthCapable = true)).isEmpty())
+        assertEquals(SupportLevel.Execute, SequenceCatalog.spec("ToggleLight")!!.level)
+        assertTrue(validateSequenceNode(SequenceCatalog.create("ToggleLight"), SequenceHardwareSnapshot(coverConnected = true)).any { it.messageEn.contains("not connected") })
+        assertTrue(validateSequenceNode(SequenceCatalog.create("ToggleLight"), SequenceHardwareSnapshot(flatPanelConnected = true)).isEmpty())
+        assertEquals(SupportLevel.Execute, SequenceCatalog.spec("SetBrightness")!!.level)
+        assertTrue(validateSequenceNode(SequenceCatalog.create("SetBrightness"), SequenceHardwareSnapshot(flatPanelConnected = true)).isEmpty())
         assertEquals(SupportLevel.Retain, SequenceCatalog.spec("TakeSubframeExposure")!!.level)
+    }
+
+    @Test
+    fun `validation reports unknown executable nodes`() {
+        val unknown = NinaNode(
+            type = "NINA.Sequencer.Trigger.Plugin.PluginOnlyTrigger, Plugin",
+            id = "plugin-trigger"
+        )
+
+        val issues = validateSequenceNode(unknown)
+
+        assertTrue(issues.any { it.messageEn.contains("Unknown") })
+    }
+
+    @Test
+    fun `validation ignores disabled instruction subtrees`() {
+        val root = emptyAdvancedSequence("Disabled")
+        val start = root.childItems()[0]
+        assertTrue(addSequenceNode(root, checkNotNull(start.id), "SequentialContainer"))
+        val set = start.childItems().single()
+        assertTrue(addSequenceNode(root, checkNotNull(set.id), "TakeExposure"))
+        assertTrue(setSequenceDisabled(root, checkNotNull(set.id), true))
+
+        assertTrue(validateSequence(root).isEmpty())
     }
 }

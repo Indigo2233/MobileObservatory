@@ -47,6 +47,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
@@ -272,7 +273,8 @@ private fun NestedSet(node: NinaNode, depth: Int, actions: SequenceTreeActions) 
             NodeList(id, "Items", node.collectionNodes("Items"), stringResource(R.string.sequence_empty), depth + 1, actions)
             TextButton(
                 onClick = { actions.onAdd(id, SequenceSlot.Item) },
-                enabled = actions.enabled
+                enabled = actions.enabled,
+                modifier = Modifier.testTag("sequence_add_item_$id")
             ) { Text(stringResource(R.string.sequence_add_instruction)) }
         }
     }
@@ -352,7 +354,11 @@ private fun TargetBlock(target: NinaNode, depth: Int, actions: SequenceTreeActio
                 SequenceLoopSections(id, target, actions)
                 Text("▤ ${stringResource(R.string.sequence_instructions)}", style = MaterialTheme.typography.labelLarge)
                 NodeList(id, "Items", target.collectionNodes("Items"), stringResource(R.string.sequence_empty), depth + 1, actions)
-                Button(onClick = { actions.onAdd(id, SequenceSlot.Item) }, enabled = actions.enabled) {
+                Button(
+                    onClick = { actions.onAdd(id, SequenceSlot.Item) },
+                    enabled = actions.enabled,
+                    modifier = Modifier.testTag("sequence_add_item_$id")
+                ) {
                     Text(stringResource(R.string.sequence_add_instruction))
                 }
             }

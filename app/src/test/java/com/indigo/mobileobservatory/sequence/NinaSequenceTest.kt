@@ -86,6 +86,7 @@ class NinaSequenceTest {
         assertTrue(dither.type.contains("Trigger.Guider.DitherAfterExposures"))
         assertEquals(3.0, expressionNumber(dither, "AfterExposures")!!, 0.0)
         assertEquals("Dither", triggerRunnerItems(dither).single().className)
+        assertEquals(3, root.plannedFrames())
 
         assertSameNode(root, parseNinaSequence(root.toJson()))
     }
@@ -117,6 +118,62 @@ class NinaSequenceTest {
         )
         assertTrue(expressionIsUnsupported(node, "ExposureTime"))
     }
+
+    @Test
+    fun `simple sequence disables rows and preserves exposure settings`() {
+        val draft = SimpleSequenceDraft(
+            title = "Calibration",
+            raHours = 0.0,
+            decDegrees = 0.0,
+            rows = listOf(
+                SimpleExposureRow(
+                    filterName = "L",
+                    exposureSeconds = 60.0,
+                    gain = 100,
+                    offset = 20,
+                    count = 3,
+                    enabled = false
+                ),
+                SimpleExposureRow(
+                    filterName = null,
+                    exposureSeconds = 15.0,
+                    gain = -1,
+                    offset = -1,
+                    count = 2,
+                    binX = 2,
+                    binY = 2,
+                    imageType = "DARK"
+                )
+            )
+        )
+
+        val root = draft.toNinaSequence()
+        val target = root.childItems()[1].childItems().single()
+        val loops = target.childItems()
+        val exposure = loops[1].childItems().single { it.className == "TakeExposure" }
+
+        assertEquals(2, draft.plannedFrames())
+        assertEquals(2, root.plannedFrames())
+        assertEquals(2, loops.size)
+        assertTrue(sequenceNodeDisabled(loops[0]))
+        assertEquals(15.0, expressionNumber(exposure, "ExposureTime")!!, 0.0)
+        assertEquals(-1.0, expressionNumber(exposure, "Gain")!!, 0.0)
+        assertEquals(-1.0, expressionNumber(exposure, "Offset")!!, 0.0)
+        assertEquals("2x2", sequenceBinningText(exposure))
+        assertEquals("DARK", exposure.textField("ImageType"))
+    }
+}
+
+private fun findNodes(root: NinaNode, className: String): List<NinaNode> {
+    val found = mutableListOf<NinaNode>()
+    fun walk(node: NinaNode) {
+        if (node.className == className) found += node
+        listOf("Items", "Conditions", "Triggers").forEach { field ->
+            node.collectionNodes(field).forEach { walk(it) }
+        }
+    }
+    walk(root)
+    return found
 }
 
 private fun assertSameNode(expected: NinaNode, actual: NinaNode) {

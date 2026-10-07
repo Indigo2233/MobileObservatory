@@ -1,6 +1,9 @@
 package com.indigo.mobileobservatory.ui.viewmodel
 
 import com.indigo.mobileobservatory.camera.CoolingCapable
+import com.indigo.mobileobservatory.camera.CameraEnvironmentControlCapable
+import com.indigo.mobileobservatory.camera.CameraUsbBandwidthCapable
+import com.indigo.mobileobservatory.guide.GuideCalibrationState
 import com.indigo.mobileobservatory.mount.MountConnectionState
 import com.indigo.mobileobservatory.mount.MountTrackingRate
 import com.indigo.mobileobservatory.mount.MountMotionType
@@ -13,13 +16,27 @@ import java.io.File
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.hypot
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 
 class CameraSequenceHardware(
     private val viewModel: CameraViewModel
 ) : SequenceHardware {
-    override suspend fun takeExposure(seconds: Double, gain: Int, offset: Int, destDir: File): SessionFrame =
-        viewModel.captureSequenceLight(seconds, gain, offset, destDir)
+    override suspend fun takeExposure(
+        seconds: Double,
+        gain: Int,
+        offset: Int,
+        destDir: File,
+        binning: Int,
+        imageType: String
+    ): SessionFrame = viewModel.captureSequenceLight(
+        exposureSeconds = seconds,
+        gain = gain,
+        offset = offset,
+        destDir = destDir,
+        binning = binning,
+        imageType = imageType
+    )
 
     override suspend fun switchFilter(name: String) {
         val names = viewModel.filterWheelSlotNames.value
@@ -29,23 +46,40 @@ class CameraSequenceHardware(
         delay(1_500)
     }
 
-    override suspend fun cool(targetC: Double) {
+    override suspend fun cool(targetC: Double, durationMinutes: Double) {
         val camera = viewModel.cameraManager.activeCamera as? CoolingCapable
             ?: throw DeviceUnavailable("cooler")
-        camera.setCoolerOn(true)
-        camera.setTargetTemperature((targetC * 10.0).toInt())
-        val deadline = System.currentTimeMillis() + 10 * 60_000L
+        if (camera.coolingInfo.value?.canSetTarget != true) throw DeviceUnavailable("cooler")
+        val startedAt = System.currentTimeMillis()
+        val safeDurationMinutes = durationMinutes.coerceAtLeast(0.0)
+        val durationMs = (safeDurationMinutes * 60_000.0).toLong()
+        camera.startCoolDown(
+            targetTenths = (targetC * 10.0).roundToInt(),
+            durationMinutes = safeDurationMinutes.roundToInt().coerceAtLeast(0)
+        )
+        val deadline = startedAt + durationMs + 10 * 60_000L
         while (System.currentTimeMillis() < deadline) {
             val sensor = viewModel.sensorTempTenths.value / 10.0
-            if (abs(sensor - targetC) <= 1.0) return
+            val durationComplete = System.currentTimeMillis() - startedAt >= durationMs
+            if (durationComplete && abs(sensor - targetC) <= 1.0) return
             delay(1_000)
         }
     }
 
-    override suspend fun warm() {
+    override suspend fun warm(durationMinutes: Double) {
         val camera = viewModel.cameraManager.activeCamera as? CoolingCapable
             ?: throw DeviceUnavailable("cooler")
-        camera.startWarmUp(10)
+        if (camera.coolingInfo.value?.canSetTarget != true) throw DeviceUnavailable("cooler")
+        val startedAt = System.currentTimeMillis()
+        val safeDurationMinutes = durationMinutes.coerceAtLeast(0.0)
+        val durationMs = (safeDurationMinutes * 60_000.0).toLong()
+        camera.startWarmUp(safeDurationMinutes.roundToInt().coerceAtLeast(0))
+        val deadline = startedAt + durationMs + 2 * 60_000L
+        while (System.currentTimeMillis() < deadline) {
+            val durationComplete = System.currentTimeMillis() - startedAt >= durationMs
+            if (durationComplete && !camera.coolerOn.value) return
+            delay(1_000)
+        }
     }
 
     override suspend fun slew(raHours: Double, decDeg: Double) {
@@ -77,7 +111,19 @@ class CameraSequenceHardware(
         viewModel.syncMountToTarget("sequence", raHours, decDeg, "J2000")
     }
 
-    override suspend fun guide(enabled: Boolean) {
+    override suspend fun guide(enabled: Boolean, forceCalibration: Boolean) {
+        if (enabled && forceCalibration) {
+            viewModel.startGuideCalibration()
+            val deadline = System.currentTimeMillis() + 180_000L
+            while (viewModel.guideCalibrating.value && System.currentTimeMillis() < deadline) {
+                delay(500)
+            }
+            when (viewModel.guideCalibrationState.value) {
+                GuideCalibrationState.COMPLETE -> Unit
+                GuideCalibrationState.FAILED -> throw IllegalStateException("guide calibration")
+                else -> throw IllegalStateException("guide calibration timeout")
+            }
+        }
         viewModel.setGuideRunning(enabled)
     }
 
@@ -107,6 +153,41 @@ class CameraSequenceHardware(
     override suspend fun cover(open: Boolean) {
         if (open) viewModel.openCover() else viewModel.closeCover()
         delay(1_000)
+    }
+
+    override suspend fun dewHeater(on: Boolean) {
+        val camera = viewModel.cameraManager.activeCamera as? CameraEnvironmentControlCapable
+            ?: throw DeviceUnavailable("dew heater")
+        if (!camera.heaterSupported || camera.heaterMaxLevel <= 0) throw DeviceUnavailable("dew heater")
+        camera.setHeaterLevel(if (on) camera.heaterMaxLevel else 0)
+    }
+
+    override suspend fun usbLimit(value: Int) {
+        val camera = viewModel.cameraManager.activeCamera as? CameraUsbBandwidthCapable
+            ?: throw DeviceUnavailable("usb limit")
+        val range = camera.usbBandwidthRange ?: throw DeviceUnavailable("usb limit")
+        if (!camera.setUsbBandwidth(value.coerceIn(range))) throw IllegalStateException("usb limit")
+    }
+
+    override suspend fun flatLight(on: Boolean) {
+        if (!viewModel.coverConnected.value) throw DeviceUnavailable("flat panel")
+        val max = viewModel.calibratorMaxBrightness.value
+        if (max <= 0) throw DeviceUnavailable("flat panel")
+        if (on) {
+            val current = viewModel.calibratorBrightness.value
+            viewModel.setCalibratorBrightness(current.takeIf { it > 0 } ?: max.coerceAtLeast(1))
+        } else {
+            viewModel.calibratorOff()
+        }
+        delay(500)
+    }
+
+    override suspend fun flatBrightness(value: Int) {
+        if (!viewModel.coverConnected.value) throw DeviceUnavailable("flat panel")
+        val max = viewModel.calibratorMaxBrightness.value
+        if (max <= 0) throw DeviceUnavailable("flat panel")
+        viewModel.setCalibratorBrightness(value.coerceIn(0, max))
+        delay(500)
     }
 
     override suspend fun moveFocuser(position: Int) {

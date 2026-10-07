@@ -9,7 +9,9 @@ data class SimpleExposureRow(
     val offset: Int,
     val count: Int,
     val binX: Int = 1,
-    val binY: Int = 1
+    val binY: Int = 1,
+    val enabled: Boolean = true,
+    val imageType: String = "LIGHT"
 )
 
 data class SimpleSequenceDraft(
@@ -33,7 +35,34 @@ data class SimpleSequenceDraft(
     val endCloseCover: Boolean = false
 )
 
-fun SimpleSequenceDraft.plannedFrames(): Int = rows.sumOf { it.count.coerceAtLeast(0) }
+fun SimpleSequenceDraft.plannedFrames(): Int = rows
+    .filter { it.enabled }
+    .sumOf { it.count.coerceAtLeast(0) }
+
+fun NinaNode.plannedFrames(): Int {
+    fun count(node: NinaNode, multiplier: Long): Long {
+        if (sequenceNodeDisabled(node)) return 0
+        if (node.className == "TakeExposure") return multiplier
+        val loopIterations = node.collectionNodes("Conditions")
+            .filterNot(::sequenceNodeDisabled)
+            .filter { it.className == "LoopCondition" }
+            .map {
+                (expressionNumber(it, "Iterations") ?: 1.0).toLong()
+                    .coerceIn(0, Int.MAX_VALUE.toLong())
+            }
+            .minOrNull()
+            ?: if (node.className == "SmartExposure" || node.className == "TakeManyExposures") {
+                (expressionNumber(node, "Iterations") ?: 1.0).toLong()
+                    .coerceIn(0, Int.MAX_VALUE.toLong())
+            } else {
+                1
+            }
+        val childMultiplier = (multiplier * loopIterations).coerceAtMost(Int.MAX_VALUE.toLong())
+        return node.childItems().sumOf { count(it, childMultiplier) }
+            .coerceAtMost(Int.MAX_VALUE.toLong())
+    }
+    return count(this, 1).toInt()
+}
 
 private class NinaIds {
     private var next = 1
@@ -204,6 +233,7 @@ private fun inputTarget(ids: NinaIds, draft: SimpleSequenceDraft): NinaNode {
 
 private fun exposureLoop(ids: NinaIds, row: SimpleExposureRow): NinaNode {
     val loop = container(ids, "NINA.Sequencer.Container.SequentialContainer", row.filterName ?: "Exposure")
+    if (!row.enabled) loop.fields["Status"] = NinaValue.Num(SEQUENCE_STATUS_DISABLED.toDouble(), true)
     val condition = node(
         ids,
         "NINA.Sequencer.Conditions.LoopCondition, NINA.Sequencer",
@@ -250,7 +280,7 @@ private fun takeExposure(ids: NinaIds, row: SimpleExposureRow): NinaNode {
             )
         )
     )
-    fields["ImageType"] = NinaValue.Text("LIGHT")
+    fields["ImageType"] = NinaValue.Text(row.imageType.ifBlank { "LIGHT" }.uppercase())
     fields["ExposureCount"] = NinaValue.Num(0.0, true)
     fields["ErrorBehavior"] = NinaValue.Num(0.0, true)
     fields["Attempts"] = NinaValue.Num(1.0, true)

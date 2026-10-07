@@ -134,6 +134,23 @@ fun setSequenceExpanded(root: NinaNode, id: String, expanded: Boolean): Boolean 
     return true
 }
 
+fun setAllSequenceExpanded(root: NinaNode, expanded: Boolean): Boolean {
+    var changed = false
+    fun walk(node: NinaNode) {
+        if (!sequenceStructural(node) && SequenceCatalog.isSet(node.className)) {
+            if (sequenceExpanded(node) != expanded) {
+                node.fields["IsExpanded"] = NinaValue.Bool(expanded)
+                changed = true
+            }
+        }
+        listOf("Items", "Conditions", "Triggers").forEach { field ->
+            node.collectionNodes(field).forEach(::walk)
+        }
+    }
+    walk(root)
+    return changed
+}
+
 fun resetSequenceProgress(root: NinaNode, id: String): Boolean {
     val node = findSequenceNode(root, id) ?: return false
     fun reset(current: NinaNode) {

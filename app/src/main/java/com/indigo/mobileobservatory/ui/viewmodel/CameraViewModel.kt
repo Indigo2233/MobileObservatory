@@ -7,6 +7,7 @@ import android.media.MediaScannerConnection
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.indigo.mobileobservatory.BuildConfig
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.accessories.AccessoryDeviceManager
 import com.indigo.mobileobservatory.accessories.power.DewHeaterMode
@@ -41,9 +42,12 @@ import com.indigo.mobileobservatory.sequence.SequenceSettings
 import com.indigo.mobileobservatory.sequence.SequenceSkyTarget
 import com.indigo.mobileobservatory.sequence.SequenceWorld
 import com.indigo.mobileobservatory.sequence.SessionFrame
+import com.indigo.mobileobservatory.sequence.VirtualSequenceHardware
+import com.indigo.mobileobservatory.sequence.VirtualSequenceStatus
 import com.indigo.mobileobservatory.sequence.countStars
 import com.indigo.mobileobservatory.sequence.medianHalfLightRadius
 import com.indigo.mobileobservatory.sequence.monoLuma
+import com.indigo.mobileobservatory.sequence.catalog.SequenceHardwareSnapshot
 import com.indigo.mobileobservatory.mount.PrecisionGotoMath
 import com.indigo.mobileobservatory.mount.PrecisionGotoProgress
 import com.indigo.mobileobservatory.ui.components.RecordLimit
@@ -129,6 +133,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val mountMotionState: StateFlow<MountMotionState> = mountModule.motionState
     val precisionGotoProgress: StateFlow<PrecisionGotoProgress> = mountModule.precisionGotoProgress
     private val astapRunner = AstapRunner(application)
+    private val virtualSequenceHardware = if (BuildConfig.EMULATOR_TEST) {
+        VirtualSequenceHardware()
+    } else {
+        null
+    }
+    private val noVirtualSequenceStatus = MutableStateFlow<VirtualSequenceStatus?>(null)
+    val virtualSequenceStatus: StateFlow<VirtualSequenceStatus?> =
+        virtualSequenceHardware?.status ?: noVirtualSequenceStatus.asStateFlow()
+    val virtualSequenceHardwareSnapshot: SequenceHardwareSnapshot? =
+        if (BuildConfig.EMULATOR_TEST) VirtualSequenceHardware.SNAPSHOT else null
     private val d50Manager = D50Manager(application)
 
     private val _previewBitmap = MutableStateFlow<Bitmap?>(null)
@@ -517,8 +531,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             templatesDir = File(files.filesDir, "sequences"),
             sessionsDir = File(files.getExternalFilesDir("captures"), "Sequences"),
             scope = viewModelScope,
-            hardware = CameraSequenceHardware(this),
-            world = object : SequenceWorld {
+            hardware = virtualSequenceHardware ?: CameraSequenceHardware(this),
+            world = virtualSequenceHardware ?: object : SequenceWorld {
                 override fun altitudeDeg(): Double? = sequenceTargetAltitude()
                 override fun minutesToMeridian(): Double? = sequenceMinutesToMeridian()
                 override fun temperatureC(): Double? {
@@ -2488,7 +2502,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         exposureSeconds: Double,
         gain: Int,
         offset: Int,
-        destDir: File
+        destDir: File,
+        binning: Int = 1,
+        imageType: String = "LIGHT"
     ): SessionFrame = withContext(Dispatchers.IO) {
         if (!License.canRecord) throw DeviceUnavailable("trial")
         val cam = cameraManager.activeCamera ?: throw DeviceUnavailable("camera")
@@ -2497,11 +2513,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
         exposureWriteMutex.withLock {
             val uiMax = ExposureLimits.uiMaxUs(cam, true)
+            val requestedBinning = binning.coerceAtLeast(1)
+            if (requestedBinning != _binning.value) applyBinning(cam, requestedBinning)
             cam.longExposureEnabled = true
             _longExposureEnabled.value = true
             cam.setExposureTime((exposureSeconds * 1_000_000.0).toFloat().coerceIn(cam.exposureRange.min, uiMax))
-            cam.setGain(gain.toFloat())
-            (cam as? CameraOffsetCapable)?.setOffset(offset.toFloat())
+            if (gain >= 0) cam.setGain(gain.toFloat())
+            if (offset >= 0) (cam as? CameraOffsetCapable)?.setOffset(offset.toFloat())
             if (cameraManager.activeCamera === cam) {
                 _exposureUs.value = cam.currentExposureUs
                 _gain.value = cam.currentGain
@@ -2514,7 +2532,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val filterName = currentFilterName()
         val stamp = DateTimeFormatter.ofPattern("HHmmss").format(LocalDateTime.now())
         val filterPart = filterName?.let { "-$it" }.orEmpty()
-        val file = File(destDir, "$stamp$filterPart-${exposureSeconds.toInt()}s.fits")
+        val normalizedImageType = imageType.ifBlank { "LIGHT" }.uppercase()
+        val typePart = normalizedImageType.lowercase()
+        val file = File(destDir, "$stamp-$typePart$filterPart-${exposureSeconds.toInt()}s.fits")
         val info = cam.cameraInfo
         val focalLengthMm = prefs.getFloat("plate_focal_length_mm", 0f).takeIf { it > 0f }
         fitsWriter.write(
@@ -2531,7 +2551,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             configuredFormat = cam.currentPixelFormat,
             pixelSizeUm = info?.pixelSizeUm,
             focalLengthMm = focalLengthMm,
-            binning = _binning.value
+            binning = _binning.value,
+            imageType = normalizedImageType
         )
         val luma = monoLuma(frame.data, frame.width, frame.height, frame.pixelFormat.bytesPerPixel)
         SessionFrame(

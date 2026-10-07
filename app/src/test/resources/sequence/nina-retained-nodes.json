@@ -1,0 +1,276 @@
+{
+  "$id": "root",
+  "$type": "NINA.Sequencer.Container.SequenceRootContainer, NINA.Sequencer",
+  "Name": "Retained compatibility",
+  "CompatibilityMarker": {
+    "$id": "compatibility-marker",
+    "$type": "Indigo.Tests.CompatibilityMarker, Indigo.Tests",
+    "Version": 1,
+    "Labels": ["nina", "android", "round-trip"]
+  },
+  "Items": {
+    "$id": "root-items",
+    "$type": "System.Collections.ObjectModel.ObservableCollection`1[[NINA.Sequencer.SequenceItem.ISequenceItem, NINA.Sequencer]], System.ObjectModel",
+    "$values": [
+      {
+        "$id": "start",
+        "$type": "NINA.Sequencer.Container.StartAreaContainer, NINA.Sequencer",
+        "Name": "Start",
+        "Parent": { "$ref": "root" },
+        "Items": {
+          "$id": "start-items",
+          "$type": "System.Collections.ObjectModel.ObservableCollection`1[[NINA.Sequencer.SequenceItem.ISequenceItem, NINA.Sequencer]], System.ObjectModel",
+          "$values": [
+            {
+              "$id": "external-script",
+              "$type": "NINA.Sequencer.SequenceItem.Utility.ExternalScript, NINA.Sequencer",
+              "Script": "C:\\NINA\\Scripts\\prepare.ps1",
+              "Arguments": ["--profile", "mobile"],
+              "Parent": { "$ref": "start" }
+            },
+            {
+              "$id": "connect-equipment",
+              "$type": "NINA.Sequencer.SequenceItem.Connect.ConnectEquipment, NINA.Sequencer",
+              "SelectedEquipment": "Camera",
+              "Parent": { "$ref": "start" }
+            },
+            {
+              "$id": "constant",
+              "$type": "NINA.Sequencer.SequenceItem.Expressions.Constant, NINA.Sequencer",
+              "SymbolName": "ExposureSeconds",
+              "Value": "15",
+              "Parent": { "$ref": "start" }
+            },
+            {
+              "$id": "open-dome",
+              "$type": "NINA.Sequencer.SequenceItem.Dome.OpenDomeShutter, NINA.Sequencer",
+              "Parent": { "$ref": "start" }
+            },
+            {
+              "$id": "wait-safe",
+              "$type": "NINA.Sequencer.SequenceItem.SafetyMonitor.WaitUntilSafe, NINA.Sequencer",
+              "TimeoutMinutes": 20,
+              "Parent": { "$ref": "start" }
+            },
+            {
+              "$id": "linked-template",
+              "$type": "NINA.Sequencer.Container.LinkedTemplateContainer, NINA.Sequencer",
+              "Name": "Shared startup",
+              "TemplateReference": "C:\\NINA\\Templates\\startup.json",
+              "TemplateId": "template-42",
+              "Parent": { "$ref": "start" },
+              "Items": {
+                "$id": "linked-items",
+                "$type": "System.Collections.ObjectModel.ObservableCollection`1[[NINA.Sequencer.SequenceItem.ISequenceItem, NINA.Sequencer]], System.ObjectModel",
+                "$values": []
+              }
+            }
+          ]
+        }
+      },
+      {
+        "$id": "targets",
+        "$type": "NINA.Sequencer.Container.TargetAreaContainer, NINA.Sequencer",
+        "Name": "Targets",
+        "Parent": { "$ref": "root" },
+        "Items": {
+          "$id": "target-items",
+          "$type": "System.Collections.ObjectModel.ObservableCollection`1[[NINA.Sequencer.SequenceItem.ISequenceItem, NINA.Sequencer]], System.ObjectModel",
+          "$values": [
+            {
+              "$id": "dso",
+              "$type": "NINA.Sequencer.Container.DeepSkyObjectContainer, NINA.Sequencer",
+              "Name": "M42",
+              "Parent": { "$ref": "targets" },
+              "Conditions": {
+                "$id": "dso-conditions",
+                "$type": "System.Collections.ObjectModel.ObservableCollection`1[[NINA.Sequencer.Conditions.ISequenceCondition, NINA.Sequencer]], System.ObjectModel",
+                "$values": [
+                  {
+                    "$id": "safety-condition",
+                    "$type": "NINA.Sequencer.Conditions.SafetyMonitorCondition, NINA.Sequencer",
+                    "Parent": { "$ref": "dso" }
+                  }
+                ]
+              },
+              "Triggers": {
+                "$id": "dso-triggers",
+                "$type": "System.Collections.ObjectModel.ObservableCollection`1[[NINA.Sequencer.Trigger.ISequenceTrigger, NINA.Sequencer]], System.ObjectModel",
+                "$values": [
+                  {
+                    "$id": "reconnect-trigger",
+                    "$type": "NINA.Sequencer.Trigger.Connect.ReconnectTrigger, NINA.Sequencer",
+                    "Parent": { "$ref": "dso" },
+                    "TriggerRunner": {
+                      "$id": "reconnect-runner",
+                      "$type": "NINA.Sequencer.Container.SequentialContainer, NINA.Sequencer",
+                      "Name": "Reconnect runner",
+                      "Items": {
+                        "$id": "reconnect-runner-items",
+                        "$type": "System.Collections.ObjectModel.ObservableCollection`1[[NINA.Sequencer.SequenceItem.ISequenceItem, NINA.Sequencer]], System.ObjectModel",
+                        "$values": []
+                      }
+                    }
+                  }
+                ]
+              },
+              "Items": {
+                "$id": "dso-items",
+                "$type": "System.Collections.ObjectModel.ObservableCollection`1[[NINA.Sequencer.SequenceItem.ISequenceItem, NINA.Sequencer]], System.ObjectModel",
+                "$values": [
+                  {
+                    "$id": "level-1",
+                    "$type": "NINA.Sequencer.Container.SequentialContainer, NINA.Sequencer",
+                    "Name": "Level 1",
+                    "Parent": { "$ref": "dso" },
+                    "Conditions": {
+                      "$id": "level-1-conditions",
+                      "$type": "System.Collections.ObjectModel.ObservableCollection`1[[NINA.Sequencer.Conditions.ISequenceCondition, NINA.Sequencer]], System.ObjectModel",
+                      "$values": [
+                        {
+                          "$id": "outer-loop",
+                          "$type": "NINA.Sequencer.Conditions.LoopCondition, NINA.Sequencer",
+                          "CompletedIterations": 0,
+                          "Iterations": 2,
+                          "IterationsDefinition": "2",
+                          "Parent": { "$ref": "level-1" }
+                        }
+                      ]
+                    },
+                    "Items": {
+                      "$id": "level-1-items",
+                      "$type": "System.Collections.ObjectModel.ObservableCollection`1[[NINA.Sequencer.SequenceItem.ISequenceItem, NINA.Sequencer]], System.ObjectModel",
+                      "$values": [
+                        {
+                          "$id": "level-2",
+                          "$type": "NINA.Sequencer.Container.SequentialContainer, NINA.Sequencer",
+                          "Name": "Level 2",
+                          "Parent": { "$ref": "level-1" },
+                          "Items": {
+                            "$id": "level-2-items",
+                            "$type": "System.Collections.ObjectModel.ObservableCollection`1[[NINA.Sequencer.SequenceItem.ISequenceItem, NINA.Sequencer]], System.ObjectModel",
+                            "$values": [
+                              {
+                                "$id": "level-3",
+                                "$type": "NINA.Sequencer.Container.SequentialContainer, NINA.Sequencer",
+                                "Name": "Level 3",
+                                "Parent": { "$ref": "level-2" },
+                                "Items": {
+                                  "$id": "level-3-items",
+                                  "$type": "System.Collections.ObjectModel.ObservableCollection`1[[NINA.Sequencer.SequenceItem.ISequenceItem, NINA.Sequencer]], System.ObjectModel",
+                                  "$values": [
+                                    {
+                                      "$id": "level-4",
+                                      "$type": "NINA.Sequencer.Container.SequentialContainer, NINA.Sequencer",
+                                      "Name": "Level 4",
+                                      "Parent": { "$ref": "level-3" },
+                                      "Conditions": {
+                                        "$id": "level-4-conditions",
+                                        "$type": "System.Collections.ObjectModel.ObservableCollection`1[[NINA.Sequencer.Conditions.ISequenceCondition, NINA.Sequencer]], System.ObjectModel",
+                                        "$values": [
+                                          {
+                                            "$id": "inner-loop",
+                                            "$type": "NINA.Sequencer.Conditions.LoopCondition, NINA.Sequencer",
+                                            "CompletedIterations": 0,
+                                            "Iterations": 3,
+                                            "IterationsDefinition": "3",
+                                            "Parent": { "$ref": "level-4" }
+                                          }
+                                        ]
+                                      },
+                                      "Items": {
+                                        "$id": "level-4-items",
+                                        "$type": "System.Collections.ObjectModel.ObservableCollection`1[[NINA.Sequencer.SequenceItem.ISequenceItem, NINA.Sequencer]], System.ObjectModel",
+                                        "$values": [
+                                          {
+                                            "$id": "level-5",
+                                            "$type": "NINA.Sequencer.Container.SequentialContainer, NINA.Sequencer",
+                                            "Name": "Level 5",
+                                            "Parent": { "$ref": "level-4" },
+                                            "Items": {
+                                              "$id": "level-5-items",
+                                              "$type": "System.Collections.ObjectModel.ObservableCollection`1[[NINA.Sequencer.SequenceItem.ISequenceItem, NINA.Sequencer]], System.ObjectModel",
+                                              "$values": [
+                                                {
+                                                  "$id": "expression-exposure",
+                                                  "$type": "NINA.Sequencer.SequenceItem.Imaging.TakeExposure, NINA.Sequencer",
+                                                  "ExposureTimeExpression": {
+                                                    "$id": "exposure-expression",
+                                                    "$type": "NINA.Sequencer.Logic.Expression, NINA.Sequencer",
+                                                    "Definition": "ExposureSeconds * 2"
+                                                  },
+                                                  "ExposureTime": 30,
+                                                  "ExposureTimeDefinition": "ExposureSeconds * 2",
+                                                  "ImageType": "LIGHT",
+                                                  "Parent": { "$ref": "level-5" }
+                                                },
+                                                {
+                                                  "$id": "subframe-exposure",
+                                                  "$type": "NINA.Sequencer.SequenceItem.Imaging.TakeSubframeExposure, NINA.Sequencer",
+                                                  "ExposureTime": 2.5,
+                                                  "Subframe": {
+                                                    "$id": "subframe-roi",
+                                                    "$type": "NINA.Core.Model.Equipment.Subframe, NINA.Core",
+                                                    "X": 320,
+                                                    "Y": 180,
+                                                    "Width": 640,
+                                                    "Height": 480
+                                                  },
+                                                  "Binning": {
+                                                    "$id": "subframe-binning",
+                                                    "$type": "NINA.Core.Model.Equipment.BinningMode, NINA.Core",
+                                                    "X": 2,
+                                                    "Y": 2
+                                                  },
+                                                  "Parent": { "$ref": "level-5" }
+                                                }
+                                              ]
+                                            }
+                                          }
+                                        ]
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "$id": "end",
+        "$type": "NINA.Sequencer.Container.EndAreaContainer, NINA.Sequencer",
+        "Name": "End",
+        "Parent": { "$ref": "root" },
+        "Items": {
+          "$id": "end-items",
+          "$type": "System.Collections.ObjectModel.ObservableCollection`1[[NINA.Sequencer.SequenceItem.ISequenceItem, NINA.Sequencer]], System.ObjectModel",
+          "$values": [
+            {
+              "$id": "auto-flat",
+              "$type": "NINA.Sequencer.SequenceItem.FlatDevice.AutoExposureFlat, NINA.Sequencer",
+              "HistogramMeanTarget": 0.5,
+              "HistogramTolerance": 0.05,
+              "Parent": { "$ref": "end" }
+            },
+            {
+              "$id": "set-switch",
+              "$type": "NINA.Sequencer.SequenceItem.Switch.SetSwitchValue, NINA.Sequencer",
+              "SwitchName": "Roof relay",
+              "Value": 1,
+              "Parent": { "$ref": "end" }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

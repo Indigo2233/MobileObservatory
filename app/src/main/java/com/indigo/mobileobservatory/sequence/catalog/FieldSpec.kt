@@ -9,6 +9,7 @@ enum class SupportLevel { Execute, Pause, Retain }
 enum class SequenceDevice {
     Camera,
     CameraCooling,
+    CameraUsbBandwidth,
     DewHeater,
     FilterWheel,
     Focuser,

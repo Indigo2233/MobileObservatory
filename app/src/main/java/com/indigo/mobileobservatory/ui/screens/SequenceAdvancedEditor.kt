@@ -29,6 +29,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -47,6 +48,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -66,6 +68,7 @@ import com.indigo.mobileobservatory.sequence.collectionNodes
 import com.indigo.mobileobservatory.sequence.dsoPositionAngle
 import com.indigo.mobileobservatory.sequence.dsoTargetName
 import com.indigo.mobileobservatory.sequence.findSequenceNode
+import com.indigo.mobileobservatory.sequence.setAllSequenceExpanded
 import com.indigo.mobileobservatory.sequence.setSequenceField
 import com.indigo.mobileobservatory.ui.screens.sequence.LocalSequenceDrag
 import com.indigo.mobileobservatory.ui.screens.sequence.SequenceAddPanel
@@ -207,6 +210,25 @@ fun SequenceAdvancedEditor(
                         .verticalScroll(treeScroll)
                 ) {
                     Column(Modifier.fillMaxWidth().padding(end = 8.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            TextButton(
+                                onClick = { runtime.editSequence { setAllSequenceExpanded(it, false) } },
+                                enabled = editing,
+                                modifier = Modifier.testTag("sequence_collapse_all")
+                            ) {
+                                Text(stringResource(R.string.sequence_collapse_all))
+                            }
+                            TextButton(
+                                onClick = { runtime.editSequence { setAllSequenceExpanded(it, true) } },
+                                enabled = editing,
+                                modifier = Modifier.testTag("sequence_expand_all")
+                            ) {
+                                Text(stringResource(R.string.sequence_expand_all))
+                            }
+                        }
                         SequenceGlobalTriggers(root, actions)
                         if (start != null) {
                             SequenceArea(
@@ -301,7 +323,10 @@ fun SequenceAdvancedEditor(
 
     val request = adding
     if (!landscape && request != null) {
-        ModalBottomSheet(onDismissRequest = { adding = null }) {
+        ModalBottomSheet(
+            onDismissRequest = { adding = null },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ) {
             SequenceAddPanel(
                 slot = request.slot,
                 chinese = chinese,

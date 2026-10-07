@@ -1,6 +1,6 @@
 # Quality and validation status
 
-Last reviewed: 2026-08-14
+Last reviewed: 2026-10-07
 
 This document distinguishes automated evidence, hardware evidence, and pending
 product claims. A compiled implementation is not recorded as hardware-validated.
@@ -19,8 +19,17 @@ push to `main`:
 - report upload.
 
 Instrumentation tests are compiled in CI and still require an Android device or a
-compatible emulator for execution. The APK contains arm64 vendor native libraries,
-which prevents treating a standard x86_64 hosted emulator as representative.
+compatible emulator for execution. `Build.ps1 -EmulatorTest` produces an isolated
+x86/x86_64 debug APK with deterministic virtual sequence devices. This validates
+sequence editing, execution, FITS output, and session persistence on a hosted
+emulator. Vendor camera, USB, and mount behavior remains part of hardware evidence.
+
+Sequence compatibility automation includes a hand-written complex NINA JSON
+fixture with retained nodes, expressions, references, deep nesting, and subframe
+ROI. A Compose device test runs a six-level advanced sequence in a 360 x 640 dp
+portrait viewport and verifies deep insertion plus access to the end area. Desktop
+NINA and physical-phone bidirectional file acceptance remains a hardware evidence
+gate documented in `docs/testing/NINA_SEQUENCE_ACCEPTANCE.md`.
 
 ## Hardware evidence
 
@@ -36,6 +45,7 @@ Known pending gates include:
 - main-camera plus guide-camera combinations;
 - Android 12–15 permission and reconnect coverage;
 - accessibility at 200% font scale on physical small-screen devices;
+- desktop NINA to physical-phone bidirectional sequence file acceptance;
 - production-signed release upgrade testing.
 
 ## Phone plate-solving maturity

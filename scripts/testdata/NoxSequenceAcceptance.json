@@ -1,0 +1,71 @@
+{
+  "$id": "root",
+  "$type": "NINA.Sequencer.Container.SequenceRootContainer, NINA.Sequencer",
+  "Name": "Nox Sequence Acceptance",
+  "Items": {
+    "$values": [
+      {
+        "$id": "start",
+        "$type": "NINA.Sequencer.Container.StartAreaContainer, NINA.Sequencer",
+        "Name": "开始",
+        "Items": {
+          "$values": [
+            {
+              "$id": "message",
+              "$type": "NINA.Sequencer.SequenceItem.Utility.MessageBox, NINA.Sequencer",
+              "Text": "Check focus before continuing",
+              "Parent": { "$ref": "start" }
+            },
+            {
+              "$id": "dew",
+              "$type": "NINA.Sequencer.SequenceItem.Camera.DewHeater, NINA.Sequencer",
+              "OnOff": true,
+              "Parent": { "$ref": "start" }
+            },
+            {
+              "$id": "usb",
+              "$type": "NINA.Sequencer.SequenceItem.Camera.SetUSBLimit, NINA.Sequencer",
+              "USBLimit": 40,
+              "Parent": { "$ref": "start" }
+            },
+            {
+              "$id": "light",
+              "$type": "NINA.Sequencer.SequenceItem.FlatDevice.ToggleLight, NINA.Sequencer",
+              "OnOff": true,
+              "Parent": { "$ref": "start" }
+            },
+            {
+              "$id": "brightness",
+              "$type": "NINA.Sequencer.SequenceItem.FlatDevice.SetBrightness, NINA.Sequencer",
+              "Brightness": 25,
+              "Parent": { "$ref": "start" }
+            }
+          ]
+        },
+        "Conditions": { "$values": [] },
+        "Triggers": { "$values": [] },
+        "Parent": { "$ref": "root" }
+      },
+      {
+        "$id": "targets",
+        "$type": "NINA.Sequencer.Container.TargetAreaContainer, NINA.Sequencer",
+        "Name": "目标",
+        "Items": { "$values": [] },
+        "Conditions": { "$values": [] },
+        "Triggers": { "$values": [] },
+        "Parent": { "$ref": "root" }
+      },
+      {
+        "$id": "end",
+        "$type": "NINA.Sequencer.Container.EndAreaContainer, NINA.Sequencer",
+        "Name": "结束",
+        "Items": { "$values": [] },
+        "Conditions": { "$values": [] },
+        "Triggers": { "$values": [] },
+        "Parent": { "$ref": "root" }
+      }
+    ]
+  },
+  "Conditions": { "$values": [] },
+  "Triggers": { "$values": [] }
+}

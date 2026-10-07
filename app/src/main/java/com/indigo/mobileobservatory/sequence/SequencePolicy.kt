@@ -38,6 +38,18 @@ fun knownCondition(className: String): Boolean = className in setOf(
     "MoonIlluminationCondition"
 )
 
+fun knownTrigger(className: String): Boolean = className in setOf(
+    "MeridianFlipTrigger",
+    "CenterAfterDriftTrigger",
+    "DitherAfterExposures",
+    "RestoreGuiding",
+    "AutofocusAfterExposures",
+    "AutofocusAfterTimeTrigger",
+    "AutofocusAfterTemperatureChangeTrigger",
+    "AutofocusAfterFilterChange",
+    "AutofocusAfterHFRIncreaseTrigger"
+)
+
 fun loopAllows(condition: NinaNode, completed: Int): Boolean {
     val limit = expressionNumber(condition, "Iterations") ?: 2.0
     return completed < limit

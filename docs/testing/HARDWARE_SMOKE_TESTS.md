@@ -67,6 +67,10 @@ Test on Android 12, 13, 14, and 15 where available.
 
 Night check for the sequence tab. Code through the autofocus routine is in place; this section is the hardware acceptance and is still open.
 
+Run the bidirectional NINA file, retained-node, expression, subframe ROI, and
+portrait nesting matrix in `docs/testing/NINA_SEQUENCE_ACCEPTANCE.md` for any
+release that changes sequence import, editing, execution, or export.
+
 - One target, two filters, at least two frames each. The run finishes without anyone touching the camera page.
 - Pause during an exposure, then resume. The FITS files that were written open cleanly.
 - With guiding already calibrated, the sequence starts guiding and dithers on the chosen interval. Guiding locks again after the dither.

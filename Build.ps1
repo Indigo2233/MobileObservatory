@@ -3,7 +3,8 @@ param(
     [switch]$NonCommercial,
     [switch]$Release,
     [switch]$ShowSequence,
-    [switch]$HideSequence
+    [switch]$HideSequence,
+    [switch]$EmulatorTest
 )
 
 $ErrorActionPreference = "Stop"
@@ -11,13 +12,23 @@ $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 if ($ShowSequence -and $HideSequence) {
     throw "Use either -ShowSequence or -HideSequence."
 }
+if ($EmulatorTest -and $Release) {
+    throw "EmulatorTest is restricted to debug builds."
+}
+if ($EmulatorTest -and $HideSequence) {
+    throw "EmulatorTest requires the sequence UI."
+}
 # The advanced sequencer is hidden by default; opt in for development builds.
-$sequenceEnabled = $ShowSequence.IsPresent
+$sequenceEnabled = $ShowSequence.IsPresent -or $EmulatorTest.IsPresent
 $buildType = if ($Release) { "release" } else { "debug" }
 $gradleTask = if ($Release) { "assembleRelease" } else { "assembleDebug" }
 $apk = Join-Path $root "app\build\outputs\apk\$buildType\app-$buildType.apk"
 $apkMetadata = Join-Path $root "app\build\outputs\apk\$buildType\output-metadata.json"
-$apkOut = Join-Path $root "bin\Installer\IndigoObservatory_android.apk"
+$apkOut = if ($EmulatorTest) {
+    Join-Path $root "bin\Installer\IndigoObservatory_emulator_test.apk"
+} else {
+    Join-Path $root "bin\Installer\IndigoObservatory_android.apk"
+}
 
 function Test-ValidApkArchive {
     param([Parameter(Mandatory = $true)][string]$Path)
@@ -86,6 +97,7 @@ try {
         $gradleArgs += "-PstellariumNonCommercial=true"
     }
     $gradleArgs += "-PsequenceEnabled=$($sequenceEnabled.ToString().ToLowerInvariant())"
+    $gradleArgs += "-PemulatorTest=$($EmulatorTest.IsPresent.ToString().ToLowerInvariant())"
 
     & .\gradlew.bat @gradleArgs
     if ($LASTEXITCODE -ne 0) {
@@ -105,8 +117,10 @@ try {
         [string]::IsNullOrWhiteSpace([string]$apkElement.versionName)) {
         throw "Gradle APK metadata does not contain a version code and name: $apkMetadata"
     }
+    $apkStem = if ($EmulatorTest) { "IndigoObservatory_emulator_test" } else { "IndigoObservatory_android" }
     $versionedApkOut = Join-Path $root (
-        "bin\Installer\IndigoObservatory_android_v{0}-build{1}.apk" -f
+        "bin\Installer\{0}_v{1}-build{2}.apk" -f
+        $apkStem,
         $apkElement.versionName,
         $apkElement.versionCode
     )
@@ -166,6 +180,8 @@ try {
         "signingCertificateSha256=$signingCertificateSha256"
         "stellariumIncluded=$($NonCommercial.IsPresent)"
         "sequenceEnabled=$sequenceEnabled"
+        "emulatorTest=$($EmulatorTest.IsPresent)"
+        "abis=$(if ($EmulatorTest) { 'x86,x86_64' } else { 'arm64-v8a' })"
         "builtAtUtc=$([DateTime]::UtcNow.ToString('o'))"
     ) | Set-Content -LiteralPath $buildInfoOut -Encoding utf8
 

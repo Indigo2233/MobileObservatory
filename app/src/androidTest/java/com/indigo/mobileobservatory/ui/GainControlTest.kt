@@ -10,6 +10,8 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performTextReplacement
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.camera.GainCapability
 import com.indigo.mobileobservatory.camera.GainValueNormalizer
 import com.indigo.mobileobservatory.ui.components.GainControl
@@ -27,6 +29,7 @@ class GainControlTest {
     @Test
     fun invalidTextRestoresThePreviousValue() {
         val submitted = mutableListOf<Float>()
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
         compose.setContent {
             MaterialTheme {
                 GainControl(
@@ -40,7 +43,7 @@ class GainControlTest {
         compose.onNodeWithTag("gain_input").performTextReplacement("abc")
         compose.onNodeWithTag("gain_input").performImeAction()
         compose.onNodeWithTag("gain_input").assertTextContains("100")
-        compose.onNodeWithText("Enter a valid number").assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.gain_input_invalid)).assertIsDisplayed()
         assertTrue(submitted.isEmpty())
     }
 

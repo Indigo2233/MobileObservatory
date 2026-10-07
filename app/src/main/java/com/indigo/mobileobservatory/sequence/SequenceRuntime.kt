@@ -36,19 +36,30 @@ data class AutofocusRun(
 )
 
 interface SequenceHardware {
-    suspend fun takeExposure(seconds: Double, gain: Int, offset: Int, destDir: File): SessionFrame
+    suspend fun takeExposure(
+        seconds: Double,
+        gain: Int,
+        offset: Int,
+        destDir: File,
+        binning: Int = 1,
+        imageType: String = "LIGHT"
+    ): SessionFrame
     suspend fun switchFilter(name: String)
-    suspend fun cool(targetC: Double)
-    suspend fun warm()
+    suspend fun cool(targetC: Double, durationMinutes: Double = 0.0)
+    suspend fun warm(durationMinutes: Double = 0.0)
     suspend fun slew(raHours: Double, decDeg: Double)
     suspend fun center(raHours: Double, decDeg: Double)
     suspend fun plateSolve(): Pair<Double, Double>
     suspend fun syncMount(raHours: Double, decDeg: Double)
-    suspend fun guide(enabled: Boolean)
+    suspend fun guide(enabled: Boolean, forceCalibration: Boolean = false)
     suspend fun dither(radiusPx: Double)
     suspend fun tracking(mode: Int)
     suspend fun goHome()
     suspend fun cover(open: Boolean)
+    suspend fun dewHeater(on: Boolean)
+    suspend fun usbLimit(value: Int)
+    suspend fun flatLight(on: Boolean)
+    suspend fun flatBrightness(value: Int)
     suspend fun moveFocuser(position: Int)
     suspend fun rotateTo(angleDeg: Double)
     suspend fun autofocus(destDir: File): AutofocusRun
@@ -75,7 +86,7 @@ class SequenceRuntime(
     val mode: StateFlow<SequenceEditorMode> = _mode.asStateFlow()
     private val _draft = MutableStateFlow(
         SimpleSequenceDraft(title = "Target", raHours = 0.0, decDegrees = 0.0, rows = listOf(
-            SimpleExposureRow(filterName = null, exposureSeconds = 30.0, gain = 0, offset = 0, count = 1)
+            SimpleExposureRow(filterName = null, exposureSeconds = 30.0, gain = -1, offset = -1, count = 1)
         ))
     )
     val draft: StateFlow<SimpleSequenceDraft> = _draft.asStateFlow()
@@ -181,6 +192,40 @@ class SequenceRuntime(
         _generation.value = _generation.value + 1
     }
 
+    fun exportJson(): String = currentDocument().toJson()
+
+    fun suggestedFileName(): String {
+        val root = currentDocument()
+        val name = root.textField("Name") ?: _draft.value.title.ifBlank { "sequence" }
+        return "${sequenceFileStem(name)}.json"
+    }
+
+    fun shareFile(): File {
+        templatesDir.mkdirs()
+        val file = File(templatesDir, suggestedFileName())
+        file.writeText(exportJson())
+        return file
+    }
+
+    fun importJson(name: String?, json: String) {
+        val root = parseNinaSequence(json)
+        _document.value = root
+        _mode.value = SequenceEditorMode.Advanced
+        history.clear()
+        publishHistory()
+        templatesDir.mkdirs()
+        val stem = sequenceFileStem(
+            name
+                ?.substringAfterLast('/')
+                ?.substringBeforeLast('.', missingDelimiterValue = name)
+                ?.takeIf { it.isNotBlank() }
+                ?: root.textField("Name")
+                ?: "sequence"
+        )
+        File(templatesDir, "$stem.json").writeText(root.toJson())
+        _generation.value = _generation.value + 1
+    }
+
     fun saveSetTemplate(id: String): Boolean {
         val node = findSequenceNode(currentDocument(), id) ?: return false
         if (sequenceStructural(node)) return false
@@ -255,7 +300,11 @@ class SequenceRuntime(
         _autofocus.value = emptyList()
         guidingWanted = false
         runSettings = settings.copy(
-            ditherPixels = if (settings.ditherPixels > 0.0) settings.ditherPixels else _draft.value.ditherPixels
+            ditherPixels = if (_mode.value == SequenceEditorMode.Simple) {
+                _draft.value.ditherPixels.coerceAtLeast(0.0)
+            } else {
+                settings.ditherPixels.coerceAtLeast(0.0)
+            }
         )
         _locked.value = true
         scope.launch {
@@ -301,16 +350,24 @@ class SequenceRuntime(
                 val dir = sessionDir ?: sessionsDir
                 val frame = hardware.takeExposure(
                     seconds = expressionNumber(instruction, "ExposureTime") ?: 1.0,
-                    gain = (expressionNumber(instruction, "Gain") ?: -1.0).toInt().let { if (it < 0) 0 else it },
-                    offset = (expressionNumber(instruction, "Offset") ?: -1.0).toInt().let { if (it < 0) 0 else it },
-                    destDir = dir
+                    gain = (expressionNumber(instruction, "Gain") ?: -1.0).toInt(),
+                    offset = (expressionNumber(instruction, "Offset") ?: -1.0).toInt(),
+                    destDir = dir,
+                    binning = ((instruction.fields["Binning"] as? NinaValue.Obj)?.node?.intField("X") ?: 1)
+                        .coerceAtLeast(1),
+                    imageType = instruction.textField("ImageType")?.ifBlank { "LIGHT" } ?: "LIGHT"
                 )
                 _frames.value = _frames.value + frame
                 writeSession(currentDocument())
             }
             "SwitchFilter" -> hardware.switchFilter(instruction.textField("ComboBoxText").orEmpty())
-            "CoolCamera" -> hardware.cool(expressionNumber(instruction, "Temperature") ?: 0.0)
-            "WarmCamera" -> hardware.warm()
+            "CoolCamera" -> hardware.cool(
+                targetC = expressionNumber(instruction, "Temperature") ?: 0.0,
+                durationMinutes = expressionNumber(instruction, "Duration") ?: 0.0
+            )
+            "WarmCamera" -> hardware.warm(
+                durationMinutes = expressionNumber(instruction, "Duration") ?: 0.0
+            )
             "SlewScopeToRaDec" -> {
                 val inherited = (instruction.fields["Inherited"] as? NinaValue.Bool)?.value == true
                 val ra = if (inherited) target?.first else instruction.doubleField("RAHours") ?: target?.first
@@ -348,7 +405,8 @@ class SequenceRuntime(
             )
             "StartGuiding" -> {
                 guidingWanted = true
-                hardware.guide(true)
+                val forceCalibration = (instruction.fields["ForceCalibration"] as? NinaValue.Bool)?.value == true
+                hardware.guide(true, forceCalibration)
             }
             "StopGuiding" -> {
                 guidingWanted = false
@@ -359,6 +417,12 @@ class SequenceRuntime(
             "FindHome" -> hardware.goHome()
             "OpenCover" -> hardware.cover(true)
             "CloseCover" -> hardware.cover(false)
+            "DewHeater" -> hardware.dewHeater((instruction.fields["OnOff"] as? NinaValue.Bool)?.value == true)
+            "SetUSBLimit" -> hardware.usbLimit(instruction.intField("USBLimit") ?: 0)
+            "ToggleLight" -> hardware.flatLight((instruction.fields["OnOff"] as? NinaValue.Bool)?.value == true)
+            "SetBrightness" -> hardware.flatBrightness(
+                (expressionNumber(instruction, "Brightness") ?: 0.0).toInt()
+            )
             "MoveFocuserAbsolute" -> hardware.moveFocuser(
                 (expressionNumber(instruction, "Position") ?: 0.0).toInt()
             )

@@ -157,6 +157,84 @@ class SequenceEngineTest {
     }
 
     @Test
+    fun `expression preflight and runtime pause agree and skip continues`() = runTest {
+        val root = SimpleSequenceDraft(
+            title = "Expressions",
+            raHours = 1.0,
+            decDegrees = 2.0,
+            rows = listOf(
+                SimpleExposureRow(null, 10.0, 0, 0, count = 1),
+                SimpleExposureRow(null, 30.0, 0, 0, count = 1)
+            )
+        ).toNinaSequence()
+        val firstExposure = root.find("TakeExposure").first()
+        putExpression(
+            firstExposure.fields,
+            "ExposureTime",
+            "ExposureSeconds * 2",
+            NinaValue.Num(10.0, integral = true),
+            "unsupported-expression"
+        )
+        val issues = com.indigo.mobileobservatory.sequence.catalog.validateSequence(
+            root,
+            com.indigo.mobileobservatory.sequence.catalog.SequenceHardwareSnapshot(cameraConnected = true)
+        )
+        assertTrue(issues.any { it.nodeId == firstExposure.id && it.messageEn.contains("Expression") })
+
+        val port = RecordingPort()
+        val engine = SequenceEngine(port)
+        val job = launch { engine.run(root) }
+        testScheduler.advanceUntilIdle()
+
+        assertEquals(SequencePhase.Paused, engine.state.phase)
+        assertEquals("TakeExposure", engine.state.currentClassName)
+        assertTrue(engine.state.message.orEmpty().contains("expression"))
+        assertTrue(port.exposures.isEmpty())
+
+        engine.control.requestSkip()
+        job.join()
+
+        assertEquals(SequencePhase.Completed, engine.state.phase)
+        assertEquals(listOf(30.0), port.exposures)
+    }
+
+    @Test
+    fun `representative retained nodes pause in order and later exposure runs`() = runTest {
+        val root = SimpleSequenceDraft(
+            title = "Retained",
+            raHours = 1.0,
+            decDegrees = 2.0,
+            rows = listOf(SimpleExposureRow(null, 8.0, 0, 0, count = 1))
+        ).toNinaSequence()
+        val start = root.childItems().first { it.className == "StartAreaContainer" }
+        val retainedIds = listOf(
+            "ExternalScript",
+            "ConnectEquipment",
+            "Constant",
+            "OpenDomeShutter",
+            "WaitUntilSafe",
+            "LinkedTemplateContainer",
+            "AutoExposureFlat",
+            "TakeSubframeExposure"
+        )
+        retainedIds.forEach { id -> assertTrue(addSequenceNode(root, checkNotNull(start.id), id)) }
+        val port = RecordingPort()
+        val engine = SequenceEngine(port)
+        val job = launch { engine.run(root) }
+
+        retainedIds.forEach { expected ->
+            testScheduler.advanceUntilIdle()
+            assertEquals(SequencePhase.Paused, engine.state.phase)
+            assertEquals(expected, engine.state.currentClassName)
+            engine.control.requestSkip()
+        }
+        job.join()
+
+        assertEquals(SequencePhase.Completed, engine.state.phase)
+        assertEquals(listOf(8.0), port.exposures)
+    }
+
+    @Test
     fun `annotation runs and a message box pauses until skip`() = runTest {
         val root = emptyAdvancedSequence("Tonight")
         val startId = checkNotNull(root.childItems()[0].id)
@@ -172,6 +250,29 @@ class SequenceEngineTest {
         engine.control.requestSkip()
         job.join()
         assertEquals(SequencePhase.Completed, engine.state.phase)
+    }
+
+    @Test
+    fun `message box can continue without skipping the node`() = runTest {
+        val root = emptyAdvancedSequence("Tonight")
+        val startId = checkNotNull(root.childItems()[0].id)
+        assertTrue(addSequenceNode(root, startId, "MessageBox"))
+        val message = root.find("MessageBox").single()
+        message.fields["Text"] = NinaValue.Text("Check focus")
+        val port = RecordingPort()
+        val engine = SequenceEngine(port)
+        val job = launch { engine.run(root) }
+        testScheduler.advanceUntilIdle()
+
+        assertEquals(SequencePhase.Paused, engine.state.phase)
+        assertEquals("MessageBox", engine.state.currentClassName)
+        assertEquals("Check focus", engine.state.message)
+
+        engine.control.resume()
+        job.join()
+
+        assertEquals(SequencePhase.Completed, engine.state.phase)
+        assertEquals("FINISHED", engine.state.nodeStatus[message.id])
     }
 
     @Test
@@ -292,6 +393,50 @@ class SequenceEngineTest {
         val state = SequenceEngine(port).run(root)
         assertEquals(SequencePhase.Completed, state.phase)
         assertEquals(2, port.exposures.size)
+    }
+
+    @Test
+    fun `parallel instruction set honors its loop condition`() = runTest {
+        val root = emptyAdvancedSequence("P")
+        val startId = checkNotNull(root.childItems()[0].id)
+        assertTrue(addSequenceNode(root, startId, "ParallelContainer"))
+        val parallel = root.childItems()[0].childItems().single { it.className == "ParallelContainer" }
+        val parallelId = checkNotNull(parallel.id)
+        assertTrue(addSequenceNode(root, parallelId, "TakeExposure"))
+        assertTrue(addSequenceNode(root, parallelId, "LoopCondition"))
+        val loop = parallel.collectionNodes("Conditions").single()
+        assertTrue(setSequenceField(root, checkNotNull(loop.id), "Iterations", "2"))
+
+        val port = RecordingPort()
+        val state = SequenceEngine(port).run(root)
+
+        assertEquals(SequencePhase.Completed, state.phase)
+        assertEquals(2, port.exposures.size)
+    }
+
+    @Test
+    fun `unknown trigger pauses before its target runs`() = runTest {
+        val root = sample()
+        val target = root.childItems()[1].childItems().single()
+        val unknown = NinaNode(
+            type = "NINA.Sequencer.Trigger.Plugin.PluginOnlyTrigger, Plugin",
+            id = "unknown-trigger",
+            fields = linkedMapOf("Parent" to NinaValue.Ref(checkNotNull(target.id)))
+        )
+        val triggers = target.fields.getValue("Triggers") as NinaValue.Collection
+        target.fields["Triggers"] = triggers.copy(values = listOf(NinaValue.Obj(unknown)))
+        val port = RecordingPort()
+        val engine = SequenceEngine(port)
+
+        val job = launch { engine.run(root) }
+        testScheduler.advanceUntilIdle()
+
+        assertEquals(SequencePhase.Paused, engine.state.phase)
+        assertEquals("PluginOnlyTrigger", engine.state.currentClassName)
+        assertTrue(port.exposures.isEmpty())
+        engine.control.requestSkip()
+        job.join()
+        assertEquals(SequencePhase.Completed, engine.state.phase)
     }
 
     @Test

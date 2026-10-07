@@ -250,9 +250,7 @@ class SequenceEngine(
         if (node.className == "ParkScope" || node.className == "UnparkScope") {
             return pauseOnUnknown(node, "mount cannot park")
         }
-        if (node.className == "MessageBox") {
-            return pauseOnUnknown(node, node.textField("Text") ?: "message")
-        }
+        if (node.className == "MessageBox") return pauseForMessage(node)
         if (isContainer(node)) {
             status[node] = EntityStatus.RUNNING
             val outcome = if (node.className == "ParallelContainer") runParallel(node) else runContainer(node)
@@ -311,16 +309,41 @@ class SequenceEngine(
     }
 
     private suspend fun runParallel(container: NinaNode): Outcome {
-        val items = container.childItems().filter { entityStatus(it) != EntityStatus.DISABLED }
-        if (items.isEmpty()) return Outcome.Continue
-        val outcomes = coroutineScope {
-            items.map { item -> async { runNode(item) } }.awaitAll()
+        for (condition in container.collectionNodes("Conditions")) {
+            if (entityStatus(condition) == EntityStatus.DISABLED) continue
+            if (!knownCondition(condition.className)) pauseOnUnknown(condition)
         }
-        return when {
-            outcomes.contains(Outcome.Abort) -> Outcome.Abort
-            outcomes.contains(Outcome.JumpToEnd) -> Outcome.JumpToEnd
-            else -> Outcome.Continue
+        iterations[container] = 0
+        containerStartedAt[container] = world.nowMillis()
+        while (canContinue(container)) {
+            val items = container.childItems().filter { entityStatus(it) != EntityStatus.DISABLED }
+            if (items.isEmpty()) break
+            val outcomes = coroutineScope {
+                items.map { item -> async { runNode(item) } }.awaitAll()
+            }
+            when {
+                outcomes.contains(Outcome.Abort) -> return Outcome.Abort
+                outcomes.contains(Outcome.JumpToEnd) -> return Outcome.JumpToEnd
+                outcomes.contains(Outcome.SkipRest) -> {
+                    skipCreated(container)
+                    return Outcome.Continue
+                }
+            }
+            iterations[container] = (iterations[container] ?: 0) + 1
+            container.collectionNodes("Conditions").forEach { condition ->
+                if (condition.className == "LoopCondition") {
+                    val done = completedIterations.getOrPut(condition) {
+                        condition.intField("CompletedIterations") ?: 0
+                    }
+                    completedIterations[condition] = done + 1
+                }
+            }
+            if (canContinue(container)) {
+                container.childItems().forEach { child -> resetTree(child) }
+            }
         }
+        skipCreated(container)
+        return Outcome.Continue
     }
 
     private fun canContinue(container: NinaNode): Boolean {
@@ -444,6 +467,21 @@ class SequenceEngine(
         return Outcome.Continue
     }
 
+    private suspend fun pauseForMessage(node: NinaNode): Outcome {
+        currentNodeId = node.id
+        status[node] = EntityStatus.RUNNING
+        control.pause()
+        commit(snapshot(SequencePhase.Paused, node.className, node.textField("Text") ?: "message"))
+        control.checkpoint()
+        if (control.consumeSkip()) {
+            status[node] = EntityStatus.SKIPPED
+        } else {
+            status[node] = EntityStatus.FINISHED
+        }
+        publish(SequencePhase.Running)
+        return Outcome.Continue
+    }
+
     private fun liveSignals(): SequenceSignals {
         val now = world.nowMillis()
         return SequenceSignals(
@@ -486,9 +524,12 @@ class SequenceEngine(
         var current: NinaNode? = parents[anchor] ?: if (isContainer(anchor)) anchor else null
         while (current != null) {
             triggers += current.collectionNodes("Triggers").filter {
-                entityStatus(it) != EntityStatus.DISABLED
+                entityStatus(it) != EntityStatus.DISABLED && entityStatus(it) != EntityStatus.SKIPPED
             }
             current = parents[current]
+        }
+        for (trigger in triggers.filterNot { knownTrigger(it.className) }) {
+            pauseOnUnknown(trigger)
         }
         val due = matchingTriggers(triggers, previous, next, moment, liveSignals(), triggerMemory, settings)
         for (trigger in due) {
@@ -630,6 +671,8 @@ private val knownInstructions = setOf(
     "SwitchFilter",
     "CoolCamera",
     "WarmCamera",
+    "DewHeater",
+    "SetUSBLimit",
     "SlewScopeToRaDec",
     "SlewScopeToAltAz",
     "Center",
@@ -644,6 +687,8 @@ private val knownInstructions = setOf(
     "FindHome",
     "OpenCover",
     "CloseCover",
+    "ToggleLight",
+    "SetBrightness",
     "MoveFocuserAbsolute",
     "MoveFocuserRelative",
     "RunAutofocus",

@@ -28,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.indigo.mobileobservatory.R
@@ -224,6 +225,7 @@ private fun CatalogEntryRow(
             tonalElevation = 1.dp,
             modifier = Modifier
                 .fillMaxWidth()
+                .testTag("sequence_catalog_${entry.id}")
                 .alpha(if (dim) 0.7f else 1f)
                 .onGloballyPositioned { coords.value = it }
                 .pointerInput(entry.id, field) {
@@ -255,7 +257,10 @@ private fun CatalogEntryRow(
     } else {
         Button(
             onClick = onPick,
-            modifier = Modifier.fillMaxWidth().alpha(if (dim) 0.7f else 1f)
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("sequence_catalog_${entry.id}")
+                .alpha(if (dim) 0.7f else 1f)
         ) { Text(title) }
     }
 }

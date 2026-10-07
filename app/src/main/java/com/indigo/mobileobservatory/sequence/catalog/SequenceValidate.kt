@@ -6,10 +6,12 @@ import com.indigo.mobileobservatory.sequence.collectionNodes
 import com.indigo.mobileobservatory.sequence.doubleField
 import com.indigo.mobileobservatory.sequence.expressionIsUnsupported
 import com.indigo.mobileobservatory.sequence.expressionNumber
+import com.indigo.mobileobservatory.sequence.sequenceNodeDisabled
 
 data class SequenceHardwareSnapshot(
     val cameraConnected: Boolean = false,
     val coolingCapable: Boolean = false,
+    val usbBandwidthCapable: Boolean = false,
     val dewHeater: Boolean = false,
     val filterWheelConnected: Boolean = false,
     val focuserConnected: Boolean = false,
@@ -35,6 +37,7 @@ fun validateSequence(
 ): List<SequenceIssue> {
     val issues = ArrayList<SequenceIssue>()
     fun walk(node: NinaNode) {
+        if (sequenceNodeDisabled(node)) return
         issues += validateSequenceNode(node, hardware)
         listOf("Items", "Conditions", "Triggers").forEach { field ->
             node.collectionNodes(field).forEach { walk(it) }
@@ -50,7 +53,8 @@ fun validateSequenceNode(
     node: NinaNode,
     hardware: SequenceHardwareSnapshot = SequenceHardwareSnapshot()
 ): List<SequenceIssue> {
-    val spec = SequenceCatalog.specByClass(node.className) ?: return emptyList()
+    val spec = SequenceCatalog.specByClass(node.className)
+        ?: return listOf(issue(node, "未知序列节点", "Unknown sequence node"))
     val issues = ArrayList<SequenceIssue>()
     when (spec.level) {
         SupportLevel.Pause -> issues += issue(node, "本机暂不支持", "Not supported on this device yet")
@@ -91,6 +95,7 @@ private fun deviceAvailable(device: SequenceDevice?, hardware: SequenceHardwareS
     null -> true
     SequenceDevice.Camera -> hardware.cameraConnected
     SequenceDevice.CameraCooling -> hardware.cameraConnected && hardware.coolingCapable
+    SequenceDevice.CameraUsbBandwidth -> hardware.cameraConnected && hardware.usbBandwidthCapable
     SequenceDevice.DewHeater -> hardware.cameraConnected && hardware.dewHeater
     SequenceDevice.FilterWheel -> hardware.filterWheelConnected
     SequenceDevice.Focuser -> hardware.focuserConnected

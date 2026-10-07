@@ -9,6 +9,9 @@ val stellariumNonCommercial =
 val sequenceEnabled =
     providers.gradleProperty("sequenceEnabled").orNull?.toBooleanStrictOrNull() ?: false
 
+val emulatorTest =
+    providers.gradleProperty("emulatorTest").orNull?.toBooleanStrictOrNull() ?: false
+
 val updateManifestUrl =
     providers.gradleProperty("updateManifestUrl").orNull
         ?.takeIf { it.isNotBlank() }
@@ -55,6 +58,7 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("boolean", "STELLARIUM_ENABLED", stellariumNonCommercial.toString())
         buildConfigField("boolean", "SEQUENCE_ENABLED", sequenceEnabled.toString())
+        buildConfigField("boolean", "EMULATOR_TEST", emulatorTest.toString())
         buildConfigField("String", "UPDATE_MANIFEST_URL", buildConfigString(updateManifestUrl))
         buildConfigField(
             "String",
@@ -63,7 +67,11 @@ android {
         )
 
         ndk {
-            abiFilters += listOf("arm64-v8a")
+            abiFilters += if (emulatorTest) {
+                listOf("x86", "x86_64")
+            } else {
+                listOf("arm64-v8a")
+            }
         }
 
         externalNativeBuild {
@@ -91,6 +99,12 @@ android {
     }
 
     buildTypes {
+        debug {
+            if (emulatorTest) {
+                applicationIdSuffix = ".emulatortest"
+                versionNameSuffix = "-emulator-test"
+            }
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
@@ -162,6 +176,11 @@ val verifyReleaseSigning = tasks.register("verifyReleaseSigning") {
 }
 
 tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    if (emulatorTest) {
+        doFirst {
+            throw GradleException("emulatorTest is restricted to debug builds.")
+        }
+    }
     dependsOn(verifyReleaseSigning)
 }
 
