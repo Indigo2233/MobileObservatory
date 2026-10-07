@@ -1,5 +1,7 @@
 package com.indigo.mobileobservatory.ui.components
 
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -233,6 +235,7 @@ fun RecordBar(
                     }
                 }
                 Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -242,7 +245,7 @@ fun RecordBar(
                         onSelect = onSelectCaptureFormat
                     )
                     FormatToggle(
-                        options = listOf("SER", "PSER", "MP4"),
+                        options = listOf("SER", "PSER", "MP4", "FITS"),
                         selected = recordFormatLabel,
                         onSelect = onSelectRecordFormat
                     )

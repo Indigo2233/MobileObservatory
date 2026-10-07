@@ -89,6 +89,67 @@ enum class MediaCategory(val displayName: String, val extensions: List<String>) 
     JPG("JPG", listOf("jpg", "jpeg", "png"))
 }
 
+private fun listMediaForCategory(
+    recordingsDir: File?,
+    capturesDir: File?,
+    category: MediaCategory
+): List<VideoFileInfo> {
+    val allFiles = mutableListOf<VideoFileInfo>()
+    if (category == MediaCategory.FITS) {
+        val dirs = listOfNotNull(
+            capturesDir?.let { File(it, "FITS") },
+            recordingsDir?.let { File(it, "FITS") }
+        )
+        dirs.forEach { dir ->
+            dir.listFiles()?.forEach { f ->
+                when {
+                    f.isFile && category.extensions.any { ext -> f.extension.equals(ext, true) } -> {
+                        allFiles.add(VideoFileInfo(f, f.name, f.length(), f.extension.uppercase()))
+                    }
+                    f.isDirectory -> {
+                        val frames = f.listFiles()?.filter {
+                            it.isFile && category.extensions.any { ext -> it.extension.equals(ext, true) }
+                        }.orEmpty()
+                        if (frames.isNotEmpty()) {
+                            allFiles.add(VideoFileInfo(f, f.name, frames.sumOf { it.length() }, "FITS"))
+                        }
+                    }
+                }
+            }
+        }
+        return allFiles.sortedByDescending { it.file.lastModified() }
+    }
+    val searchDirs = when (category) {
+        MediaCategory.SER_PSER -> listOfNotNull(
+            recordingsDir?.let { File(it, "SER") },
+            recordingsDir?.let { File(it, "PSER") }
+        )
+        MediaCategory.MP4 -> listOfNotNull(
+            recordingsDir?.let { File(it, "MP4") }
+        )
+        MediaCategory.JPG -> listOfNotNull(
+            capturesDir?.let { File(it, "JPG") }
+        )
+        MediaCategory.FITS -> emptyList()
+    }
+    searchDirs.forEach { dir ->
+        dir.listFiles()?.filter { f ->
+            f.isFile && category.extensions.any { ext -> f.extension.equals(ext, true) }
+        }?.forEach { f ->
+            allFiles.add(VideoFileInfo(f, f.name, f.length(), f.extension.uppercase()))
+        }
+    }
+    return allFiles.sortedByDescending { it.file.lastModified() }
+}
+
+private fun firstFitsIn(file: File): File? {
+    if (file.isFile) return file
+    return file.listFiles()
+        ?.filter { it.isFile && (it.extension.equals("fit", true) || it.extension.equals("fits", true)) }
+        ?.sortedBy { it.name }
+        ?.firstOrNull()
+}
+
 @Composable
 fun PlayerScreen(
     recordingsDir: File?,
@@ -127,30 +188,7 @@ fun PlayerScreen(
     }
     
     val currentFiles = remember(recordingsDir, capturesDir, selectedCategory, refreshTrigger) {
-        val allFiles = mutableListOf<VideoFileInfo>()
-        val searchDirs = when (selectedCategory) {
-            MediaCategory.SER_PSER -> listOfNotNull(
-                recordingsDir?.let { File(it, "SER") },
-                recordingsDir?.let { File(it, "PSER") }
-            )
-            MediaCategory.MP4 -> listOfNotNull(
-                recordingsDir?.let { File(it, "MP4") }
-            )
-            MediaCategory.FITS -> listOfNotNull(
-                capturesDir?.let { File(it, "FITS") }
-            )
-            MediaCategory.JPG -> listOfNotNull(
-                capturesDir?.let { File(it, "JPG") }
-            )
-        }
-        searchDirs.forEach { dir ->
-            dir.listFiles()?.filter { f -> 
-                selectedCategory.extensions.any { ext -> f.extension.equals(ext, true) }
-            }?.forEach { f ->
-                allFiles.add(VideoFileInfo(f, f.name, f.length(), f.extension.uppercase()))
-            }
-        }
-        allFiles.sortedByDescending { it.file.lastModified() }
+        listMediaForCategory(recordingsDir, capturesDir, selectedCategory)
     }
 
     if (showFilePicker && selectedFile == null) {
@@ -173,7 +211,7 @@ fun PlayerScreen(
                     selectedFile = null
                     showFilePicker = true
                 },
-                onSolve = { plateSolveFile = info.file },
+                onSolve = { plateSolveFile = firstFitsIn(info.file) ?: info.file },
                 onDelete = {
                     val currentIndex = currentFiles.indexOfFirst { it.file.absolutePath == info.file.absolutePath }
                     if (trashDir != null && info.file.exists()) {
@@ -224,30 +262,7 @@ private fun FilePickerView(
     }
 
     val files = remember(recordingsDir, capturesDir, selectedCategory, refreshTrigger) {
-        val allFiles = mutableListOf<VideoFileInfo>()
-        val searchDirs = when (selectedCategory) {
-            MediaCategory.SER_PSER -> listOfNotNull(
-                recordingsDir?.let { File(it, "SER") },
-                recordingsDir?.let { File(it, "PSER") }
-            )
-            MediaCategory.MP4 -> listOfNotNull(
-                recordingsDir?.let { File(it, "MP4") }
-            )
-            MediaCategory.FITS -> listOfNotNull(
-                capturesDir?.let { File(it, "FITS") }
-            )
-            MediaCategory.JPG -> listOfNotNull(
-                capturesDir?.let { File(it, "JPG") }
-            )
-        }
-        searchDirs.forEach { dir ->
-            dir.listFiles()?.filter { f -> 
-                selectedCategory.extensions.any { ext -> f.extension.equals(ext, true) }
-            }?.forEach { f ->
-                allFiles.add(VideoFileInfo(f, f.name, f.length(), f.extension.uppercase()))
-            }
-        }
-        allFiles.sortedByDescending { it.file.lastModified() }
+        listMediaForCategory(recordingsDir, capturesDir, selectedCategory)
     }
     
     val trashFiles = remember(trashDir, showTrash, refreshTrigger) {
@@ -384,7 +399,7 @@ private fun FilePickerView(
                     }
                     Button(
                         onClick = {
-                            trashFiles.forEach { it.file.delete() }
+                            trashFiles.forEach { it.file.deleteRecursively() }
                             refreshTrigger++
                         },
                         colors = ButtonDefaults.buttonColors(
@@ -815,10 +830,17 @@ private fun ImageViewScreen(
             try {
                 val isFits = fileInfo.format.equals("FIT", true) || fileInfo.format.equals("FITS", true)
                 if (isFits) {
-                    val result = decodeFits(fileInfo.file)
+                    val source = firstFitsIn(fileInfo.file) ?: throw IllegalArgumentException("Empty FITS session")
+                    val result = decodeFits(source)
+                    val extra = if (fileInfo.file.isDirectory) {
+                        val n = fileInfo.file.listFiles()?.count {
+                            it.isFile && (it.extension.equals("fit", true) || it.extension.equals("fits", true))
+                        } ?: 0
+                        if (n > 1) "  $n frames" else ""
+                    } else ""
                     withContext(Dispatchers.Main) {
                         bitmap = result.first
-                        fitsInfo = result.second
+                        fitsInfo = result.second + extra
                     }
                 } else {
                     val bmp = BitmapFactory.decodeFile(fileInfo.file.absolutePath)

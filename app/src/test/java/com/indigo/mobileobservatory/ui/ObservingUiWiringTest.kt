@@ -499,6 +499,24 @@ class ObservingUiWiringTest {
         assertTrue(!camera.contains("SequenceScreen(\n") || camera.contains("MainControlTab.SEQUENCE"))
     }
 
+    @Test
+    fun recordBarOffersFitsAsACrashSafeFormat() {
+        val bar = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/components/RecordBar.kt"
+        )
+        val viewModel = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/viewmodel/CameraViewModel.kt"
+        )
+        val player = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/PlayerScreen.kt"
+        )
+        assertTrue(bar.contains("""listOf("SER", "PSER", "MP4", "FITS")"""))
+        assertTrue(viewModel.contains("enum class RecordFormat { SER, PSER, MP4, FITS }"))
+        assertTrue(viewModel.contains("FitsSequenceWriter"))
+        assertTrue(player.contains("listMediaForCategory"))
+        assertTrue(player.contains("recordingsDir?.let { File(it, \"FITS\") }"))
+    }
+
     private fun read(relative: String): String {
         val candidates = listOf(File(relative), File("app/$relative"))
         val file = candidates.firstOrNull { it.isFile }

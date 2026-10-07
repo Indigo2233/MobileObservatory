@@ -21,8 +21,10 @@ transport, measurements, and links to de-identified evidence.
 - Confirm the gain control shows the vendor-native value (not dB as the primary number).
   Enter an exact gain, drag the slider, and for Player One tap HDR/HCG/Unity/lowest-noise presets.
   After pixel-format and readout-mode changes, confirm the gain range and current value refresh.
-- Capture JPG and FITS; record and reopen SER, PSER, and MP4.
+- Capture JPG and FITS; record and reopen SER, PSER, MP4, and FITS sequences.
   Confirm FITS `GAIN` is native (not labelled dB). If a dB conversion exists, `GAINDB` is present.
+  On at least one non-flagship phone, start MP4 recording: the app must not crash. If the encoder
+  cannot handle the ROI, it shows an error and SER/FITS still record.
 - Leave preview running for 30 minutes. Record `Preview baseline` Logcat values,
   visible tearing, input latency, device temperature, and any reconnect failure.
 - Disconnect and reconnect after Activity recreation.
