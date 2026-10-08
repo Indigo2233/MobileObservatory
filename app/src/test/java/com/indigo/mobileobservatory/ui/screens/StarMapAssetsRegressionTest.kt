@@ -101,6 +101,18 @@ class StarMapAssetsRegressionTest {
         assertTrue(js.contains("notifyAndroid(\"onTargetSelected\""))
     }
 
+    @Test
+    fun sensorPositionAngleUsesTheProjectedCelestialBasis() {
+        val html = read("index.html")
+        val appJs = read("app.js")
+        val geometryJs = read("fov-position-angle.js")
+        assertTrue(html.contains("./fov-position-angle.js"))
+        assertTrue(appJs.contains("function projectedSensorRotation("))
+        assertTrue(appJs.contains("projectedSensorRotationDeg("))
+        assertTrue(geometryJs.contains("function positionAngleReference("))
+        assertTrue(geometryJs.contains("Math.atan2(dy, dx) * RAD_TO_DEG + 90"))
+    }
+
     private fun read(name: String): String {
         val candidates = listOf(
             File("src/stellarium/assets/stellarium/$name"),

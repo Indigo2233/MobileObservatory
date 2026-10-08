@@ -36,6 +36,9 @@ jobs:
       - name: Make Gradle wrapper executable
         run: chmod +x ./gradlew
 
+      - name: Test star map position-angle projection
+        run: node --test scripts/tests/star-map-position-angle.test.cjs
+
       - name: Run core unit tests
         run: ./gradlew testDebugUnitTest
 

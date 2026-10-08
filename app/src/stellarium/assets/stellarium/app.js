@@ -291,6 +291,35 @@
         };
     }
 
+    function projectedSensorRotation(spec) {
+        if (!spec || spec.shape !== "rect" ||
+            !isFinite(Number(spec.positionAngleDeg)) ||
+            !window.MercFovPositionAngle) {
+            return 0;
+        }
+        let anchor = null;
+        if (spec.raHours != null && spec.decDegrees != null &&
+            isFinite(Number(spec.raHours)) && isFinite(Number(spec.decDegrees))) {
+            anchor = {
+                raHours: Number(spec.raHours),
+                decDegrees: Number(spec.decDegrees),
+                frame: spec.frame || "JNOW"
+            };
+        } else {
+            anchor = targetAtMapCenter("");
+        }
+        if (!anchor) return 0;
+        const rotation = window.MercFovPositionAngle.projectedSensorRotationDeg(
+            anchor.raHours,
+            anchor.decDegrees,
+            Number(spec.positionAngleDeg),
+            function (raHours, decDegrees) {
+                return projectRaDecToScreen(raHours, decDegrees, anchor.frame);
+            }
+        );
+        return isFinite(Number(rotation)) ? Number(rotation) : 0;
+    }
+
     function applyFovOverlay(element, spec) {
         if (!element) return;
         if (!spec) {
@@ -351,9 +380,7 @@
         element.style.height = boxH + "px";
         element.style.left = pos.x + "px";
         element.style.top = pos.y + "px";
-        const rotation = spec.shape === "rect" && isFinite(Number(spec.rotationDeg))
-            ? Number(spec.rotationDeg)
-            : 0;
+        const rotation = projectedSensorRotation(spec);
         element.style.transform = "translate(-50%, -50%) rotate(" + rotation + "deg)";
         element.style.display = "block";
         element.textContent = "";
@@ -387,7 +414,7 @@
             : "r" + spec.widthDeg + "x" + spec.heightDeg;
         const ra = spec.raHours != null ? spec.raHours : "";
         const dec = spec.decDegrees != null ? spec.decDegrees : "";
-        const rotation = spec.rotationDeg != null ? spec.rotationDeg : 0;
+        const rotation = spec.positionAngleDeg != null ? spec.positionAngleDeg : 0;
         return shape + "@" + ra + "," + dec + "," + (spec.frame || "") +
             ",r" + rotation;
     }
@@ -805,7 +832,9 @@
                 raHours: anchor.raHours,
                 decDegrees: anchor.decDegrees,
                 frame: anchor.frame,
-                rotationDeg: pendingTargetFov ? Number(pendingTargetFov.rotationDeg) || 0 : 0
+                positionAngleDeg: pendingTargetFov
+                    ? Number(pendingTargetFov.positionAngleDeg) || 0
+                    : 0
             };
             applyFovOverlay(fovTargetElement, pendingTargetFov);
         },
@@ -819,7 +848,9 @@
                 raHours: anchor.raHours,
                 decDegrees: anchor.decDegrees,
                 frame: anchor.frame,
-                rotationDeg: pendingTargetFov ? Number(pendingTargetFov.rotationDeg) || 0 : 0
+                positionAngleDeg: pendingTargetFov
+                    ? Number(pendingTargetFov.positionAngleDeg) || 0
+                    : 0
             };
             applyFovOverlay(fovTargetElement, pendingTargetFov);
         },
@@ -827,7 +858,7 @@
             if (!pendingTargetFov) return false;
             const angle = Number(angleDeg);
             if (!isFinite(angle)) return false;
-            pendingTargetFov.rotationDeg = ((angle % 360) + 360) % 360;
+            pendingTargetFov.positionAngleDeg = ((angle % 360) + 360) % 360;
             lastOverlayFovKey = "";
             applyFovOverlay(fovTargetElement, pendingTargetFov);
             return true;
