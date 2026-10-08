@@ -8,6 +8,7 @@
     const canvas = document.getElementById("stel-canvas");
     let stel = null;
     let lastSelectionKey = "";
+    let manualCenterTarget = null;
     let pendingObserver = null;
     let pendingTimeMillis = null;
     let pendingMountCoordinates = null;
@@ -589,6 +590,32 @@
         };
     }
 
+    function targetAtMapCenter(name) {
+        if (!stel) return null;
+        const observer = (stel.core && stel.core.observer) || stel.observer;
+        if (!observer) return null;
+        let jnowVector = null;
+        if (observer.yaw != null && observer.pitch != null) {
+            try {
+                const observed = stel.s2c(observer.yaw, observer.pitch);
+                jnowVector = stel.convertFrame(observer, "OBSERVED", "JNOW", observed);
+            } catch (_) {
+                jnowVector = null;
+            }
+        }
+        if (!jnowVector) {
+            const forward = viewForwardSign(observer);
+            jnowVector = stel.convertFrame(observer, "VIEW", "JNOW", [0, 0, forward]);
+        }
+        const spherical = stel.c2s(jnowVector);
+        return {
+            name: name || "Custom target",
+            raHours: stel.anp(spherical[0]) * 12 / Math.PI,
+            decDegrees: stel.anpm(spherical[1]) * 180 / Math.PI,
+            frame: "JNOW"
+        };
+    }
+
     function publishSelection() {
         let target;
         try {
@@ -598,12 +625,14 @@
             return;
         }
         if (!target) {
+            if (manualCenterTarget) return;
             if (lastSelectionKey) {
                 lastSelectionKey = "";
                 notifyAndroid("onSelectionCleared", "");
             }
             return;
         }
+        manualCenterTarget = null;
         const key = target.name + "|" + target.raHours.toFixed(8) + "|" +
             target.decDegrees.toFixed(8);
         if (key === lastSelectionKey) return;
@@ -612,6 +641,17 @@
     }
 
     window.MercStarMap = {
+        selectMapCenter: function (name) {
+            const target = targetAtMapCenter(name);
+            if (!target) return false;
+            manualCenterTarget = target;
+            try {
+                stel.core.selection = null;
+            } catch (_) {}
+            lastSelectionKey = "";
+            notifyAndroid("onTargetSelected", JSON.stringify(target));
+            return true;
+        },
         setObserver: function (latitudeDeg, longitudeDeg, epochMillis) {
             pendingObserver = {
                 latitudeDeg: Number(latitudeDeg),

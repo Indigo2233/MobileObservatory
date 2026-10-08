@@ -8,6 +8,7 @@ import com.indigo.mobileobservatory.sequence.catalog.catalogCollection
 import com.indigo.mobileobservatory.sequence.catalog.catalogInstruction
 import com.indigo.mobileobservatory.sequence.catalog.catalogRootContainer
 import com.indigo.mobileobservatory.sequence.catalog.slotElementType
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
 
 /** Matches NINA `SequenceEntityStatus.DISABLED`. Persisted so a template keeps the toggle. */
@@ -278,7 +279,12 @@ fun dsoCoordinateText(node: NinaNode, part: String): String {
     val coordinates = dsoCoordinates(node) ?: return ""
     val value = coordinates.fields[part]
     return when (value) {
-        is NinaValue.Num -> if (value.integral) value.value.toLong().toString() else value.value.toString()
+        is NinaValue.Num -> when {
+            value.integral -> value.value.toLong().toString()
+            part == "RASeconds" || part == "DecSeconds" ->
+                String.format(Locale.US, "%.1f", value.value)
+            else -> value.value.toString()
+        }
         is NinaValue.Bool -> value.value.toString()
         else -> coordinates.doubleField(part)?.toString().orEmpty()
     }

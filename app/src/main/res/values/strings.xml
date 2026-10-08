@@ -357,6 +357,8 @@
     <string name="star_map_search">Search sky</string>
     <string name="star_map_search_hint">Name or catalog id</string>
     <string name="star_map_search_empty">No matching objects</string>
+    <string name="star_map_use_center">Use map center</string>
+    <string name="star_map_custom_target">Custom target</string>
     <string name="lock_star_map_overlays">Lock overlays</string>
     <string name="show_star_map_controls">Show star map controls</string>
     <string name="expand_target_details">Expand or collapse target details</string>
@@ -937,6 +939,9 @@
     <string name="sequence_from_star_map_empty">Select a target on the star map first</string>
     <string name="sequence_from_pointing">Use current pointing</string>
     <string name="sequence_position_angle">Position angle °</string>
+    <string name="sequence_sensor_angle">Sensor angle</string>
+    <string name="sequence_import_destination">Add target to</string>
+    <string name="sequence_import_destination_detail">%1$s · sensor angle %2$s°</string>
     <string name="sequence_sky_target_summary">RA %1$.4f h  Dec %2$.3f°  PA %3$.1f°</string>
     <string name="sequence_ra_hms">Right ascension</string>
     <string name="sequence_dec_dms">Declination</string>

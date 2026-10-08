@@ -92,6 +92,30 @@ class SequenceRuntimeHardwareMappingTest {
         assertTrue(share.isFile)
         assertTrue(share.name.endsWith(".json"))
     }
+
+    @Test
+    fun starMapTargetUsesTheChosenEditorMode() = runTest {
+        val runtime = SequenceRuntime(
+            templatesDir = Files.createTempDirectory("sequence-templates").toFile(),
+            sessionsDir = Files.createTempDirectory("sequence-sessions").toFile(),
+            scope = this,
+            hardware = RecordingSequenceHardware()
+        )
+
+        runtime.setMode(SequenceEditorMode.Advanced)
+        runtime.addTarget("Simple target", 1.25, -2.5, 30.0, SequenceEditorMode.Simple)
+        assertEquals(SequenceEditorMode.Simple, runtime.mode.value)
+        assertEquals("Simple target", runtime.draft.value.title)
+        assertEquals(30.0, runtime.draft.value.positionAngleDeg, 0.0)
+
+        runtime.addTarget("Advanced target", 3.5, 4.5, 90.0, SequenceEditorMode.Advanced)
+        assertEquals(SequenceEditorMode.Advanced, runtime.mode.value)
+        val targets = checkNotNull(runtime.document.value)
+            .childItems()
+            .first { it.className == "TargetAreaContainer" }
+            .childItems()
+        assertTrue(targets.any { dsoTargetName(it) == "Advanced target" })
+    }
 }
 
 private class RecordingSequenceHardware : SequenceHardware {

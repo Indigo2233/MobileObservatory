@@ -1,6 +1,7 @@
 package com.indigo.mobileobservatory.sequence
 
 import kotlin.math.abs
+import kotlin.math.roundToLong
 
 data class SimpleExposureRow(
     val filterName: String?,
@@ -341,9 +342,10 @@ private fun observableCollectionType(elementType: String): String =
     "System.Collections.ObjectModel.ObservableCollection`1[[$elementType]], System.ObjectModel"
 
 internal fun splitSexagesimal(value: Double): Triple<Int, Int, Double> {
-    val whole = abs(value).toInt()
-    val minutesFull = (abs(value) - whole) * 60.0
-    val minutes = minutesFull.toInt()
-    val seconds = (minutesFull - minutes) * 60.0
+    val totalTenths = (abs(value) * 36_000.0).roundToLong()
+    val whole = (totalTenths / 36_000L).toInt()
+    val remainder = totalTenths % 36_000L
+    val minutes = (remainder / 600L).toInt()
+    val seconds = (remainder % 600L) / 10.0
     return Triple(whole, minutes, seconds)
 }

@@ -82,6 +82,7 @@ import com.indigo.mobileobservatory.astro.OpticsTrainConfig
 import com.indigo.mobileobservatory.astro.OpticsTrainId
 import com.indigo.mobileobservatory.astro.StarMapFovOverlay
 import com.indigo.mobileobservatory.astro.StarMapOpticsPrefs
+import com.indigo.mobileobservatory.sequence.SequenceEditorMode
 import com.indigo.mobileobservatory.astro.UserOpticsCatalog
 import com.indigo.mobileobservatory.astro.resolveTelescopeFl
 import com.indigo.mobileobservatory.catalog.AssetDeepSkyCatalog
@@ -148,6 +149,17 @@ data class StarMapTarget(
             decDegrees,
             frame
         )
+    }
+}
+
+private fun normalizePositionAngle(value: Double): Double = ((value % 360.0) + 360.0) % 360.0
+
+private fun positionAngleText(value: Double): String {
+    val normalized = normalizePositionAngle(value)
+    return if (normalized % 1.0 == 0.0) {
+        normalized.toLong().toString()
+    } else {
+        "%.1f".format(Locale.US, normalized)
     }
 }
 
@@ -248,7 +260,7 @@ fun StarMapScreen(
     onGoto: (StarMapTarget) -> Unit,
     onSync: (StarMapTarget) -> Unit = {},
     onPrecisionGoto: (StarMapTarget, Double) -> Unit = { _, _ -> },
-    onAddToSequence: (StarMapTarget) -> Unit = {},
+    onAddToSequence: (StarMapTarget, SequenceEditorMode) -> Unit = { _, _ -> },
     showSequenceActions: Boolean = true,
     onTargetSelected: (StarMapTarget) -> Unit = {},
     onSlewRateChange: (MountSlewRate) -> Unit = {},
@@ -272,6 +284,7 @@ fun StarMapScreen(
     var overlaysLocked by remember { mutableStateOf(false) }
     var targetExpanded by remember { mutableStateOf(false) }
     var importAngleText by remember { mutableStateOf("0") }
+    var sequenceImportTarget by remember { mutableStateOf<StarMapTarget?>(null) }
     var searchDialogVisible by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var searchResults by remember { mutableStateOf<List<CatalogObject>>(emptyList()) }
@@ -665,6 +678,18 @@ fun StarMapScreen(
     fun centerOnTarget() {
         evalStarMap("window.MercStarMap && window.MercStarMap.centerOnSelection(1);")
         overlaysVisible = true
+    }
+
+    fun selectMapCenterTarget() {
+        val name = JSONObject.quote(context.getString(R.string.star_map_custom_target))
+        evalStarMap("window.MercStarMap && window.MercStarMap.selectMapCenter($name);")
+        overlaysVisible = true
+        cornerPanel = StarMapCornerPanel.NONE
+    }
+
+    fun adjustImportAngle(delta: Double) {
+        val current = importAngleText.toDoubleOrNull() ?: 0.0
+        importAngleText = positionAngleText(current + delta)
     }
 
     fun centerOnRaDec(raHours: Double, decDegrees: Double, frame: String = "JNOW") {
@@ -1130,6 +1155,15 @@ fun StarMapScreen(
                                 )
                             }
                         }
+                        Card {
+                            TextButton(onClick = ::selectMapCenterTarget) {
+                                Text(
+                                    stringResource(R.string.star_map_use_center),
+                                    maxLines = 1,
+                                    softWrap = false
+                                )
+                            }
+                        }
                     }
                 }
                 is StarMapEngineState.Error -> {
@@ -1355,21 +1389,55 @@ fun StarMapScreen(
                                 overflow = TextOverflow.Ellipsis
                             )
                         }
-                        OutlinedTextField(
-                            value = importAngleText,
-                            onValueChange = { importAngleText = it },
-                            label = { Text(stringResource(R.string.sequence_position_angle)) },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                            modifier = Modifier.fillMaxWidth()
+                        Text(
+                            stringResource(R.string.sequence_sensor_angle),
+                            style = MaterialTheme.typography.labelMedium
                         )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedTextField(
+                                value = importAngleText,
+                                onValueChange = { importAngleText = it },
+                                suffix = { Text("°") },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                modifier = Modifier.weight(1f)
+                            )
+                            OutlinedButton(
+                                onClick = { adjustImportAngle(-1.0) },
+                                contentPadding = PaddingValues(horizontal = 8.dp),
+                                modifier = Modifier.defaultMinSize(minWidth = 0.dp)
+                            ) { Text("−1°") }
+                            OutlinedButton(
+                                onClick = { adjustImportAngle(1.0) },
+                                contentPadding = PaddingValues(horizontal = 8.dp),
+                                modifier = Modifier.defaultMinSize(minWidth = 0.dp)
+                            ) { Text("+1°") }
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            listOf(0, 90, 180, 270).forEach { angle ->
+                                TextButton(
+                                    onClick = { importAngleText = angle.toString() },
+                                    contentPadding = PaddingValues(horizontal = 2.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .defaultMinSize(minWidth = 0.dp)
+                                ) { Text("$angle°", maxLines = 1) }
+                            }
+                        }
                         if (showSequenceActions) {
                             OutlinedButton(
                                 onClick = {
                                     overlaysVisible = true
-                                    onAddToSequence(
-                                        target.copy(
-                                            positionAngleDeg = importAngleText.toDoubleOrNull() ?: 0.0
+                                    sequenceImportTarget = target.copy(
+                                        positionAngleDeg = normalizePositionAngle(
+                                            importAngleText.toDoubleOrNull() ?: 0.0
                                         )
                                     )
                                 },
@@ -1505,6 +1573,39 @@ fun StarMapScreen(
                 onPrecisionGoto(target, currentPrecisionToleranceArcmin())
             },
             onDismiss = { precisionConfirmation = null }
+        )
+    }
+
+    sequenceImportTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { sequenceImportTarget = null },
+            title = { Text(stringResource(R.string.sequence_import_destination)) },
+            text = {
+                Text(
+                    stringResource(
+                        R.string.sequence_import_destination_detail,
+                        target.name,
+                        positionAngleText(target.positionAngleDeg)
+                    )
+                )
+            },
+            confirmButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(onClick = {
+                        sequenceImportTarget = null
+                        onAddToSequence(target, SequenceEditorMode.Simple)
+                    }) { Text(stringResource(R.string.sequence_simple)) }
+                    TextButton(onClick = {
+                        sequenceImportTarget = null
+                        onAddToSequence(target, SequenceEditorMode.Advanced)
+                    }) { Text(stringResource(R.string.sequence_advanced)) }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { sequenceImportTarget = null }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
         )
     }
 

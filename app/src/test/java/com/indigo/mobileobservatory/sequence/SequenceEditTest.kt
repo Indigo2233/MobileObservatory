@@ -81,6 +81,27 @@ class SequenceEditTest {
     }
 
     @Test
+    fun `sky coordinates round seconds to one decimal and carry overflow`() {
+        val ordinary = splitSexagesimal(5.588)
+        assertEquals(5, ordinary.first)
+        assertEquals(35, ordinary.second)
+        assertEquals(16.8, ordinary.third, 1e-9)
+
+        val carry = splitSexagesimal(1.0 + 59.0 / 60.0 + 59.96 / 3600.0)
+        assertEquals(2, carry.first)
+        assertEquals(0, carry.second)
+        assertEquals(0.0, carry.third, 1e-9)
+
+        val root = emptyAdvancedSequence("Rounded")
+        val areaId = checkNotNull(root.childItems()[1].id)
+        assertTrue(addSequenceNode(root, areaId, "DeepSkyObjectContainer"))
+        val target = find(root, "DeepSkyObjectContainer").single()
+        assertTrue(applyDsoSkyTarget(root, checkNotNull(target.id), "M42", 5.588, -5.391, 0.0))
+        assertEquals("16.8", dsoCoordinateText(target, "RASeconds"))
+        assertEquals("27.6", dsoCoordinateText(target, "DecSeconds"))
+    }
+
+    @Test
     fun `binning time provider and exposure summary follow the nina fields`() {
         val root = emptyAdvancedSequence("Tonight")
         val startId = checkNotNull(root.childItems()[0].id)

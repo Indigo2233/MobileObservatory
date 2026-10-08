@@ -36,6 +36,7 @@ import com.indigo.mobileobservatory.astro.ObserverSite
 import com.indigo.mobileobservatory.mount.SkyWatcherEquatorialMath
 import com.indigo.mobileobservatory.sequence.AutofocusRun
 import com.indigo.mobileobservatory.sequence.DeviceUnavailable
+import com.indigo.mobileobservatory.sequence.SequenceEditorMode
 import com.indigo.mobileobservatory.sequence.SequenceEphemeris
 import com.indigo.mobileobservatory.sequence.SequenceRuntime
 import com.indigo.mobileobservatory.sequence.SequenceSettings
@@ -579,10 +580,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         name: String,
         raHours: Double,
         decDeg: Double,
-        positionAngleDeg: Double = 0.0
+        positionAngleDeg: Double = 0.0,
+        destination: SequenceEditorMode = sequenceRuntime.mode.value
     ) {
         rememberSequenceSkyTarget(name, raHours, decDeg, positionAngleDeg)
-        sequenceRuntime.addTarget(name, raHours, decDeg, positionAngleDeg)
+        sequenceRuntime.addTarget(name, raHours, decDeg, positionAngleDeg, destination)
     }
 
     val mountBusy = mountModule.mountBusy

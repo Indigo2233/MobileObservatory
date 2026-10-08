@@ -469,15 +469,17 @@ class SequenceRuntime(
         name: String,
         raHours: Double,
         decDeg: Double,
-        positionAngleDeg: Double = 0.0
+        positionAngleDeg: Double = 0.0,
+        destination: SequenceEditorMode = _mode.value
     ) {
-        if (_mode.value == SequenceEditorMode.Simple) {
+        if (destination == SequenceEditorMode.Simple) {
             _draft.value = _draft.value.copy(
                 title = name,
                 raHours = raHours,
                 decDegrees = decDeg,
                 positionAngleDeg = positionAngleDeg
             )
+            _mode.value = SequenceEditorMode.Simple
             return
         }
         editSequence { root ->

@@ -87,6 +87,15 @@ class StarMapAssetsRegressionTest {
         assertTrue(css.contains("hue-rotate(-50deg)"))
     }
 
+    @Test
+    fun mapCenterCanBecomeAnArbitraryTarget() {
+        val js = read("app.js")
+        assertTrue(js.contains("function targetAtMapCenter("))
+        assertTrue(js.contains("convertFrame(observer, \"OBSERVED\", \"JNOW\""))
+        assertTrue(js.contains("selectMapCenter:"))
+        assertTrue(js.contains("notifyAndroid(\"onTargetSelected\""))
+    }
+
     private fun read(name: String): String {
         val candidates = listOf(
             File("src/stellarium/assets/stellarium/$name"),

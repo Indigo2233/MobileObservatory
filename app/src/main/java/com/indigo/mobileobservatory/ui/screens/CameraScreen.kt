@@ -34,6 +34,7 @@ import com.indigo.mobileobservatory.ui.viewmodel.CaptureFormat
 import com.indigo.mobileobservatory.ui.viewmodel.RecordFormat
 import com.indigo.mobileobservatory.BuildConfig
 import com.indigo.mobileobservatory.R
+import com.indigo.mobileobservatory.sequence.SequenceEditorMode
 import com.indigo.mobileobservatory.sequence.SequenceFeature
 import com.indigo.mobileobservatory.sequence.plannedFrames
 import com.indigo.mobileobservatory.ui.AppOrientationMode
@@ -456,12 +457,13 @@ fun CameraScreen(
                                 toleranceArcmin = toleranceArcmin
                             )
                         },
-                        onAddToSequence = { target ->
+                        onAddToSequence = { target, destination ->
                             viewModel.addSequenceSkyTarget(
                                 name = target.name,
                                 raHours = target.raHours,
                                 decDeg = target.decDegrees,
-                                positionAngleDeg = target.positionAngleDeg
+                                positionAngleDeg = target.positionAngleDeg,
+                                destination = destination
                             )
                         },
                         showSequenceActions = sequenceEnabled,
