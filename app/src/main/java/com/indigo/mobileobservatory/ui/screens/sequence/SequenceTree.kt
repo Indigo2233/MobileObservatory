@@ -8,6 +8,7 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -16,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -395,7 +397,10 @@ private fun InstructionRow(
                 }
             }
             Column(
-                Modifier.weight(1f).clickable(enabled = id != null) { if (id != null) actions.onSelect(id) }
+                Modifier
+                    .weight(1f)
+                    .testTag("sequence_node_$id")
+                    .clickable(enabled = id != null) { if (id != null) actions.onSelect(id) }
             ) {
                 Text(
                     title,
@@ -429,11 +434,12 @@ private fun InstructionRow(
             ActionBar(node, id, actions)
             if (showFields && !disabled) {
                 val inherited = sequenceInherited(node)
-                editableFields(node).forEach { spec ->
-                    if (spec.path == "ErrorBehavior" || spec.path == "Attempts") return@forEach
-                    if (inherited && spec.path in setOf("RAHours", "DecDegrees")) return@forEach
-                    FieldEditor(node, spec, actions)
+                val fields = editableFields(node).filter { spec ->
+                    spec.path != "ErrorBehavior" &&
+                        spec.path != "Attempts" &&
+                        !(inherited && spec.path in setOf("RAHours", "DecDegrees"))
                 }
+                EditableFieldGrid(node, fields, actions)
             }
             nodeIssues.forEach {
                 Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
@@ -452,7 +458,12 @@ private fun ActionBar(node: NinaNode, id: String, actions: SequenceTreeActions) 
                 Text(stringResource(R.string.sequence_enable))
             }
         } else {
-            FieldEditor(node, SequenceEditField("Attempts", "重试", "Attempts"), actions)
+            FieldEditor(
+                node,
+                SequenceEditField("Attempts", "重试", "Attempts"),
+                actions,
+                Modifier.width(132.dp)
+            )
             ErrorBehaviorChips(node, id, actions)
             TextButton(onClick = { actions.onEdit { setSequenceDisabled(it, id, true) } }, enabled = actions.enabled) {
                 Text(stringResource(R.string.sequence_disable))
@@ -513,8 +524,53 @@ private fun ErrorBehaviorChips(node: NinaNode, id: String, actions: SequenceTree
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun FieldEditor(node: NinaNode, field: SequenceEditField, actions: SequenceTreeActions) {
+private fun EditableFieldGrid(
+    node: NinaNode,
+    fields: List<SequenceEditField>,
+    actions: SequenceTreeActions
+) {
+    if (fields.isEmpty()) return
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val gap = 8.dp
+        val twoColumns = maxWidth >= 300.dp
+        val compactWidth = if (twoColumns) (maxWidth - gap) * 0.5f else maxWidth
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(gap),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            maxItemsInEachRow = 2
+        ) {
+            fields.forEach { field ->
+                val modifier = if (twoColumns && compactSequenceField(node, field)) {
+                    Modifier.width(compactWidth)
+                } else {
+                    Modifier.fillMaxWidth()
+                }
+                FieldEditor(node, field, actions, modifier)
+            }
+        }
+    }
+}
+
+private fun compactSequenceField(node: NinaNode, field: SequenceEditField): Boolean {
+    if (field.path == "Attempts") return true
+    val spec = SequenceCatalog.specByClass(node.className)
+        ?.fields
+        ?.firstOrNull { it.editPath == field.path }
+        ?: return false
+    if (spec.kind != FieldKind.Number && spec.kind != FieldKind.Expression) return false
+    val value = sequenceFieldText(node, field.path)
+    return value.isBlank() || value.toDoubleOrNull() != null
+}
+
+@Composable
+private fun FieldEditor(
+    node: NinaNode,
+    field: SequenceEditField,
+    actions: SequenceTreeActions,
+    modifier: Modifier = Modifier.fillMaxWidth()
+) {
     val id = node.id ?: return
     val spec = SequenceCatalog.specByClass(node.className)?.fields?.firstOrNull { it.editPath == field.path }
     var text by remember(id, field.path) { mutableStateOf(sequenceFieldText(node, field.path)) }
@@ -524,6 +580,7 @@ private fun FieldEditor(node: NinaNode, field: SequenceEditField, actions: Seque
             options = listOf("LIGHT", "FLAT", "DARK", "BIAS", "SNAPSHOT").map { it to it },
             selected = text,
             enabled = actions.enabled,
+            modifier = modifier,
             onPick = { value ->
                 text = value
                 actions.onEdit { setSequenceField(it, id, field.path, value) }
@@ -543,6 +600,7 @@ private fun FieldEditor(node: NinaNode, field: SequenceEditField, actions: Seque
             options = options,
             selected = text.ifBlank { "0" },
             enabled = actions.enabled,
+            modifier = modifier,
             onPick = { value ->
                 text = value
                 actions.onEdit { setSequenceField(it, id, field.path, value) }
@@ -555,6 +613,7 @@ private fun FieldEditor(node: NinaNode, field: SequenceEditField, actions: Seque
             options = listOf("1x1", "2x2", "3x3", "4x4").map { it to it },
             selected = text.ifBlank { "1x1" },
             enabled = actions.enabled,
+            modifier = modifier,
             onPick = { value ->
                 text = value
                 actions.onEdit { setSequenceField(it, id, field.path, value) }
@@ -567,6 +626,7 @@ private fun FieldEditor(node: NinaNode, field: SequenceEditField, actions: Seque
             options = actions.filterNames.map { name -> name to name },
             selected = text,
             enabled = actions.enabled,
+            modifier = modifier,
             onPick = { value ->
                 text = value
                 actions.onEdit { setSequenceField(it, id, field.path, value) }
@@ -581,6 +641,7 @@ private fun FieldEditor(node: NinaNode, field: SequenceEditField, actions: Seque
             },
             selected = text.ifBlank { "TimeProvider" },
             enabled = actions.enabled,
+            modifier = modifier,
             onPick = { value ->
                 text = value
                 actions.onEdit { setSequenceField(it, id, field.path, value) }
@@ -589,16 +650,18 @@ private fun FieldEditor(node: NinaNode, field: SequenceEditField, actions: Seque
         return
     }
     if (spec?.kind == FieldKind.Bool) {
-        FilterChip(
-            selected = text.equals("true", ignoreCase = true),
-            onClick = {
-                val next = if (text.equals("true", ignoreCase = true)) "false" else "true"
-                text = next
-                if (actions.enabled) actions.onEdit { setSequenceField(it, id, field.path, next) }
-            },
-            label = { Text(label) },
-            enabled = actions.enabled
-        )
+        Box(modifier) {
+            FilterChip(
+                selected = text.equals("true", ignoreCase = true),
+                onClick = {
+                    val next = if (text.equals("true", ignoreCase = true)) "false" else "true"
+                    text = next
+                    if (actions.enabled) actions.onEdit { setSequenceField(it, id, field.path, next) }
+                },
+                label = { Text(label) },
+                enabled = actions.enabled
+            )
+        }
         return
     }
     val unsupported = spec?.kind == FieldKind.Expression && text.isNotBlank() && text.toDoubleOrNull() == null
@@ -618,7 +681,7 @@ private fun FieldEditor(node: NinaNode, field: SequenceEditField, actions: Seque
         isError = unsupported ||
             (spec?.min != null && text.toDoubleOrNull()?.let { it < spec.min } == true) ||
             (spec?.max != null && text.toDoubleOrNull()?.let { it > spec.max } == true),
-        modifier = Modifier.fillMaxWidth()
+        modifier = modifier.testTag("sequence_field_${id}_${field.path}")
     )
 }
 
@@ -628,9 +691,10 @@ private fun ChoiceChips(
     options: List<Pair<String, String>>,
     selected: String,
     enabled: Boolean,
+    modifier: Modifier = Modifier,
     onPick: (String) -> Unit
 ) {
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+    FlowRow(modifier, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         options.forEach { (value, label) ->
             FilterChip(
                 selected = selected == value,

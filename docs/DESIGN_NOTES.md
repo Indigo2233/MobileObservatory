@@ -230,3 +230,15 @@
 ---
 
 相机、赤道仪、导星相机、配件各自连接、互不绑定。协议细节留在 adapter 里，UI 只看统一 ViewModel 状态。包名/JNI 符号约定见 `AGENTS.md`。
+
+---
+
+## 序列：参数密度与展开操作
+
+手机竖屏上的序列参数按内容长度排布。数值和短表达式在可用宽度不少于 300 dp 时每行放两个；路径、批注、条件表达式和选择芯片占整行。深层嵌套导致可用宽度变窄时自动恢复单列，避免输入内容和标签被压缩。
+
+点击指令标题展开参数，再次点击同一标题直接收起。点击另一条指令时收起原指令并展开新指令。
+
+**代码：** `SequenceAdvancedEditor.kt`、`ui/screens/sequence/SequenceTree.kt`
+
+**回归：** `SequencePortraitUsabilityTest.shortNumericFieldsShareARow`、`tappingAnOpenInstructionAgainCollapsesItsFields`

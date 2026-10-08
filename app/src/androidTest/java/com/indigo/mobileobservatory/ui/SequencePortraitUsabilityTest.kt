@@ -122,4 +122,74 @@ class SequencePortraitUsabilityTest {
         }
         compose.onNodeWithText("End").performScrollTo().assertIsDisplayed()
     }
+
+    @Test
+    fun shortNumericFieldsShareARow() {
+        val exposureId = showTakeExposureEditor("compact")
+        compose.onNodeWithTag("sequence_node_$exposureId")
+            .performScrollTo()
+            .assertIsDisplayed()
+            .performClick()
+        compose.onNodeWithTag("sequence_field_${exposureId}_ExposureTime").performScrollTo()
+        val exposureBounds = compose
+            .onNodeWithTag("sequence_field_${exposureId}_ExposureTime")
+            .fetchSemanticsNode().boundsInRoot
+        val gainBounds = compose
+            .onNodeWithTag("sequence_field_${exposureId}_Gain")
+            .fetchSemanticsNode().boundsInRoot
+        assertTrue("numeric fields should share a row", kotlin.math.abs(exposureBounds.top - gainBounds.top) < 1f)
+    }
+
+    @Test
+    fun tappingAnOpenInstructionAgainCollapsesItsFields() {
+        val exposureId = showTakeExposureEditor("toggle")
+        val row = compose.onNodeWithTag("sequence_node_$exposureId")
+        row.performScrollTo().assertIsDisplayed().performClick()
+        compose.onNodeWithTag("sequence_field_${exposureId}_ExposureTime").fetchSemanticsNode()
+        row.performClick()
+        assertTrue(
+            compose.onAllNodesWithTag("sequence_field_${exposureId}_ExposureTime")
+                .fetchSemanticsNodes().isEmpty()
+        )
+    }
+
+    private fun showTakeExposureEditor(testName: String): String {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val root = emptyAdvancedSequence("Compact fields")
+        val start = root.childItems().first { it.className == "StartAreaContainer" }
+        assertTrue(addSequenceNode(root, checkNotNull(start.id), "TakeExposure"))
+        val exposureId = checkNotNull(start.childItems().single().id)
+        val runtime = SequenceRuntime(
+            templatesDir = File(context.cacheDir, "$testName-sequence-templates"),
+            sessionsDir = File(context.cacheDir, "$testName-sequence-sessions"),
+            scope = scope,
+            hardware = VirtualSequenceHardware()
+        )
+        runtime.importJson("$testName.json", root.toJson())
+
+        val configuration = Configuration(context.resources.configuration).apply {
+            orientation = Configuration.ORIENTATION_PORTRAIT
+            screenWidthDp = 360
+            screenHeightDp = 640
+            setLocale(Locale.ENGLISH)
+        }
+        val localizedContext = context.createConfigurationContext(configuration)
+        compose.setContent {
+            CompositionLocalProvider(
+                LocalContext provides localizedContext,
+                LocalConfiguration provides configuration
+            ) {
+                MaterialTheme {
+                    Box(Modifier.size(width = 360.dp, height = 640.dp)) {
+                        SequenceAdvancedEditor(
+                            runtime = runtime,
+                            enabled = true,
+                            hardware = VirtualSequenceHardware.SNAPSHOT
+                        )
+                    }
+                }
+            }
+        }
+        return exposureId
+    }
 }

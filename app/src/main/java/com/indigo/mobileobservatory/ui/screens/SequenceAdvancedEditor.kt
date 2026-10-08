@@ -140,7 +140,7 @@ fun SequenceAdvancedEditor(
         pointingDecDeg = pointingDecDeg,
         runNodeId = runState.currentNodeId,
         nodeStatus = runState.nodeStatus,
-        onSelect = { selectedId = it },
+        onSelect = { id -> selectedId = if (selectedId == id) null else id },
         onAdd = { parent, slot -> adding = AddRequest(parent, slot) },
         onEdit = { runtime.editSequence(it) },
         onApplySkyTarget = { id ->
