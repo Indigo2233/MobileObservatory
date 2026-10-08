@@ -7,6 +7,22 @@ import org.junit.Test
 
 class SequenceEditTest {
     @Test
+    fun `top level areas accept instructions only`() {
+        val root = emptyAdvancedSequence("Area slots")
+        val start = root.childItems().first { it.className == "StartAreaContainer" }
+        val startId = checkNotNull(start.id)
+
+        assertFalse(addSequenceNode(root, startId, "LoopCondition"))
+        assertFalse(addSequenceNode(root, startId, "DitherAfterExposures"))
+        assertTrue(addSequenceNode(root, startId, "SequentialContainer"))
+
+        val sequential = start.childItems().single()
+        val sequentialId = checkNotNull(sequential.id)
+        assertTrue(addSequenceNode(root, sequentialId, "LoopCondition"))
+        assertTrue(addSequenceNode(root, sequentialId, "DitherAfterExposures"))
+    }
+
+    @Test
     fun `copy delete move and global trigger edit the nina tree`() {
         val root = SimpleSequenceDraft(
             title = "M42",

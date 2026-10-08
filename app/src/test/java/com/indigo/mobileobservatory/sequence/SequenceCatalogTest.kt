@@ -24,6 +24,25 @@ class SequenceCatalogTest {
     }
 
     @Test
+    fun `new sequence uses NINA root and area collection shape`() {
+        val root = emptyAdvancedSequence("NINA shape")
+
+        assertTrue(root.fields.containsKey("Items"))
+        assertTrue(root.fields.containsKey("Triggers"))
+        assertFalse(root.fields.containsKey("Conditions"))
+        root.childItems().forEach { area ->
+            assertTrue(area.fields.containsKey("Items"))
+            assertFalse(area.fields.containsKey("Triggers"))
+            assertFalse(area.fields.containsKey("Conditions"))
+        }
+
+        val sequential = SequenceCatalog.create("SequentialContainer")
+        assertTrue(sequential.fields.containsKey("Items"))
+        assertTrue(sequential.fields.containsKey("Triggers"))
+        assertTrue(sequential.fields.containsKey("Conditions"))
+    }
+
+    @Test
     fun `every listed type has a unique id and default factory`() {
         val listed = SequenceCatalog.types.filter { it.listed }
         assertEquals(listed.size, listed.map { it.id }.toSet().size)

@@ -3,9 +3,10 @@ package com.indigo.mobileobservatory.sequence
 import com.indigo.mobileobservatory.sequence.catalog.SequenceCatalog
 import com.indigo.mobileobservatory.sequence.catalog.SupportLevel
 import com.indigo.mobileobservatory.sequence.catalog.binningMode
+import com.indigo.mobileobservatory.sequence.catalog.catalogAreaContainer
 import com.indigo.mobileobservatory.sequence.catalog.catalogCollection
-import com.indigo.mobileobservatory.sequence.catalog.catalogContainer
 import com.indigo.mobileobservatory.sequence.catalog.catalogInstruction
+import com.indigo.mobileobservatory.sequence.catalog.catalogRootContainer
 import com.indigo.mobileobservatory.sequence.catalog.slotElementType
 import java.util.concurrent.atomic.AtomicLong
 
@@ -56,10 +57,10 @@ private fun com.indigo.mobileobservatory.sequence.catalog.SequenceTypeSpec.toCat
 )
 
 fun emptyAdvancedSequence(name: String): NinaNode {
-    val root = catalogContainer("NINA.Sequencer.Container.SequenceRootContainer, NINA.Sequencer", name)
-    val start = catalogContainer("NINA.Sequencer.Container.StartAreaContainer, NINA.Sequencer", "开始")
-    val targets = catalogContainer("NINA.Sequencer.Container.TargetAreaContainer, NINA.Sequencer", "目标")
-    val end = catalogContainer("NINA.Sequencer.Container.EndAreaContainer, NINA.Sequencer", "结束")
+    val root = catalogRootContainer("NINA.Sequencer.Container.SequenceRootContainer, NINA.Sequencer", name)
+    val start = catalogAreaContainer("NINA.Sequencer.Container.StartAreaContainer, NINA.Sequencer", "开始")
+    val targets = catalogAreaContainer("NINA.Sequencer.Container.TargetAreaContainer, NINA.Sequencer", "目标")
+    val end = catalogAreaContainer("NINA.Sequencer.Container.EndAreaContainer, NINA.Sequencer", "结束")
     val rootId = checkNotNull(root.id)
     listOf(start, targets, end).forEach { area -> area.fields["Parent"] = NinaValue.Ref(rootId) }
     val items = root.fields.getValue("Items") as NinaValue.Collection
@@ -378,14 +379,14 @@ fun insertSequenceSnippet(root: NinaNode, parentId: String, json: String, field:
         spec?.slot == SequenceSlot.Condition || incoming.className.endsWith("Condition") -> "Conditions"
         else -> "Items"
     }
-    if (parent.className == "SequenceRootContainer" && slotField != "Triggers") return false
-    val copy = cloneNode(incoming, HashMap())
-    copy.fields["Parent"] = NinaValue.Ref(parentId)
     val slot = when (slotField) {
         "Conditions" -> SequenceSlot.Condition
         "Triggers" -> SequenceSlot.Trigger
         else -> SequenceSlot.Item
     }
+    if (!sequenceAcceptsSlot(parent, slot)) return false
+    val copy = cloneNode(incoming, HashMap())
+    copy.fields["Parent"] = NinaValue.Ref(parentId)
     val collection = ensureCollection(parent, slotField, slot)
     parent.fields[slotField] = collection.copy(values = collection.values + NinaValue.Obj(copy))
     return true
@@ -424,7 +425,21 @@ fun formatDecDegrees(degrees: Double): String {
 }
 
 fun sequenceHidesLoopSections(className: String): Boolean =
-    className == "ParallelContainer" || className == "ConditionalContainer"
+    className in setOf(
+        "SequenceRootContainer",
+        "StartAreaContainer",
+        "TargetAreaContainer",
+        "EndAreaContainer",
+        "ParallelContainer",
+        "ConditionalContainer"
+    )
+
+private fun sequenceAcceptsSlot(parent: NinaNode, slot: SequenceSlot): Boolean =
+    when (parent.className) {
+        "SequenceRootContainer" -> slot == SequenceSlot.Trigger
+        "StartAreaContainer", "TargetAreaContainer", "EndAreaContainer" -> slot == SequenceSlot.Item
+        else -> true
+    }
 
 fun sequenceFieldText(node: NinaNode, path: String): String {
     if (node.className == "DeepSkyObjectContainer") {
@@ -466,10 +481,11 @@ fun findSequenceNode(root: NinaNode, id: String): NinaNode? {
 fun addSequenceNode(root: NinaNode, parentId: String, catalogId: String): Boolean {
     val parent = findSequenceNode(root, parentId) ?: return false
     val entry = catalogEntry(catalogId) ?: return false
+    if (!sequenceAcceptsSlot(parent, entry.slot)) return false
     val field = when (entry.slot) {
         SequenceSlot.Trigger -> "Triggers"
         SequenceSlot.Condition -> "Conditions"
-        SequenceSlot.Item -> if (parent.className == "SequenceRootContainer") return false else "Items"
+        SequenceSlot.Item -> "Items"
     }
     val child = createCatalogNode(entry)
     child.fields["Parent"] = NinaValue.Ref(parentId)
@@ -516,7 +532,12 @@ fun relocateSequenceNode(root: NinaNode, id: String, targetParentId: String, fie
     val node = (slot.collection.values[slot.index] as? NinaValue.Obj)?.node ?: return false
     if (sequenceStructural(node)) return false
     val targetParent = findSequenceNode(root, targetParentId) ?: return false
-    if (targetParent.className == "SequenceRootContainer" && field != "Triggers") return false
+    val targetSlot = when (field) {
+        "Conditions" -> SequenceSlot.Condition
+        "Triggers" -> SequenceSlot.Trigger
+        else -> SequenceSlot.Item
+    }
+    if (!sequenceAcceptsSlot(targetParent, targetSlot)) return false
     if (subtreeContains(node, targetParentId)) return false
     val sourceValues = slot.collection.values.toMutableList()
     val moved = sourceValues.removeAt(slot.index)
@@ -531,11 +552,6 @@ fun relocateSequenceNode(root: NinaNode, id: String, targetParentId: String, fie
     }
     slot.owner.fields[field] = slot.collection.copy(values = sourceValues)
     node.fields["Parent"] = NinaValue.Ref(targetParentId)
-    val targetSlot = when (field) {
-        "Conditions" -> SequenceSlot.Condition
-        "Triggers" -> SequenceSlot.Trigger
-        else -> SequenceSlot.Item
-    }
     val targetCollection = ensureCollection(targetParent, field, targetSlot)
     val targetValues = targetCollection.values.toMutableList()
     targetValues.add(index.coerceIn(0, targetValues.size), moved)

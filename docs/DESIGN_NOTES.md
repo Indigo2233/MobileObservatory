@@ -241,6 +241,8 @@
 
 拖动指令时，编辑区域最右侧显示固定删除区。指令进入删除区后停止边缘自动滚动，松手完成删除；删除区覆盖在编辑器上方，不改变序列列表的可用高度。
 
+开始、目标、结束三区只承载普通指令，不显示或接受触发器与循环条件。根节点只承载全局触发器。触发器和循环条件入口显示在 NINA 支持这些集合的目标及顺序指令集内。
+
 **代码：** `SequenceAdvancedEditor.kt`、`ui/screens/sequence/SequenceTree.kt`
 
 **回归：** `SequencePortraitUsabilityTest.shortNumericFieldsShareARow`、`tappingAnOpenInstructionAgainCollapsesItsFields`、`draggingToFixedRightRailDeletesWithoutVerticalScroll`

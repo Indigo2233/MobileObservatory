@@ -156,7 +156,6 @@ internal fun SequenceArea(
             }
         }
         NodeList(areaId, "Items", area.collectionNodes("Items"), emptyHint, depth, actions)
-        if (areaId != null) SequenceLoopSections(areaId, area, actions)
     }
 }
 

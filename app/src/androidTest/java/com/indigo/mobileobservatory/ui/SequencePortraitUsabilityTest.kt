@@ -11,7 +11,9 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -124,6 +126,48 @@ class SequencePortraitUsabilityTest {
             assertEquals(listOf("Annotation", "MessageBox"), deepest.childItems().map { it.className })
         }
         compose.onNodeWithText("End").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun topLevelAreasHideLoopSectionsWhileSequentialSetShowsThem() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val root = emptyAdvancedSequence("NINA area layout")
+        val start = root.childItems().first { it.className == "StartAreaContainer" }
+        assertTrue(addSequenceNode(root, checkNotNull(start.id), "SequentialContainer"))
+        val runtime = SequenceRuntime(
+            templatesDir = File(context.cacheDir, "area-layout-sequence-templates"),
+            sessionsDir = File(context.cacheDir, "area-layout-sequence-sessions"),
+            scope = scope,
+            hardware = VirtualSequenceHardware()
+        )
+        runtime.importJson("area-layout.json", root.toJson())
+
+        val configuration = Configuration(context.resources.configuration).apply {
+            orientation = Configuration.ORIENTATION_PORTRAIT
+            screenWidthDp = 360
+            screenHeightDp = 640
+            setLocale(Locale.ENGLISH)
+        }
+        val localizedContext = context.createConfigurationContext(configuration)
+        compose.setContent {
+            CompositionLocalProvider(
+                LocalContext provides localizedContext,
+                LocalConfiguration provides configuration
+            ) {
+                MaterialTheme {
+                    Box(Modifier.size(width = 360.dp, height = 640.dp)) {
+                        SequenceAdvancedEditor(
+                            runtime = runtime,
+                            enabled = true,
+                            hardware = VirtualSequenceHardware.SNAPSHOT
+                        )
+                    }
+                }
+            }
+        }
+
+        compose.onAllNodesWithText("⚡ Triggers").assertCountEquals(1)
+        compose.onAllNodesWithText("☰ Conditions").assertCountEquals(1)
     }
 
     @Test

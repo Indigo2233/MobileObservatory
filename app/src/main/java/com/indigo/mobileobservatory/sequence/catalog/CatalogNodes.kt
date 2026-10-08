@@ -31,6 +31,17 @@ fun catalogContainer(
     return node
 }
 
+fun catalogRootContainer(type: String, name: String): NinaNode =
+    catalogContainer(type, name).apply {
+        fields.remove("Conditions")
+    }
+
+fun catalogAreaContainer(type: String, name: String): NinaNode =
+    catalogContainer(type, name).apply {
+        fields.remove("Conditions")
+        fields.remove("Triggers")
+    }
+
 fun catalogCollection(elementType: String) = NinaValue.Collection(
     type = "System.Collections.ObjectModel.ObservableCollection`1[[$elementType]], System.ObjectModel",
     id = nextSequenceEditId(),

@@ -329,7 +329,10 @@ private fun area(id: String, titleZh: String, titleEn: String, listed: Boolean):
         isSet = true,
         listed = listed,
         hiddenByDefault = false
-    ) { catalogContainer(type, titleZh) }
+    ) {
+        if (id == "SequenceRootContainer") catalogRootContainer(type, titleZh)
+        else catalogAreaContainer(type, titleZh)
+    }
 }
 
 private fun setSpec(

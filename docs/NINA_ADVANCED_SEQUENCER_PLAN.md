@@ -77,7 +77,7 @@ NINA 是 MPL-2.0。本仓库只按它的 JSON 格式读写，按它的规则执�
 | `Container.ParallelContainer` | 并行指令集 | 同顺序指令集。条件和触发器不评估 | 子项同时启动 | 执行 |
 | `Container.ConditionalContainer` | 条件指令集（暂译） | 加 `PredicateExpression` | 保留（依赖表达式求值） | — |
 | `Container.LinkedTemplateContainer` | 链接模板（暂译） | `TemplateReference`、`TargetOverride`，不写子项 | 保留 | N5 视情况 |
-| `Container.SequenceRootContainer` / `StartAreaContainer` / `TargetAreaContainer` / `EndAreaContainer` | 序列 / 开始 / 目标 / 结束 | 根只有全局触发器；三区可挂条件和触发器 | 执行 | N1 |
+| `Container.SequenceRootContainer` / `StartAreaContainer` / `TargetAreaContainer` / `EndAreaContainer` | 序列 / 开始 / 目标 / 结束 | 根只有全局触发器；三区只有普通指令集合 | 执行 | N1 |
 
 ### 3.3 相机
 
