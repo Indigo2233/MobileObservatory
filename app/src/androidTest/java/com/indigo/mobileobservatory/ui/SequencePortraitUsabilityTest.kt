@@ -134,6 +134,7 @@ class SequencePortraitUsabilityTest {
         val root = emptyAdvancedSequence("NINA area layout")
         val start = root.childItems().first { it.className == "StartAreaContainer" }
         assertTrue(addSequenceNode(root, checkNotNull(start.id), "SequentialContainer"))
+        assertTrue(addSequenceNode(root, checkNotNull(start.id), "LinkedTemplateContainer"))
         val runtime = SequenceRuntime(
             templatesDir = File(context.cacheDir, "area-layout-sequence-templates"),
             sessionsDir = File(context.cacheDir, "area-layout-sequence-sessions"),

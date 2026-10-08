@@ -425,14 +425,7 @@ fun formatDecDegrees(degrees: Double): String {
 }
 
 fun sequenceHidesLoopSections(className: String): Boolean =
-    className in setOf(
-        "SequenceRootContainer",
-        "StartAreaContainer",
-        "TargetAreaContainer",
-        "EndAreaContainer",
-        "ParallelContainer",
-        "ConditionalContainer"
-    )
+    className != "SequentialContainer" && className != "DeepSkyObjectContainer"
 
 private fun sequenceAcceptsSlot(parent: NinaNode, slot: SequenceSlot): Boolean =
     when (parent.className) {
