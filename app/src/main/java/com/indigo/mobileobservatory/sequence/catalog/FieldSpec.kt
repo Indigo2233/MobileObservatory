@@ -71,7 +71,7 @@ data class SequenceTypeSpec(
     val device: SequenceDevice? = null,
     val isSet: Boolean = false,
     val listed: Boolean = true,
-    val hiddenByDefault: Boolean = level == SupportLevel.Retain,
+    val hiddenByDefault: Boolean = level != SupportLevel.Execute,
     val factory: () -> com.indigo.mobileobservatory.sequence.NinaNode
 )
 

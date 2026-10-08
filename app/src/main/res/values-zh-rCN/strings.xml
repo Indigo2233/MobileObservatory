@@ -924,9 +924,9 @@
     <string name="sequence_drag">拖动</string>
     <string name="sequence_drag_hint">按住左侧手柄可移动指令，拖到最右侧可删除。</string>
     <string name="sequence_add_to_targets">添加指令集</string>
-    <string name="sequence_show_all_instructions">显示全部指令</string>
-    <string name="sequence_support_pause">本机暂不支持</string>
-    <string name="sequence_support_retain">默认隐藏</string>
+    <string name="sequence_show_all_instructions">显示暂不可执行指令</string>
+    <string name="sequence_support_pause">暂不可执行</string>
+    <string name="sequence_support_retain">仅兼容保存</string>
     <string name="sequence_convert_advanced">转为高级序列</string>
     <string name="sequence_area_start_empty">序列开始区</string>
     <string name="sequence_area_targets_empty">目标区</string>

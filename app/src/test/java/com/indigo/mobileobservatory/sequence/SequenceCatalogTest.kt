@@ -12,12 +12,14 @@ import org.junit.Test
 
 class SequenceCatalogTest {
     @Test
-    fun `visible catalog hides retain types until asked`() {
+    fun `visible catalog hides non executable types until asked`() {
         val visible = sequenceCatalog().map { it.id }.toSet()
         val all = sequenceCatalog(includeHidden = true).map { it.id }.toSet()
         assertTrue(visible.contains("TakeExposure"))
         assertTrue(visible.contains("SmartExposure"))
+        assertFalse(visible.contains("ParkScope"))
         assertFalse(visible.contains("OpenDomeShutter"))
+        assertTrue(all.contains("ParkScope"))
         assertTrue(all.contains("OpenDomeShutter"))
         assertTrue(all.contains("LoopWhile"))
         assertFalse(visible.contains("SequenceRootContainer"))
@@ -54,13 +56,13 @@ class SequenceCatalogTest {
     }
 
     @Test
-    fun `every retained type is hidden validated and lossless on round trip`() {
+    fun `every non executable type is hidden validated and lossless on round trip`() {
         val visible = sequenceCatalog().map { it.id }.toSet()
         val full = sequenceCatalog(includeHidden = true).map { it.id }.toSet()
-        val retained = SequenceCatalog.types.filter { it.listed && it.level == SupportLevel.Retain }
+        val nonExecutable = SequenceCatalog.types.filter { it.listed && it.level != SupportLevel.Execute }
 
-        assertTrue(retained.isNotEmpty())
-        retained.forEach { spec ->
+        assertTrue(nonExecutable.isNotEmpty())
+        nonExecutable.forEach { spec ->
             val original = SequenceCatalog.create(spec.id)
             val restored = parseNinaSequence(original.toJson())
 
@@ -70,7 +72,7 @@ class SequenceCatalogTest {
             assertEquals(original.toJson(indent = 0), restored.toJson(indent = 0))
             assertTrue(
                 spec.id,
-                validateSequenceNode(restored).any { it.messageEn.contains("Not supported") }
+                validateSequenceNode(restored).any { it.messageEn.contains("not executable", ignoreCase = true) }
             )
         }
     }
@@ -109,7 +111,7 @@ class SequenceCatalogTest {
 
         val park = SequenceCatalog.create("ParkScope")
         assertEquals(SupportLevel.Pause, SequenceCatalog.spec("ParkScope")!!.level)
-        assertTrue(validateSequenceNode(park).any { it.messageZh.contains("暂不支持") })
+        assertTrue(validateSequenceNode(park).any { it.messageZh.contains("暂不可执行") })
         assertEquals(SupportLevel.Execute, SequenceCatalog.spec("DewHeater")!!.level)
         assertTrue(validateSequenceNode(SequenceCatalog.create("DewHeater"), SequenceHardwareSnapshot(cameraConnected = true)).any { it.messageEn.contains("not connected") })
         assertTrue(validateSequenceNode(SequenceCatalog.create("DewHeater"), SequenceHardwareSnapshot(cameraConnected = true, dewHeater = true)).isEmpty())

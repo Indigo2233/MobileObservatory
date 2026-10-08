@@ -915,9 +915,9 @@
     <string name="sequence_area_end_hint">Runs after a normal finish or skip-to-end.</string>
     <string name="sequence_collapse_all">Collapse all</string>
     <string name="sequence_expand_all">Expand all</string>
-    <string name="sequence_show_all_instructions">Show all instructions</string>
-    <string name="sequence_support_pause">not supported yet</string>
-    <string name="sequence_support_retain">hidden</string>
+    <string name="sequence_show_all_instructions">Show non-executable instructions</string>
+    <string name="sequence_support_pause">not executable yet</string>
+    <string name="sequence_support_retain">preserve only</string>
     <string name="sequence_convert_advanced">Convert to advanced sequence</string>
     <string name="sequence_area_start_empty">Start-of-sequence area</string>
     <string name="sequence_area_targets_empty">Target area</string>
