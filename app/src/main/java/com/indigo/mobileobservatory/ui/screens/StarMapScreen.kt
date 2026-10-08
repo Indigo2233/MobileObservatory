@@ -640,6 +640,14 @@ fun StarMapScreen(
         hipsCacheSizeLabel = HipsTileCache.formatCacheSize(hipsCache.cacheSizeBytes())
     }
 
+    fun applyTargetFovRotation() {
+        val angle = normalizePositionAngle(importAngleText.toDoubleOrNull() ?: 0.0)
+        evalStarMap(
+            "window.MercStarMap && window.MercStarMap.setTargetFovRotation(" +
+                "${"%.4f".format(Locale.US, angle)});"
+        )
+    }
+
     fun applyFovOverlays(alsoZoom: Boolean) {
         val currentAnchor = if (mountConnected) {
             mountCoordinates?.let { FovSkyAnchor(it.raHours, it.decDeg, "JNOW") }
@@ -654,6 +662,7 @@ fun StarMapScreen(
             alsoZoom = alsoZoom,
             currentAnchor = currentAnchor
         ).forEach(::evalStarMap)
+        applyTargetFovRotation()
     }
 
     fun setFollowMountEnabled(enabled: Boolean) {
@@ -803,7 +812,16 @@ fun StarMapScreen(
 
     LaunchedEffect(selectedTarget, importAngleText) {
         val current = selectedTarget ?: return@LaunchedEffect
-        onTargetSelected(current.copy(positionAngleDeg = importAngleText.toDoubleOrNull() ?: 0.0))
+        onTargetSelected(
+            current.copy(
+                positionAngleDeg = normalizePositionAngle(importAngleText.toDoubleOrNull() ?: 0.0)
+            )
+        )
+    }
+
+    LaunchedEffect(webView, engineState, importAngleText, activeComputation, showFovOverlay) {
+        if (engineState !is StarMapEngineState.Ready) return@LaunchedEffect
+        applyTargetFovRotation()
     }
 
     LaunchedEffect(
@@ -1392,6 +1410,17 @@ fun StarMapScreen(
                         Text(
                             stringResource(R.string.sequence_sensor_angle),
                             style = MaterialTheme.typography.labelMedium
+                        )
+                        Text(
+                            stringResource(
+                                if (showFovOverlay && activeComputation?.mode == FovInstrumentMode.SENSOR) {
+                                    R.string.sequence_sensor_angle_preview_active
+                                } else {
+                                    R.string.sequence_sensor_angle_preview_hint
+                                }
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Row(
                             modifier = Modifier.fillMaxWidth(),

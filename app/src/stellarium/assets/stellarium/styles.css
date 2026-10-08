@@ -53,9 +53,22 @@ body {
     font-size: 12px;
     line-height: 1.2;
     text-align: center;
-    padding-top: 6px;
     pointer-events: none;
     box-sizing: border-box;
+    overflow: visible;
+}
+
+.fov-label {
+    position: absolute;
+    left: 50%;
+    top: -22px;
+    transform-origin: center;
+    white-space: nowrap;
+}
+
+#fov-current .fov-label {
+    top: auto;
+    bottom: -22px;
 }
 
 #fov-current {

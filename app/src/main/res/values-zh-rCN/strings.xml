@@ -949,6 +949,8 @@
     <string name="sequence_from_pointing">从当前指向取</string>
     <string name="sequence_position_angle">位置角 °</string>
     <string name="sequence_sensor_angle">传感器角度</string>
+    <string name="sequence_sensor_angle_preview_active">虚线传感器视场框会实时旋转，可用于预览构图。</string>
+    <string name="sequence_sensor_angle_preview_hint">开启相机传感器视场后可预览构图。</string>
     <string name="sequence_import_destination">目标加入到</string>
     <string name="sequence_import_destination_detail">%1$s · 传感器角度 %2$s°</string>
     <string name="sequence_sky_target_summary">RA %1$.4f h  Dec %2$.3f°  位置角 %3$.1f°</string>

@@ -351,8 +351,20 @@
         element.style.height = boxH + "px";
         element.style.left = pos.x + "px";
         element.style.top = pos.y + "px";
+        const rotation = spec.shape === "rect" && isFinite(Number(spec.rotationDeg))
+            ? Number(spec.rotationDeg)
+            : 0;
+        element.style.transform = "translate(-50%, -50%) rotate(" + rotation + "deg)";
         element.style.display = "block";
-        element.textContent = spec.label || "";
+        element.textContent = "";
+        if (spec.label) {
+            const label = document.createElement("span");
+            label.className = "fov-label";
+            label.style.transform =
+                "translateX(-50%) rotate(" + (-rotation) + "deg)";
+            label.textContent = spec.label;
+            element.appendChild(label);
+        }
     }
 
     function zoomToCurrentFov() {
@@ -375,7 +387,9 @@
             : "r" + spec.widthDeg + "x" + spec.heightDeg;
         const ra = spec.raHours != null ? spec.raHours : "";
         const dec = spec.decDegrees != null ? spec.decDegrees : "";
-        return shape + "@" + ra + "," + dec + "," + (spec.frame || "");
+        const rotation = spec.rotationDeg != null ? spec.rotationDeg : 0;
+        return shape + "@" + ra + "," + dec + "," + (spec.frame || "") +
+            ",r" + rotation;
     }
     function refreshFovOverlaysFromEngine() {
         const coreFov = coreFovDegrees();
@@ -790,7 +804,8 @@
                 label: label || "",
                 raHours: anchor.raHours,
                 decDegrees: anchor.decDegrees,
-                frame: anchor.frame
+                frame: anchor.frame,
+                rotationDeg: pendingTargetFov ? Number(pendingTargetFov.rotationDeg) || 0 : 0
             };
             applyFovOverlay(fovTargetElement, pendingTargetFov);
         },
@@ -803,9 +818,19 @@
                 label: label || "",
                 raHours: anchor.raHours,
                 decDegrees: anchor.decDegrees,
-                frame: anchor.frame
+                frame: anchor.frame,
+                rotationDeg: pendingTargetFov ? Number(pendingTargetFov.rotationDeg) || 0 : 0
             };
             applyFovOverlay(fovTargetElement, pendingTargetFov);
+        },
+        setTargetFovRotation: function (angleDeg) {
+            if (!pendingTargetFov) return false;
+            const angle = Number(angleDeg);
+            if (!isFinite(angle)) return false;
+            pendingTargetFov.rotationDeg = ((angle % 360) + 360) % 360;
+            lastOverlayFovKey = "";
+            applyFovOverlay(fovTargetElement, pendingTargetFov);
+            return true;
         },
         clearTargetFovOverlay: function () {
             pendingTargetFov = null;

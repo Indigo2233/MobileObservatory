@@ -37,11 +37,16 @@ class StarMapAssetsRegressionTest {
     @Test
     fun overlayApiUsesCurrentAndTargetRoles() {
         val js = read("app.js")
+        val css = read("styles.css")
         assertTrue(js.contains("setCurrentCircleFovOverlay:"))
         assertTrue(js.contains("setCurrentRectFovOverlay:"))
         assertTrue(js.contains("clearCurrentFovOverlay:"))
         assertTrue(js.contains("setTargetCircleFovOverlay:"))
         assertTrue(js.contains("setTargetRectFovOverlay:"))
+        assertTrue(js.contains("setTargetFovRotation:"))
+        assertTrue(js.contains("rotate("))
+        assertTrue(js.contains("label.className = \"fov-label\""))
+        assertTrue(css.contains(".fov-label"))
         assertTrue(js.contains("function projectRaDecToScreen("))
         assertTrue(js.contains("convertFrame"))
         assertTrue(js.contains("\"VIEW\""))
