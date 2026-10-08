@@ -11,8 +11,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -101,6 +101,8 @@ fun SequenceAdvancedEditor(
     val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     val drag = remember { SequenceDragState() }
     val density = LocalDensity.current
+    val deleteRailWidth = 80.dp
+    val deleteRailWidthPx = with(density) { deleteRailWidth.toPx() }
     val treeScroll = rememberScrollState()
     var selectedId by remember { mutableStateOf<String?>(null) }
     var adding by remember { mutableStateOf<AddRequest?>(null) }
@@ -177,6 +179,7 @@ fun SequenceAdvancedEditor(
         while (isActive && drag.active) {
             drag.updateHover()
             val delta = when {
+                drag.overTrash -> 0f
                 viewport.height <= 0f -> 0f
                 drag.point.y < viewport.top + edge -> -48f
                 drag.point.y > viewport.bottom - edge -> 48f
@@ -201,112 +204,139 @@ fun SequenceAdvancedEditor(
                 canRedo = canRedo,
                 runtime = runtime
             )
-            Row(Modifier.weight(1f).fillMaxWidth()) {
-                Box(
-                    Modifier
-                        .weight(if (landscape) 0.7f else 1f)
-                        .fillMaxHeight()
-                        .onGloballyPositioned { viewport = it.boundsInRoot() }
-                        .verticalScroll(treeScroll)
-                ) {
-                    Column(Modifier.fillMaxWidth().padding(end = 8.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.End
-                        ) {
-                            TextButton(
-                                onClick = { runtime.editSequence { setAllSequenceExpanded(it, false) } },
-                                enabled = editing,
-                                modifier = Modifier.testTag("sequence_collapse_all")
-                            ) {
-                                Text(stringResource(R.string.sequence_collapse_all))
-                            }
-                            TextButton(
-                                onClick = { runtime.editSequence { setAllSequenceExpanded(it, true) } },
-                                enabled = editing,
-                                modifier = Modifier.testTag("sequence_expand_all")
-                            ) {
-                                Text(stringResource(R.string.sequence_expand_all))
-                            }
-                        }
-                        SequenceGlobalTriggers(root, actions)
-                        if (start != null) {
-                            SequenceArea(
-                                title = stringResource(R.string.sequence_area_start),
-                                emptyHint = stringResource(R.string.sequence_area_start_empty),
-                                area = start,
-                                targetArea = false,
-                                depth = 0,
-                                actions = actions
+            Box(
+                Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .testTag("sequence_editor_content")
+                    .onGloballyPositioned { coordinates ->
+                        val bounds = coordinates.boundsInRoot()
+                        drag.putTrash(
+                            Rect(
+                                left = bounds.right - deleteRailWidthPx,
+                                top = bounds.top,
+                                right = bounds.right,
+                                bottom = bounds.bottom
                             )
-                        }
-                        if (targets != null) {
-                            SequenceArea(
-                                title = stringResource(R.string.sequence_area_targets),
-                                emptyHint = stringResource(R.string.sequence_area_targets_empty),
-                                area = targets,
-                                targetArea = true,
-                                depth = 0,
-                                actions = actions
-                            )
-                        }
-                        if (end != null) {
-                            SequenceArea(
-                                title = stringResource(R.string.sequence_area_end),
-                                emptyHint = stringResource(R.string.sequence_area_end_empty),
-                                area = end,
-                                targetArea = false,
-                                depth = 0,
-                                actions = actions
-                            )
-                        }
+                        )
                     }
-                }
-                if (landscape) {
-                    SequenceAddPanel(
-                        slot = adding?.slot ?: SequenceSlot.Item,
-                        chinese = chinese,
-                        templates = runtime.templateNames(),
-                        onPickInstruction = { entry ->
-                            val parent = adding?.parentId ?: start?.id
-                            if (parent != null && editing) {
-                                runtime.editSequence { addSequenceNode(it, parent, entry.id) }
+            ) {
+                Row(Modifier.fillMaxSize()) {
+                    Box(
+                        Modifier
+                            .weight(if (landscape) 0.7f else 1f)
+                            .fillMaxHeight()
+                            .testTag("sequence_tree_scroll")
+                            .onGloballyPositioned { viewport = it.boundsInRoot() }
+                            .verticalScroll(treeScroll)
+                    ) {
+                        Column(Modifier.fillMaxWidth().padding(end = 8.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                TextButton(
+                                    onClick = { runtime.editSequence { setAllSequenceExpanded(it, false) } },
+                                    enabled = editing,
+                                    modifier = Modifier.testTag("sequence_collapse_all")
+                                ) {
+                                    Text(stringResource(R.string.sequence_collapse_all))
+                                }
+                                TextButton(
+                                    onClick = { runtime.editSequence { setAllSequenceExpanded(it, true) } },
+                                    enabled = editing,
+                                    modifier = Modifier.testTag("sequence_expand_all")
+                                ) {
+                                    Text(stringResource(R.string.sequence_expand_all))
+                                }
                             }
-                        },
-                        onPickTemplate = { runtime.load(it) },
-                        skyTarget = skyTarget,
-                        onAddSkyTarget = {
-                            if (skyTarget != null && editing) {
-                                runtime.addTarget(
-                                    skyTarget.name,
-                                    skyTarget.raHours,
-                                    skyTarget.decDeg,
-                                    skyTarget.positionAngleDeg
+                            SequenceGlobalTriggers(root, actions)
+                            if (start != null) {
+                                SequenceArea(
+                                    title = stringResource(R.string.sequence_area_start),
+                                    emptyHint = stringResource(R.string.sequence_area_start_empty),
+                                    area = start,
+                                    targetArea = false,
+                                    depth = 0,
+                                    actions = actions
                                 )
                             }
-                        },
-                        setTemplates = runtime.setTemplateNames(),
-                        savedTargets = runtime.savedTargetNames(),
-                        onInsertTemplate = { name ->
-                            val parent = adding?.parentId ?: start?.id
-                            if (parent != null && editing) runtime.insertSetTemplate(parent, name)
-                        },
-                        onInsertTarget = { name ->
-                            val parent = adding?.parentId ?: targets?.id
-                            if (parent != null && editing) runtime.insertSavedTarget(parent, name)
-                        },
-                        dragEnabled = editing,
-                        onDropCatalog = { catalogId, parent, field, index ->
-                            if (editing) {
-                                runtime.editSequence { addSequenceNodeAt(it, parent, catalogId, field, index) }
+                            if (targets != null) {
+                                SequenceArea(
+                                    title = stringResource(R.string.sequence_area_targets),
+                                    emptyHint = stringResource(R.string.sequence_area_targets_empty),
+                                    area = targets,
+                                    targetArea = true,
+                                    depth = 0,
+                                    actions = actions
+                                )
                             }
-                        },
-                        modifier = Modifier.weight(0.3f).fillMaxHeight().padding(start = 8.dp)
+                            if (end != null) {
+                                SequenceArea(
+                                    title = stringResource(R.string.sequence_area_end),
+                                    emptyHint = stringResource(R.string.sequence_area_end_empty),
+                                    area = end,
+                                    targetArea = false,
+                                    depth = 0,
+                                    actions = actions
+                                )
+                            }
+                        }
+                    }
+                    if (landscape) {
+                        SequenceAddPanel(
+                            slot = adding?.slot ?: SequenceSlot.Item,
+                            chinese = chinese,
+                            templates = runtime.templateNames(),
+                            onPickInstruction = { entry ->
+                                val parent = adding?.parentId ?: start?.id
+                                if (parent != null && editing) {
+                                    runtime.editSequence { addSequenceNode(it, parent, entry.id) }
+                                }
+                            },
+                            onPickTemplate = { runtime.load(it) },
+                            skyTarget = skyTarget,
+                            onAddSkyTarget = {
+                                if (skyTarget != null && editing) {
+                                    runtime.addTarget(
+                                        skyTarget.name,
+                                        skyTarget.raHours,
+                                        skyTarget.decDeg,
+                                        skyTarget.positionAngleDeg
+                                    )
+                                }
+                            },
+                            setTemplates = runtime.setTemplateNames(),
+                            savedTargets = runtime.savedTargetNames(),
+                            onInsertTemplate = { name ->
+                                val parent = adding?.parentId ?: start?.id
+                                if (parent != null && editing) runtime.insertSetTemplate(parent, name)
+                            },
+                            onInsertTarget = { name ->
+                                val parent = adding?.parentId ?: targets?.id
+                                if (parent != null && editing) runtime.insertSavedTarget(parent, name)
+                            },
+                            dragEnabled = editing,
+                            onDropCatalog = { catalogId, parent, field, index ->
+                                if (editing) {
+                                    runtime.editSequence { addSequenceNodeAt(it, parent, catalogId, field, index) }
+                                }
+                            },
+                            modifier = Modifier.weight(0.3f).fillMaxHeight().padding(start = 8.dp)
+                        )
+                    }
+                }
+                if (drag.active) {
+                    DeleteDropRail(
+                        hot = drag.overTrash,
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .width(deleteRailWidth)
+                            .fillMaxHeight()
                     )
                 }
             }
             if (drag.active) {
-                TrashBar(drag.overTrash)
                 val local = drag.point - editorOrigin
                 Popup(
                     alignment = Alignment.TopStart,
@@ -410,24 +440,23 @@ private fun EditorBar(
 }
 
 @Composable
-private fun TrashBar(hot: Boolean) {
+private fun DeleteDropRail(hot: Boolean, modifier: Modifier = Modifier) {
     val color = if (hot) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.surfaceVariant
-    val drag = LocalSequenceDrag.current
     Surface(
         color = color,
-        tonalElevation = 4.dp,
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(56.dp)
-            .onGloballyPositioned { drag?.putTrash(it.boundsInRoot()) }
+        tonalElevation = 8.dp,
+        modifier = modifier.testTag("sequence_delete_drop_target")
     ) {
-        Row(
-            Modifier.fillMaxWidth().padding(8.dp),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically
+        Column(
+            Modifier.fillMaxSize().padding(8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
         ) {
             Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.sequence_delete))
-            Text(stringResource(R.string.sequence_drop_to_delete), modifier = Modifier.padding(start = 8.dp))
+            Text(
+                stringResource(R.string.sequence_drop_to_delete),
+                style = MaterialTheme.typography.labelMedium
+            )
         }
     }
 }

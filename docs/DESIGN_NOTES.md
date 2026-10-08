@@ -239,6 +239,8 @@
 
 点击指令标题展开参数，再次点击同一标题直接收起。点击另一条指令时收起原指令并展开新指令。
 
+拖动指令时，编辑区域最右侧显示固定删除区。指令进入删除区后停止边缘自动滚动，松手完成删除；删除区覆盖在编辑器上方，不改变序列列表的可用高度。
+
 **代码：** `SequenceAdvancedEditor.kt`、`ui/screens/sequence/SequenceTree.kt`
 
-**回归：** `SequencePortraitUsabilityTest.shortNumericFieldsShareARow`、`tappingAnOpenInstructionAgainCollapsesItsFields`
+**回归：** `SequencePortraitUsabilityTest.shortNumericFieldsShareARow`、`tappingAnOpenInstructionAgainCollapsesItsFields`、`draggingToFixedRightRailDeletesWithoutVerticalScroll`

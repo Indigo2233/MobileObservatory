@@ -5,9 +5,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -15,6 +17,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -151,6 +154,40 @@ class SequencePortraitUsabilityTest {
             compose.onAllNodesWithTag("sequence_field_${exposureId}_ExposureTime")
                 .fetchSemanticsNodes().isEmpty()
         )
+    }
+
+    @Test
+    fun draggingToFixedRightRailDeletesWithoutVerticalScroll() {
+        val exposureId = showTakeExposureEditor("right-rail-delete")
+        val handle = compose.onNodeWithTag("sequence_drag_$exposureId")
+            .performScrollTo()
+            .assertIsDisplayed()
+        val contentBounds = compose.onNodeWithTag("sequence_editor_content")
+            .fetchSemanticsNode().boundsInRoot
+        val handleBounds = handle.fetchSemanticsNode().boundsInRoot
+        val scrollBefore = compose.onNodeWithTag("sequence_tree_scroll")
+            .fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value()
+
+        handle.performTouchInput {
+            down(center)
+            advanceEventTime(100)
+            moveTo(
+                Offset(
+                    x = contentBounds.right - handleBounds.left - 12f,
+                    y = handleBounds.center.y - handleBounds.top
+                )
+            )
+            advanceEventTime(100)
+            up()
+        }
+
+        compose.waitUntil(timeoutMillis = 5_000) {
+            compose.onAllNodesWithTag("sequence_node_$exposureId")
+                .fetchSemanticsNodes().isEmpty()
+        }
+        val scrollAfter = compose.onNodeWithTag("sequence_tree_scroll")
+            .fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value()
+        assertEquals(scrollBefore, scrollAfter, 0.5f)
     }
 
     private fun showTakeExposureEditor(testName: String): String {

@@ -979,7 +979,7 @@
     <string name="sequence_triggers">Triggers</string>
     <string name="sequence_actions">Actions</string>
     <string name="sequence_drag">Drag</string>
-    <string name="sequence_drag_hint">Hold the handle to drag an instruction to another place.</string>
+    <string name="sequence_drag_hint">Hold the handle to move an instruction. Drag it to the far right to delete it.</string>
     <string name="sequence_add_to_targets">Add instruction set</string>
     <!-- Software update -->
     <string name="settings_update">Software update</string>

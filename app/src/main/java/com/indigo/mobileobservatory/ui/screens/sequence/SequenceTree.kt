@@ -765,7 +765,11 @@ private fun DragHandle(
     val drag = LocalSequenceDrag.current ?: return
     val coords = remember { mutableStateOf<androidx.compose.ui.layout.LayoutCoordinates?>(null) }
     Box(
-        Modifier.size(48.dp).onGloballyPositioned { coords.value = it }.pointerInput(node.id, field, enabled) {
+        Modifier
+            .size(48.dp)
+            .testTag("sequence_drag_${node.id}")
+            .onGloballyPositioned { coords.value = it }
+            .pointerInput(node.id, field, enabled) {
             if (!enabled) return@pointerInput
             trackDrag(
                 onStart = { local ->

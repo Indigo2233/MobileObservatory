@@ -922,7 +922,7 @@
     <string name="sequence_triggers">触发器</string>
     <string name="sequence_actions">操作</string>
     <string name="sequence_drag">拖动</string>
-    <string name="sequence_drag_hint">按住左侧手柄，可以把指令拖到别的位置。</string>
+    <string name="sequence_drag_hint">按住左侧手柄可移动指令，拖到最右侧可删除。</string>
     <string name="sequence_add_to_targets">添加指令集</string>
     <string name="sequence_show_all_instructions">显示全部指令</string>
     <string name="sequence_support_pause">本机暂不支持</string>
