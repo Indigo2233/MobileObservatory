@@ -53,16 +53,20 @@
 |---|---|
 | 光路 | 各有焦距 + 终端（目镜圆或相机矩），互不覆盖。默认显示**导星**。 |
 | 当前框 | `#fov-current`，绿实线。已连接赤道仪时钉在指向的 RA/Dec；未连接则钉屏幕中央。 |
-| 目标框 | `#fov-target`，黄虚线。只要开着视场叠加就一直显示，钉在屏幕中央（构图/GOTO 这块天）。不需要先点选天体。 |
+| 目标框 | `#fov-target`，黄虚线。选中目标后钉在目标 RA/Dec；未选目标时取屏幕中央天球坐标。不需要先点选天体即可显示。 |
+| 传感器位置角 | 与 NINA/WCS 一致，从天球北向经东向计量。矩形长边在位置角 `0°` 时与目标处赤纬线相切。传感器单框和马赛克从共同切平面计算天球四角，再逐角投影到当前星图；地平视图、天极附近、超广角和星图移动时实时重算。 |
+| 马赛克 | 相机模式提供 `1..10` 行、`1..10` 列、`0..90%` 重叠率、位置角和面板编号。执行顺序支持逐行、蛇形、逐列及四个起始角，默认从左上角蛇形移动。设置写入 `star_map_mosaic_*` 偏好。 |
+| 构图导入序列 | 星图按共同切平面计算每个面板中心，简单序列保存可启停、重排和单独重拍的面板列表；高级序列生成独立目标、面板元数据、指向、居中和曝光指令。再次导入同名马赛克时更新高级序列中的原面板。 |
+| 解算角度 | WCS 解算结果统一换算为传感器位置角。星图可采用解算角度、显示计划误差，并以当前机械角校准旋转器偏移和方向。连接旋转器时可直接转到构图角度。 |
 | 标签 | 光路切换始终写「主镜」「导星」，设备自定义名不替换这两个字。视场框/圈显示 **望远镜 + 终端** 组合名，例如 `C8 + 25 mm · 50° 当前 1.50°` / `C8 + ASI533 目标 1.20°×0.80°`。 |
 | 设备库 | 视场设置可添加、删除、命名望远镜、目镜和相机。已连接相机不能改名或删除。至少保留一项。 |
 | 十字丝 | 不要屏幕中心十字丝（`mount-reticle` 已去掉）。指向改用跟随或「居中到赤道仪」。 |
 | 板解焦距 | 仅当**导星且为相机**时，在视场设置里改焦距才写 `plate_focal_length_mm`。主镜目视不改板解焦距。`persistFovPrefs()` 不得顺手覆盖该键。 |
 | 旧安装 | 现有 `star_map_*` 键迁到主镜。 |
 
-**代码：** `StarMapOpticsTrain.kt`、`UserOpticsCatalog.kt`、`StarMapFovOverlay.kt`、`StarMapFovSheet.kt`、`StarMapHud.kt`、`stellarium/styles.css`、`app.js` `projectRaDecToScreen`
+**代码：** `StarMapOpticsTrain.kt`、`StarMapMosaicConfig.kt`、`StarMapMosaicPlanner.kt`、`SensorAngleCalibration.kt`、`UserOpticsCatalog.kt`、`StarMapFovOverlay.kt`、`StarMapFovSheet.kt`、`StarMapHud.kt`、`SimpleSequence.kt`、`SequenceRuntime.kt`、`FitsWcsParser.kt`、`stellarium/styles.css`、`fov-position-angle.js`、`app.js` `projectRaDecToScreen` / `renderProjectedRectOverlay`
 
-**回归：** `StarMapOpticsTrainTest`、`UserOpticsCatalogTest`、`StarMapFovOverlayTest`、`FovOverlayLayoutTest.skyOffsetUsesTheSameLinearDegreeMappingAsTheBox`、`StarMapAssetsRegressionTest.overlayApiUsesCurrentAndTargetRoles`
+**回归：** `StarMapOpticsTrainTest`、`UserOpticsCatalogTest`、`StarMapFovOverlayTest`、`StarMapMosaicPlannerTest`、`SensorAngleCalibrationTest`、`FitsWcsParserPositionAngleTest`、`SequenceRuntimeHardwareMappingTest`、`FovOverlayLayoutTest.skyOffsetUsesTheSameLinearDegreeMappingAsTheBox`、`StarMapAssetsRegressionTest.overlayApiUsesCurrentAndTargetRoles`、`scripts/tests/star-map-position-angle.test.cjs`
 
 ---
 
@@ -182,7 +186,7 @@
 - 扫描只按 Android USB 列表列出相机，不要在扫描时启动 Player One SDK。点中某一台后才连接，Player One 的 SDK 只在这时启动。
 - 导星相机不打开主相机已经占用的那台 USB 设备。主相机没连接时，导星相机可以单独连接，例如主镜目视、导星镜负责指向。拔掉其中一台时，另一个会话不要跟着断开。
 - 有线 OnStep 先在 DTR/RTS 拉低时轮询 `:GR#`，不要一连接就翻转 DTR。翻转会复位控制板，断开后立刻重连就会在启动完成前失败。断开必须等串口关完，再开始下一次打开。
-- SDK 型号表没有的 PID 仍当作相机列出，不要因为 `getModelName` 为空就忽略（VID 仍是 0x0547）。
+- SDK 型号表没有的 PID 仍当作相机列出，不要因为 `getModelName` 为空就忽略。消费版 VID 不只是 `0x0547`：USB2/Cypress 是 `0x04B4`，部分 GPM/OEM 462 在 Android 上报 USB3 Vision 通用号 `0x2BA2`。工业 overlay 的 `0x2BA2` 仍走 Galaxy，只用 `isProtocolVendor`。
 - 预览降采样只发生在 `FrameProcessor.frameToBitmap`，且仅当帧超过约 4MP；拍摄/FITS 走原图。常见图谱行星相机尺寸应保持 `sampleStep = 1`。
 - 工业 overlay 覆盖 `DahengCameraManager.kt` 时必须带上 USB 句柄持有和未知 PID 枚举，否则会把公有树修复盖掉。
 
@@ -230,3 +234,19 @@
 ---
 
 相机、赤道仪、导星相机、配件各自连接、互不绑定。协议细节留在 adapter 里，UI 只看统一 ViewModel 状态。包名/JNI 符号约定见 `AGENTS.md`。
+
+---
+
+## 序列：参数密度与展开操作
+
+手机竖屏上的序列参数按内容长度排布。数值和短表达式在可用宽度不少于 300 dp 时每行放两个；路径、批注、条件表达式和选择芯片占整行。深层嵌套导致可用宽度变窄时自动恢复单列，避免输入内容和标签被压缩。
+
+点击指令标题展开参数，再次点击同一标题直接收起。点击另一条指令时收起原指令并展开新指令。
+
+拖动指令时，编辑区域最右侧显示固定删除区。指令进入删除区后停止边缘自动滚动，松手完成删除；删除区覆盖在编辑器上方，不改变序列列表的可用高度。
+
+开始、目标、结束三区只承载普通指令，不显示或接受触发器与循环条件。根节点只承载全局触发器。触发器和循环条件入口显示在 NINA 支持这些集合的目标及顺序指令集内。
+
+**代码：** `SequenceAdvancedEditor.kt`、`ui/screens/sequence/SequenceTree.kt`
+
+**回归：** `SequencePortraitUsabilityTest.shortNumericFieldsShareARow`、`tappingAnOpenInstructionAgainCollapsesItsFields`、`draggingToFixedRightRailDeletesWithoutVerticalScroll`

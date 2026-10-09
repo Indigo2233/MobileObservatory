@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Nightlight
 import androidx.compose.material.icons.filled.NightlightRound
@@ -42,6 +43,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -66,6 +68,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -74,12 +77,20 @@ import androidx.webkit.WebViewAssetLoader
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.astro.FovInstrumentMode
 import com.indigo.mobileobservatory.astro.FovSkyAnchor
+import com.indigo.mobileobservatory.astro.MosaicStartCorner
+import com.indigo.mobileobservatory.astro.MosaicTraversal
 import com.indigo.mobileobservatory.astro.OpticsEquipment
 import com.indigo.mobileobservatory.astro.OpticsPrefReader
 import com.indigo.mobileobservatory.astro.OpticsTrainConfig
 import com.indigo.mobileobservatory.astro.OpticsTrainId
 import com.indigo.mobileobservatory.astro.StarMapFovOverlay
+import com.indigo.mobileobservatory.astro.StarMapMosaicConfig
+import com.indigo.mobileobservatory.astro.StarMapMosaicPlanner
 import com.indigo.mobileobservatory.astro.StarMapOpticsPrefs
+import com.indigo.mobileobservatory.astro.SensorAngleCalibration
+import com.indigo.mobileobservatory.sequence.SequenceEditorMode
+import com.indigo.mobileobservatory.sequence.SequenceMosaicPanel
+import com.indigo.mobileobservatory.sequence.SequenceMosaicPlan
 import com.indigo.mobileobservatory.astro.UserOpticsCatalog
 import com.indigo.mobileobservatory.astro.resolveTelescopeFl
 import com.indigo.mobileobservatory.catalog.AssetDeepSkyCatalog
@@ -88,6 +99,7 @@ import com.indigo.mobileobservatory.mount.MountCoordinates
 import com.indigo.mobileobservatory.mount.MountDirection
 import com.indigo.mobileobservatory.mount.MountMotionState
 import com.indigo.mobileobservatory.mount.MountSite
+import com.indigo.mobileobservatory.mount.MountTime
 import com.indigo.mobileobservatory.mount.MountSlewRate
 import com.indigo.mobileobservatory.mount.PrecisionGotoMath
 import com.indigo.mobileobservatory.mount.PrecisionGotoPhase
@@ -103,12 +115,40 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.util.Locale
+import java.time.Instant
+import java.time.LocalDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeParseException
+
+private const val STAR_MAP_TIME_PREF = "star_map_epoch_millis"
+private val STAR_MAP_TIME_FORMATTER: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
+
+private fun formatStarMapTime(epochMillis: Long): String {
+    return Instant.ofEpochMilli(epochMillis)
+        .atZone(ZoneId.systemDefault())
+        .toLocalDateTime()
+        .format(STAR_MAP_TIME_FORMATTER)
+}
+
+private fun parseStarMapTime(text: String): Long? {
+    return try {
+        LocalDateTime.parse(text.trim(), STAR_MAP_TIME_FORMATTER)
+            .atZone(ZoneId.systemDefault())
+            .toInstant()
+            .toEpochMilli()
+    } catch (_: DateTimeParseException) {
+        null
+    }
+}
 
 data class StarMapTarget(
     val name: String,
     val raHours: Double,
     val decDegrees: Double,
-    val frame: String
+    val frame: String,
+    val positionAngleDeg: Double = 0.0
 ) {
     fun coordinatesText(): String {
         return "RA %.5f h  Dec %+.4f°  %s".format(
@@ -117,6 +157,17 @@ data class StarMapTarget(
             decDegrees,
             frame
         )
+    }
+}
+
+private fun normalizePositionAngle(value: Double): Double = ((value % 360.0) + 360.0) % 360.0
+
+private fun positionAngleText(value: Double): String {
+    val normalized = normalizePositionAngle(value)
+    return if (normalized % 1.0 == 0.0) {
+        normalized.toLong().toString()
+    } else {
+        "%.1f".format(Locale.US, normalized)
     }
 }
 
@@ -204,6 +255,7 @@ private class StarMapJavascriptBridge(
 fun StarMapScreen(
     mountCoordinates: MountCoordinates?,
     mountSite: MountSite?,
+    mountTime: MountTime? = null,
     mountConnected: Boolean,
     mountSupportsSync: Boolean = true,
     mountBusy: Boolean,
@@ -213,9 +265,17 @@ fun StarMapScreen(
     cameraPixelSizeUm: Float? = null,
     cameraFrameWidthPx: Int = 0,
     cameraFrameHeightPx: Int = 0,
+    lastSolvedPositionAngleDeg: Double? = null,
+    rotatorConnected: Boolean = false,
+    rotatorMechanicalAngleDeg: Double = 0.0,
+    initialSequencePlan: SequenceMosaicPlan? = null,
     onGoto: (StarMapTarget) -> Unit,
     onSync: (StarMapTarget) -> Unit = {},
     onPrecisionGoto: (StarMapTarget, Double) -> Unit = { _, _ -> },
+    onAddToSequence: (SequenceMosaicPlan, SequenceEditorMode) -> Unit = { _, _ -> },
+    onMoveRotator: (Double) -> Unit = {},
+    showSequenceActions: Boolean = true,
+    onTargetSelected: (StarMapTarget) -> Unit = {},
     onSlewRateChange: (MountSlewRate) -> Unit = {},
     onManualMoveStart: (MountDirection) -> Unit = {},
     onManualMoveStop: (MountDirection) -> Unit = {},
@@ -227,7 +287,19 @@ fun StarMapScreen(
 ) {
     var webView by remember { mutableStateOf<WebView?>(null) }
     var webViewSession by remember { mutableIntStateOf(0) }
-    var selectedTarget by remember { mutableStateOf<StarMapTarget?>(null) }
+    var selectedTarget by remember {
+        mutableStateOf(
+            initialSequencePlan?.let {
+                StarMapTarget(
+                    it.name,
+                    it.centerRaHours,
+                    it.centerDecDeg,
+                    "J2000",
+                    it.positionAngleDeg
+                )
+            }
+        )
+    }
     var engineState by remember { mutableStateOf<StarMapEngineState>(StarMapEngineState.Loading) }
     var gotoConfirmation by remember { mutableStateOf<StarMapTarget?>(null) }
     var syncConfirmation by remember { mutableStateOf<StarMapTarget?>(null) }
@@ -236,15 +308,30 @@ fun StarMapScreen(
     var overlaysVisible by remember { mutableStateOf(true) }
     var overlaysLocked by remember { mutableStateOf(false) }
     var targetExpanded by remember { mutableStateOf(false) }
+    var importAngleText by remember {
+        mutableStateOf(positionAngleText(initialSequencePlan?.positionAngleDeg ?: 0.0))
+    }
+    var sequenceImportPlan by remember { mutableStateOf<SequenceMosaicPlan?>(null) }
     var searchDialogVisible by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var searchResults by remember { mutableStateOf<List<CatalogObject>>(emptyList()) }
     var cornerPanel by remember { mutableStateOf(StarMapCornerPanel.NONE) }
     var confirmHome by remember { mutableStateOf(false) }
     var fovDialogVisible by remember { mutableStateOf(false) }
+    var starMapTimeDialogVisible by remember { mutableStateOf(false) }
+    var starMapTimeText by remember { mutableStateOf("") }
+    var starMapTimeError by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val prefs = remember {
         context.getSharedPreferences("mobile_observatory", android.content.Context.MODE_PRIVATE)
+    }
+    var sensorAngleCalibration by remember {
+        mutableStateOf(
+            SensorAngleCalibration(
+                offsetDeg = prefs.getFloat(SensorAngleCalibration.OFFSET_PREF, 0f).toDouble(),
+                reversed = prefs.getBoolean(SensorAngleCalibration.REVERSED_PREF, false)
+            )
+        )
     }
     val hipsCache = remember { HipsTileCache.create(context.applicationContext) }
     val catalog = remember { AssetDeepSkyCatalog(context.applicationContext) }
@@ -256,6 +343,15 @@ fun StarMapScreen(
     }
     var followMount by remember {
         mutableStateOf(prefs.getBoolean("star_map_follow_mount", false))
+    }
+    var starMapTimeManual by remember {
+        mutableStateOf(prefs.contains(STAR_MAP_TIME_PREF))
+    }
+    var starMapEpochMillis by remember {
+        mutableStateOf(
+            prefs.getLong(STAR_MAP_TIME_PREF, 0L).takeIf { it > 0L }
+                ?: System.currentTimeMillis()
+        )
     }
     var equatorialGrid by remember {
         mutableStateOf(prefs.getBoolean("star_map_equatorial_grid", false))
@@ -354,6 +450,30 @@ fun StarMapScreen(
     var showFovOverlay by remember {
         mutableStateOf(prefs.getBoolean(StarMapOpticsPrefs.SHOW_OVERLAY, true))
     }
+    var mosaicConfig by remember {
+        mutableStateOf(
+            StarMapMosaicConfig(
+                rows = initialSequencePlan?.rows
+                    ?: prefs.getInt(StarMapMosaicConfig.ROWS_PREF, 1),
+                columns = initialSequencePlan?.columns
+                    ?: prefs.getInt(StarMapMosaicConfig.COLUMNS_PREF, 1),
+                overlapPercent = initialSequencePlan?.overlapPercent
+                    ?: prefs.getInt(StarMapMosaicConfig.OVERLAP_PREF, 10),
+                showPanelNumbers = prefs.getBoolean(
+                    StarMapMosaicConfig.SHOW_NUMBERS_PREF,
+                    true
+                ),
+                traversal = MosaicTraversal.fromPref(
+                    initialSequencePlan?.traversal
+                        ?: prefs.getString(StarMapMosaicConfig.TRAVERSAL_PREF, null)
+                ),
+                startCorner = MosaicStartCorner.fromPref(
+                    initialSequencePlan?.startCorner
+                        ?: prefs.getString(StarMapMosaicConfig.START_CORNER_PREF, null)
+                )
+            ).normalized()
+        )
+    }
     LaunchedEffect(connectedSensor) {
         if (!prefs.contains("star_map_secondary_fov_mode")) {
             secondaryTrain = StarMapOpticsPrefs.defaultSecondary(
@@ -436,15 +556,54 @@ fun StarMapScreen(
     }
     val fovCurrentWord = stringResource(R.string.star_map_fov_current)
     val fovTargetWord = stringResource(R.string.star_map_fov_target)
+    val mosaicOverlaySummary = stringResource(
+        R.string.fov_mosaic_overlay_summary,
+        mosaicConfig.rows,
+        mosaicConfig.columns,
+        mosaicConfig.overlapPercent
+    )
     val overlayCurrentLabel = remember(overlayTrainLabel, fovCurrentWord, activeComputation) {
         StarMapFovOverlay.overlayCaption(overlayTrainLabel, fovCurrentWord, activeComputation)
     }
-    val overlayTargetLabel = remember(overlayTrainLabel, fovTargetWord, activeComputation) {
-        StarMapFovOverlay.overlayCaption(overlayTrainLabel, fovTargetWord, activeComputation)
+    val overlayTargetLabel = remember(
+        overlayTrainLabel,
+        fovTargetWord,
+        activeComputation,
+        mosaicConfig,
+        mosaicOverlaySummary
+    ) {
+        StarMapFovOverlay.overlayCaption(overlayTrainLabel, fovTargetWord, activeComputation) +
+            if (activeComputation?.mode == FovInstrumentMode.SENSOR &&
+                mosaicConfig.panelCount > 1
+            ) {
+                " · $mosaicOverlaySummary"
+            } else {
+                ""
+            }
     }
 
     fun evalStarMap(script: String) {
         webView?.evaluateJavascript(script, null)
+    }
+
+    fun openStarMapTimeDialog() {
+        starMapTimeText = formatStarMapTime(starMapEpochMillis)
+        starMapTimeError = false
+        starMapTimeDialogVisible = true
+        overlaysVisible = true
+    }
+
+    fun applyStarMapTime(epochMillis: Long, manual: Boolean) {
+        starMapEpochMillis = epochMillis
+        starMapTimeManual = manual
+        if (manual) {
+            prefs.edit().putLong(STAR_MAP_TIME_PREF, epochMillis).apply()
+        } else {
+            prefs.edit().remove(STAR_MAP_TIME_PREF).apply()
+        }
+        evalStarMap(
+            "window.MercStarMap && window.MercStarMap.setTime($epochMillis);"
+        )
     }
 
     fun persistFovPrefs() {
@@ -460,6 +619,15 @@ fun StarMapScreen(
         optics.strings.forEach { (key, value) -> editor.putString(key, value) }
         optics.bools.forEach { (key, value) -> editor.putBoolean(key, value) }
         editor
+            .putInt(StarMapMosaicConfig.ROWS_PREF, mosaicConfig.rows)
+            .putInt(StarMapMosaicConfig.COLUMNS_PREF, mosaicConfig.columns)
+            .putInt(StarMapMosaicConfig.OVERLAP_PREF, mosaicConfig.overlapPercent)
+            .putBoolean(
+                StarMapMosaicConfig.SHOW_NUMBERS_PREF,
+                mosaicConfig.showPanelNumbers
+            )
+            .putString(StarMapMosaicConfig.TRAVERSAL_PREF, mosaicConfig.traversal.name)
+            .putString(StarMapMosaicConfig.START_CORNER_PREF, mosaicConfig.startCorner.name)
             .putBoolean("star_map_equatorial_grid", equatorialGrid)
             .putBoolean("star_map_azimuthal_grid", azimuthalGrid)
             .putBoolean("star_map_meridian", meridianLine)
@@ -559,11 +727,23 @@ fun StarMapScreen(
         hipsCacheSizeLabel = HipsTileCache.formatCacheSize(hipsCache.cacheSizeBytes())
     }
 
+    fun applyTargetFraming(alsoZoom: Boolean = false) {
+        val angle = normalizePositionAngle(importAngleText.toDoubleOrNull() ?: 0.0)
+        StarMapFovOverlay.targetSensorFramingScripts(
+            positionAngleDeg = angle,
+            mosaic = mosaicConfig,
+            alsoZoom = alsoZoom
+        ).forEach(::evalStarMap)
+    }
+
     fun applyFovOverlays(alsoZoom: Boolean) {
         val currentAnchor = if (mountConnected) {
             mountCoordinates?.let { FovSkyAnchor(it.raHours, it.decDeg, "JNOW") }
         } else {
             null
+        }
+        val targetAnchor = selectedTarget?.let {
+            FovSkyAnchor(it.raHours, it.decDegrees, it.frame)
         }
         StarMapFovOverlay.scripts(
             showOverlay = showFovOverlay,
@@ -571,8 +751,10 @@ fun StarMapScreen(
             currentLabel = overlayCurrentLabel,
             targetLabel = overlayTargetLabel,
             alsoZoom = alsoZoom,
-            currentAnchor = currentAnchor
+            currentAnchor = currentAnchor,
+            targetAnchor = targetAnchor
         ).forEach(::evalStarMap)
+        applyTargetFraming(alsoZoom)
     }
 
     fun setFollowMountEnabled(enabled: Boolean) {
@@ -597,6 +779,68 @@ fun StarMapScreen(
     fun centerOnTarget() {
         evalStarMap("window.MercStarMap && window.MercStarMap.centerOnSelection(1);")
         overlaysVisible = true
+    }
+
+    fun selectMapCenterTarget() {
+        val name = JSONObject.quote(context.getString(R.string.star_map_custom_target))
+        evalStarMap("window.MercStarMap && window.MercStarMap.selectMapCenter($name);")
+        overlaysVisible = true
+        cornerPanel = StarMapCornerPanel.NONE
+    }
+
+    fun adjustImportAngle(delta: Double) {
+        val current = importAngleText.toDoubleOrNull() ?: 0.0
+        importAngleText = positionAngleText(current + delta)
+    }
+
+    fun updateSensorAngleCalibration(next: SensorAngleCalibration) {
+        sensorAngleCalibration = next
+        prefs.edit()
+            .putFloat(SensorAngleCalibration.OFFSET_PREF, next.offsetDeg.toFloat())
+            .putBoolean(SensorAngleCalibration.REVERSED_PREF, next.reversed)
+            .apply()
+    }
+
+    fun sequenceMosaicPlan(target: StarMapTarget): SequenceMosaicPlan {
+        val angle = normalizePositionAngle(importAngleText.toDoubleOrNull() ?: 0.0)
+        val computation = activeComputation
+        val panels = if (
+            computation?.mode == FovInstrumentMode.SENSOR &&
+            computation.rectWidthDeg != null &&
+            computation.rectHeightDeg != null
+        ) {
+            StarMapMosaicPlanner.panels(
+                centerRaHours = target.raHours,
+                centerDecDegrees = target.decDegrees,
+                widthDeg = computation.rectWidthDeg,
+                heightDeg = computation.rectHeightDeg,
+                positionAngleDeg = angle,
+                config = mosaicConfig
+            ).map { panel ->
+                SequenceMosaicPanel(
+                    number = panel.number,
+                    row = panel.row + 1,
+                    column = panel.column + 1,
+                    raHours = panel.raHours,
+                    decDeg = panel.decDegrees
+                )
+            }
+        } else {
+            listOf(SequenceMosaicPanel(1, 1, 1, target.raHours, target.decDegrees))
+        }
+        return SequenceMosaicPlan(
+            name = target.name,
+            centerRaHours = target.raHours,
+            centerDecDeg = target.decDegrees,
+            positionAngleDeg = angle,
+            rows = if (panels.size > 1) mosaicConfig.rows else 1,
+            columns = if (panels.size > 1) mosaicConfig.columns else 1,
+            overlapPercent = if (panels.size > 1) mosaicConfig.overlapPercent else 0,
+            traversal = mosaicConfig.traversal.name,
+            startCorner = mosaicConfig.startCorner.name,
+            panels = panels,
+            rotateWithRotator = rotatorConnected
+        )
     }
 
     fun centerOnRaDec(raHours: Double, decDegrees: Double, frame: String = "JNOW") {
@@ -704,6 +948,31 @@ fun StarMapScreen(
         if (showGlobalStop) cornerPanel = StarMapCornerPanel.NONE
     }
 
+    LaunchedEffect(selectedTarget?.name, selectedTarget?.raHours, selectedTarget?.decDegrees) {
+        importAngleText = "0"
+    }
+
+    LaunchedEffect(selectedTarget, importAngleText) {
+        val current = selectedTarget ?: return@LaunchedEffect
+        onTargetSelected(
+            current.copy(
+                positionAngleDeg = normalizePositionAngle(importAngleText.toDoubleOrNull() ?: 0.0)
+            )
+        )
+    }
+
+    LaunchedEffect(
+        webView,
+        engineState,
+        importAngleText,
+        mosaicConfig,
+        activeComputation,
+        showFovOverlay
+    ) {
+        if (engineState !is StarMapEngineState.Ready) return@LaunchedEffect
+        applyTargetFraming()
+    }
+
     LaunchedEffect(
         overlaysVisible,
         overlaysLocked,
@@ -716,7 +985,8 @@ fun StarMapScreen(
         searchDialogVisible,
         cornerPanel,
         fovDialogVisible,
-        confirmHome
+        confirmHome,
+        starMapTimeDialogVisible
     ) {
         if (!overlaysVisible ||
             overlaysLocked ||
@@ -728,7 +998,8 @@ fun StarMapScreen(
             searchDialogVisible ||
             cornerPanel != StarMapCornerPanel.NONE ||
             fovDialogVisible ||
-            confirmHome
+            confirmHome ||
+            starMapTimeDialogVisible
         ) {
             return@LaunchedEffect
         }
@@ -736,12 +1007,30 @@ fun StarMapScreen(
         overlaysVisible = false
     }
 
-    LaunchedEffect(webView, mountSite, engineState) {
+    LaunchedEffect(webView, mountSite, starMapEpochMillis, engineState) {
         if (engineState !is StarMapEngineState.Ready) return@LaunchedEffect
         val site = mountSite ?: return@LaunchedEffect
         val script = "window.MercStarMap && window.MercStarMap.setObserver(" +
-            "${site.latitudeDeg},${site.longitudeDeg},${System.currentTimeMillis()});"
+            "${site.latitudeDeg},${site.longitudeDeg},$starMapEpochMillis);"
         webView?.evaluateJavascript(script, null)
+    }
+
+    LaunchedEffect(webView, starMapEpochMillis, engineState) {
+        if (engineState !is StarMapEngineState.Ready) return@LaunchedEffect
+        evalStarMap("window.MercStarMap && window.MercStarMap.setTime($starMapEpochMillis);")
+    }
+
+    LaunchedEffect(starMapTimeManual) {
+        if (starMapTimeManual) return@LaunchedEffect
+        while (true) {
+            starMapEpochMillis = System.currentTimeMillis()
+            delay(60_000L)
+        }
+    }
+
+    LaunchedEffect(mountTime) {
+        val synchronizedTime = mountTime?.epochMillis ?: return@LaunchedEffect
+        applyStarMapTime(synchronizedTime, manual = true)
     }
 
     LaunchedEffect(webView, mountCoordinates, engineState) {
@@ -770,7 +1059,12 @@ fun StarMapScreen(
         mountConnected,
         cameraPixelSizeUm,
         cameraFrameWidthPx,
-        cameraFrameHeightPx
+        cameraFrameHeightPx,
+        fovDialogVisible,
+        selectedTarget?.raHours,
+        selectedTarget?.decDegrees,
+        selectedTarget?.frame,
+        mosaicConfig
     ) {
         if (engineState !is StarMapEngineState.Ready) return@LaunchedEffect
         evalStarMap(
@@ -1033,6 +1327,15 @@ fun StarMapScreen(
                                 )
                             }
                         }
+                        Card {
+                            TextButton(onClick = ::selectMapCenterTarget) {
+                                Text(
+                                    stringResource(R.string.star_map_use_center),
+                                    maxLines = 1,
+                                    softWrap = false
+                                )
+                            }
+                        }
                     }
                 }
                 is StarMapEngineState.Error -> {
@@ -1105,6 +1408,7 @@ fun StarMapScreen(
                 starHints = starHints,
                 atmosphereVisible = atmosphereVisible,
                 onlineDssEnabled = onlineDssEnabled,
+                starMapTimeLabel = formatStarMapTime(starMapEpochMillis),
                 overlaysLocked = overlaysLocked,
                 hipsCacheSizeLabel = hipsCacheSizeLabel,
                 onSlewRateChange = onSlewRateChange,
@@ -1124,6 +1428,7 @@ fun StarMapScreen(
                     fovDialogVisible = true
                     overlaysVisible = true
                 },
+                onOpenTimeSettings = ::openStarMapTimeDialog,
                 precisionToleranceText = precisionToleranceText,
                 onPrecisionToleranceChange = ::persistPrecisionTolerance,
                 onShowFovOverlayChange = {
@@ -1256,6 +1561,161 @@ fun StarMapScreen(
                                 overflow = TextOverflow.Ellipsis
                             )
                         }
+                        Text(
+                            stringResource(R.string.sequence_sensor_angle),
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                        Text(
+                            stringResource(
+                                if (showFovOverlay && activeComputation?.mode == FovInstrumentMode.SENSOR) {
+                                    R.string.sequence_sensor_angle_preview_active
+                                } else {
+                                    R.string.sequence_sensor_angle_preview_hint
+                                }
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedTextField(
+                                value = importAngleText,
+                                onValueChange = { importAngleText = it },
+                                suffix = { Text("°") },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                modifier = Modifier.weight(1f)
+                            )
+                            OutlinedButton(
+                                onClick = { adjustImportAngle(-1.0) },
+                                contentPadding = PaddingValues(horizontal = 8.dp),
+                                modifier = Modifier.defaultMinSize(minWidth = 0.dp)
+                            ) { Text("−1°") }
+                            OutlinedButton(
+                                onClick = { adjustImportAngle(1.0) },
+                                contentPadding = PaddingValues(horizontal = 8.dp),
+                                modifier = Modifier.defaultMinSize(minWidth = 0.dp)
+                            ) { Text("+1°") }
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            listOf(0, 90, 180, 270).forEach { angle ->
+                                TextButton(
+                                    onClick = { importAngleText = angle.toString() },
+                                    contentPadding = PaddingValues(horizontal = 2.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .defaultMinSize(minWidth = 0.dp)
+                                ) { Text("$angle°", maxLines = 1) }
+                            }
+                        }
+                        lastSolvedPositionAngleDeg?.let { solvedAngle ->
+                            val plannedAngle = normalizePositionAngle(
+                                importAngleText.toDoubleOrNull() ?: 0.0
+                            )
+                            val error = SensorAngleCalibration.angularError(plannedAngle, solvedAngle)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    stringResource(
+                                        R.string.fov_solved_sensor_angle,
+                                        positionAngleText(solvedAngle)
+                                    ),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                TextButton(onClick = {
+                                    importAngleText = positionAngleText(solvedAngle)
+                                }) {
+                                    Text(stringResource(R.string.fov_use_solved_angle))
+                                }
+                            }
+                            if (rotatorConnected && error > 1.0) {
+                                Text(
+                                    stringResource(R.string.fov_sensor_angle_error, error),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
+                        }
+                        if (rotatorConnected) {
+                            val plannedAngle = normalizePositionAngle(
+                                importAngleText.toDoubleOrNull() ?: 0.0
+                            )
+                            val targetMechanical = sensorAngleCalibration.mechanicalAngle(plannedAngle)
+                            Text(
+                                stringResource(
+                                    R.string.fov_rotator_angle_summary,
+                                    rotatorMechanicalAngleDeg,
+                                    targetMechanical,
+                                    sensorAngleCalibration.offsetDeg
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                FilterChip(
+                                    selected = sensorAngleCalibration.reversed,
+                                    onClick = {
+                                        updateSensorAngleCalibration(
+                                            sensorAngleCalibration.copy(
+                                                reversed = !sensorAngleCalibration.reversed
+                                            )
+                                        )
+                                    },
+                                    label = { Text(stringResource(R.string.fov_rotator_reverse_mapping)) }
+                                )
+                                TextButton(
+                                    enabled = lastSolvedPositionAngleDeg != null,
+                                    onClick = {
+                                        val solved = lastSolvedPositionAngleDeg ?: return@TextButton
+                                        updateSensorAngleCalibration(
+                                            sensorAngleCalibration.calibrated(
+                                                solved,
+                                                rotatorMechanicalAngleDeg
+                                            )
+                                        )
+                                    }
+                                ) {
+                                    Text(stringResource(R.string.fov_calibrate_rotator_angle))
+                                }
+                            }
+                            OutlinedButton(
+                                onClick = { onMoveRotator(targetMechanical) },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(stringResource(R.string.fov_rotate_to_composition))
+                            }
+                        }
+                        if (showSequenceActions) {
+                            OutlinedButton(
+                                onClick = {
+                                    overlaysVisible = true
+                                    sequenceImportPlan = sequenceMosaicPlan(target)
+                                },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    stringResource(R.string.sequence_add_from_star_map),
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
                         if (precisionGotoProgress.isActive ||
                             precisionGotoProgress.phase == PrecisionGotoPhase.SUCCEEDED ||
                             precisionGotoProgress.phase == PrecisionGotoPhase.FAILED
@@ -1380,6 +1840,40 @@ fun StarMapScreen(
         )
     }
 
+    sequenceImportPlan?.let { plan ->
+        AlertDialog(
+            onDismissRequest = { sequenceImportPlan = null },
+            title = { Text(stringResource(R.string.sequence_import_destination)) },
+            text = {
+                Text(
+                    stringResource(
+                        R.string.sequence_import_mosaic_detail,
+                        plan.name,
+                        plan.panels.size,
+                        positionAngleText(plan.positionAngleDeg)
+                    )
+                )
+            },
+            confirmButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(onClick = {
+                        sequenceImportPlan = null
+                        onAddToSequence(plan, SequenceEditorMode.Simple)
+                    }) { Text(stringResource(R.string.sequence_simple)) }
+                    TextButton(onClick = {
+                        sequenceImportPlan = null
+                        onAddToSequence(plan, SequenceEditorMode.Advanced)
+                    }) { Text(stringResource(R.string.sequence_advanced)) }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { sequenceImportPlan = null }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        )
+    }
+
     if (confirmHome) {
         AlertDialog(
             onDismissRequest = { confirmHome = false },
@@ -1459,6 +1953,71 @@ fun StarMapScreen(
         )
     }
 
+    if (starMapTimeDialogVisible) {
+        AlertDialog(
+            onDismissRequest = { starMapTimeDialogVisible = false },
+            title = { Text(stringResource(R.string.star_map_time_title)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        stringResource(R.string.star_map_time_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = starMapTimeText,
+                        onValueChange = {
+                            starMapTimeText = it
+                            starMapTimeError = false
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        isError = starMapTimeError,
+                        label = { Text(stringResource(R.string.star_map_time_label)) },
+                        supportingText = if (starMapTimeError) {
+                            { Text(stringResource(R.string.star_map_time_invalid)) }
+                        } else {
+                            null
+                        },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii)
+                    )
+                    TextButton(
+                        onClick = {
+                            val now = System.currentTimeMillis()
+                            applyStarMapTime(now, manual = false)
+                            starMapTimeText = formatStarMapTime(now)
+                            starMapTimeError = false
+                            starMapTimeDialogVisible = false
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(stringResource(R.string.star_map_time_use_current))
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val parsed = parseStarMapTime(starMapTimeText)
+                        if (parsed == null) {
+                            starMapTimeError = true
+                        } else {
+                            applyStarMapTime(parsed, manual = true)
+                            starMapTimeDialogVisible = false
+                        }
+                    }
+                ) {
+                    Text(stringResource(R.string.set))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { starMapTimeDialogVisible = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        )
+    }
+
     if (fovDialogVisible) {
         StarMapFovSheet(
             editingTrain = editingTrain,
@@ -1468,6 +2027,8 @@ fun StarMapScreen(
             sensors = sensors,
             showOverlay = showFovOverlay,
             computation = editingComputation,
+            mosaicConfig = mosaicConfig,
+            positionAngleText = importAngleText,
             onEditingTrainChange = { editingTrain = it },
             onConfigChange = { updated ->
                 if (updated.id == OpticsTrainId.PRIMARY) {
@@ -1478,6 +2039,16 @@ fun StarMapScreen(
                 showFovOverlay = true
                 persistFovPrefs()
                 maybeWritePlateFocalLength(updated)
+            },
+            onMosaicConfigChange = {
+                mosaicConfig = it.normalized()
+                showFovOverlay = true
+                persistFovPrefs()
+                applyTargetFraming(alsoZoom = true)
+            },
+            onPositionAngleChange = {
+                importAngleText = it
+                showFovOverlay = true
             },
             onShowOverlayChange = {
                 showFovOverlay = it

@@ -1,5 +1,9 @@
 package com.indigo.mobileobservatory.mount
 
+import java.time.Instant
+import java.time.LocalDateTime
+import java.time.ZoneId
+import java.time.ZoneOffset
 import java.util.Locale
 import kotlin.math.asin
 import kotlin.math.atan2
@@ -16,6 +20,7 @@ class SkyWatcherAdapter(
     override var modelName: String = "Sky-Watcher SynScan"
         private set
     override val supportsSync: Boolean = false
+    override val supportsTimeSync: Boolean = true
     var aligned: Boolean = false
         private set
     private var slewRate = 6
@@ -114,15 +119,54 @@ class SkyWatcherAdapter(
     override fun setSite(site: MountSite) {
         val lat = toDms(site.latitudeDeg)
         val lon = toDms(site.longitudeDeg)
-        command(
+        exchange(
             byteArrayOf(
                 'W'.code.toByte(),
                 lat.degrees.toByte(), lat.minutes.toByte(), lat.seconds.toByte(),
                 if (site.latitudeDeg < 0) 1 else 0,
                 lon.degrees.toByte(), lon.minutes.toByte(), lon.seconds.toByte(),
                 if (site.longitudeDeg < 0) 1 else 0
-            )
+            ),
+            9
         )
+    }
+
+    override fun readTime(): MountTime {
+        val data = exchange("h".toByteArray(Charsets.US_ASCII), 8)
+        require(data.size >= 8) { "Invalid SynScan time response." }
+        val offsetHours = data[6].toInt()
+        val daylight = (data[7].toInt() and 0xff) != 0
+        val local = LocalDateTime.of(
+            2000 + (data[5].toInt() and 0xff),
+            data[3].toInt() and 0xff,
+            data[4].toInt() and 0xff,
+            data[0].toInt() and 0xff,
+            data[1].toInt() and 0xff,
+            data[2].toInt() and 0xff
+        )
+        val offset = ZoneOffset.ofHours(offsetHours + if (daylight) 1 else 0)
+        return MountTime(local.toInstant(offset).toEpochMilli())
+    }
+
+    override fun setTime(time: MountTime) {
+        val zoned = Instant.ofEpochMilli(time.epochMillis).atZone(ZoneId.systemDefault())
+        require(zoned.offset.totalSeconds % 3600 == 0) {
+            "SynScan supports whole-hour UTC offsets only."
+        }
+        val offsetHours = zoned.offset.totalSeconds / 3600
+        require(offsetHours in -128..127) { "SynScan UTC offset is out of range." }
+        val payload = byteArrayOf(
+            'H'.code.toByte(),
+            zoned.hour.toByte(),
+            zoned.minute.toByte(),
+            zoned.second.toByte(),
+            zoned.monthValue.toByte(),
+            zoned.dayOfMonth.toByte(),
+            (zoned.year % 100).toByte(),
+            offsetHours.toByte(),
+            0
+        )
+        exchange(payload, 9)
     }
 
     override fun setHomeHere() {

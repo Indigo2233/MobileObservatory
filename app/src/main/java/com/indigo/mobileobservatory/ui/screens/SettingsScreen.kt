@@ -46,8 +46,10 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.indigo.mobileobservatory.BuildConfig
 import com.indigo.mobileobservatory.R
+import com.indigo.mobileobservatory.sequence.SequenceFeature
 import com.indigo.mobileobservatory.ui.AppOrientationMode
 import com.indigo.mobileobservatory.ui.RememberAppOrientation
 import com.indigo.mobileobservatory.camera.ConnectionState
@@ -58,11 +60,14 @@ import com.indigo.mobileobservatory.settings.CameraDefaults
 import com.indigo.mobileobservatory.settings.CoverDefaults
 import com.indigo.mobileobservatory.settings.FocuserDefaults
 import com.indigo.mobileobservatory.ui.viewmodel.CameraViewModel
+import com.indigo.mobileobservatory.ui.viewmodel.UpdatePhase
+import com.indigo.mobileobservatory.ui.viewmodel.UpdateViewModel
 import com.indigo.mobileobservatory.util.FileLogger
 import kotlin.math.roundToInt
 
 private enum class SettingsSection {
     GENERAL,
+    SEQUENCE,
     CAMERA,
     FILTER_WHEEL,
     FOCUSER,
@@ -78,6 +83,17 @@ fun SettingsScreen(
     onBack: () -> Unit
 ) {
     var selectedSection by rememberSaveable { mutableStateOf(SettingsSection.GENERAL) }
+    val updateViewModel: UpdateViewModel = viewModel()
+    val sections = remember {
+        SettingsSection.entries.filter {
+            SequenceFeature.ENABLED || it != SettingsSection.SEQUENCE
+        }
+    }
+    LaunchedEffect(SequenceFeature.ENABLED) {
+        if (!SequenceFeature.ENABLED && selectedSection == SettingsSection.SEQUENCE) {
+            selectedSection = SettingsSection.GENERAL
+        }
+    }
     RememberAppOrientation(AppOrientationMode.PORTRAIT)
 
     Scaffold(
@@ -97,8 +113,8 @@ fun SettingsScreen(
         }
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
-            ScrollableTabRow(selectedTabIndex = selectedSection.ordinal) {
-                SettingsSection.entries.forEach { section ->
+            ScrollableTabRow(selectedTabIndex = sections.indexOf(selectedSection).coerceAtLeast(0)) {
+                sections.forEach { section ->
                     Tab(
                         selected = section == selectedSection,
                         onClick = { selectedSection = section },
@@ -107,7 +123,10 @@ fun SettingsScreen(
                 }
             }
             when (selectedSection) {
-                SettingsSection.GENERAL -> GeneralSettingsPage()
+                SettingsSection.GENERAL -> GeneralSettingsPage(updateViewModel)
+                SettingsSection.SEQUENCE -> {
+                    if (SequenceFeature.ENABLED) SequenceSettingsPage(viewModel)
+                }
                 SettingsSection.CAMERA -> CameraSettingsPage(viewModel)
                 SettingsSection.FILTER_WHEEL -> FilterWheelSettingsPage(viewModel)
                 SettingsSection.FOCUSER -> FocuserSettingsPage(viewModel)
@@ -122,6 +141,7 @@ fun SettingsScreen(
 @Composable
 private fun settingsSectionTitle(section: SettingsSection): String = when (section) {
     SettingsSection.GENERAL -> stringResource(R.string.settings_general)
+    SettingsSection.SEQUENCE -> stringResource(R.string.settings_sequence)
     SettingsSection.CAMERA -> stringResource(R.string.settings_camera)
     SettingsSection.FILTER_WHEEL -> stringResource(R.string.settings_filter_wheel)
     SettingsSection.FOCUSER -> stringResource(R.string.settings_focuser)
@@ -141,12 +161,112 @@ private fun SettingsPage(content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun GeneralSettingsPage() = SettingsPage {
+private fun GeneralSettingsPage(updateViewModel: UpdateViewModel) = SettingsPage {
     Text(stringResource(R.string.save_location), style = MaterialTheme.typography.titleSmall)
     Text(
         stringResource(R.string.save_location_desc),
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    Divider()
+    UpdateSettingsSection(updateViewModel)
+}
+
+@Composable
+private fun UpdateSettingsSection(updateViewModel: UpdateViewModel) {
+    val updateState by updateViewModel.state.collectAsState()
+    Text(stringResource(R.string.settings_update), style = MaterialTheme.typography.titleSmall)
+    Text(
+        stringResource(
+            R.string.update_current_version,
+            BuildConfig.VERSION_NAME,
+            BuildConfig.VERSION_CODE
+        ),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.Start
+    ) {
+        Button(
+            onClick = { updateViewModel.checkForUpdates(manual = true) },
+            enabled = !updateState.isBusy
+        ) {
+            Text(stringResource(R.string.update_check_button))
+        }
+    }
+    SettingSwitch(
+        label = stringResource(R.string.update_auto_check),
+        checked = updateState.autoCheckEnabled,
+        onCheckedChange = updateViewModel::setAutoCheckEnabled
+    )
+    updateState.statusText?.let { status ->
+        Text(
+            status,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (updateState.phase == UpdatePhase.ERROR) {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            }
+        )
+    }
+}
+
+@Composable
+private fun SequenceSettingsPage(viewModel: CameraViewModel) = SettingsPage {
+    val settings by viewModel.sequenceSettings.collectAsState()
+    Text(stringResource(R.string.sequence_meridian_flip), style = MaterialTheme.typography.titleSmall)
+    SequenceNumberField(
+        label = stringResource(R.string.sequence_minutes_after_meridian),
+        value = settings.minutesAfterMeridian,
+        onValue = { viewModel.updateSequenceSettings(settings.copy(minutesAfterMeridian = it)) }
+    )
+    SequenceNumberField(
+        label = stringResource(R.string.sequence_max_minutes_after_meridian),
+        value = settings.maxMinutesAfterMeridian,
+        onValue = { viewModel.updateSequenceSettings(settings.copy(maxMinutesAfterMeridian = it)) }
+    )
+    SequenceNumberField(
+        label = stringResource(R.string.sequence_pause_before_meridian),
+        value = settings.pauseTimeBeforeMeridian,
+        onValue = { viewModel.updateSequenceSettings(settings.copy(pauseTimeBeforeMeridian = it)) }
+    )
+    SequenceNumberField(
+        label = stringResource(R.string.sequence_settle_seconds),
+        value = settings.settleTimeSeconds.toDouble(),
+        onValue = { viewModel.updateSequenceSettings(settings.copy(settleTimeSeconds = it.toInt().coerceAtLeast(0))) }
+    )
+    SequenceNumberField(
+        label = stringResource(R.string.sequence_dither_pixels),
+        value = settings.ditherPixels,
+        onValue = { viewModel.updateSequenceSettings(settings.copy(ditherPixels = it.coerceAtLeast(0.0))) }
+    )
+    SettingSwitch(
+        stringResource(R.string.sequence_recenter_after_flip),
+        settings.recenterAfterFlip
+    ) { viewModel.updateSequenceSettings(settings.copy(recenterAfterFlip = it)) }
+    SettingSwitch(
+        stringResource(R.string.sequence_autofocus_after_flip),
+        settings.autofocusAfterFlip
+    ) { viewModel.updateSequenceSettings(settings.copy(autofocusAfterFlip = it)) }
+}
+
+@Composable
+private fun SequenceNumberField(label: String, value: Double, onValue: (Double) -> Unit) {
+    var text by remember(value) {
+        mutableStateOf(if (value % 1.0 == 0.0) value.toLong().toString() else value.toString())
+    }
+    OutlinedTextField(
+        value = text,
+        onValueChange = { next ->
+            text = next
+            next.toDoubleOrNull()?.let(onValue)
+        },
+        label = { Text(label) },
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+        modifier = Modifier.fillMaxWidth()
     )
 }
 

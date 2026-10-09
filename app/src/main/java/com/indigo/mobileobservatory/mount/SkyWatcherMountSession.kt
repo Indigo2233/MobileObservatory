@@ -4,6 +4,8 @@ package com.indigo.mobileobservatory.mount
 interface SkyWatcherMountSession {
     val modelName: String
     val supportsSync: Boolean
+    val supportsTimeSync: Boolean
+        get() = false
 
     fun open(): MountCoordinates
     fun readCoordinates(): MountCoordinates
@@ -17,6 +19,12 @@ interface SkyWatcherMountSession {
     }
     fun readSite(): MountSite
     fun setSite(site: MountSite)
+    fun readTime(): MountTime {
+        error("Sky-Watcher mount time synchronization is not supported by this protocol.")
+    }
+    fun setTime(time: MountTime) {
+        error("Sky-Watcher mount time synchronization is not supported by this protocol.")
+    }
     fun setHomeHere()
     fun goHome()
     fun syncTo(coordinates: MountCoordinates)

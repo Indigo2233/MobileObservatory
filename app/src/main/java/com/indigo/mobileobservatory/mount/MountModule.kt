@@ -128,12 +128,18 @@ class MountModule(
     private val _mountSite = MutableStateFlow<MountSite?>(null)
     val mountSite: StateFlow<MountSite?> = _mountSite.asStateFlow()
 
+    private val _mountTime = MutableStateFlow<MountTime?>(null)
+    val mountTime: StateFlow<MountTime?> = _mountTime.asStateFlow()
+
     private val _mountBusy = MutableStateFlow(false)
     val mountBusy: StateFlow<Boolean> = _mountBusy.asStateFlow()
 
     /** Protocol sync is available for LX200/OnStep/iOptron and SynScan motor/Wi‑Fi, not USB handset. */
     val supportsSync: Boolean
         get() = controller.isConnected && controller.supportsSync
+
+    val supportsTimeSync: Boolean
+        get() = controller.isConnected && controller.supportsTimeSync
 
     private val _mountConnectionMessage = MutableStateFlow("")
     val mountConnectionMessage: StateFlow<String> = _mountConnectionMessage.asStateFlow()
@@ -300,6 +306,7 @@ class MountModule(
                 _activeUsbMountDeviceId.value = null
                 _mountCoordinates.value = null
                 _mountSite.value = null
+                _mountTime.value = null
                 _mountDetectedInfo.value = ""
                 FileLogger.e(TAG, "connectTcp failed", e)
                 _mountConnectionState.value = MountConnectionState.Error(e.message ?: "Mount connection failed")
@@ -387,6 +394,7 @@ class MountModule(
                 _activeUsbMountDeviceId.value = null
                 _mountCoordinates.value = null
                 _mountSite.value = null
+                _mountTime.value = null
                 _mountDetectedInfo.value = ""
                 _mountConnectionState.value = MountConnectionState.Error(e.message ?: "Mount USB connection failed")
                 _statusMessage.value = "Mount USB error: ${e.message}"
@@ -461,6 +469,7 @@ class MountModule(
                 _activeUsbMountDeviceId.value = null
                 _mountCoordinates.value = null
                 _mountSite.value = null
+                _mountTime.value = null
                 _mountDetectedInfo.value = ""
                 val message = if (error is RfcommConnectionTimeoutException) {
                     "\u8fde\u63a5\u8d85\u65f6"
@@ -520,6 +529,7 @@ class MountModule(
                 controller.disconnect()
                 _mountCoordinates.value = null
                 _mountSite.value = null
+                _mountTime.value = null
                 _mountDetectedInfo.value = ""
                 _mountConnectionState.value =
                     MountConnectionState.Error(e.message ?: "SynScan Wi-Fi failed")
@@ -581,6 +591,7 @@ class MountModule(
                 _activeUsbMountDeviceId.value = null
                 _mountCoordinates.value = null
                 _mountSite.value = null
+                _mountTime.value = null
                 _mountDetectedInfo.value = ""
                 _mountConnectionState.value = MountConnectionState.Disconnected
                 _mountBusy.value = false
@@ -621,6 +632,47 @@ class MountModule(
             } catch (e: Throwable) {
                 _mountConnectionState.value = MountConnectionState.Error(e.message ?: "Mount site sync failed")
                 _statusMessage.value = "Mount site error: ${e.message}"
+            } finally {
+                _mountBusy.value = false
+            }
+        }
+    }
+
+    fun readMountTime() {
+        if (!controller.isConnected) return
+        scope.launch {
+            _mountBusy.value = true
+            try {
+                val time = controller.readTime()
+                _mountTime.value = time
+                _mountConnectionState.value = MountConnectionState.Connected
+                _statusMessage.value = "Mount time updated: ${time.epochMillis}"
+            } catch (e: Throwable) {
+                _mountConnectionState.value = MountConnectionState.Error(
+                    e.message ?: "Mount time read failed"
+                )
+                _statusMessage.value = "Mount time error: ${e.message}"
+            } finally {
+                _mountBusy.value = false
+            }
+        }
+    }
+
+    fun syncPhoneTimeToMount(epochMillis: Long = System.currentTimeMillis()) {
+        if (!controller.isConnected) return
+        scope.launch {
+            _mountBusy.value = true
+            try {
+                val time = MountTime(epochMillis)
+                controller.setTime(time)
+                _mountTime.value = time
+                _mountConnectionState.value = MountConnectionState.Connected
+                _statusMessage.value = "Mount time updated from phone"
+            } catch (e: Throwable) {
+                _mountConnectionState.value = MountConnectionState.Error(
+                    e.message ?: "Mount time sync failed"
+                )
+                _statusMessage.value = "Mount time error: ${e.message}"
             } finally {
                 _mountBusy.value = false
             }

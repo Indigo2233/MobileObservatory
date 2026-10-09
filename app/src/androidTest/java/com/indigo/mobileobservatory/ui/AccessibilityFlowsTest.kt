@@ -35,6 +35,7 @@ class AccessibilityFlowsTest {
     @Test
     fun bluetoothCancellationRemainsUsableAtTwoHundredPercentFontScale() {
         var cancelled = false
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
         val state = MountConnectionUiState.from(
             connection = MountConnectionState.Connecting,
             transport = MountTransportType.BLUETOOTH,
@@ -55,7 +56,7 @@ class AccessibilityFlowsTest {
             }
         }
 
-        compose.onNodeWithText("Cancel connection")
+        compose.onNodeWithText(context.getString(R.string.cancel_connection))
             .assertIsDisplayed()
             .assertIsEnabled()
             .performClick()
@@ -63,17 +64,23 @@ class AccessibilityFlowsTest {
     }
 
     @Test
-    fun talkBackCanReturnFromStarMapAndConfirmGoto() {
+    fun talkBackCanReturnFromStarMap() {
         var returned = false
-        var confirmed = false
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
 
         compose.setContent {
             MaterialTheme {
                 StarMapBackButton(onBack = { returned = true })
             }
         }
-        compose.onNodeWithContentDescription("Back to mount").performClick()
+        compose.onNodeWithContentDescription(context.getString(R.string.back_to_mount)).performClick()
         assertTrue(returned)
+    }
+
+    @Test
+    fun talkBackCanConfirmGotoAtTwoHundredPercentFontScale() {
+        var confirmed = false
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
 
         compose.setContent {
             val density = LocalDensity.current.density
@@ -88,8 +95,8 @@ class AccessibilityFlowsTest {
                 }
             }
         }
-        compose.onNodeWithText("Confirm mount slew").assertIsDisplayed()
-        compose.onNodeWithText("Run GOTO").assertIsEnabled().performClick()
+        compose.onNodeWithText(context.getString(R.string.confirm_mount_slew)).assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.execute_goto)).assertIsEnabled().performClick()
         assertTrue(confirmed)
     }
 

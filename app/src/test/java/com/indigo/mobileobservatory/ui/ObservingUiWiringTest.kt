@@ -71,7 +71,8 @@ class ObservingUiWiringTest {
         assertTrue(starMap.contains("currentLabel = overlayCurrentLabel"))
         assertTrue(starMap.contains("targetLabel = overlayTargetLabel"))
         assertTrue(starMap.contains("currentAnchor = currentAnchor"))
-        assertTrue(!starMap.contains("targetAnchor = targetAnchor"))
+        assertTrue(starMap.contains("targetAnchor = targetAnchor"))
+        assertTrue(starMap.contains("StarMapFovOverlay.targetSensorFramingScripts"))
         assertTrue(starMap.contains("FovSkyAnchor("))
         assertTrue(!starMap.contains("eyepieceFovDeg = eyepieceComputation"))
         assertTrue(!starMap.contains("sensorWidthDeg = sensorComputation"))
@@ -269,9 +270,13 @@ class ObservingUiWiringTest {
         val openEnd = manager.indexOf("private fun closeToupcamUsbConnection")
         assertTrue("openToupcamDevice missing", openStart >= 0 && openEnd > openStart)
         val open = manager.substring(openStart, openEnd)
-        val successStart = open.indexOf("if (camera.open(")
+        val openCallStart = open.indexOf("camera.open(")
+        val successStart = open.indexOf("if (ok)", openCallStart)
         val elseStart = open.indexOf("} else {", successStart)
-        assertTrue("ToupTek success branch missing", successStart >= 0 && elseStart > successStart)
+        assertTrue(
+            "ToupTek success branch missing",
+            openCallStart >= 0 && successStart > openCallStart && elseStart > successStart
+        )
         val success = open.substring(successStart, elseStart)
         assertTrue(
             "open() success must keep UsbDeviceConnection; dropping it lets GC close the fd",
@@ -289,6 +294,10 @@ class ObservingUiWiringTest {
         )
         assertTrue(manager.contains("ToupTekDevices.classify(isfw, iseaf)"))
         assertTrue(manager.contains("ToupTekDevices.Kind.CAMERA"))
+        assertTrue(
+            "GPM/USB2 ToupTek units may report 0x04B4 or 0x2BA2, not only 0x0547",
+            manager.contains("ToupTekDevices.isVendor")
+        )
         assertTrue(
             "unknown ToupTek PIDs must still enumerate as cameras",
             !manager.contains("else if (modelName != null)")
@@ -472,6 +481,23 @@ class ObservingUiWiringTest {
         assertTrue(mount.contains("if (!controller.supportsSync)"))
         assertTrue(mount.contains("controller.syncTo(target)"))
         assertTrue(mount.contains("Visual sync: mount stays put"))
+    }
+
+    @Test
+    fun sequenceHasItsOwnEditAndStatusPages() {
+        val camera = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/CameraScreen.kt"
+        )
+        val sequence = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/SequenceScreen.kt"
+        )
+        assertTrue(camera.contains("SEQUENCE"))
+        assertTrue(camera.contains("R.string.tab_sequence"))
+        assertTrue(camera.contains("SequenceScreen("))
+        assertTrue(camera.contains("SequenceProgressStrip("))
+        assertTrue(sequence.contains("R.string.sequence_edit"))
+        assertTrue(sequence.contains("R.string.sequence_status"))
+        assertTrue(!camera.contains("SequenceScreen(\n") || camera.contains("MainControlTab.SEQUENCE"))
     }
 
     @Test

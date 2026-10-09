@@ -21,17 +21,22 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.indigo.mobileobservatory.camera.ConnectionState
 import com.indigo.mobileobservatory.camera.DeviceEntry
 import com.indigo.mobileobservatory.camera.FrameProcessor
 import com.indigo.mobileobservatory.camera.GainCapability
 import com.indigo.mobileobservatory.ui.components.*
 import com.indigo.mobileobservatory.ui.viewmodel.CameraViewModel
+import com.indigo.mobileobservatory.ui.viewmodel.UpdateViewModel
 import com.indigo.mobileobservatory.mount.MountMotionState
 import com.indigo.mobileobservatory.ui.viewmodel.CaptureFormat
 import com.indigo.mobileobservatory.ui.viewmodel.RecordFormat
 import com.indigo.mobileobservatory.BuildConfig
 import com.indigo.mobileobservatory.R
+import com.indigo.mobileobservatory.sequence.SequenceEditorMode
+import com.indigo.mobileobservatory.sequence.SequenceFeature
+import com.indigo.mobileobservatory.sequence.plannedFrames
 import com.indigo.mobileobservatory.ui.AppOrientationMode
 import com.indigo.mobileobservatory.ui.RememberAppOrientation
 
@@ -39,7 +44,8 @@ private enum class MainControlTab {
     CAMERA,
     MOUNT,
     STAR_MAP,
-    ACCESSORIES
+    ACCESSORIES,
+    SEQUENCE
 }
 
 @Composable
@@ -56,6 +62,10 @@ fun CameraScreen(
     val phoneNav = rememberPhonePlateSolveNavState()
     var selectedTab by rememberSaveable { mutableStateOf(MainControlTab.CAMERA) }
     val globalMountMotionState by viewModel.mountMotionState.collectAsState()
+    val mountTime by viewModel.mountTime.collectAsState()
+    val updateViewModel: UpdateViewModel = viewModel()
+    val updateState by updateViewModel.state.collectAsState()
+    val sequenceEnabled = SequenceFeature.ENABLED
 
     val orientationMode = when {
         showGuide || showPlayer -> AppOrientationMode.LANDSCAPE
@@ -63,6 +73,13 @@ fun CameraScreen(
         else -> AppOrientationMode.PORTRAIT
     }
     RememberAppOrientation(orientationMode)
+
+    UpdateAvailableDialog(
+        state = updateState,
+        onDownload = updateViewModel::downloadAndInstall,
+        onDismiss = updateViewModel::dismissPrompt,
+        onOpenInstallSettings = updateViewModel::openInstallPermissionSettings
+    )
 
     if (selectedTab != MainControlTab.STAR_MAP || !BuildConfig.STELLARIUM_ENABLED) {
         MountMotionStopPopup(
@@ -72,7 +89,17 @@ fun CameraScreen(
     }
 
     if (phoneNav.destination != null) {
-        PhonePlateSolveScreens(phoneNav)
+        PhonePlateSolveScreens(
+            phoneNav,
+            onAddToSequence = { obj ->
+                viewModel.addSequenceSkyTarget(
+                    name = "${obj.id} · ${obj.name}",
+                    raHours = obj.raHours,
+                    decDeg = obj.decDeg
+                )
+            },
+            showSequenceActions = sequenceEnabled
+        )
         return
     }
 
@@ -83,6 +110,7 @@ fun CameraScreen(
             mountCoordinates = mountCoordinates,
             cameraPixelSizeUm = (connectionState as? ConnectionState.Connected)
                 ?.info?.pixelSizeUm,
+            onSolved = viewModel::recordPlateSolveResult,
             onBack = { showPlateSolve = false }
         )
         return
@@ -275,9 +303,15 @@ fun CameraScreen(
             .background(MaterialTheme.colorScheme.background)
     ) {
         if (selectedTab != MainControlTab.STAR_MAP || !BuildConfig.STELLARIUM_ENABLED) {
-            TabRow(
-                selectedTabIndex = selectedTab.ordinal,
-                modifier = Modifier.height(48.dp)
+            val visibleTabCount = if (sequenceEnabled) {
+                MainControlTab.entries.size
+            } else {
+                MainControlTab.entries.size - 1
+            }
+            ScrollableTabRow(
+                selectedTabIndex = selectedTab.ordinal.coerceIn(0, visibleTabCount - 1),
+                modifier = Modifier.height(48.dp),
+                edgePadding = 8.dp
             ) {
                 Tab(
                     selected = selectedTab == MainControlTab.CAMERA,
@@ -319,6 +353,18 @@ fun CameraScreen(
                         )
                     }
                 )
+                if (sequenceEnabled) {
+                    Tab(
+                        selected = selectedTab == MainControlTab.SEQUENCE,
+                        onClick = { selectedTab = MainControlTab.SEQUENCE },
+                        text = {
+                            Text(
+                                stringResource(R.string.tab_sequence),
+                                style = MaterialTheme.typography.labelLarge
+                            )
+                        }
+                    )
+                }
                 Tab(
                     selected = false,
                     onClick = { showSettings = true },
@@ -330,6 +376,31 @@ fun CameraScreen(
                     }
                 )
                 }
+        }
+
+        if (sequenceEnabled) {
+            val sequenceState by viewModel.sequenceRuntime.state.collectAsState()
+            val sequenceDraft by viewModel.sequenceRuntime.draft.collectAsState()
+            val sequenceRunning =
+                sequenceState.phase == com.indigo.mobileobservatory.sequence.SequencePhase.Running ||
+                    sequenceState.phase == com.indigo.mobileobservatory.sequence.SequencePhase.Paused
+            if (sequenceRunning && selectedTab != MainControlTab.SEQUENCE) {
+                SequenceProgressStrip(
+                    title = sequenceState.currentClassName ?: stringResource(R.string.tab_sequence),
+                    detail = stringResource(R.string.sequence_progress, sequenceState.framesDone, sequenceDraft.plannedFrames()),
+                    paused = sequenceState.phase == com.indigo.mobileobservatory.sequence.SequencePhase.Paused,
+                    onOpen = { selectedTab = MainControlTab.SEQUENCE },
+                    onPause = viewModel.sequenceRuntime::pause,
+                    onResume = viewModel.sequenceRuntime::resume,
+                    onStop = viewModel.sequenceRuntime::stop
+                )
+            }
+        } else {
+            LaunchedEffect(Unit) {
+                if (selectedTab == MainControlTab.SEQUENCE) {
+                    selectedTab = MainControlTab.CAMERA
+                }
+            }
         }
 
         when (selectedTab) {
@@ -347,9 +418,18 @@ fun CameraScreen(
             MainControlTab.STAR_MAP -> {
                 if (BuildConfig.STELLARIUM_ENABLED) {
                     val mountSite by viewModel.mountSite.collectAsState()
+                    val solvedPositionAngle by viewModel.lastPlateSolvePositionAngleDeg.collectAsState()
+                    val sequenceMosaicPlan by viewModel.sequenceMosaicPlan.collectAsState()
+                    val sequenceGeneration by viewModel.sequenceRuntime.generation.collectAsState()
+                    val restoredSequencePlan = remember(sequenceMosaicPlan, sequenceGeneration) {
+                        viewModel.sequenceRuntime.mosaicPlan() ?: sequenceMosaicPlan
+                    }
+                    val rotatorConnected by viewModel.rotatorConnected.collectAsState()
+                    val rotatorAngle by viewModel.rotatorAngle.collectAsState()
                     StarMapScreen(
                         mountCoordinates = mountCoordinates,
                         mountSite = mountSite,
+                        mountTime = mountTime,
                         mountConnected = mountConnectionState is
                             com.indigo.mobileobservatory.mount.MountConnectionState.Connected,
                         mountSupportsSync = viewModel.mountSupportsSync,
@@ -361,6 +441,10 @@ fun CameraScreen(
                             ?.info?.pixelSizeUm,
                         cameraFrameWidthPx = roi.width,
                         cameraFrameHeightPx = roi.height,
+                        lastSolvedPositionAngleDeg = solvedPositionAngle,
+                        rotatorConnected = rotatorConnected,
+                        rotatorMechanicalAngleDeg = rotatorAngle,
+                        initialSequencePlan = restoredSequencePlan,
                         onGoto = { target ->
                             viewModel.gotoMountTarget(
                                 name = target.name,
@@ -384,6 +468,17 @@ fun CameraScreen(
                                 decDeg = target.decDegrees,
                                 frame = target.frame,
                                 toleranceArcmin = toleranceArcmin
+                            )
+                        },
+                        onAddToSequence = viewModel::addSequenceMosaic,
+                        onMoveRotator = viewModel::moveRotatorTo,
+                        showSequenceActions = sequenceEnabled,
+                        onTargetSelected = { target ->
+                            viewModel.rememberSequenceSkyTarget(
+                                name = target.name,
+                                raHours = target.raHours,
+                                decDeg = target.decDegrees,
+                                positionAngleDeg = target.positionAngleDeg
                             )
                         },
                         onSlewRateChange = viewModel::setMountSlewRate,
@@ -418,6 +513,17 @@ fun CameraScreen(
                             }
                         }
                     }
+                }
+            }
+            MainControlTab.SEQUENCE -> {
+                if (sequenceEnabled) {
+                    SequenceScreen(
+                        viewModel = viewModel,
+                        redNightMode = redNightMode,
+                        onOpenGuiding = { showGuide = true },
+                        onOpenAccessories = { selectedTab = MainControlTab.ACCESSORIES },
+                        modifier = Modifier.weight(1f)
+                    )
                 }
             }
             MainControlTab.ACCESSORIES -> {
@@ -675,6 +781,7 @@ fun CameraScreen(
                         longExposureProgress = longExposureProgress,
                         cameraInfo = camInfo,
                         cameraName = camName,
+                        showMountControls = true,
                         fwConnected = fwConnected,
                         fwPosition = fwPosition,
                         fwMoving = fwMoving,

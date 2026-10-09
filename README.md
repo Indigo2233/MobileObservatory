@@ -79,6 +79,9 @@
 
 # 正式签名候选包；密钥配置见 docs/RELEASE_PROCESS.md
 .\Build.ps1 -Release -NonCommercial
+
+# 序列功能默认隐藏；开发时显式打开
+.\Build.ps1 -NonCommercial -ShowSequence
 ```
 
 产物：`bin/Installer/IndigoObservatory_android.apk`
@@ -108,6 +111,7 @@ SDK、星表、图像和其他第三方组件继续适用各自的许可证与�
 | [`docs/README.md`](docs/README.md) | 方案文档索引（进行中 / 已落地待真机 / archive） |
 | [`docs/DESIGN_NOTES.md`](docs/DESIGN_NOTES.md) | 已拍板的交互与协议决策（星图跟随、STOP、零位、EQ/地平、板解光学） |
 | [`docs/RELEASE_PROCESS.md`](docs/RELEASE_PROCESS.md) | 正式签名、发布候选与 go/no-go 门 |
+| [`docs/APP_UPDATE.md`](docs/APP_UPDATE.md) | 应用内更新：update.json 格式、校验与发布流程 |
 | [`docs/testing/HARDWARE_SMOKE_TESTS.md`](docs/testing/HARDWARE_SMOKE_TESTS.md) | 真机冒烟测试矩阵 |
 | [`docs/PHONE_PLATE_SOLVE_PLAN.md`](docs/PHONE_PLATE_SOLVE_PLAN.md) | 手机板解 / Push-to 方案（开放开发中） |
 

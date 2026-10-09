@@ -61,7 +61,6 @@ class DahengCameraManager(
 
     companion object {
         private const val TAG = "CameraMgr"
-        private const val TOUPCAM_VENDOR_ID = 1351  // 0x0547
         private const val QHY_VENDOR_ID = 0x1618    // 5656 decimal
         private const val ZWO_VENDOR_ID = 0x03C3        // 963 decimal
         private const val PLAYERONE_VENDOR_ID = 0xA0A0  // 41120 decimal
@@ -149,37 +148,37 @@ class DahengCameraManager(
                 UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
                     val usbDevice = intent.getParcelableExtra<UsbDevice>("device") ?: return
                     trace(
-                        "USB attached VID=0x${usbDevice.vendorId.toString(16)} " +
-                            "PID=0x${usbDevice.productId.toString(16)} state=${_connectionState.value}"
+                        "USB attached ${ToupTekDevices.usbIdentity(usbDevice)} " +
+                            "state=${_connectionState.value}"
                     )
-                    if (usbDevice.vendorId == TOUPCAM_VENDOR_ID) {
+                    if (ToupTekDevices.isVendor(usbDevice.vendorId)) {
                         val isAccessory = runCatching {
                             ToupcamJni.isFilterWheel(usbDevice.vendorId, usbDevice.productId) ||
                                 ToupcamJni.isAutoFocuser(usbDevice.vendorId, usbDevice.productId)
                         }.getOrDefault(false)
                         if (isAccessory) return
                     }
-                    if (usbDevice.vendorId == TOUPCAM_VENDOR_ID || usbDevice.vendorId == QHY_VENDOR_ID ||
+                    if (ToupTekDevices.isVendor(usbDevice.vendorId) || usbDevice.vendorId == QHY_VENDOR_ID ||
                         usbDevice.vendorId == ZWO_VENDOR_ID || usbDevice.vendorId == PLAYERONE_VENDOR_ID ||
                         DslrUsb.brandForVendor(usbDevice.vendorId) == CameraBrand.NIKON)
                         enumerateDevices()
                 }
                 UsbManager.ACTION_USB_DEVICE_DETACHED -> {
                     val usbDevice = intent.getParcelableExtra<UsbDevice>("device") ?: return
-                    if (usbDevice.vendorId == TOUPCAM_VENDOR_ID || usbDevice.vendorId == QHY_VENDOR_ID ||
+                    if (ToupTekDevices.isVendor(usbDevice.vendorId) || usbDevice.vendorId == QHY_VENDOR_ID ||
                         usbDevice.vendorId == ZWO_VENDOR_ID || usbDevice.vendorId == PLAYERONE_VENDOR_ID ||
                         DslrUsb.brandForVendor(usbDevice.vendorId) == CameraBrand.NIKON) {
                         trace(
-                            "USB detached VID=0x${usbDevice.vendorId.toString(16)} " +
-                                "PID=0x${usbDevice.productId.toString(16)} state=${_connectionState.value}"
+                            "USB detached ${ToupTekDevices.usbIdentity(usbDevice)} " +
+                                "state=${_connectionState.value}"
                         )
-                        if (usbDevice.vendorId == TOUPCAM_VENDOR_ID &&
+                        if (ToupTekDevices.isVendor(usbDevice.vendorId) &&
                             ToupcamJni.isFilterWheel(usbDevice.vendorId, usbDevice.productId)) {
                             filterWheelController.close()
                             _accessoryDevices.value = _accessoryDevices.value.filterNot {
                                 it.usbDevice.deviceId == usbDevice.deviceId
                             }
-                        } else if (usbDevice.vendorId == TOUPCAM_VENDOR_ID &&
+                        } else if (ToupTekDevices.isVendor(usbDevice.vendorId) &&
                             ToupcamJni.isAutoFocuser(usbDevice.vendorId, usbDevice.productId)) {
                             eafController.close()
                             _accessoryDevices.value = _accessoryDevices.value.filterNot {
@@ -360,13 +359,16 @@ class DahengCameraManager(
         // Enumerate ToupTek devices via USB (cameras and filter wheels)
         try {
             val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
-            Log.i(TAG, "USB device list: ${usbManager.deviceList.size} device(s)")
+            trace("USB device list: ${usbManager.deviceList.size} device(s)")
             for ((path, usbDev) in usbManager.deviceList) {
                 val vid = usbDev.vendorId
                 val pid = usbDev.productId
-                Log.i(TAG, "USB device: path=$path VID=0x${vid.toString(16)} PID=0x${pid.toString(16)} name=${usbDev.deviceName}")
+                trace(
+                    "USB device: path=$path ${ToupTekDevices.usbIdentity(usbDev)} " +
+                        "name=${usbDev.deviceName}"
+                )
 
-                if (vid == TOUPCAM_VENDOR_ID) {
+                if (ToupTekDevices.isVendor(vid)) {
                     val modelName = try { ToupcamJni.getModelName(vid, pid) } catch (e: Exception) {
                         Log.w(TAG, "getModelName failed for VID=0x${vid.toString(16)} PID=0x${pid.toString(16)}: ${e.message}")
                         null
@@ -393,7 +395,7 @@ class DahengCameraManager(
                             }
                         }
                         ToupTekDevices.Kind.CAMERA -> {
-                            val displayName = ToupTekDevices.cameraDisplayName(modelName)
+                            val displayName = ToupTekDevices.displayNameFor(usbDev, modelName)
                             allDevices.add(DeviceEntry(
                                 index = allDevices.size,
                                 name = displayName,
@@ -523,7 +525,7 @@ class DahengCameraManager(
         try {
             val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
             usbManager.deviceList.values.forEach { usbDevice ->
-                if (usbDevice.vendorId != TOUPCAM_VENDOR_ID) return@forEach
+                if (!ToupTekDevices.isVendor(usbDevice.vendorId)) return@forEach
 
                 val isFilterWheel = runCatching {
                     ToupcamJni.isFilterWheel(usbDevice.vendorId, usbDevice.productId)
@@ -677,27 +679,38 @@ class DahengCameraManager(
             }
 
             val fd = connection.fileDescriptor
-            val vid = usbDevice.vendorId
-            val pid = usbDevice.productId
-            val modelName = ToupcamJni.getModelName(vid, pid) ?: "ToupTek Camera"
-            val flag = ToupcamJni.getModelFlag(vid, pid)
-            trace("Opening ToupTek: fd=$fd VID=0x${vid.toString(16)} PID=0x${pid.toString(16)} model=$modelName flag=0x${flag.toString(16)}")
-
-            // Root the connection before native open. The success assignment below
-            // keeps it after open() returns; this one covers the native call itself.
+            val hints = ToupTekDevices.openHints(
+                usbDevice.vendorId,
+                usbDevice.productId,
+                usbDevice.productName,
+                usbDevice.manufacturerName
+            )
             toupcamUsbConnection = connection
             val camera = ToupcamCamera()
-            if (camera.open(fd, vid, pid, modelName)) {
-                toupcamUsbConnection = connection
-                activeCamera = camera
-                claimUsbDevice(usbDevice)
-                _connectionState.value = ConnectionState.Connected(camera.cameraInfo!!)
-                trace("ToupTek camera connected: $modelName")
-            } else {
+            val opened = hints.any { hint ->
+                val modelName = ToupcamJni.getModelName(hint.vendorId, hint.productId)
+                    ?: ToupTekDevices.displayNameFor(usbDevice, hint.modelName)
+                val flag = ToupcamJni.getModelFlag(hint.vendorId, hint.productId)
+                trace(
+                    "Opening ToupTek: fd=$fd VID=0x${hint.vendorId.toString(16)} " +
+                        "PID=0x${hint.productId.toString(16)} model=$modelName flag=0x${flag.toString(16)}"
+                )
+                camera.open(fd, hint.vendorId, hint.productId, modelName).also { ok ->
+                    if (ok) {
+                        toupcamUsbConnection = connection
+                        activeCamera = camera
+                        claimUsbDevice(usbDevice)
+                        _connectionState.value = ConnectionState.Connected(camera.cameraInfo!!)
+                        trace("ToupTek camera connected: $modelName")
+                    } else {
+                        trace("ToupcamCamera.open returned false for $modelName")
+                    }
+                }
+            }
+            if (!opened) {
                 closeToupcamUsbConnection()
                 abandonReservation()
-                trace("ToupcamCamera.open returned false for $modelName")
-                Log.e(TAG, "ToupcamCamera.open returned false for $modelName")
+                Log.e(TAG, "ToupcamCamera.open returned false after ${hints.size} hint(s)")
                 _connectionState.value = ConnectionState.Error("Failed to initialize ToupTek camera")
             }
         } catch (e: Throwable) {

@@ -6,6 +6,25 @@ plugins {
 val stellariumNonCommercial =
     providers.gradleProperty("stellariumNonCommercial").orNull == "true"
 
+val sequenceEnabled =
+    providers.gradleProperty("sequenceEnabled").orNull?.toBooleanStrictOrNull() ?: false
+
+val emulatorTest =
+    providers.gradleProperty("emulatorTest").orNull?.toBooleanStrictOrNull() ?: false
+
+val updateManifestUrl =
+    providers.gradleProperty("updateManifestUrl").orNull
+        ?.takeIf { it.isNotBlank() }
+        ?: "https://github.com/Indigo2233/MobileObservatory/releases/latest/download/update.json"
+
+val updateManifestFallbackUrl =
+    providers.gradleProperty("updateManifestFallbackUrl").orNull
+        ?.takeIf { it.isNotBlank() }
+        ?: "https://indigo2233.github.io/MobileObservatory/update.json"
+
+fun buildConfigString(value: String): String =
+    "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+
 fun releaseCredential(propertyName: String, environmentName: String): String? =
     providers.gradleProperty(propertyName)
         .orElse(providers.environmentVariable(environmentName))
@@ -38,9 +57,21 @@ android {
         versionName = "1.0.6"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("boolean", "STELLARIUM_ENABLED", stellariumNonCommercial.toString())
+        buildConfigField("boolean", "SEQUENCE_ENABLED", sequenceEnabled.toString())
+        buildConfigField("boolean", "EMULATOR_TEST", emulatorTest.toString())
+        buildConfigField("String", "UPDATE_MANIFEST_URL", buildConfigString(updateManifestUrl))
+        buildConfigField(
+            "String",
+            "UPDATE_MANIFEST_FALLBACK_URL",
+            buildConfigString(updateManifestFallbackUrl)
+        )
 
         ndk {
-            abiFilters += listOf("arm64-v8a")
+            abiFilters += if (emulatorTest) {
+                listOf("x86", "x86_64")
+            } else {
+                listOf("arm64-v8a")
+            }
         }
 
         externalNativeBuild {
@@ -68,6 +99,12 @@ android {
     }
 
     buildTypes {
+        debug {
+            if (emulatorTest) {
+                applicationIdSuffix = ".emulatortest"
+                versionNameSuffix = "-emulator-test"
+            }
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
@@ -139,6 +176,11 @@ val verifyReleaseSigning = tasks.register("verifyReleaseSigning") {
 }
 
 tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    if (emulatorTest) {
+        doFirst {
+            throw GradleException("emulatorTest is restricted to debug builds.")
+        }
+    }
     dependsOn(verifyReleaseSigning)
 }
 

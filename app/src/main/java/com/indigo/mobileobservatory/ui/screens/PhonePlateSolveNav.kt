@@ -6,6 +6,7 @@ import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import com.indigo.mobileobservatory.catalog.CatalogObject
 
 /**
  * Full-screen destinations of the phone plate-solve WIP flow. Kept in a
@@ -31,7 +32,11 @@ fun rememberPhonePlateSolveNavState(): PhonePlateSolveNavState =
     remember { PhonePlateSolveNavState() }
 
 @Composable
-fun PhonePlateSolveScreens(nav: PhonePlateSolveNavState) {
+fun PhonePlateSolveScreens(
+    nav: PhonePlateSolveNavState,
+    onAddToSequence: (CatalogObject) -> Unit = {},
+    showSequenceActions: Boolean = true
+) {
     when (nav.destination) {
         PhonePlateSolveDestination.PHONE_CAMERA_DEBUG ->
             PhoneCameraDebugScreen(onBack = { nav.destination = null })
@@ -44,7 +49,9 @@ fun PhonePlateSolveScreens(nav: PhonePlateSolveNavState) {
                     nav.targetRaHours = obj.raHours
                     nav.targetDecDeg = obj.decDeg
                     nav.destination = PhonePlateSolveDestination.PUSH_TO
-                }
+                },
+                onAddToSequence = onAddToSequence,
+                showSequenceActions = showSequenceActions
             )
 
         PhonePlateSolveDestination.PUSH_TO ->

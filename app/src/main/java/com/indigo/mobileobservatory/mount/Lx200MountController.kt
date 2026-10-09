@@ -24,6 +24,9 @@ import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.Socket
+import java.time.Instant
+import java.time.LocalDateTime
+import java.time.ZoneId
 import java.util.Locale
 import java.util.UUID
 import kotlin.math.absoluteValue
@@ -63,6 +66,10 @@ data class MountSite(
         return "lat %.5f  lon %.5f".format(Locale.US, latitudeDeg, longitudeDeg)
     }
 }
+
+data class MountTime(
+    val epochMillis: Long
+)
 
 sealed class MountConnectionState {
     data object Disconnected : MountConnectionState()
@@ -186,6 +193,10 @@ class Lx200MountController {
     val supportsSync: Boolean
         get() = skyWatcherAdapter?.supportsSync
             ?: (activeProtocol != MountProtocolType.SKYWATCHER)
+    val supportsTimeSync: Boolean
+        get() = skyWatcherAdapter?.supportsTimeSync
+            ?: (activeProtocol == MountProtocolType.LX200_ONSTEP ||
+                activeProtocol == MountProtocolType.IOPTRON)
 
     val isConnected: Boolean
         get() = (socket?.isConnected == true && socket?.isClosed == false) ||
@@ -537,6 +548,66 @@ class Lx200MountController {
         val latOk = sendBooleanCommand(":St${formatLatitude(site.latitudeDeg)}#")
         val lonOk = sendBooleanCommand(":Sg${formatLongitude(-site.longitudeDeg)}#")
         if (!latOk || !lonOk) error("Mount rejected site coordinates.")
+    }
+
+    suspend fun readTime(): MountTime = withContext(Dispatchers.IO) {
+        skyWatcherAdapter?.let { return@withContext it.readTime() }
+        if (activeProtocol == MountProtocolType.IOPTRON) {
+            val response = sendFixedCommand(":GUT#", 18)
+            require(response.matches(Regex("[+-]\\d{3}[01]\\d{13}"))) {
+                "Invalid iOptron UTC time response: $response"
+            }
+            val millisSinceJ2000 = response.substring(5).toLongOrNull()
+                ?: error("Invalid iOptron UTC time response: $response")
+            return@withContext MountTime(IOPTRON_J2000_EPOCH_MILLIS + millisSinceJ2000)
+        }
+        val date = sendCommand(":GC#")
+        val time = sendCommand(":GL#")
+        MountTime(parseLx200LocalTime(date, time))
+    }
+
+    suspend fun setTime(time: MountTime) = withContext(Dispatchers.IO) {
+        skyWatcherAdapter?.let {
+            it.setTime(time)
+            return@withContext
+        }
+        val instant = Instant.ofEpochMilli(time.epochMillis)
+        if (activeProtocol == MountProtocolType.IOPTRON) {
+            val millisSinceJ2000 = time.epochMillis - IOPTRON_J2000_EPOCH_MILLIS
+            require(millisSinceJ2000 >= 0L) { "iOptron time must be after 2000-01-01 12:00 UTC." }
+            if (!sendIoptronOk(":SUT%013d#".format(Locale.US, millisSinceJ2000))) {
+                error("iOptron mount rejected UTC time.")
+            }
+            val zone = ZoneId.systemDefault()
+            val offsetMinutes = zone.rules.getStandardOffset(instant).totalSeconds / 60
+            val offsetCommand = ":SG${if (offsetMinutes < 0) '-' else '+'}%03d#"
+                .format(Locale.US, kotlin.math.abs(offsetMinutes))
+            if (!sendIoptronOk(offsetCommand) ||
+                !sendIoptronOk(if (zone.rules.isDaylightSavings(instant)) ":SDS1#" else ":SDS0#")
+            ) {
+                error("iOptron mount rejected time-zone settings.")
+            }
+            return@withContext
+        }
+        val local = instant.atZone(ZoneId.systemDefault()).toLocalDateTime()
+        val dateCommand = ":SC%02d/%02d/%02d#".format(
+            Locale.US,
+            local.monthValue,
+            local.dayOfMonth,
+            local.year % 100
+        )
+        val timeCommand = ":SL%02d:%02d:%02d#".format(
+            Locale.US,
+            local.hour,
+            local.minute,
+            local.second
+        )
+        require(sendCommand(dateCommand).trim().startsWith("1")) {
+            "Mount rejected date."
+        }
+        require(sendCommand(timeCommand).trim().startsWith("1")) {
+            "Mount rejected time."
+        }
     }
 
     suspend fun slewTo(coordinates: MountCoordinates) = withContext(Dispatchers.IO) {
@@ -1173,6 +1244,26 @@ class Lx200MountController {
         return "%s%0${degreeDigits}d*%02d".format(Locale.US, sign, degrees, minutes)
     }
 
+    private fun parseLx200LocalTime(dateResponse: String, timeResponse: String): Long {
+        val date = Regex("^(\\d{1,2})/(\\d{1,2})/(\\d{2,4})$")
+            .matchEntire(dateResponse.trim())
+            ?: error("Invalid LX200 date response: $dateResponse")
+        val time = Regex("^(\\d{1,2}):(\\d{2}):(\\d{2})$")
+            .matchEntire(timeResponse.trim())
+            ?: error("Invalid LX200 time response: $timeResponse")
+        val yearValue = date.groupValues[3].toInt()
+        val year = if (yearValue < 100) 2000 + yearValue else yearValue
+        val local = LocalDateTime.of(
+            year,
+            date.groupValues[1].toInt(),
+            date.groupValues[2].toInt(),
+            time.groupValues[1].toInt(),
+            time.groupValues[2].toInt(),
+            time.groupValues[3].toInt()
+        )
+        return local.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+    }
+
     companion object {
         private const val TAG = "Lx200Mount"
         private const val SERIAL_TIMEOUT_MS = 5000
@@ -1184,6 +1275,8 @@ class Lx200MountController {
         private const val USB_POLL_TIMEOUT_MS = 400
         private const val SERIAL_DRAIN_MAX_MS = 700L
         private const val SERIAL_DRAIN_MAX_BYTES = 4096
+        private val IOPTRON_J2000_EPOCH_MILLIS =
+            Instant.parse("2000-01-01T12:00:00Z").toEpochMilli()
         private val SPP_UUID: UUID =
             UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
         private val IOPTRON_MODELS = mapOf(

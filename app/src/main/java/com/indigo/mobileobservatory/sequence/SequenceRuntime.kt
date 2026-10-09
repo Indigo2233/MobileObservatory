@@ -1,0 +1,936 @@
+package com.indigo.mobileobservatory.sequence
+
+import java.io.File
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import org.json.JSONArray
+import org.json.JSONObject
+
+enum class SequenceEditorMode { Simple, Advanced }
+
+data class SequenceSkyTarget(
+    val name: String,
+    val raHours: Double,
+    val decDeg: Double,
+    val positionAngleDeg: Double = 0.0
+)
+
+data class SequenceMosaicPanel(
+    val number: Int,
+    val row: Int,
+    val column: Int,
+    val raHours: Double,
+    val decDeg: Double,
+    val enabled: Boolean = true
+)
+
+data class SequenceMosaicPlan(
+    val name: String,
+    val centerRaHours: Double,
+    val centerDecDeg: Double,
+    val positionAngleDeg: Double,
+    val rows: Int,
+    val columns: Int,
+    val overlapPercent: Int,
+    val traversal: String = "SNAKE",
+    val startCorner: String = "TOP_LEFT",
+    val panels: List<SequenceMosaicPanel>,
+    val rotateWithRotator: Boolean = false
+)
+
+data class SessionFrame(
+    val name: String,
+    val filter: String?,
+    val exposureSeconds: Double,
+    val hfr: Double?,
+    val starCount: Int? = null
+)
+
+data class AutofocusRun(
+    val atMillis: Long,
+    val temperatureC: Double?,
+    val filter: String?,
+    val position: Int,
+    val hfr: Double,
+    val curve: List<Pair<Int, Double>>
+)
+
+interface SequenceHardware {
+    suspend fun takeExposure(
+        seconds: Double,
+        gain: Int,
+        offset: Int,
+        destDir: File,
+        binning: Int = 1,
+        imageType: String = "LIGHT"
+    ): SessionFrame
+    suspend fun switchFilter(name: String)
+    suspend fun cool(targetC: Double, durationMinutes: Double = 0.0)
+    suspend fun warm(durationMinutes: Double = 0.0)
+    suspend fun slew(raHours: Double, decDeg: Double)
+    suspend fun center(raHours: Double, decDeg: Double)
+    suspend fun plateSolve(): Pair<Double, Double>
+    suspend fun syncMount(raHours: Double, decDeg: Double)
+    suspend fun guide(enabled: Boolean, forceCalibration: Boolean = false)
+    suspend fun dither(radiusPx: Double)
+    suspend fun tracking(mode: Int)
+    suspend fun goHome()
+    suspend fun cover(open: Boolean)
+    suspend fun dewHeater(on: Boolean)
+    suspend fun usbLimit(value: Int)
+    suspend fun flatLight(on: Boolean)
+    suspend fun flatBrightness(value: Int)
+    suspend fun moveFocuser(position: Int)
+    suspend fun rotateTo(angleDeg: Double)
+    fun isRotatorConnected(): Boolean
+    suspend fun autofocus(destDir: File): AutofocusRun
+    suspend fun waitUntil(epochMillis: Long)
+    fun guidingLocked(): Boolean
+    fun raHours(): Double?
+    fun decDeg(): Double?
+    fun focuserPosition(): Int = 0
+}
+
+class SequenceRuntime(
+    private val templatesDir: File,
+    private val sessionsDir: File,
+    private val scope: CoroutineScope,
+    private val hardware: SequenceHardware,
+    private val world: SequenceWorld = SequenceWorld.System
+) : SequenceDevicePort {
+    private var sessionDir: File? = null
+    private var runSettings = SequenceSettings()
+
+    private val _state = MutableStateFlow(SequenceRunState(SequencePhase.Idle))
+    val state: StateFlow<SequenceRunState> = _state.asStateFlow()
+    private val _mode = MutableStateFlow(SequenceEditorMode.Simple)
+    val mode: StateFlow<SequenceEditorMode> = _mode.asStateFlow()
+    private val _draft = MutableStateFlow(
+        SimpleSequenceDraft(title = "Target", raHours = 0.0, decDegrees = 0.0, rows = listOf(
+            SimpleExposureRow(filterName = null, exposureSeconds = 30.0, gain = -1, offset = -1, count = 1)
+        ))
+    )
+    val draft: StateFlow<SimpleSequenceDraft> = _draft.asStateFlow()
+    private val _document = MutableStateFlow<NinaNode?>(null)
+    val document: StateFlow<NinaNode?> = _document.asStateFlow()
+    private val _frames = MutableStateFlow<List<SessionFrame>>(emptyList())
+    val frames: StateFlow<List<SessionFrame>> = _frames.asStateFlow()
+    private val _autofocus = MutableStateFlow<List<AutofocusRun>>(emptyList())
+    val autofocus: StateFlow<List<AutofocusRun>> = _autofocus.asStateFlow()
+    private val _generation = MutableStateFlow(0)
+    val generation: StateFlow<Int> = _generation.asStateFlow()
+    private val history = SequenceHistory()
+    private val _locked = MutableStateFlow(false)
+    val locked: StateFlow<Boolean> = _locked.asStateFlow()
+    private val _canUndo = MutableStateFlow(false)
+    val canUndo: StateFlow<Boolean> = _canUndo.asStateFlow()
+    private val _canRedo = MutableStateFlow(false)
+    val canRedo: StateFlow<Boolean> = _canRedo.asStateFlow()
+
+    private val engine = SequenceEngine(this, world = world) { next ->
+        _state.value = next
+    }
+    private var guidingWanted = false
+
+    val control: SequenceControl get() = engine.control
+
+    fun setMode(mode: SequenceEditorMode) {
+        if (mode == SequenceEditorMode.Advanced && _document.value == null) {
+            _document.value = emptyAdvancedSequence(_draft.value.title)
+            history.clear()
+            publishHistory()
+            _generation.value = _generation.value + 1
+        }
+        _mode.value = mode
+    }
+
+    fun importSimpleDraft() {
+        _document.value = _draft.value.toNinaSequence()
+        _mode.value = SequenceEditorMode.Advanced
+        history.clear()
+        publishHistory()
+        _generation.value = _generation.value + 1
+    }
+
+    fun editSequence(block: (NinaNode) -> Boolean) {
+        if (_locked.value) return
+        val root = ensureDocument()
+        val before = root.toJson(indent = 0)
+        if (block(root)) {
+            history.record(before)
+            publishHistory()
+            _generation.value = _generation.value + 1
+        }
+    }
+
+    fun undoEdit() {
+        if (_locked.value) return
+        val current = _document.value ?: return
+        val previous = history.undo(current.toJson(indent = 0)) ?: return
+        _document.value = parseNinaSequence(previous)
+        publishHistory()
+        _generation.value = _generation.value + 1
+    }
+
+    fun redoEdit() {
+        if (_locked.value) return
+        val current = _document.value ?: return
+        val next = history.redo(current.toJson(indent = 0)) ?: return
+        _document.value = parseNinaSequence(next)
+        publishHistory()
+        _generation.value = _generation.value + 1
+    }
+
+    fun setLocked(locked: Boolean) {
+        _locked.value = locked
+    }
+
+    private fun publishHistory() {
+        _canUndo.value = history.canUndo
+        _canRedo.value = history.canRedo
+    }
+
+    fun updateDraft(draft: SimpleSequenceDraft) {
+        _draft.value = draft
+    }
+
+    fun templateNames(): List<String> {
+        templatesDir.mkdirs()
+        return templatesDir.listFiles { file -> file.isFile && file.extension == "json" }
+            ?.map { it.nameWithoutExtension }
+            ?.sorted()
+            ?: emptyList()
+    }
+
+    fun setTemplateNames(): List<String> = listSnippetNames(File(templatesDir, "templates"), ".template.json")
+
+    fun savedTargetNames(): List<String> = listSnippetNames(File(templatesDir, "targets"), ".json")
+
+    fun save(name: String) {
+        templatesDir.mkdirs()
+        val root = currentDocument()
+        File(templatesDir, "${sequenceFileStem(name)}.json").writeText(root.toJson())
+        _generation.value = _generation.value + 1
+    }
+
+    fun exportJson(): String = currentDocument().toJson()
+
+    fun suggestedFileName(): String {
+        val root = currentDocument()
+        val name = root.textField("Name") ?: _draft.value.title.ifBlank { "sequence" }
+        return "${sequenceFileStem(name)}.json"
+    }
+
+    fun shareFile(): File {
+        templatesDir.mkdirs()
+        val file = File(templatesDir, suggestedFileName())
+        file.writeText(exportJson())
+        return file
+    }
+
+    fun importJson(name: String?, json: String) {
+        val root = parseNinaSequence(json)
+        _document.value = root
+        _mode.value = SequenceEditorMode.Advanced
+        history.clear()
+        publishHistory()
+        templatesDir.mkdirs()
+        val stem = sequenceFileStem(
+            name
+                ?.substringAfterLast('/')
+                ?.substringBeforeLast('.', missingDelimiterValue = name)
+                ?.takeIf { it.isNotBlank() }
+                ?: root.textField("Name")
+                ?: "sequence"
+        )
+        File(templatesDir, "$stem.json").writeText(root.toJson())
+        _generation.value = _generation.value + 1
+    }
+
+    fun saveSetTemplate(id: String): Boolean {
+        val node = findSequenceNode(currentDocument(), id) ?: return false
+        if (sequenceStructural(node)) return false
+        val name = sequenceFileStem(node.textField("Name") ?: node.className)
+        val dir = File(templatesDir, "templates")
+        dir.mkdirs()
+        File(dir, "$name.template.json").writeText(node.toJson())
+        _generation.value = _generation.value + 1
+        return true
+    }
+
+    fun saveTargetSnippet(id: String): Boolean {
+        val node = findSequenceNode(currentDocument(), id) ?: return false
+        if (node.className != "DeepSkyObjectContainer") return false
+        val name = sequenceFileStem(dsoTargetName(node) ?: node.textField("Name") ?: "target")
+        val dir = File(templatesDir, "targets")
+        dir.mkdirs()
+        File(dir, "$name.json").writeText(node.toJson())
+        _generation.value = _generation.value + 1
+        return true
+    }
+
+    fun insertSetTemplate(parentId: String, name: String): Boolean {
+        val file = File(File(templatesDir, "templates"), "$name.template.json")
+        if (!file.isFile) return false
+        var ok = false
+        editSequence { root ->
+            ok = insertSequenceSnippet(root, parentId, file.readText())
+            ok
+        }
+        return ok
+    }
+
+    fun insertSavedTarget(parentId: String, name: String): Boolean {
+        val file = File(File(templatesDir, "targets"), "$name.json")
+        if (!file.isFile) return false
+        var ok = false
+        editSequence { root ->
+            ok = insertSequenceSnippet(root, parentId, file.readText(), "Items")
+            ok
+        }
+        return ok
+    }
+
+    private fun listSnippetNames(dir: File, suffix: String): List<String> {
+        if (!dir.isDirectory) return emptyList()
+        return dir.listFiles { file -> file.isFile && file.name.endsWith(suffix) }
+            ?.map { file ->
+                if (suffix == ".json") file.nameWithoutExtension else file.name.removeSuffix(suffix)
+            }
+            ?.sorted()
+            ?: emptyList()
+    }
+
+    fun load(name: String) {
+        val root = parseNinaSequence(File(templatesDir, "$name.json").readText())
+        _document.value = root
+        _mode.value = SequenceEditorMode.Advanced
+        history.clear()
+        publishHistory()
+        _generation.value = _generation.value + 1
+    }
+
+    fun start(settings: SequenceSettings = SequenceSettings()) {
+        if (_state.value.phase == SequencePhase.Running || _state.value.phase == SequencePhase.Paused) return
+        val root = currentDocument()
+        _document.value = root
+        sessionDir = File(sessionsDir, "${root.textField("Name") ?: "sequence"}-${System.currentTimeMillis()}").also {
+            it.mkdirs()
+        }
+        _frames.value = emptyList()
+        _autofocus.value = emptyList()
+        guidingWanted = false
+        runSettings = settings.copy(
+            ditherPixels = if (_mode.value == SequenceEditorMode.Simple) {
+                _draft.value.ditherPixels.coerceAtLeast(0.0)
+            } else {
+                settings.ditherPixels.coerceAtLeast(0.0)
+            }
+        )
+        _locked.value = true
+        scope.launch {
+            try {
+                val result = engine.run(root, runSettings)
+                _state.value = result
+                writeSession(root)
+            } finally {
+                _locked.value = false
+            }
+        }
+    }
+
+    fun stop() = control.stop()
+    fun skip() = control.requestSkip()
+    fun skipToEnd() = control.requestSkipToEnd()
+
+    fun running(): Boolean = _state.value.phase == SequencePhase.Running || _state.value.phase == SequencePhase.Paused
+
+    fun observingTarget(): Pair<Double, Double> =
+        targetCoordinates() ?: (_draft.value.raHours to _draft.value.decDegrees)
+
+    fun pause() {
+        control.pause()
+        if (_state.value.phase == SequencePhase.Running) {
+            _state.value = _state.value.copy(phase = SequencePhase.Paused)
+        }
+    }
+
+    fun resume() {
+        control.resume()
+        if (control.isPaused) return
+        if (_state.value.phase == SequencePhase.Paused) {
+            _state.value = _state.value.copy(phase = SequencePhase.Running, message = null)
+        }
+    }
+
+    override suspend fun execute(instruction: NinaNode, className: String) {
+        val target = targetCoordinates(instruction)
+        when (className) {
+            "TakeExposure" -> {
+                if (guidingWanted && !hardware.guidingLocked()) throw GuideLost()
+                val dir = sessionDir ?: sessionsDir
+                val frame = hardware.takeExposure(
+                    seconds = expressionNumber(instruction, "ExposureTime") ?: 1.0,
+                    gain = (expressionNumber(instruction, "Gain") ?: -1.0).toInt(),
+                    offset = (expressionNumber(instruction, "Offset") ?: -1.0).toInt(),
+                    destDir = dir,
+                    binning = ((instruction.fields["Binning"] as? NinaValue.Obj)?.node?.intField("X") ?: 1)
+                        .coerceAtLeast(1),
+                    imageType = instruction.textField("ImageType")?.ifBlank { "LIGHT" } ?: "LIGHT"
+                )
+                _frames.value = _frames.value + frame
+                writeSession(currentDocument())
+            }
+            "SwitchFilter" -> hardware.switchFilter(instruction.textField("ComboBoxText").orEmpty())
+            "CoolCamera" -> hardware.cool(
+                targetC = expressionNumber(instruction, "Temperature") ?: 0.0,
+                durationMinutes = expressionNumber(instruction, "Duration") ?: 0.0
+            )
+            "WarmCamera" -> hardware.warm(
+                durationMinutes = expressionNumber(instruction, "Duration") ?: 0.0
+            )
+            "SlewScopeToRaDec" -> {
+                val inherited = (instruction.fields["Inherited"] as? NinaValue.Bool)?.value == true
+                val ra = if (inherited) target?.first else instruction.doubleField("RAHours") ?: target?.first
+                val dec = if (inherited) target?.second else instruction.doubleField("DecDegrees") ?: target?.second
+                hardware.slew(ra ?: hardware.raHours() ?: 0.0, dec ?: hardware.decDeg() ?: 0.0)
+            }
+            "SlewScopeToAltAz" -> {
+                val lat = world.observerLatitudeDeg() ?: throw DeviceUnavailable("site")
+                val lon = world.observerLongitudeDeg() ?: throw DeviceUnavailable("site")
+                val alt = expressionNumber(instruction, "Alt") ?: instruction.doubleField("Alt") ?: 45.0
+                val az = expressionNumber(instruction, "Az") ?: instruction.doubleField("Az") ?: 0.0
+                val equatorial = SequenceEphemeris.altAzToEquatorialHours(
+                    alt,
+                    az,
+                    com.indigo.mobileobservatory.astro.ObserverSite(lat, lon),
+                    java.time.Instant.ofEpochMilli(world.nowMillis())
+                )
+                hardware.slew(equatorial.first, equatorial.second)
+            }
+            "Center" -> hardware.center(target?.first ?: 0.0, target?.second ?: 0.0)
+            "CenterAndRotate" -> {
+                hardware.center(target?.first ?: 0.0, target?.second ?: 0.0)
+                rotateIfAvailable(instructionPositionAngle(instruction))
+            }
+            "SolveAndSync" -> {
+                val solved = hardware.plateSolve()
+                hardware.syncMount(solved.first, solved.second)
+            }
+            "SolveAndRotate" -> {
+                hardware.plateSolve()
+                rotateIfAvailable(instructionPositionAngle(instruction))
+            }
+            "MoveRotatorMechanical" -> rotateIfAvailable(
+                expressionNumber(instruction, "MechanicalAngle") ?: 0.0
+            )
+            "StartGuiding" -> {
+                guidingWanted = true
+                val forceCalibration = (instruction.fields["ForceCalibration"] as? NinaValue.Bool)?.value == true
+                hardware.guide(true, forceCalibration)
+            }
+            "StopGuiding" -> {
+                guidingWanted = false
+                hardware.guide(false)
+            }
+            "Dither" -> hardware.dither(runSettings.ditherPixels)
+            "SetTracking" -> hardware.tracking(instruction.intField("TrackingMode") ?: 0)
+            "FindHome" -> hardware.goHome()
+            "OpenCover" -> hardware.cover(true)
+            "CloseCover" -> hardware.cover(false)
+            "DewHeater" -> hardware.dewHeater((instruction.fields["OnOff"] as? NinaValue.Bool)?.value == true)
+            "SetUSBLimit" -> hardware.usbLimit(instruction.intField("USBLimit") ?: 0)
+            "ToggleLight" -> hardware.flatLight((instruction.fields["OnOff"] as? NinaValue.Bool)?.value == true)
+            "SetBrightness" -> hardware.flatBrightness(
+                (expressionNumber(instruction, "Brightness") ?: 0.0).toInt()
+            )
+            "MoveFocuserAbsolute" -> hardware.moveFocuser(
+                (expressionNumber(instruction, "Position") ?: 0.0).toInt()
+            )
+            "MoveFocuserRelative" -> hardware.moveFocuser(
+                hardware.focuserPosition() + (expressionNumber(instruction, "RelativePosition") ?: 0.0).toInt()
+            )
+            "RunAutofocus" -> {
+                val run = hardware.autofocus(sessionDir ?: sessionsDir)
+                _autofocus.value = _autofocus.value + run
+            }
+            "WaitForTime" -> {
+                val deadline = nextClockTimeMillis(
+                    instruction,
+                    world.nowMillis(),
+                    world.observerLatitudeDeg(),
+                    world.observerLongitudeDeg(),
+                    target?.first
+                ) ?: throw DeviceUnavailable("time provider")
+                hardware.waitUntil(deadline)
+            }
+            "WaitForTimeSpan" -> {
+                val seconds = (expressionNumber(instruction, "Time") ?: 60.0).coerceAtLeast(0.0)
+                kotlinx.coroutines.delay((seconds * 1000.0).toLong())
+            }
+            "WaitForAltitude", "WaitUntilAboveHorizon" -> waitForAltitude(altitudeOffset(instruction))
+            "WaitForSunAltitude" -> waitUntilCompared(
+                { world.sunAltitudeDeg() },
+                altitudeOffset(instruction),
+                altitudeComparator(instruction),
+                "sun"
+            )
+            "WaitForMoonAltitude" -> waitUntilCompared(
+                { world.moonAltitudeDeg() },
+                altitudeOffset(instruction),
+                altitudeComparator(instruction),
+                "moon"
+            )
+            "Annotation" -> Unit
+            else -> throw IllegalStateException(className)
+        }
+    }
+
+    fun addTarget(
+        name: String,
+        raHours: Double,
+        decDeg: Double,
+        positionAngleDeg: Double = 0.0,
+        destination: SequenceEditorMode = _mode.value
+    ) {
+        if (destination == SequenceEditorMode.Simple) {
+            _draft.value = _draft.value.copy(
+                title = name,
+                raHours = raHours,
+                decDegrees = decDeg,
+                positionAngleDeg = positionAngleDeg,
+                targets = emptyList()
+            )
+            _mode.value = SequenceEditorMode.Simple
+            return
+        }
+        editSequence { root ->
+            val area = root.childItems().firstOrNull { it.className == "TargetAreaContainer" }
+                ?: return@editSequence false
+            appendChild(area, deepSkyNode(name, raHours, decDeg, positionAngleDeg))
+            true
+        }
+    }
+
+    fun addMosaic(
+        plan: SequenceMosaicPlan,
+        destination: SequenceEditorMode = _mode.value
+    ) {
+        val panelTargets = plan.panels.map { panel ->
+            SimpleSequenceTarget(
+                name = "${plan.name} · P${panel.number}",
+                raHours = panel.raHours,
+                decDegrees = panel.decDeg,
+                positionAngleDeg = plan.positionAngleDeg,
+                enabled = panel.enabled,
+                panelNumber = panel.number,
+                panelRow = panel.row,
+                panelColumn = panel.column,
+                mosaicRows = plan.rows,
+                mosaicColumns = plan.columns,
+                overlapPercent = plan.overlapPercent,
+                mosaicPlanName = plan.name,
+                mosaicTraversal = plan.traversal,
+                mosaicStartCorner = plan.startCorner,
+                mosaicCenterRaHours = plan.centerRaHours,
+                mosaicCenterDecDeg = plan.centerDecDeg
+            )
+        }
+        val mosaicDraft = _draft.value.copy(
+            title = plan.name,
+            raHours = plan.centerRaHours,
+            decDegrees = plan.centerDecDeg,
+            positionAngleDeg = plan.positionAngleDeg,
+            slewBefore = true,
+            centerBefore = true,
+            rotateBefore = plan.rotateWithRotator,
+            targets = panelTargets
+        )
+        if (destination == SequenceEditorMode.Simple) {
+            _draft.value = mosaicDraft
+            _mode.value = SequenceEditorMode.Simple
+            return
+        }
+        val generatedTargets = mosaicDraft.toNinaSequence()
+            .childItems()
+            .first { it.className == "TargetAreaContainer" }
+            .childItems()
+        editSequence { root ->
+            val area = root.childItems().firstOrNull { it.className == "TargetAreaContainer" }
+                ?: return@editSequence false
+            val areaId = area.id ?: return@editSequence false
+            area.childItems()
+                .filter { it.textField("MosaicPlanName") == plan.name }
+                .mapNotNull { it.id }
+                .forEach { deleteSequenceNode(root, it) }
+            generatedTargets.fold(false) { changed, target ->
+                insertSequenceSnippet(root, areaId, target.toJson(), "Items") || changed
+            }
+        }
+    }
+
+    fun mosaicPlan(): SequenceMosaicPlan? {
+        if (_mode.value == SequenceEditorMode.Simple) {
+            val draft = _draft.value
+            val panels = draft.targets.filter { it.panelNumber != null }
+            val first = panels.firstOrNull() ?: return null
+            return SequenceMosaicPlan(
+                name = first.mosaicPlanName ?: draft.title,
+                centerRaHours = first.mosaicCenterRaHours ?: draft.raHours,
+                centerDecDeg = first.mosaicCenterDecDeg ?: draft.decDegrees,
+                positionAngleDeg = first.positionAngleDeg,
+                rows = first.mosaicRows ?: 1,
+                columns = first.mosaicColumns ?: panels.size,
+                overlapPercent = first.overlapPercent ?: 0,
+                traversal = first.mosaicTraversal ?: "SNAKE",
+                startCorner = first.mosaicStartCorner ?: "TOP_LEFT",
+                panels = panels.map { panel ->
+                    SequenceMosaicPanel(
+                        number = panel.panelNumber ?: 1,
+                        row = panel.panelRow ?: 1,
+                        column = panel.panelColumn ?: 1,
+                        raHours = panel.raHours,
+                        decDeg = panel.decDegrees,
+                        enabled = panel.enabled
+                    )
+                },
+                rotateWithRotator = draft.rotateBefore
+            )
+        }
+        val targets = _document.value
+            ?.childItems()
+            ?.firstOrNull { it.className == "TargetAreaContainer" }
+            ?.childItems()
+            ?.filter { it.textField("MosaicPlanName") != null }
+            .orEmpty()
+        val first = targets.firstOrNull() ?: return null
+        return SequenceMosaicPlan(
+            name = first.textField("MosaicPlanName") ?: dsoTargetName(first).orEmpty(),
+            centerRaHours = first.doubleField("MosaicCenterRaHours") ?: dsoRaHours(first) ?: 0.0,
+            centerDecDeg = first.doubleField("MosaicCenterDecDeg") ?: dsoDecDegrees(first) ?: 0.0,
+            positionAngleDeg = dsoPositionAngle(first) ?: 0.0,
+            rows = first.intField("MosaicRows") ?: 1,
+            columns = first.intField("MosaicColumns") ?: targets.size,
+            overlapPercent = first.intField("MosaicOverlapPercent") ?: 0,
+            traversal = first.textField("MosaicTraversal") ?: "SNAKE",
+            startCorner = first.textField("MosaicStartCorner") ?: "TOP_LEFT",
+            panels = targets.map { target ->
+                SequenceMosaicPanel(
+                    number = target.intField("MosaicPanelNumber") ?: 1,
+                    row = target.intField("MosaicRow") ?: 1,
+                    column = target.intField("MosaicColumn") ?: 1,
+                    raHours = dsoRaHours(target) ?: 0.0,
+                    decDeg = dsoDecDegrees(target) ?: 0.0,
+                    enabled = !sequenceNodeDisabled(target)
+                )
+            },
+            rotateWithRotator = targets.any { target ->
+                target.childItems().any { it.className == "CenterAndRotate" }
+            }
+        )
+    }
+
+    fun applySkyTarget(id: String, sky: SequenceSkyTarget) {
+        editSequence {
+            applyDsoSkyTarget(it, id, sky.name, sky.raHours, sky.decDeg, sky.positionAngleDeg)
+        }
+    }
+
+    fun addSmartExposure(filterName: String, seconds: Double, count: Int, ditherEvery: Int) {
+        val root = ensureDocument()
+        val target = root.childItems().getOrNull(1)?.childItems()?.lastOrNull {
+            it.className == "DeepSkyObjectContainer"
+        } ?: return
+        val loop = sequentialLoop(filterName.ifBlank { "Smart" }, count, listOf(
+            filterName.takeIf { it.isNotBlank() }?.let { switchNode(it) },
+            exposureNode(seconds)
+        ).filterNotNull())
+        val trigger = triggerNode("Guider.DitherAfterExposures", linkedMapOf<String, NinaValue>().also { fields ->
+            putExpression(fields, "AfterExposures", ditherEvery.toDouble())
+        })
+        trigger.fields["Parent"] = NinaValue.Ref(checkNotNull(loop.id))
+        loop.fields["Triggers"] = singleCollection(
+            loop.fields["Triggers"],
+            "NINA.Sequencer.Trigger.ISequenceTrigger, NINA.Sequencer",
+            trigger
+        )
+        appendChild(target, loop)
+        _document.value = root
+    }
+
+    fun addTrigger(className: String) {
+        val root = ensureDocument()
+        val target = root.childItems().getOrNull(1)?.childItems()?.lastOrNull {
+            it.className == "DeepSkyObjectContainer"
+        } ?: root
+        val trigger = triggerNode(className, LinkedHashMap<String, NinaValue>().also { fields ->
+            putExpression(fields, "AfterExposures", 3.0)
+            putExpression(fields, "Amount", 30.0)
+        })
+        trigger.fields["Parent"] = NinaValue.Ref(target.id ?: return)
+        val existing = target.fields["Triggers"] as? NinaValue.Collection
+        target.fields["Triggers"] = NinaValue.Collection(
+            type = existing?.type.orEmpty(),
+            id = existing?.id,
+            values = (existing?.values ?: emptyList()) + NinaValue.Obj(trigger)
+        )
+        _document.value = root
+    }
+
+    override suspend fun measurePointing(): Pair<Double, Double>? = try {
+        hardware.plateSolve()
+    } catch (_: Exception) {
+        null
+    }
+
+    private suspend fun rotateIfAvailable(angleDeg: Double) {
+        if (!hardware.isRotatorConnected()) return
+        try {
+            hardware.rotateTo(angleDeg)
+        } catch (error: DeviceUnavailable) {
+            if (hardware.isRotatorConnected()) throw error
+        }
+    }
+
+    private fun instructionPositionAngle(instruction: NinaNode): Double {
+        val inherited = (instruction.fields["Inherited"] as? NinaValue.Bool)?.value == true
+        if (!inherited) {
+            expressionNumber(instruction, "PositionAngle")?.let { return it }
+            instruction.doubleField("PositionAngle")?.let { return it }
+        }
+        val dso = _document.value
+            ?.childItems()
+            ?.getOrNull(1)
+            ?.childItems()
+            ?.firstOrNull { it.className == "DeepSkyObjectContainer" }
+        return dsoPositionAngle(dso ?: instruction) ?: expressionNumber(instruction, "PositionAngle") ?: 0.0
+    }
+
+    private suspend fun waitUntilCompared(
+        sample: () -> Double?,
+        offset: Double,
+        comparator: Int,
+        missing: String
+    ) {
+        val deadline = world.nowMillis() + 18 * 60 * 60_000L
+        while (world.nowMillis() < deadline) {
+            val value = sample() ?: throw DeviceUnavailable(missing)
+            if (compareOrdered(value, offset, comparator)) return
+            kotlinx.coroutines.delay(1_000)
+        }
+        throw IllegalStateException(missing)
+    }
+
+    private suspend fun waitForAltitude(offset: Double) {
+        val deadline = world.nowMillis() + 12 * 60 * 60_000L
+        while (world.nowMillis() < deadline) {
+            val altitude = world.altitudeDeg()
+            if (altitude == null || altitude >= offset) return
+            kotlinx.coroutines.delay(1_000)
+        }
+        throw IllegalStateException("altitude")
+    }
+
+    private fun ensureDocument(): NinaNode {
+        val current = _document.value ?: emptyAdvancedSequence(_draft.value.title)
+        _document.value = current
+        _mode.value = SequenceEditorMode.Advanced
+        return current
+    }
+
+    private fun currentDocument(): NinaNode = when (_mode.value) {
+        SequenceEditorMode.Simple -> _draft.value.toNinaSequence()
+        SequenceEditorMode.Advanced -> _document.value ?: _draft.value.toNinaSequence()
+    }
+
+    private fun targetCoordinates(instruction: NinaNode? = null): Pair<Double, Double>? {
+        val root = _document.value ?: return null
+        val targets = root.childItems().firstOrNull { it.className == "TargetAreaContainer" }
+            ?.childItems()
+            ?.filter { it.className == "DeepSkyObjectContainer" }
+            .orEmpty()
+        val target = instruction?.id?.let { instructionId ->
+            targets.firstOrNull { findSequenceNode(it, instructionId) != null }
+        } ?: targets.firstOrNull() ?: return null
+        val input = ((target.fields["Target"] as? NinaValue.Obj)?.node
+            ?.fields?.get("InputCoordinates") as? NinaValue.Obj)?.node ?: return null
+        val ra = (input.intField("RAHours") ?: 0) +
+            (input.intField("RAMinutes") ?: 0) / 60.0 +
+            (input.doubleField("RASeconds") ?: 0.0) / 3600.0
+        val sign = if ((input.fields["NegativeDec"] as? NinaValue.Bool)?.value == true) -1.0 else 1.0
+        val decAbs = kotlin.math.abs(input.intField("DecDegrees") ?: 0) +
+            (input.intField("DecMinutes") ?: 0) / 60.0 +
+            (input.doubleField("DecSeconds") ?: 0.0) / 3600.0
+        val signedDegrees = input.intField("DecDegrees") ?: 0
+        val dec = if (signedDegrees < 0) -decAbs else sign * decAbs
+        return ra to dec
+    }
+
+    private fun writeSession(root: NinaNode) {
+        val dir = sessionDir ?: return
+        val frames = JSONArray()
+        _frames.value.forEach { frame ->
+            frames.put(JSONObject()
+                .put("name", frame.name)
+                .put("filter", frame.filter ?: JSONObject.NULL)
+                .put("exposureSeconds", frame.exposureSeconds)
+                .put("hfr", frame.hfr ?: JSONObject.NULL)
+                .put("starCount", frame.starCount ?: JSONObject.NULL))
+        }
+        val focus = JSONArray()
+        _autofocus.value.forEach { run ->
+            val curve = JSONArray()
+            run.curve.forEach { (position, hfr) ->
+                curve.put(JSONObject().put("position", position).put("hfr", hfr))
+            }
+            focus.put(JSONObject()
+                .put("atMillis", run.atMillis)
+                .put("temperatureC", run.temperatureC ?: JSONObject.NULL)
+                .put("filter", run.filter ?: JSONObject.NULL)
+                .put("position", run.position)
+                .put("hfr", run.hfr)
+                .put("curve", curve))
+        }
+        File(dir, "session.json").writeText(JSONObject()
+            .put("sequence", JSONObject(root.toJson()))
+            .put("frames", frames)
+            .put("autofocus", focus)
+            .toString(2))
+    }
+
+    private fun deepSkyNode(
+        name: String,
+        raHours: Double,
+        decDeg: Double,
+        positionAngleDeg: Double = 0.0
+    ): NinaNode {
+        val ra = splitSexagesimal(raHours.coerceIn(0.0, 24.0))
+        val decAbs = splitSexagesimal(kotlin.math.abs(decDeg))
+        val signedDegrees = if (decDeg < 0) -decAbs.first else decAbs.first
+        val coordinates = fresh(
+            "NINA.Astrometry.InputCoordinates, NINA.Astrometry",
+            linkedMapOf(
+                "RAHours" to NinaValue.Num(ra.first.toDouble(), true),
+                "RAMinutes" to NinaValue.Num(ra.second.toDouble(), true),
+                "RASeconds" to NinaValue.Num(ra.third, integral = ra.third % 1.0 == 0.0),
+                "NegativeDec" to NinaValue.Bool(decDeg < 0),
+                "DecDegrees" to NinaValue.Num(signedDegrees.toDouble(), true),
+                "DecMinutes" to NinaValue.Num(decAbs.second.toDouble(), true),
+                "DecSeconds" to NinaValue.Num(decAbs.third, integral = decAbs.third % 1.0 == 0.0)
+            )
+        )
+        val input = fresh(
+            "NINA.Astrometry.InputTarget, NINA.Astrometry",
+            linkedMapOf(
+                "TargetName" to NinaValue.Text(name),
+                "PositionAngle" to NinaValue.Num(
+                    positionAngleDeg,
+                    integral = positionAngleDeg % 1.0 == 0.0
+                ),
+                "InputCoordinates" to NinaValue.Obj(coordinates)
+            )
+        )
+        val target = fresh(
+            "NINA.Sequencer.Container.DeepSkyObjectContainer, NINA.Sequencer",
+            linkedMapOf(
+                "Name" to NinaValue.Text(name),
+                "IsExpanded" to NinaValue.Bool(true),
+                "Target" to NinaValue.Obj(input)
+            )
+        )
+        target.fields["Conditions"] = NinaValue.Collection(observableConditions(), nextId(), emptyList())
+        target.fields["Triggers"] = NinaValue.Collection(observableTriggers(), nextId(), emptyList())
+        target.fields["Items"] = NinaValue.Collection(observableItems(), nextId(), emptyList())
+        return target
+    }
+
+    private fun sequentialLoop(name: String, count: Int, steps: List<NinaNode>): NinaNode {
+        val loop = fresh("NINA.Sequencer.Container.SequentialContainer, NINA.Sequencer", linkedMapOf(
+            "Name" to NinaValue.Text(name),
+            "IsExpanded" to NinaValue.Bool(true)
+        ))
+        val condition = fresh("NINA.Sequencer.Conditions.LoopCondition, NINA.Sequencer", linkedMapOf(
+            "CompletedIterations" to NinaValue.Num(0.0, true),
+            "Iterations" to NinaValue.Num(count.toDouble(), true),
+            "IterationsDefinition" to NinaValue.Text(count.toString())
+        ))
+        condition.fields["Parent"] = NinaValue.Ref(checkNotNull(loop.id))
+        loop.fields["Conditions"] = singleCollection(
+            null,
+            "NINA.Sequencer.Conditions.ISequenceCondition, NINA.Sequencer",
+            condition
+        )
+        loop.fields["Items"] = NinaValue.Collection(
+            type = observableItems(),
+            id = nextId(),
+            values = steps.map { step ->
+                step.fields["Parent"] = NinaValue.Ref(checkNotNull(loop.id))
+                NinaValue.Obj(step)
+            }
+        )
+        loop.fields["Triggers"] = NinaValue.Collection(observableTriggers(), nextId(), emptyList())
+        return loop
+    }
+
+    private fun switchNode(filterName: String): NinaNode = fresh(
+        "NINA.Sequencer.SequenceItem.FilterWheel.SwitchFilter, NINA.Sequencer",
+        linkedMapOf("ComboBoxText" to NinaValue.Text(filterName))
+    )
+
+    private fun exposureNode(seconds: Double): NinaNode {
+        val fields = LinkedHashMap<String, NinaValue>()
+        putExpression(fields, "ExposureTime", seconds)
+        putExpression(fields, "Gain", -1.0)
+        putExpression(fields, "Offset", -1.0)
+        fields["ImageType"] = NinaValue.Text("LIGHT")
+        return fresh("NINA.Sequencer.SequenceItem.Imaging.TakeExposure, NINA.Sequencer", fields)
+    }
+
+    private fun triggerNode(className: String, fields: LinkedHashMap<String, NinaValue>): NinaNode =
+        fresh("NINA.Sequencer.Trigger.$className, NINA.Sequencer", fields)
+
+    private fun appendChild(parent: NinaNode, child: NinaNode) {
+        val parentId = parent.id ?: return
+        child.fields["Parent"] = NinaValue.Ref(parentId)
+        val existing = parent.fields["Items"] as? NinaValue.Collection
+        parent.fields["Items"] = NinaValue.Collection(
+            type = existing?.type ?: observableItems(),
+            id = existing?.id,
+            values = (existing?.values ?: emptyList()) + NinaValue.Obj(child)
+        )
+    }
+
+    private fun singleCollection(
+        existing: NinaValue?,
+        elementType: String,
+        node: NinaNode
+    ): NinaValue.Collection {
+        val previous = existing as? NinaValue.Collection
+        return NinaValue.Collection(
+            type = previous?.type ?: "System.Collections.ObjectModel.ObservableCollection`1[[$elementType]], System.ObjectModel",
+            id = previous?.id ?: nextId(),
+            values = (previous?.values ?: emptyList()) + NinaValue.Obj(node)
+        )
+    }
+
+    private fun fresh(type: String, fields: LinkedHashMap<String, NinaValue>): NinaNode {
+        val merged = LinkedHashMap(fields)
+        merged.putIfAbsent("ErrorBehavior", NinaValue.Num(0.0, true))
+        merged.putIfAbsent("Attempts", NinaValue.Num(1.0, true))
+        return NinaNode(type, nextId(), merged)
+    }
+
+    private fun nextId(): String = "s${System.nanoTime()}"
+
+    private fun observableItems(): String =
+        "System.Collections.ObjectModel.ObservableCollection`1[[NINA.Sequencer.SequenceItem.ISequenceItem, NINA.Sequencer]], System.ObjectModel"
+
+    private fun observableTriggers(): String =
+        "System.Collections.ObjectModel.ObservableCollection`1[[NINA.Sequencer.Trigger.ISequenceTrigger, NINA.Sequencer]], System.ObjectModel"
+
+    private fun observableConditions(): String =
+        "System.Collections.ObjectModel.ObservableCollection`1[[NINA.Sequencer.Conditions.ISequenceCondition, NINA.Sequencer]], System.ObjectModel"
+}

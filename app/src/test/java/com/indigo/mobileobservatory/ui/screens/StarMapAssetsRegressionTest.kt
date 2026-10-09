@@ -37,11 +37,16 @@ class StarMapAssetsRegressionTest {
     @Test
     fun overlayApiUsesCurrentAndTargetRoles() {
         val js = read("app.js")
+        val css = read("styles.css")
         assertTrue(js.contains("setCurrentCircleFovOverlay:"))
         assertTrue(js.contains("setCurrentRectFovOverlay:"))
         assertTrue(js.contains("clearCurrentFovOverlay:"))
         assertTrue(js.contains("setTargetCircleFovOverlay:"))
         assertTrue(js.contains("setTargetRectFovOverlay:"))
+        assertTrue(js.contains("setTargetFovRotation:"))
+        assertTrue(js.contains("rotate("))
+        assertTrue(js.contains("label.className = \"fov-label\""))
+        assertTrue(css.contains(".fov-label"))
         assertTrue(js.contains("function projectRaDecToScreen("))
         assertTrue(js.contains("convertFrame"))
         assertTrue(js.contains("\"VIEW\""))
@@ -85,6 +90,42 @@ class StarMapAssetsRegressionTest {
         assertTrue(js.contains("classList.toggle(\"night-vision\""))
         assertTrue(css.contains("html.night-vision #stel-canvas"))
         assertTrue(css.contains("hue-rotate(-50deg)"))
+    }
+
+    @Test
+    fun mapCenterCanBecomeAnArbitraryTarget() {
+        val js = read("app.js")
+        assertTrue(js.contains("function targetAtMapCenter("))
+        assertTrue(js.contains("convertFrame(observer, \"OBSERVED\", \"JNOW\""))
+        assertTrue(js.contains("selectMapCenter:"))
+        assertTrue(js.contains("notifyAndroid(\"onTargetSelected\""))
+    }
+
+    @Test
+    fun sensorPositionAngleUsesTheProjectedCelestialBasis() {
+        val html = read("index.html")
+        val appJs = read("app.js")
+        val geometryJs = read("fov-position-angle.js")
+        assertTrue(html.contains("./fov-position-angle.js"))
+        assertTrue(appJs.contains("function projectedSensorRotation("))
+        assertTrue(appJs.contains("projectedSensorRotationDeg("))
+        assertTrue(geometryJs.contains("function positionAngleReference("))
+        assertTrue(geometryJs.contains("Math.atan2(dy, dx) * RAD_TO_DEG + 90"))
+    }
+
+    @Test
+    fun sensorAndMosaicFramesProjectTheirSkyCorners() {
+        val appJs = read("app.js")
+        val css = read("styles.css")
+        val geometryJs = read("fov-position-angle.js")
+        assertTrue(geometryJs.contains("function tangentPlanePoint("))
+        assertTrue(geometryJs.contains("function sensorMosaicPanels("))
+        assertTrue(appJs.contains("function renderProjectedRectOverlay("))
+        assertTrue(appJs.contains("createElementNS(SVG_NAMESPACE, \"polygon\")"))
+        assertTrue(appJs.contains("setTargetFovMosaic:"))
+        assertTrue(appJs.contains("fov-panel-number"))
+        assertTrue(css.contains(".fov-vector .fov-panel"))
+        assertTrue(css.contains(".fov-panel-number"))
     }
 
     private fun read(name: String): String {

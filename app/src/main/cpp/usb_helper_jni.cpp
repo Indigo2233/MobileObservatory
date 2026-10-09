@@ -359,7 +359,9 @@ static int phdr_callback(struct dl_phdr_info *info, size_t, void *data) {
     if (!info->dlpi_name || !info->dlpi_name[0])
         return 0;
 
-    if (!g_native_lib_dir[0] && strstr(info->dlpi_name, "/lib/arm64/lib")) {
+    if (!g_native_lib_dir[0] &&
+        strstr(info->dlpi_name, "/lib/") &&
+        strstr(info->dlpi_name, "libusb_helper_jni.so")) {
         const char *last_slash = strrchr(info->dlpi_name, '/');
         if (last_slash) {
             size_t dir_len = last_slash - info->dlpi_name;
@@ -410,7 +412,11 @@ static int phdr_callback(struct dl_phdr_info *info, size_t, void *data) {
 
     size_t rela_count = rela_plt_size / sizeof(ElfW(Rela));
     for (size_t i = 0; i < rela_count; i++) {
+#if defined(__LP64__)
         uint32_t sym_idx = ELF64_R_SYM(rela_plt[i].r_info);
+#else
+        uint32_t sym_idx = ELF32_R_SYM(rela_plt[i].r_info);
+#endif
         if (!sym_idx) continue;
 
         const char *sym_name = strtab + symtab[sym_idx].st_name;

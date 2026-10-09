@@ -96,6 +96,26 @@ class FITSWriterTest {
         }
     }
 
+    @Test
+    fun `writes the sequence image type`() {
+        val file = Files.createTempFile("indigo-dark", ".fits").toFile()
+        try {
+            FITSWriter().write(
+                file = file,
+                frame = FrameData(ByteArray(4), 2, 2, PixelFormat.MONO8, frameId = 1L, timestamp = 0L),
+                exposureSeconds = 1f,
+                gain = 100f,
+                imageType = "dark"
+            )
+
+            val header = file.readBytes().decodeToString()
+            assertTrue(header.contains("IMAGETYP"))
+            assertTrue(header.contains("'DARK'"))
+        } finally {
+            file.delete()
+        }
+    }
+
     @Test(expected = IllegalStateException::class)
     fun `refuses RGB24 live view frames`() {
         val file = Files.createTempFile("indigo-rgb24", ".fits").toFile()

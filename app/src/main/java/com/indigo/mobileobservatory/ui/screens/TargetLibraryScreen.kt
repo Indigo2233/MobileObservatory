@@ -52,7 +52,9 @@ import kotlinx.coroutines.withContext
 @Composable
 fun TargetLibraryScreen(
     onBack: () -> Unit,
-    onGuideTo: (CatalogObject) -> Unit = {}
+    onGuideTo: (CatalogObject) -> Unit = {},
+    onAddToSequence: (CatalogObject) -> Unit = {},
+    showSequenceActions: Boolean = true
 ) {
     Scaffold(
         topBar = {
@@ -71,7 +73,9 @@ fun TargetLibraryScreen(
                 .fillMaxSize()
                 .padding(padding)
                 .padding(16.dp),
-            onGuideTo = onGuideTo
+            onGuideTo = onGuideTo,
+            onAddToSequence = onAddToSequence,
+            showSequenceActions = showSequenceActions
         )
     }
 }
@@ -80,6 +84,8 @@ fun TargetLibraryScreen(
 @Composable
 fun TargetLibraryContent(
     onGuideTo: (CatalogObject) -> Unit,
+    onAddToSequence: (CatalogObject) -> Unit = {},
+    showSequenceActions: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -168,8 +174,15 @@ fun TargetLibraryContent(
                                 color = MaterialTheme.colorScheme.outline
                             )
                         }
-                        TextButton(onClick = { onGuideTo(obj) }) {
-                            Text(stringResource(R.string.target_library_guide))
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            TextButton(onClick = { onGuideTo(obj) }) {
+                                Text(stringResource(R.string.target_library_guide))
+                            }
+                            if (showSequenceActions) {
+                                TextButton(onClick = { onAddToSequence(obj) }) {
+                                    Text(stringResource(R.string.sequence_add_from_star_map))
+                                }
+                            }
                         }
                     }
                 }
