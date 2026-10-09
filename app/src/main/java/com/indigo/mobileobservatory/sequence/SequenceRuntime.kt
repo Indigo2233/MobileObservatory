@@ -85,6 +85,7 @@ interface SequenceHardware {
     suspend fun flatBrightness(value: Int)
     suspend fun moveFocuser(position: Int)
     suspend fun rotateTo(angleDeg: Double)
+    fun isRotatorConnected(): Boolean
     suspend fun autofocus(destDir: File): AutofocusRun
     suspend fun waitUntil(epochMillis: Long)
     fun guidingLocked(): Boolean
@@ -413,7 +414,7 @@ class SequenceRuntime(
             "Center" -> hardware.center(target?.first ?: 0.0, target?.second ?: 0.0)
             "CenterAndRotate" -> {
                 hardware.center(target?.first ?: 0.0, target?.second ?: 0.0)
-                hardware.rotateTo(instructionPositionAngle(instruction))
+                rotateIfAvailable(instructionPositionAngle(instruction))
             }
             "SolveAndSync" -> {
                 val solved = hardware.plateSolve()
@@ -421,9 +422,9 @@ class SequenceRuntime(
             }
             "SolveAndRotate" -> {
                 hardware.plateSolve()
-                hardware.rotateTo(instructionPositionAngle(instruction))
+                rotateIfAvailable(instructionPositionAngle(instruction))
             }
-            "MoveRotatorMechanical" -> hardware.rotateTo(
+            "MoveRotatorMechanical" -> rotateIfAvailable(
                 expressionNumber(instruction, "MechanicalAngle") ?: 0.0
             )
             "StartGuiding" -> {
@@ -683,6 +684,15 @@ class SequenceRuntime(
         hardware.plateSolve()
     } catch (_: Exception) {
         null
+    }
+
+    private suspend fun rotateIfAvailable(angleDeg: Double) {
+        if (!hardware.isRotatorConnected()) return
+        try {
+            hardware.rotateTo(angleDeg)
+        } catch (error: DeviceUnavailable) {
+            if (hardware.isRotatorConnected()) throw error
+        }
     }
 
     private fun instructionPositionAngle(instruction: NinaNode): Double {

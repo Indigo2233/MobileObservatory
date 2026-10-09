@@ -123,6 +123,18 @@ class SequenceCatalogTest {
         assertTrue(validateSequenceNode(SequenceCatalog.create("ToggleLight"), SequenceHardwareSnapshot(flatPanelConnected = true)).isEmpty())
         assertEquals(SupportLevel.Execute, SequenceCatalog.spec("SetBrightness")!!.level)
         assertTrue(validateSequenceNode(SequenceCatalog.create("SetBrightness"), SequenceHardwareSnapshot(flatPanelConnected = true)).isEmpty())
+        assertTrue(
+            validateSequenceNode(
+                SequenceCatalog.create("CenterAndRotate"),
+                SequenceHardwareSnapshot(mountConnected = true, rotatorConnected = false)
+            ).isEmpty()
+        )
+        assertTrue(
+            validateSequenceNode(
+                SequenceCatalog.create("MoveRotatorMechanical"),
+                SequenceHardwareSnapshot(rotatorConnected = false)
+            ).isEmpty()
+        )
         assertEquals(SupportLevel.Retain, SequenceCatalog.spec("TakeSubframeExposure")!!.level)
     }
 

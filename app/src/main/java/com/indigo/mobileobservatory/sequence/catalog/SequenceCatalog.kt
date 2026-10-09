@@ -96,11 +96,11 @@ private fun buildCatalog(): List<SequenceTypeSpec> = buildList {
     add(item("SequenceItem.Telescope.UnparkScope", "望远镜", "Telescope", "解除停放望远镜", "Unpark Scope", SupportLevel.Pause, SequenceDevice.Mount))
     add(item("SequenceItem.Platesolving.Center", "望远镜", "Telescope", "指向并居中", "Slew and center", SupportLevel.Execute, SequenceDevice.Mount,
         FieldSpec("Inherited", FieldKind.Bool, "使用目标坐标", "Use target", defaultBool = true)))
-    add(item("SequenceItem.Platesolving.CenterAndRotate", "望远镜", "Telescope", "指向，居中并旋转", "Slew, center and rotate", SupportLevel.Execute, SequenceDevice.Rotator,
+    add(item("SequenceItem.Platesolving.CenterAndRotate", "望远镜", "Telescope", "指向，居中并旋转", "Slew, center and rotate", SupportLevel.Execute, SequenceDevice.Mount,
         FieldSpec("PositionAngle", FieldKind.Expression, "位置角", "Position angle", defaultNumber = 0.0),
         FieldSpec("Inherited", FieldKind.Bool, "使用目标坐标", "Use target", defaultBool = true)))
     add(item("SequenceItem.Platesolving.SolveAndSync", "望远镜", "Telescope", "解析并同步", "Solve and Sync", SupportLevel.Execute, SequenceDevice.Mount))
-    add(item("SequenceItem.Platesolving.SolveAndRotate", "望远镜", "Telescope", "解析并旋转", "Solve and Rotate", SupportLevel.Execute, SequenceDevice.Rotator,
+    add(item("SequenceItem.Platesolving.SolveAndRotate", "望远镜", "Telescope", "解析并旋转", "Solve and Rotate", SupportLevel.Execute, SequenceDevice.Mount,
         FieldSpec("PositionAngle", FieldKind.Expression, "位置角", "Position angle", defaultNumber = 0.0),
         FieldSpec("Inherited", FieldKind.Bool, "使用目标坐标", "Use target", defaultBool = true)))
     add(item("SequenceItem.Rotator.MoveRotatorMechanical", "旋转器", "Rotator", "转到机械角", "Rotate to mechanical angle", SupportLevel.Execute, SequenceDevice.Rotator,

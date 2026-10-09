@@ -59,7 +59,10 @@ fun validateSequenceNode(
     when (spec.level) {
         SupportLevel.Pause -> issues += issue(node, "当前版本暂不可执行", "Not executable in this version yet")
         SupportLevel.Retain -> issues += issue(node, "仅兼容保存，当前版本不可执行", "Preserved for compatibility; not executable in this version")
-        SupportLevel.Execute -> if (!deviceAvailable(spec.device, hardware)) {
+        SupportLevel.Execute -> if (
+            spec.device != SequenceDevice.Rotator &&
+            !deviceAvailable(spec.device, hardware)
+        ) {
             issues += issue(node, "设备未连接", "Required device is not connected")
         }
     }

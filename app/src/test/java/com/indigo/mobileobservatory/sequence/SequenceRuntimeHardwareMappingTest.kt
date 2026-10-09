@@ -73,6 +73,31 @@ class SequenceRuntimeHardwareMappingTest {
     }
 
     @Test
+    fun rotationInstructionsAreIgnoredWhenCaaIsDisconnected() = runTest {
+        val hardware = RecordingSequenceHardware(rotatorAvailable = false)
+        val runtime = SequenceRuntime(
+            templatesDir = Files.createTempDirectory("sequence-templates").toFile(),
+            sessionsDir = Files.createTempDirectory("sequence-sessions").toFile(),
+            scope = this,
+            hardware = hardware
+        )
+        val centerAndRotate = SequenceCatalog.create("CenterAndRotate")
+        putExpression(centerAndRotate.fields, "PositionAngle", 42.0, "position-angle")
+        val solveAndRotate = SequenceCatalog.create("SolveAndRotate")
+        putExpression(solveAndRotate.fields, "PositionAngle", 84.0, "position-angle")
+        val moveRotator = SequenceCatalog.create("MoveRotatorMechanical")
+        putExpression(moveRotator.fields, "MechanicalAngle", 21.0, "mechanical-angle")
+
+        runtime.execute(centerAndRotate, "CenterAndRotate")
+        runtime.execute(solveAndRotate, "SolveAndRotate")
+        runtime.execute(moveRotator, "MoveRotatorMechanical")
+
+        assertEquals(1, hardware.centerCalls)
+        assertEquals(1, hardware.plateSolveCalls)
+        assertTrue(hardware.rotatorAngles.isEmpty())
+    }
+
+    @Test
     fun importedSequenceIsSavedAndShareable() = runTest {
         val templatesDir = Files.createTempDirectory("sequence-templates").toFile()
         val runtime = SequenceRuntime(
@@ -187,7 +212,9 @@ class SequenceRuntimeHardwareMappingTest {
     }
 }
 
-private class RecordingSequenceHardware : SequenceHardware {
+private class RecordingSequenceHardware(
+    private val rotatorAvailable: Boolean = true
+) : SequenceHardware {
     var coolTargetC: Double? = null
     var coolDurationMinutes: Double? = null
     var warmDurationMinutes: Double? = null
@@ -199,6 +226,9 @@ private class RecordingSequenceHardware : SequenceHardware {
     var flatBrightnessValue: Int? = null
     var centerRaHours: Double? = null
     var centerDecDeg: Double? = null
+    var centerCalls: Int = 0
+    var plateSolveCalls: Int = 0
+    val rotatorAngles = mutableListOf<Double>()
 
     override suspend fun takeExposure(
         seconds: Double,
@@ -222,10 +252,14 @@ private class RecordingSequenceHardware : SequenceHardware {
 
     override suspend fun slew(raHours: Double, decDeg: Double) = Unit
     override suspend fun center(raHours: Double, decDeg: Double) {
+        centerCalls += 1
         centerRaHours = raHours
         centerDecDeg = decDeg
     }
-    override suspend fun plateSolve(): Pair<Double, Double> = 0.0 to 0.0
+    override suspend fun plateSolve(): Pair<Double, Double> {
+        plateSolveCalls += 1
+        return 0.0 to 0.0
+    }
     override suspend fun syncMount(raHours: Double, decDeg: Double) = Unit
 
     override suspend fun guide(enabled: Boolean, forceCalibration: Boolean) {
@@ -255,7 +289,10 @@ private class RecordingSequenceHardware : SequenceHardware {
     }
 
     override suspend fun moveFocuser(position: Int) = Unit
-    override suspend fun rotateTo(angleDeg: Double) = Unit
+    override suspend fun rotateTo(angleDeg: Double) {
+        rotatorAngles += angleDeg
+    }
+    override fun isRotatorConnected(): Boolean = rotatorAvailable
     override suspend fun autofocus(destDir: File): AutofocusRun =
         AutofocusRun(0L, null, null, 0, 0.0, emptyList())
 

@@ -1638,7 +1638,7 @@ fun StarMapScreen(
                                     Text(stringResource(R.string.fov_use_solved_angle))
                                 }
                             }
-                            if (error > 1.0) {
+                            if (rotatorConnected && error > 1.0) {
                                 Text(
                                     stringResource(R.string.fov_sensor_angle_error, error),
                                     style = MaterialTheme.typography.bodySmall,

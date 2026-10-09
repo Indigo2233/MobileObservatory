@@ -229,6 +229,8 @@ class VirtualSequenceHardware(
         update { copy(rotatorAngleDeg = angleDeg.mod(360.0)) }
     }
 
+    override fun isRotatorConnected(): Boolean = true
+
     override suspend fun autofocus(destDir: File): AutofocusRun {
         val origin = _status.value.focuserPosition
         val curve = listOf(

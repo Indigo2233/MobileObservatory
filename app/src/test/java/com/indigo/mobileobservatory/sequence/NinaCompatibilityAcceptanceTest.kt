@@ -138,6 +138,7 @@ private class CompatibilityHardware : SequenceHardware {
     override suspend fun flatBrightness(value: Int) = Unit
     override suspend fun moveFocuser(position: Int) = Unit
     override suspend fun rotateTo(angleDeg: Double) = Unit
+    override fun isRotatorConnected(): Boolean = true
     override suspend fun autofocus(destDir: File) =
         AutofocusRun(0L, null, null, 0, 0.0, emptyList())
     override suspend fun waitUntil(epochMillis: Long) = Unit

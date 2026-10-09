@@ -309,6 +309,7 @@ fun SequenceScreen(
                         SimpleEditor(
                             draft = draft,
                             enabled = !running,
+                            rotatorConnected = hardware.rotatorConnected,
                             skyTarget = skyTarget,
                             filterNames = hardware.filterNames
                         ) { runtime.updateDraft(it) }
@@ -529,6 +530,7 @@ private fun sequenceDisplayName(context: Context, uri: Uri): String? =
 private fun SimpleEditor(
     draft: com.indigo.mobileobservatory.sequence.SimpleSequenceDraft,
     enabled: Boolean,
+    rotatorConnected: Boolean,
     skyTarget: com.indigo.mobileobservatory.sequence.SequenceSkyTarget? = null,
     filterNames: List<String> = emptyList(),
     onChange: (com.indigo.mobileobservatory.sequence.SimpleSequenceDraft) -> Unit
@@ -578,13 +580,15 @@ private fun SimpleEditor(
             label = { Text("Dec") },
             modifier = Modifier.weight(1f)
         )
-        DecimalInputField(
-            value = draft.positionAngleDeg,
-            onValueChange = { onChange(draft.copy(positionAngleDeg = it)) },
-            enabled = enabled,
-            label = { Text(stringResource(R.string.sequence_position_angle)) },
-            modifier = Modifier.weight(1f)
-        )
+        if (rotatorConnected) {
+            DecimalInputField(
+                value = draft.positionAngleDeg,
+                onValueChange = { onChange(draft.copy(positionAngleDeg = it)) },
+                enabled = enabled,
+                label = { Text(stringResource(R.string.sequence_position_angle)) },
+                modifier = Modifier.weight(1f)
+            )
+        }
     }
     if (draft.targets.isNotEmpty()) {
         Text(
@@ -766,8 +770,10 @@ private fun SimpleEditor(
     }, enabled = enabled) { Text(stringResource(R.string.sequence_add_row)) }
     ToggleLine(stringResource(R.string.sequence_slew), draft.slewBefore, enabled) { onChange(draft.copy(slewBefore = it)) }
     ToggleLine(stringResource(R.string.sequence_center), draft.centerBefore, enabled) { onChange(draft.copy(centerBefore = it)) }
-    ToggleLine(stringResource(R.string.sequence_rotate_to_angle), draft.rotateBefore, enabled) {
-        onChange(draft.copy(rotateBefore = it))
+    if (rotatorConnected) {
+        ToggleLine(stringResource(R.string.sequence_rotate_to_angle), draft.rotateBefore, enabled) {
+            onChange(draft.copy(rotateBefore = it))
+        }
     }
     ToggleLine(stringResource(R.string.sequence_guide), draft.guideBefore, enabled) { onChange(draft.copy(guideBefore = it)) }
     ToggleLine(stringResource(R.string.sequence_autofocus_before), draft.autofocusBefore, enabled) { onChange(draft.copy(autofocusBefore = it)) }

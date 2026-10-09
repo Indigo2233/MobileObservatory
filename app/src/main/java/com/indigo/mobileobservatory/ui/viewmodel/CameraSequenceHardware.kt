@@ -207,6 +207,8 @@ class CameraSequenceHardware(
         }
     }
 
+    override fun isRotatorConnected(): Boolean = viewModel.rotatorConnected.value
+
     override suspend fun autofocus(destDir: File): AutofocusRun =
         viewModel.runSequenceAutofocus(destDir)
 
