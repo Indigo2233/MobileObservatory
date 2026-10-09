@@ -280,6 +280,18 @@
         return projectRaDecToScreen(spec.raHours, spec.decDegrees, spec.frame);
     }
 
+    function overlaySkyAnchor(spec) {
+        if (spec.raHours != null && spec.decDegrees != null &&
+            isFinite(Number(spec.raHours)) && isFinite(Number(spec.decDegrees))) {
+            return {
+                raHours: Number(spec.raHours),
+                decDegrees: Number(spec.decDegrees),
+                frame: spec.frame || "JNOW"
+            };
+        }
+        return targetAtMapCenter("");
+    }
+
     function parseAnchor(raHours, decDegrees, frame) {
         if (raHours == null || raHours === "" || decDegrees == null || decDegrees === "") {
             return {raHours: null, decDegrees: null, frame: "JNOW"};
@@ -320,6 +332,101 @@
         return isFinite(Number(rotation)) ? Number(rotation) : 0;
     }
 
+    const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
+
+    function appendSvgText(svg, className, x, y, value) {
+        if (!value || !isFinite(x) || !isFinite(y)) return;
+        const text = document.createElementNS(SVG_NAMESPACE, "text");
+        text.setAttribute("class", className);
+        text.setAttribute("x", String(x));
+        text.setAttribute("y", String(y));
+        text.setAttribute("text-anchor", "middle");
+        text.textContent = value;
+        svg.appendChild(text);
+    }
+
+    function renderProjectedRectOverlay(element, spec, viewW, viewH) {
+        if (!window.MercFovPositionAngle ||
+            typeof window.MercFovPositionAngle.sensorMosaicPanels !== "function") {
+            return false;
+        }
+        const anchor = overlaySkyAnchor(spec);
+        if (!anchor) return false;
+        const panels = window.MercFovPositionAngle.sensorMosaicPanels(
+            anchor.raHours,
+            anchor.decDegrees,
+            Number(spec.widthDeg),
+            Number(spec.heightDeg),
+            Number(spec.positionAngleDeg) || 0,
+            Number(spec.rows) || 1,
+            Number(spec.columns) || 1,
+            Number(spec.overlapPercent) || 0
+        );
+        const projected = panels.map(function (panel) {
+            const corners = panel.corners.map(function (corner) {
+                return projectRaDecToScreen(corner.raHours, corner.decDegrees, anchor.frame);
+            });
+            if (corners.some(function (corner) { return !corner; })) return null;
+            const center = projectRaDecToScreen(
+                panel.center.raHours,
+                panel.center.decDegrees,
+                anchor.frame
+            );
+            if (!center) return null;
+            return {panel: panel, corners: corners, center: center};
+        }).filter(Boolean);
+        if (!projected.length) return false;
+
+        element.classList.add("fov-vector");
+        element.style.left = "0px";
+        element.style.top = "0px";
+        element.style.width = viewW + "px";
+        element.style.height = viewH + "px";
+        element.style.transform = "none";
+        element.textContent = "";
+        const svg = document.createElementNS(SVG_NAMESPACE, "svg");
+        svg.setAttribute("viewBox", "0 0 " + viewW + " " + viewH);
+        svg.setAttribute("preserveAspectRatio", "none");
+        projected.forEach(function (item) {
+            const polygon = document.createElementNS(SVG_NAMESPACE, "polygon");
+            polygon.setAttribute("class", "fov-panel");
+            polygon.setAttribute("points", item.corners.map(function (corner) {
+                return corner.x + "," + corner.y;
+            }).join(" "));
+            svg.appendChild(polygon);
+            if (spec.showPanelNumbers && panels.length > 1) {
+                appendSvgText(
+                    svg,
+                    "fov-panel-number",
+                    item.center.x,
+                    item.center.y + 5,
+                    String(item.panel.number)
+                );
+            }
+        });
+        if (spec.label) {
+            const allCorners = projected.reduce(function (result, item) {
+                return result.concat(item.corners);
+            }, []);
+            const minimumX = Math.min.apply(null, allCorners.map(function (point) { return point.x; }));
+            const maximumX = Math.max.apply(null, allCorners.map(function (point) { return point.x; }));
+            const minimumY = Math.min.apply(null, allCorners.map(function (point) { return point.y; }));
+            const maximumY = Math.max.apply(null, allCorners.map(function (point) { return point.y; }));
+            const labelY = element === fovCurrentElement
+                ? Math.min(viewH - 4, maximumY + 18)
+                : Math.max(14, minimumY - 8);
+            appendSvgText(
+                svg,
+                "fov-svg-label",
+                (minimumX + maximumX) / 2,
+                labelY,
+                spec.label
+            );
+        }
+        element.appendChild(svg);
+        return true;
+    }
+
     function applyFovOverlay(element, spec) {
         if (!element) return;
         if (!spec) {
@@ -331,6 +438,7 @@
         const coreFov = coreFovDegrees();
         element.classList.toggle("fov-circle", spec.shape === "circle");
         element.classList.toggle("fov-rect", spec.shape === "rect");
+        element.classList.remove("fov-vector");
         let boxW;
         let boxH;
         if (spec.shape === "circle") {
@@ -353,6 +461,10 @@
             const heightDeg = Number(spec.heightDeg);
             if (!(widthDeg > 0) || !(heightDeg > 0)) {
                 element.style.display = "none";
+                return;
+            }
+            if (renderProjectedRectOverlay(element, spec, viewW, viewH)) {
+                element.style.display = "block";
                 return;
             }
             const fovs = coreFov != null ? viewFovsDegrees(viewW, viewH, coreFov) : null;
@@ -406,6 +518,19 @@
         }
     }
 
+    function zoomToTargetFov() {
+        if (!pendingTargetFov || pendingTargetFov.shape !== "rect") return;
+        const rows = Math.max(1, Number(pendingTargetFov.rows) || 1);
+        const columns = Math.max(1, Number(pendingTargetFov.columns) || 1);
+        const overlap = Math.max(0, Math.min(90, Number(pendingTargetFov.overlapPercent) || 0)) / 100;
+        const halfWidth = Math.tan(Number(pendingTargetFov.widthDeg) * Math.PI / 360);
+        const halfHeight = Math.tan(Number(pendingTargetFov.heightDeg) * Math.PI / 360);
+        const totalWidth = 2 * Math.atan(halfWidth * (1 + (columns - 1) * (1 - overlap))) * 180 / Math.PI;
+        const totalHeight = 2 * Math.atan(halfHeight * (1 + (rows - 1) * (1 - overlap))) * 180 / Math.PI;
+        const maxDim = Math.max(totalWidth, totalHeight);
+        if (maxDim > 0) applyFovDegrees(maxDim * 1.35, 1);
+    }
+
     let lastOverlayFovKey = "";
     function fovSpecKey(spec) {
         if (!spec) return "";
@@ -416,16 +541,19 @@
         const dec = spec.decDegrees != null ? spec.decDegrees : "";
         const rotation = spec.positionAngleDeg != null ? spec.positionAngleDeg : 0;
         return shape + "@" + ra + "," + dec + "," + (spec.frame || "") +
-            ",r" + rotation;
+            ",r" + rotation + ",m" + (spec.rows || 1) + "x" + (spec.columns || 1) +
+            ",o" + (spec.overlapPercent || 0) + ",n" + Boolean(spec.showPanelNumbers);
     }
     function refreshFovOverlaysFromEngine() {
         const coreFov = coreFovDegrees();
         const observer = stel && ((stel.core && stel.core.observer) || stel.observer);
         const yaw = observer && observer.yaw;
         const pitch = observer && observer.pitch;
+        const utc = observer && observer.utc;
         const key = String(coreFov) + "|" +
             (yaw != null ? Number(yaw).toFixed(5) : "") + "|" +
             (pitch != null ? Number(pitch).toFixed(5) : "") + "|" +
+            (utc != null ? Number(utc).toFixed(7) : "") + "|" +
             fovSpecKey(pendingCurrentFov) + "|" +
             fovSpecKey(pendingTargetFov);
         const hasSkyAnchor =
@@ -850,7 +978,15 @@
                 frame: anchor.frame,
                 positionAngleDeg: pendingTargetFov
                     ? Number(pendingTargetFov.positionAngleDeg) || 0
-                    : 0
+                    : 0,
+                rows: pendingTargetFov ? Number(pendingTargetFov.rows) || 1 : 1,
+                columns: pendingTargetFov ? Number(pendingTargetFov.columns) || 1 : 1,
+                overlapPercent: pendingTargetFov
+                    ? Number(pendingTargetFov.overlapPercent) || 0
+                    : 0,
+                showPanelNumbers: pendingTargetFov
+                    ? Boolean(pendingTargetFov.showPanelNumbers)
+                    : true
             };
             applyFovOverlay(fovTargetElement, pendingTargetFov);
         },
@@ -860,6 +996,26 @@
             if (!isFinite(angle)) return false;
             pendingTargetFov.positionAngleDeg = ((angle % 360) + 360) % 360;
             lastOverlayFovKey = "";
+            applyFovOverlay(fovTargetElement, pendingTargetFov);
+            return true;
+        },
+        setTargetFovMosaic: function (
+            rows,
+            columns,
+            overlapPercent,
+            showPanelNumbers,
+            alsoZoom
+        ) {
+            if (!pendingTargetFov || pendingTargetFov.shape !== "rect") return false;
+            pendingTargetFov.rows = Math.max(1, Math.min(10, Math.round(Number(rows) || 1)));
+            pendingTargetFov.columns = Math.max(1, Math.min(10, Math.round(Number(columns) || 1)));
+            pendingTargetFov.overlapPercent = Math.max(
+                0,
+                Math.min(90, Number(overlapPercent) || 0)
+            );
+            pendingTargetFov.showPanelNumbers = Boolean(showPanelNumbers);
+            lastOverlayFovKey = "";
+            if (alsoZoom) zoomToTargetFov();
             applyFovOverlay(fovTargetElement, pendingTargetFov);
             return true;
         },

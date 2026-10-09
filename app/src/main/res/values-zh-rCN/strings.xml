@@ -478,6 +478,14 @@
     <string name="fov_connected_camera_locked">已连接相机不能改名或删除</string>
     <string name="fov_eyepiece">目镜</string>
     <string name="fov_sensor">相机 / 传感器</string>
+    <string name="fov_mosaic_title">多面板拼接构图</string>
+    <string name="fov_mosaic_rows">行数</string>
+    <string name="fov_mosaic_columns">列数</string>
+    <string name="fov_mosaic_overlap">重叠率</string>
+    <string name="fov_mosaic_panel_count">共 %1$d 个面板</string>
+    <string name="fov_mosaic_overlay_summary">%1$d×%2$d · 重叠 %3$d%%</string>
+    <string name="fov_mosaic_rotation">位置角</string>
+    <string name="fov_mosaic_show_numbers">显示面板编号</string>
     <string name="fov_show_overlay">在星图上显示视场</string>
     <string name="fov_summary_incomplete">请选择完整的望远镜与目镜/传感器</string>
     <string name="fov_summary_eyepiece">圆视场 %1$.2f° · %2$.0f×</string>

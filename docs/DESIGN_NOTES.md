@@ -53,15 +53,16 @@
 |---|---|
 | 光路 | 各有焦距 + 终端（目镜圆或相机矩），互不覆盖。默认显示**导星**。 |
 | 当前框 | `#fov-current`，绿实线。已连接赤道仪时钉在指向的 RA/Dec；未连接则钉屏幕中央。 |
-| 目标框 | `#fov-target`，黄虚线。只要开着视场叠加就一直显示，钉在屏幕中央（构图/GOTO 这块天）。不需要先点选天体。 |
-| 传感器位置角 | 与 NINA/WCS 一致，从天球北向经东向计量。矩形长边在位置角 `0°` 时与目标处赤纬线相切。显示角度由目标处的天球北向、东向投影到当前星图后计算，随地平视图、天极位置和星图移动实时更新。 |
+| 目标框 | `#fov-target`，黄虚线。选中目标后钉在目标 RA/Dec；未选目标时取屏幕中央天球坐标。不需要先点选天体即可显示。 |
+| 传感器位置角 | 与 NINA/WCS 一致，从天球北向经东向计量。矩形长边在位置角 `0°` 时与目标处赤纬线相切。传感器单框和马赛克从共同切平面计算天球四角，再逐角投影到当前星图；地平视图、天极附近、超广角和星图移动时实时重算。 |
+| 马赛克 | 相机模式提供 `1..10` 行、`1..10` 列、`0..90%` 重叠率、位置角和面板编号。面板从传感器画面上侧第一行开始，按从左到右、从上到下编号。设置写入 `star_map_mosaic_*` 偏好。 |
 | 标签 | 光路切换始终写「主镜」「导星」，设备自定义名不替换这两个字。视场框/圈显示 **望远镜 + 终端** 组合名，例如 `C8 + 25 mm · 50° 当前 1.50°` / `C8 + ASI533 目标 1.20°×0.80°`。 |
 | 设备库 | 视场设置可添加、删除、命名望远镜、目镜和相机。已连接相机不能改名或删除。至少保留一项。 |
 | 十字丝 | 不要屏幕中心十字丝（`mount-reticle` 已去掉）。指向改用跟随或「居中到赤道仪」。 |
 | 板解焦距 | 仅当**导星且为相机**时，在视场设置里改焦距才写 `plate_focal_length_mm`。主镜目视不改板解焦距。`persistFovPrefs()` 不得顺手覆盖该键。 |
 | 旧安装 | 现有 `star_map_*` 键迁到主镜。 |
 
-**代码：** `StarMapOpticsTrain.kt`、`UserOpticsCatalog.kt`、`StarMapFovOverlay.kt`、`StarMapFovSheet.kt`、`StarMapHud.kt`、`stellarium/styles.css`、`fov-position-angle.js`、`app.js` `projectRaDecToScreen`
+**代码：** `StarMapOpticsTrain.kt`、`StarMapMosaicConfig.kt`、`UserOpticsCatalog.kt`、`StarMapFovOverlay.kt`、`StarMapFovSheet.kt`、`StarMapHud.kt`、`stellarium/styles.css`、`fov-position-angle.js`、`app.js` `projectRaDecToScreen` / `renderProjectedRectOverlay`
 
 **回归：** `StarMapOpticsTrainTest`、`UserOpticsCatalogTest`、`StarMapFovOverlayTest`、`FovOverlayLayoutTest.skyOffsetUsesTheSameLinearDegreeMappingAsTheBox`、`StarMapAssetsRegressionTest.overlayApiUsesCurrentAndTargetRoles`、`scripts/tests/star-map-position-angle.test.cjs`
 

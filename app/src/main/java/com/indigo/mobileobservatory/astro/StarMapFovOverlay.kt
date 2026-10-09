@@ -14,11 +14,26 @@ data class FovSkyAnchor(
 }
 
 /**
- * JS bridge for the active optical train. Target (dashed) is the framing
- * box and always sits at screen centre. Current (solid) follows the mount
- * when connected, otherwise also the screen centre.
+ * JS bridge for the active optical train. Target (dashed) is anchored to a
+ * selected framing coordinate or the map centre. Current (solid) follows the
+ * mount when connected, otherwise it also uses the map centre.
  */
 object StarMapFovOverlay {
+    fun targetSensorFramingScripts(
+        positionAngleDeg: Double,
+        mosaic: StarMapMosaicConfig,
+        alsoZoom: Boolean
+    ): List<String> {
+        val normalized = mosaic.normalized()
+        val angle = ((positionAngleDeg % 360.0) + 360.0) % 360.0
+        return listOf(
+            "window.MercStarMap && window.MercStarMap.setTargetFovRotation(${js(angle)});",
+            "window.MercStarMap && window.MercStarMap.setTargetFovMosaic(" +
+                "${normalized.rows},${normalized.columns},${normalized.overlapPercent}," +
+                "${normalized.showPanelNumbers},$alsoZoom);"
+        )
+    }
+
     fun scripts(
         showOverlay: Boolean,
         computation: FovComputation?,

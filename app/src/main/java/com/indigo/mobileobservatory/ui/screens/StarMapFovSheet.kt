@@ -5,6 +5,7 @@ package com.indigo.mobileobservatory.ui.screens
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -43,6 +44,7 @@ import com.indigo.mobileobservatory.astro.OpticsEquipment
 import com.indigo.mobileobservatory.astro.OpticsTrainConfig
 import com.indigo.mobileobservatory.astro.OpticsTrainId
 import com.indigo.mobileobservatory.astro.SensorSpec
+import com.indigo.mobileobservatory.astro.StarMapMosaicConfig
 import com.indigo.mobileobservatory.astro.TelescopeSpec
 import com.indigo.mobileobservatory.astro.UserOpticsCatalog
 import java.util.Locale
@@ -61,8 +63,12 @@ fun StarMapFovSheet(
     sensors: List<SensorSpec>,
     showOverlay: Boolean,
     computation: FovComputation?,
+    mosaicConfig: StarMapMosaicConfig,
+    positionAngleText: String,
     onEditingTrainChange: (OpticsTrainId) -> Unit,
     onConfigChange: (OpticsTrainConfig) -> Unit,
+    onMosaicConfigChange: (StarMapMosaicConfig) -> Unit,
+    onPositionAngleChange: (String) -> Unit,
     onShowOverlayChange: (Boolean) -> Unit,
     onTelescopesChange: (List<TelescopeSpec>) -> Unit,
     onEyepiecesChange: (List<EyepieceSpec>) -> Unit,
@@ -323,6 +329,12 @@ fun StarMapFovSheet(
                             }
                         )
                     }
+                    MosaicFramingControls(
+                        config = mosaicConfig,
+                        positionAngleText = positionAngleText,
+                        onConfigChange = onMosaicConfigChange,
+                        onPositionAngleChange = onPositionAngleChange
+                    )
                 }
             }
 
@@ -506,6 +518,155 @@ private fun EyepieceEditor(
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
         modifier = Modifier.fillMaxWidth()
     )
+}
+
+@Composable
+private fun MosaicFramingControls(
+    config: StarMapMosaicConfig,
+    positionAngleText: String,
+    onConfigChange: (StarMapMosaicConfig) -> Unit,
+    onPositionAngleChange: (String) -> Unit
+) {
+    Text(
+        stringResource(R.string.fov_mosaic_title),
+        style = MaterialTheme.typography.labelLarge
+    )
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        MosaicCounter(
+            label = stringResource(R.string.fov_mosaic_rows),
+            value = config.rows,
+            valueSuffix = "",
+            onDecrease = {
+                onConfigChange(config.copy(rows = config.rows - 1).normalized())
+            },
+            onIncrease = {
+                onConfigChange(config.copy(rows = config.rows + 1).normalized())
+            },
+            modifier = Modifier.weight(1f)
+        )
+        MosaicCounter(
+            label = stringResource(R.string.fov_mosaic_columns),
+            value = config.columns,
+            valueSuffix = "",
+            onDecrease = {
+                onConfigChange(config.copy(columns = config.columns - 1).normalized())
+            },
+            onIncrease = {
+                onConfigChange(config.copy(columns = config.columns + 1).normalized())
+            },
+            modifier = Modifier.weight(1f)
+        )
+        MosaicCounter(
+            label = stringResource(R.string.fov_mosaic_overlap),
+            value = config.overlapPercent,
+            valueSuffix = "%",
+            onDecrease = {
+                onConfigChange(config.copy(overlapPercent = config.overlapPercent - 5).normalized())
+            },
+            onIncrease = {
+                onConfigChange(config.copy(overlapPercent = config.overlapPercent + 5).normalized())
+            },
+            modifier = Modifier.weight(1f)
+        )
+    }
+    Text(
+        stringResource(R.string.fov_mosaic_panel_count, config.panelCount),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    Text(
+        stringResource(R.string.fov_mosaic_rotation),
+        style = MaterialTheme.typography.labelMedium
+    )
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        OutlinedTextField(
+            value = positionAngleText,
+            onValueChange = onPositionAngleChange,
+            suffix = { Text("°") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            modifier = Modifier.weight(1f)
+        )
+        TextButton(
+            onClick = {
+                val angle = (positionAngleText.toDoubleOrNull() ?: 0.0) - 1.0
+                onPositionAngleChange(formatPositionAngle(angle))
+            }
+        ) { Text("−1°") }
+        TextButton(
+            onClick = {
+                val angle = (positionAngleText.toDoubleOrNull() ?: 0.0) + 1.0
+                onPositionAngleChange(formatPositionAngle(angle))
+            }
+        ) { Text("+1°") }
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        listOf(0, 90, 180, 270).forEach { angle ->
+            TextButton(
+                onClick = { onPositionAngleChange(angle.toString()) },
+                modifier = Modifier.weight(1f)
+            ) { Text("$angle°", maxLines = 1) }
+        }
+    }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Switch(
+            checked = config.showPanelNumbers,
+            onCheckedChange = {
+                onConfigChange(config.copy(showPanelNumbers = it))
+            }
+        )
+        Text(stringResource(R.string.fov_mosaic_show_numbers))
+    }
+}
+
+@Composable
+private fun MosaicCounter(
+    label: String,
+    value: Int,
+    valueSuffix: String,
+    onDecrease: () -> Unit,
+    onIncrease: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(label, style = MaterialTheme.typography.bodySmall, maxLines = 1)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(
+                onClick = onDecrease,
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp),
+                modifier = Modifier.defaultMinSize(minWidth = 0.dp)
+            ) { Text("−") }
+            Text("$value$valueSuffix", maxLines = 1)
+            TextButton(
+                onClick = onIncrease,
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp),
+                modifier = Modifier.defaultMinSize(minWidth = 0.dp)
+            ) { Text("+") }
+        }
+    }
+}
+
+private fun formatPositionAngle(value: Double): String {
+    val normalized = ((value % 360.0) + 360.0) % 360.0
+    return if (normalized == normalized.toLong().toDouble()) {
+        normalized.toLong().toString()
+    } else {
+        "%.1f".format(Locale.US, normalized)
+    }
 }
 
 @Composable

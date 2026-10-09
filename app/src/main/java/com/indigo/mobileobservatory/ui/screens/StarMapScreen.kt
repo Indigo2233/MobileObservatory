@@ -81,6 +81,7 @@ import com.indigo.mobileobservatory.astro.OpticsPrefReader
 import com.indigo.mobileobservatory.astro.OpticsTrainConfig
 import com.indigo.mobileobservatory.astro.OpticsTrainId
 import com.indigo.mobileobservatory.astro.StarMapFovOverlay
+import com.indigo.mobileobservatory.astro.StarMapMosaicConfig
 import com.indigo.mobileobservatory.astro.StarMapOpticsPrefs
 import com.indigo.mobileobservatory.sequence.SequenceEditorMode
 import com.indigo.mobileobservatory.astro.UserOpticsCatalog
@@ -415,6 +416,19 @@ fun StarMapScreen(
     var showFovOverlay by remember {
         mutableStateOf(prefs.getBoolean(StarMapOpticsPrefs.SHOW_OVERLAY, true))
     }
+    var mosaicConfig by remember {
+        mutableStateOf(
+            StarMapMosaicConfig(
+                rows = prefs.getInt(StarMapMosaicConfig.ROWS_PREF, 1),
+                columns = prefs.getInt(StarMapMosaicConfig.COLUMNS_PREF, 1),
+                overlapPercent = prefs.getInt(StarMapMosaicConfig.OVERLAP_PREF, 10),
+                showPanelNumbers = prefs.getBoolean(
+                    StarMapMosaicConfig.SHOW_NUMBERS_PREF,
+                    true
+                )
+            ).normalized()
+        )
+    }
     LaunchedEffect(connectedSensor) {
         if (!prefs.contains("star_map_secondary_fov_mode")) {
             secondaryTrain = StarMapOpticsPrefs.defaultSecondary(
@@ -497,11 +511,30 @@ fun StarMapScreen(
     }
     val fovCurrentWord = stringResource(R.string.star_map_fov_current)
     val fovTargetWord = stringResource(R.string.star_map_fov_target)
+    val mosaicOverlaySummary = stringResource(
+        R.string.fov_mosaic_overlay_summary,
+        mosaicConfig.rows,
+        mosaicConfig.columns,
+        mosaicConfig.overlapPercent
+    )
     val overlayCurrentLabel = remember(overlayTrainLabel, fovCurrentWord, activeComputation) {
         StarMapFovOverlay.overlayCaption(overlayTrainLabel, fovCurrentWord, activeComputation)
     }
-    val overlayTargetLabel = remember(overlayTrainLabel, fovTargetWord, activeComputation) {
-        StarMapFovOverlay.overlayCaption(overlayTrainLabel, fovTargetWord, activeComputation)
+    val overlayTargetLabel = remember(
+        overlayTrainLabel,
+        fovTargetWord,
+        activeComputation,
+        mosaicConfig,
+        mosaicOverlaySummary
+    ) {
+        StarMapFovOverlay.overlayCaption(overlayTrainLabel, fovTargetWord, activeComputation) +
+            if (activeComputation?.mode == FovInstrumentMode.SENSOR &&
+                mosaicConfig.panelCount > 1
+            ) {
+                " · $mosaicOverlaySummary"
+            } else {
+                ""
+            }
     }
 
     fun evalStarMap(script: String) {
@@ -541,6 +574,13 @@ fun StarMapScreen(
         optics.strings.forEach { (key, value) -> editor.putString(key, value) }
         optics.bools.forEach { (key, value) -> editor.putBoolean(key, value) }
         editor
+            .putInt(StarMapMosaicConfig.ROWS_PREF, mosaicConfig.rows)
+            .putInt(StarMapMosaicConfig.COLUMNS_PREF, mosaicConfig.columns)
+            .putInt(StarMapMosaicConfig.OVERLAP_PREF, mosaicConfig.overlapPercent)
+            .putBoolean(
+                StarMapMosaicConfig.SHOW_NUMBERS_PREF,
+                mosaicConfig.showPanelNumbers
+            )
             .putBoolean("star_map_equatorial_grid", equatorialGrid)
             .putBoolean("star_map_azimuthal_grid", azimuthalGrid)
             .putBoolean("star_map_meridian", meridianLine)
@@ -640,12 +680,13 @@ fun StarMapScreen(
         hipsCacheSizeLabel = HipsTileCache.formatCacheSize(hipsCache.cacheSizeBytes())
     }
 
-    fun applyTargetFovRotation() {
+    fun applyTargetFraming(alsoZoom: Boolean = false) {
         val angle = normalizePositionAngle(importAngleText.toDoubleOrNull() ?: 0.0)
-        evalStarMap(
-            "window.MercStarMap && window.MercStarMap.setTargetFovRotation(" +
-                "${"%.4f".format(Locale.US, angle)});"
-        )
+        StarMapFovOverlay.targetSensorFramingScripts(
+            positionAngleDeg = angle,
+            mosaic = mosaicConfig,
+            alsoZoom = alsoZoom
+        ).forEach(::evalStarMap)
     }
 
     fun applyFovOverlays(alsoZoom: Boolean) {
@@ -654,15 +695,19 @@ fun StarMapScreen(
         } else {
             null
         }
+        val targetAnchor = selectedTarget?.let {
+            FovSkyAnchor(it.raHours, it.decDegrees, it.frame)
+        }
         StarMapFovOverlay.scripts(
             showOverlay = showFovOverlay,
             computation = activeComputation,
             currentLabel = overlayCurrentLabel,
             targetLabel = overlayTargetLabel,
             alsoZoom = alsoZoom,
-            currentAnchor = currentAnchor
+            currentAnchor = currentAnchor,
+            targetAnchor = targetAnchor
         ).forEach(::evalStarMap)
-        applyTargetFovRotation()
+        applyTargetFraming(alsoZoom)
     }
 
     fun setFollowMountEnabled(enabled: Boolean) {
@@ -819,9 +864,16 @@ fun StarMapScreen(
         )
     }
 
-    LaunchedEffect(webView, engineState, importAngleText, activeComputation, showFovOverlay) {
+    LaunchedEffect(
+        webView,
+        engineState,
+        importAngleText,
+        mosaicConfig,
+        activeComputation,
+        showFovOverlay
+    ) {
         if (engineState !is StarMapEngineState.Ready) return@LaunchedEffect
-        applyTargetFovRotation()
+        applyTargetFraming()
     }
 
     LaunchedEffect(
@@ -910,7 +962,12 @@ fun StarMapScreen(
         mountConnected,
         cameraPixelSizeUm,
         cameraFrameWidthPx,
-        cameraFrameHeightPx
+        cameraFrameHeightPx,
+        fovDialogVisible,
+        selectedTarget?.raHours,
+        selectedTarget?.decDegrees,
+        selectedTarget?.frame,
+        mosaicConfig
     ) {
         if (engineState !is StarMapEngineState.Ready) return@LaunchedEffect
         evalStarMap(
@@ -1791,6 +1848,8 @@ fun StarMapScreen(
             sensors = sensors,
             showOverlay = showFovOverlay,
             computation = editingComputation,
+            mosaicConfig = mosaicConfig,
+            positionAngleText = importAngleText,
             onEditingTrainChange = { editingTrain = it },
             onConfigChange = { updated ->
                 if (updated.id == OpticsTrainId.PRIMARY) {
@@ -1801,6 +1860,16 @@ fun StarMapScreen(
                 showFovOverlay = true
                 persistFovPrefs()
                 maybeWritePlateFocalLength(updated)
+            },
+            onMosaicConfigChange = {
+                mosaicConfig = it.normalized()
+                showFovOverlay = true
+                persistFovPrefs()
+                applyTargetFraming(alsoZoom = true)
+            },
+            onPositionAngleChange = {
+                importAngleText = it
+                showFovOverlay = true
             },
             onShowOverlayChange = {
                 showFovOverlay = it

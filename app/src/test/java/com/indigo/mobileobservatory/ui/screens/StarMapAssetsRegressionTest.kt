@@ -113,6 +113,21 @@ class StarMapAssetsRegressionTest {
         assertTrue(geometryJs.contains("Math.atan2(dy, dx) * RAD_TO_DEG + 90"))
     }
 
+    @Test
+    fun sensorAndMosaicFramesProjectTheirSkyCorners() {
+        val appJs = read("app.js")
+        val css = read("styles.css")
+        val geometryJs = read("fov-position-angle.js")
+        assertTrue(geometryJs.contains("function tangentPlanePoint("))
+        assertTrue(geometryJs.contains("function sensorMosaicPanels("))
+        assertTrue(appJs.contains("function renderProjectedRectOverlay("))
+        assertTrue(appJs.contains("createElementNS(SVG_NAMESPACE, \"polygon\")"))
+        assertTrue(appJs.contains("setTargetFovMosaic:"))
+        assertTrue(appJs.contains("fov-panel-number"))
+        assertTrue(css.contains(".fov-vector .fov-panel"))
+        assertTrue(css.contains(".fov-panel-number"))
+    }
+
     private fun read(name: String): String {
         val candidates = listOf(
             File("src/stellarium/assets/stellarium/$name"),

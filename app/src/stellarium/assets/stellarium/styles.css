@@ -93,6 +93,57 @@ body {
     border-radius: 2px;
 }
 
+#fov-current.fov-vector,
+#fov-target.fov-vector {
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    overflow: visible;
+}
+
+.fov-vector svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+}
+
+.fov-vector .fov-panel {
+    vector-effect: non-scaling-stroke;
+    stroke-width: 2px;
+}
+
+#fov-current.fov-vector .fov-panel {
+    fill: rgba(80, 220, 160, 0.04);
+    stroke: rgba(80, 220, 160, 0.95);
+}
+
+#fov-target.fov-vector .fov-panel {
+    fill: rgba(255, 196, 72, 0.05);
+    stroke: rgba(255, 196, 72, 0.95);
+    stroke-dasharray: 8 5;
+}
+
+.fov-panel-number,
+.fov-svg-label {
+    fill: currentColor;
+    font-family: sans-serif;
+    paint-order: stroke;
+    stroke: rgba(2, 4, 10, 0.9);
+    stroke-width: 3px;
+    stroke-linejoin: round;
+}
+
+.fov-panel-number {
+    font-size: 14px;
+    font-weight: 700;
+}
+
+.fov-svg-label {
+    font-size: 12px;
+}
+
 html.night-vision #stel-canvas,
 html.night-vision #fov-current,
 html.night-vision #fov-target {

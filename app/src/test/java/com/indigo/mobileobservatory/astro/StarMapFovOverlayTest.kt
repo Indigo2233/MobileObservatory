@@ -34,7 +34,7 @@ class StarMapFovOverlayTest {
     }
 
     @Test
-    fun eyepieceTrainAlwaysPushesDashedTargetAtScreenCentre() {
+    fun eyepieceTrainPushesDashedTargetWithoutAnExplicitAnchor() {
         val scripts = StarMapFovOverlay.scripts(
             showOverlay = true,
             computation = circle,
@@ -49,7 +49,7 @@ class StarMapFovOverlayTest {
     }
 
     @Test
-    fun sensorTrainKeepsDashedTargetCenteredAndCurrentOnMount() {
+    fun sensorTrainKeepsCurrentOnMountAndUsesTheMapCenterByDefault() {
         val scripts = StarMapFovOverlay.scripts(
             showOverlay = true,
             computation = rect,
