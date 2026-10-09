@@ -572,6 +572,25 @@ fun setSequenceDisabled(root: NinaNode, id: String, disabled: Boolean): Boolean 
     return true
 }
 
+fun enableOnlyMosaicPanel(root: NinaNode, id: String): Boolean {
+    val area = root.childItems().firstOrNull { it.className == "TargetAreaContainer" }
+        ?: return false
+    val selected = area.childItems().firstOrNull {
+        it.id == id && it.className == "DeepSkyObjectContainer" &&
+            it.intField("MosaicPanelNumber") != null
+    } ?: return false
+    area.childItems()
+        .filter { it.className == "DeepSkyObjectContainer" && it.intField("MosaicPanelNumber") != null }
+        .forEach { panel ->
+            panel.fields["Status"] = NinaValue.Num(
+                if (panel === selected) 0.0 else SEQUENCE_STATUS_DISABLED.toDouble(),
+                true
+            )
+        }
+    resetSequenceProgress(root, id)
+    return true
+}
+
 fun setSequenceField(root: NinaNode, id: String, path: String, text: String): Boolean {
     val node = findSequenceNode(root, id) ?: return false
     if (node.className == "DeepSkyObjectContainer") {

@@ -40,6 +40,8 @@ import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.astro.EyepieceSpec
 import com.indigo.mobileobservatory.astro.FovComputation
 import com.indigo.mobileobservatory.astro.FovInstrumentMode
+import com.indigo.mobileobservatory.astro.MosaicStartCorner
+import com.indigo.mobileobservatory.astro.MosaicTraversal
 import com.indigo.mobileobservatory.astro.OpticsEquipment
 import com.indigo.mobileobservatory.astro.OpticsTrainConfig
 import com.indigo.mobileobservatory.astro.OpticsTrainId
@@ -577,6 +579,41 @@ private fun MosaicFramingControls(
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )
+    Text(
+        stringResource(R.string.fov_mosaic_order),
+        style = MaterialTheme.typography.labelMedium
+    )
+    ChipRow {
+        listOf(
+            MosaicTraversal.ROWS to R.string.fov_mosaic_order_rows,
+            MosaicTraversal.SNAKE to R.string.fov_mosaic_order_snake,
+            MosaicTraversal.COLUMNS to R.string.fov_mosaic_order_columns
+        ).forEach { (value, label) ->
+            FilterChip(
+                selected = config.traversal == value,
+                onClick = { onConfigChange(config.copy(traversal = value)) },
+                label = { Text(stringResource(label)) }
+            )
+        }
+    }
+    Text(
+        stringResource(R.string.fov_mosaic_start_corner),
+        style = MaterialTheme.typography.labelMedium
+    )
+    ChipRow {
+        listOf(
+            MosaicStartCorner.TOP_LEFT to R.string.fov_mosaic_top_left,
+            MosaicStartCorner.TOP_RIGHT to R.string.fov_mosaic_top_right,
+            MosaicStartCorner.BOTTOM_LEFT to R.string.fov_mosaic_bottom_left,
+            MosaicStartCorner.BOTTOM_RIGHT to R.string.fov_mosaic_bottom_right
+        ).forEach { (value, label) ->
+            FilterChip(
+                selected = config.startCorner == value,
+                onClick = { onConfigChange(config.copy(startCorner = value)) },
+                label = { Text(stringResource(label)) }
+            )
+        }
+    }
     Text(
         stringResource(R.string.fov_mosaic_rotation),
         style = MaterialTheme.typography.labelMedium

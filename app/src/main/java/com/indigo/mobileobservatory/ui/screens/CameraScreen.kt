@@ -110,6 +110,7 @@ fun CameraScreen(
             mountCoordinates = mountCoordinates,
             cameraPixelSizeUm = (connectionState as? ConnectionState.Connected)
                 ?.info?.pixelSizeUm,
+            onSolved = viewModel::recordPlateSolveResult,
             onBack = { showPlateSolve = false }
         )
         return
@@ -417,6 +418,14 @@ fun CameraScreen(
             MainControlTab.STAR_MAP -> {
                 if (BuildConfig.STELLARIUM_ENABLED) {
                     val mountSite by viewModel.mountSite.collectAsState()
+                    val solvedPositionAngle by viewModel.lastPlateSolvePositionAngleDeg.collectAsState()
+                    val sequenceMosaicPlan by viewModel.sequenceMosaicPlan.collectAsState()
+                    val sequenceGeneration by viewModel.sequenceRuntime.generation.collectAsState()
+                    val restoredSequencePlan = remember(sequenceMosaicPlan, sequenceGeneration) {
+                        viewModel.sequenceRuntime.mosaicPlan() ?: sequenceMosaicPlan
+                    }
+                    val rotatorConnected by viewModel.rotatorConnected.collectAsState()
+                    val rotatorAngle by viewModel.rotatorAngle.collectAsState()
                     StarMapScreen(
                         mountCoordinates = mountCoordinates,
                         mountSite = mountSite,
@@ -432,6 +441,10 @@ fun CameraScreen(
                             ?.info?.pixelSizeUm,
                         cameraFrameWidthPx = roi.width,
                         cameraFrameHeightPx = roi.height,
+                        lastSolvedPositionAngleDeg = solvedPositionAngle,
+                        rotatorConnected = rotatorConnected,
+                        rotatorMechanicalAngleDeg = rotatorAngle,
+                        initialSequencePlan = restoredSequencePlan,
                         onGoto = { target ->
                             viewModel.gotoMountTarget(
                                 name = target.name,
@@ -457,15 +470,8 @@ fun CameraScreen(
                                 toleranceArcmin = toleranceArcmin
                             )
                         },
-                        onAddToSequence = { target, destination ->
-                            viewModel.addSequenceSkyTarget(
-                                name = target.name,
-                                raHours = target.raHours,
-                                decDeg = target.decDegrees,
-                                positionAngleDeg = target.positionAngleDeg,
-                                destination = destination
-                            )
-                        },
+                        onAddToSequence = viewModel::addSequenceMosaic,
+                        onMoveRotator = viewModel::moveRotatorTo,
                         showSequenceActions = sequenceEnabled,
                         onTargetSelected = { target ->
                             viewModel.rememberSequenceSkyTarget(

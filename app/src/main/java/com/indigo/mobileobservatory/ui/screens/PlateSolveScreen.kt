@@ -54,6 +54,7 @@ fun PlateSolveScreen(
     initialFile: File? = null,
     mountCoordinates: MountCoordinates? = null,
     cameraPixelSizeUm: Float? = null,
+    onSolved: (PlateSolveResult) -> Unit = {},
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -88,6 +89,10 @@ fun PlateSolveScreen(
     var error by remember { mutableStateOf<String?>(null) }
     var showLog by remember { mutableStateOf(false) }
     var useMountHint by remember(mountCoordinates) { mutableStateOf(mountCoordinates != null) }
+
+    LaunchedEffect(result) {
+        result?.takeIf { it.success }?.let(onSolved)
+    }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
         if (uri != null) {

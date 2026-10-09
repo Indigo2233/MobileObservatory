@@ -77,8 +77,10 @@ import com.indigo.mobileobservatory.sequence.dsoRaHours
 import com.indigo.mobileobservatory.sequence.dsoTargetName
 import com.indigo.mobileobservatory.sequence.duplicateSequenceNode
 import com.indigo.mobileobservatory.sequence.editableFields
+import com.indigo.mobileobservatory.sequence.enableOnlyMosaicPanel
 import com.indigo.mobileobservatory.sequence.formatDecDegrees
 import com.indigo.mobileobservatory.sequence.formatRaHours
+import com.indigo.mobileobservatory.sequence.intField
 import com.indigo.mobileobservatory.sequence.moveSequenceNode
 import com.indigo.mobileobservatory.sequence.relocateSequenceNode
 import com.indigo.mobileobservatory.sequence.resetSequenceProgress
@@ -469,6 +471,14 @@ private fun ActionBar(node: NinaNode, id: String, actions: SequenceTreeActions) 
             }
             TextButton(onClick = { actions.onEdit { resetSequenceProgress(it, id) } }, enabled = actions.enabled) {
                 Text(stringResource(R.string.sequence_reset_progress))
+            }
+            if (node.className == "DeepSkyObjectContainer" && node.intField("MosaicPanelNumber") != null) {
+                TextButton(
+                    onClick = { actions.onEdit { enableOnlyMosaicPanel(it, id) } },
+                    enabled = actions.enabled
+                ) {
+                    Text(stringResource(R.string.sequence_only_this_panel))
+                }
             }
             TextButton(onClick = { actions.onEdit { duplicateSequenceNode(it, id) } }, enabled = actions.enabled) {
                 Text(stringResource(R.string.sequence_copy))

@@ -15,6 +15,25 @@ data class SimpleExposureRow(
     val imageType: String = "LIGHT"
 )
 
+data class SimpleSequenceTarget(
+    val name: String,
+    val raHours: Double,
+    val decDegrees: Double,
+    val positionAngleDeg: Double = 0.0,
+    val enabled: Boolean = true,
+    val panelNumber: Int? = null,
+    val panelRow: Int? = null,
+    val panelColumn: Int? = null,
+    val mosaicRows: Int? = null,
+    val mosaicColumns: Int? = null,
+    val overlapPercent: Int? = null,
+    val mosaicPlanName: String? = null,
+    val mosaicTraversal: String? = null,
+    val mosaicStartCorner: String? = null,
+    val mosaicCenterRaHours: Double? = null,
+    val mosaicCenterDecDeg: Double? = null
+)
+
 data class SimpleSequenceDraft(
     val title: String,
     val raHours: Double,
@@ -26,6 +45,7 @@ data class SimpleSequenceDraft(
     val centerBefore: Boolean = false,
     val guideBefore: Boolean = false,
     val autofocusBefore: Boolean = false,
+    val rotateBefore: Boolean = false,
     val ditherEvery: Int? = null,
     val ditherPixels: Double = 3.0,
     val altitudeEndDeg: Double? = null,
@@ -33,12 +53,19 @@ data class SimpleSequenceDraft(
     val endWarm: Boolean = false,
     val endStopTracking: Boolean = false,
     val endGoHome: Boolean = false,
-    val endCloseCover: Boolean = false
+    val endCloseCover: Boolean = false,
+    val targets: List<SimpleSequenceTarget> = emptyList()
 )
 
-fun SimpleSequenceDraft.plannedFrames(): Int = rows
-    .filter { it.enabled }
-    .sumOf { it.count.coerceAtLeast(0) }
+fun SimpleSequenceDraft.effectiveTargets(): List<SimpleSequenceTarget> =
+    targets.ifEmpty {
+        listOf(SimpleSequenceTarget(title, raHours, decDegrees, positionAngleDeg))
+    }
+
+fun SimpleSequenceDraft.plannedFrames(): Int {
+    val framesPerTarget = rows.filter { it.enabled }.sumOf { it.count.coerceAtLeast(0) }
+    return framesPerTarget * effectiveTargets().count { it.enabled }
+}
 
 fun NinaNode.plannedFrames(): Int {
     fun count(node: NinaNode, multiplier: Long): Long {
@@ -80,21 +107,50 @@ fun SimpleSequenceDraft.toNinaSequence(): NinaNode {
     val start = container(ids, "NINA.Sequencer.Container.StartAreaContainer", "Start")
     val targets = container(ids, "NINA.Sequencer.Container.TargetAreaContainer", "Targets")
     val end = container(ids, "NINA.Sequencer.Container.EndAreaContainer", "End")
-    val target = deepSkyTarget(ids, this)
-    attachChildren(targets, listOf(target))
+    val plannedTargets = effectiveTargets()
+    val multipleTargets = this.targets.isNotEmpty()
+    attachChildren(
+        targets,
+        plannedTargets.map { target -> deepSkyTarget(ids, this, target, multipleTargets) }
+    )
     attachChildren(start, startInstructions(ids, this))
     attachChildren(end, endInstructions(ids, this))
     attachChildren(root, listOf(start, targets, end))
     return root
 }
 
-private fun deepSkyTarget(ids: NinaIds, draft: SimpleSequenceDraft): NinaNode {
+private fun deepSkyTarget(
+    ids: NinaIds,
+    draft: SimpleSequenceDraft,
+    sequenceTarget: SimpleSequenceTarget,
+    targetScopedSetup: Boolean
+): NinaNode {
     val target = container(
         ids,
         "NINA.Sequencer.Container.DeepSkyObjectContainer",
-        draft.title
+        sequenceTarget.name
     )
-    target.fields["Target"] = NinaValue.Obj(inputTarget(ids, draft))
+    target.fields["Target"] = NinaValue.Obj(inputTarget(ids, sequenceTarget))
+    if (!sequenceTarget.enabled) {
+        target.fields["Status"] = NinaValue.Num(SEQUENCE_STATUS_DISABLED.toDouble(), true)
+    }
+    sequenceTarget.panelNumber?.let { target.fields["MosaicPanelNumber"] = NinaValue.Num(it.toDouble(), true) }
+    sequenceTarget.panelRow?.let { target.fields["MosaicRow"] = NinaValue.Num(it.toDouble(), true) }
+    sequenceTarget.panelColumn?.let { target.fields["MosaicColumn"] = NinaValue.Num(it.toDouble(), true) }
+    sequenceTarget.mosaicRows?.let { target.fields["MosaicRows"] = NinaValue.Num(it.toDouble(), true) }
+    sequenceTarget.mosaicColumns?.let { target.fields["MosaicColumns"] = NinaValue.Num(it.toDouble(), true) }
+    sequenceTarget.overlapPercent?.let {
+        target.fields["MosaicOverlapPercent"] = NinaValue.Num(it.toDouble(), true)
+    }
+    sequenceTarget.mosaicPlanName?.let { target.fields["MosaicPlanName"] = NinaValue.Text(it) }
+    sequenceTarget.mosaicTraversal?.let { target.fields["MosaicTraversal"] = NinaValue.Text(it) }
+    sequenceTarget.mosaicStartCorner?.let { target.fields["MosaicStartCorner"] = NinaValue.Text(it) }
+    sequenceTarget.mosaicCenterRaHours?.let {
+        target.fields["MosaicCenterRaHours"] = NinaValue.Num(it, it % 1.0 == 0.0)
+    }
+    sequenceTarget.mosaicCenterDecDeg?.let {
+        target.fields["MosaicCenterDecDeg"] = NinaValue.Num(it, it % 1.0 == 0.0)
+    }
     target.fields["ExposureInfoListExpanded"] = NinaValue.Bool(false)
     target.fields["ExposureInfoList"] = emptyCollection(
         ids,
@@ -118,17 +174,47 @@ private fun deepSkyTarget(ids: NinaIds, draft: SimpleSequenceDraft): NinaNode {
             listOf(trigger)
         )
     }
-    val rows = draft.rows.map { row -> exposureLoop(ids, row) }
-    attachChildren(target, rows)
+    val steps = buildList {
+        if (targetScopedSetup) {
+            if (draft.guideBefore) add(bareInstruction(ids, "NINA.Sequencer.SequenceItem.Guider.StopGuiding"))
+            if (draft.slewBefore) add(slew(ids, sequenceTarget))
+            if (draft.centerBefore) {
+                add(
+                    if (draft.rotateBefore) {
+                        instruction(
+                            ids,
+                            "NINA.Sequencer.SequenceItem.Platesolving.CenterAndRotate",
+                            linkedMapOf(
+                                "PositionAngle" to NinaValue.Num(
+                                    sequenceTarget.positionAngleDeg,
+                                    sequenceTarget.positionAngleDeg % 1.0 == 0.0
+                                )
+                            )
+                        )
+                    } else {
+                        bareInstruction(ids, "NINA.Sequencer.SequenceItem.Platesolving.Center")
+                    }
+                )
+            }
+            if (draft.autofocusBefore) {
+                add(bareInstruction(ids, "NINA.Sequencer.SequenceItem.Autofocus.RunAutofocus"))
+            }
+            if (draft.guideBefore) add(bareInstruction(ids, "NINA.Sequencer.SequenceItem.Guider.StartGuiding"))
+        }
+        addAll(draft.rows.map { row -> exposureLoop(ids, row) })
+    }
+    attachChildren(target, steps)
     return target
 }
 
 private fun startInstructions(ids: NinaIds, draft: SimpleSequenceDraft): List<NinaNode> = buildList {
     draft.coolToC?.let { add(coolCamera(ids, it)) }
-    if (draft.slewBefore) add(slew(ids, draft))
-    if (draft.centerBefore) add(bareInstruction(ids, "NINA.Sequencer.SequenceItem.Platesolving.Center"))
-    if (draft.guideBefore) add(bareInstruction(ids, "NINA.Sequencer.SequenceItem.Guider.StartGuiding"))
-    if (draft.autofocusBefore) add(bareInstruction(ids, "NINA.Sequencer.SequenceItem.Autofocus.RunAutofocus"))
+    if (draft.targets.isEmpty()) {
+        if (draft.slewBefore) add(slew(ids, draft.asTarget()))
+        if (draft.centerBefore) add(bareInstruction(ids, "NINA.Sequencer.SequenceItem.Platesolving.Center"))
+        if (draft.guideBefore) add(bareInstruction(ids, "NINA.Sequencer.SequenceItem.Guider.StartGuiding"))
+        if (draft.autofocusBefore) add(bareInstruction(ids, "NINA.Sequencer.SequenceItem.Autofocus.RunAutofocus"))
+    }
 }
 
 private fun endInstructions(ids: NinaIds, draft: SimpleSequenceDraft): List<NinaNode> = buildList {
@@ -150,15 +236,18 @@ private fun coolCamera(ids: NinaIds, celsius: Double): NinaNode {
     return instruction(ids, "NINA.Sequencer.SequenceItem.Camera.CoolCamera", fields)
 }
 
-private fun slew(ids: NinaIds, draft: SimpleSequenceDraft): NinaNode {
-    val ra = splitSexagesimal(draft.raHours.coerceIn(0.0, 24.0))
+private fun slew(ids: NinaIds, target: SimpleSequenceTarget): NinaNode {
+    val ra = splitSexagesimal(target.raHours.coerceIn(0.0, 24.0))
     return instruction(
         ids,
         "NINA.Sequencer.SequenceItem.Telescope.SlewScopeToRaDec",
         linkedMapOf(
-            "RAHours" to NinaValue.Num(draft.raHours, integral = draft.raHours % 1.0 == 0.0),
+            "RAHours" to NinaValue.Num(target.raHours, integral = target.raHours % 1.0 == 0.0),
             "RAMinutes" to NinaValue.Num(ra.second.toDouble(), true),
-            "DecDegrees" to NinaValue.Num(draft.decDegrees, integral = draft.decDegrees % 1.0 == 0.0)
+            "DecDegrees" to NinaValue.Num(
+                target.decDegrees,
+                integral = target.decDegrees % 1.0 == 0.0
+            )
         )
     )
 }
@@ -200,10 +289,10 @@ private fun instruction(
     return node(ids, qualified, merged)
 }
 
-private fun inputTarget(ids: NinaIds, draft: SimpleSequenceDraft): NinaNode {
-    val ra = splitSexagesimal(draft.raHours.coerceIn(0.0, 24.0))
-    val decAbs = splitSexagesimal(abs(draft.decDegrees))
-    val signedDegrees = if (draft.decDegrees < 0) -decAbs.first else decAbs.first
+private fun inputTarget(ids: NinaIds, target: SimpleSequenceTarget): NinaNode {
+    val ra = splitSexagesimal(target.raHours.coerceIn(0.0, 24.0))
+    val decAbs = splitSexagesimal(abs(target.decDegrees))
+    val signedDegrees = if (target.decDegrees < 0) -decAbs.first else decAbs.first
     val coordinates = node(
         ids,
         "NINA.Astrometry.InputCoordinates, NINA.Astrometry",
@@ -211,7 +300,7 @@ private fun inputTarget(ids: NinaIds, draft: SimpleSequenceDraft): NinaNode {
             "RAHours" to NinaValue.Num(ra.first.toDouble(), true),
             "RAMinutes" to NinaValue.Num(ra.second.toDouble(), true),
             "RASeconds" to NinaValue.Num(ra.third, integral = ra.third % 1.0 == 0.0),
-            "NegativeDec" to NinaValue.Bool(draft.decDegrees < 0),
+            "NegativeDec" to NinaValue.Bool(target.decDegrees < 0),
             "DecDegrees" to NinaValue.Num(signedDegrees.toDouble(), true),
             "DecMinutes" to NinaValue.Num(decAbs.second.toDouble(), true),
             "DecSeconds" to NinaValue.Num(decAbs.third, integral = decAbs.third % 1.0 == 0.0)
@@ -222,15 +311,18 @@ private fun inputTarget(ids: NinaIds, draft: SimpleSequenceDraft): NinaNode {
         "NINA.Astrometry.InputTarget, NINA.Astrometry",
         linkedMapOf(
             "Expanded" to NinaValue.Bool(true),
-            "TargetName" to NinaValue.Text(draft.title),
+            "TargetName" to NinaValue.Text(target.name),
             "PositionAngle" to NinaValue.Num(
-                draft.positionAngleDeg,
-                integral = draft.positionAngleDeg % 1.0 == 0.0
+                target.positionAngleDeg,
+                integral = target.positionAngleDeg % 1.0 == 0.0
             ),
             "InputCoordinates" to NinaValue.Obj(coordinates)
         )
     )
 }
+
+private fun SimpleSequenceDraft.asTarget(): SimpleSequenceTarget =
+    SimpleSequenceTarget(title, raHours, decDegrees, positionAngleDeg)
 
 private fun exposureLoop(ids: NinaIds, row: SimpleExposureRow): NinaNode {
     val loop = container(ids, "NINA.Sequencer.Container.SequentialContainer", row.filterName ?: "Exposure")

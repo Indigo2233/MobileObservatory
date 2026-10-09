@@ -81,6 +81,34 @@ class SequenceEditTest {
     }
 
     @Test
+    fun `only one mosaic panel is enabled for a targeted retake`() {
+        val root = SimpleSequenceDraft(
+            title = "Mosaic",
+            raHours = 1.0,
+            decDegrees = 2.0,
+            rows = listOf(SimpleExposureRow(null, 10.0, 0, 0, count = 1)),
+            targets = (1..3).map { number ->
+                SimpleSequenceTarget(
+                    name = "Mosaic · P$number",
+                    raHours = number.toDouble(),
+                    decDegrees = 2.0,
+                    panelNumber = number,
+                    mosaicPlanName = "Mosaic"
+                )
+            }
+        ).toNinaSequence()
+        val panels = root.childItems()
+            .first { it.className == "TargetAreaContainer" }
+            .childItems()
+        val selectedId = checkNotNull(panels[1].id)
+
+        assertTrue(enableOnlyMosaicPanel(root, selectedId))
+        assertTrue(sequenceNodeDisabled(panels[0]))
+        assertFalse(sequenceNodeDisabled(panels[1]))
+        assertTrue(sequenceNodeDisabled(panels[2]))
+    }
+
+    @Test
     fun `sky coordinates round seconds to one decimal and carry overflow`() {
         val ordinary = splitSexagesimal(5.588)
         assertEquals(5, ordinary.first)

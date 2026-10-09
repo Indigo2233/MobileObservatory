@@ -16,7 +16,7 @@ APK 使用的 `stellarium-web-engine.js`、`stellarium-web-engine.wasm`、许可
 
 本仓库在 `app/src/stellarium/assets/stellarium/` 中同时交付 Android 集成层的
 `app.js`、`fov-position-angle.js` 和 `styles.css` 源码。视场四角投影与马赛克
-构图属于该集成层；上述固定上游引擎二进制未作修改。
+构图、逐行/蛇形/逐列面板编号属于该集成层；上述固定上游引擎二进制未作修改。
 
 包含星图资源的正式构建命令为：
 

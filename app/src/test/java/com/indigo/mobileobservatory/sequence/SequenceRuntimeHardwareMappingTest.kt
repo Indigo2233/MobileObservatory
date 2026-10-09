@@ -116,6 +116,75 @@ class SequenceRuntimeHardwareMappingTest {
             .childItems()
         assertTrue(targets.any { dsoTargetName(it) == "Advanced target" })
     }
+
+    @Test
+    fun mosaicImportCreatesOrderedExecutableTargetsInBothEditors() = runTest {
+        val hardware = RecordingSequenceHardware()
+        val runtime = SequenceRuntime(
+            templatesDir = Files.createTempDirectory("sequence-templates").toFile(),
+            sessionsDir = Files.createTempDirectory("sequence-sessions").toFile(),
+            scope = this,
+            hardware = hardware
+        )
+        val plan = SequenceMosaicPlan(
+            name = "M31 mosaic",
+            centerRaHours = 0.7,
+            centerDecDeg = 41.2,
+            positionAngleDeg = 32.0,
+            rows = 1,
+            columns = 2,
+            overlapPercent = 15,
+            panels = listOf(
+                SequenceMosaicPanel(1, 1, 1, 0.65, 41.2),
+                SequenceMosaicPanel(2, 1, 2, 0.75, 41.2)
+            )
+        )
+
+        runtime.addMosaic(plan, SequenceEditorMode.Simple)
+        assertEquals(SequenceEditorMode.Simple, runtime.mode.value)
+        assertEquals(listOf("M31 mosaic · P1", "M31 mosaic · P2"), runtime.draft.value.targets.map { it.name })
+        assertEquals(2, runtime.draft.value.plannedFrames())
+        assertEquals(plan, runtime.mosaicPlan())
+        val simpleRoot = runtime.draft.value.toNinaSequence()
+        val simpleTargets = simpleRoot.childItems()
+            .first { it.className == "TargetAreaContainer" }
+            .childItems()
+        assertEquals(2, simpleTargets.size)
+        assertEquals(2, simpleTargets[1].intField("MosaicPanelNumber"))
+        assertTrue(simpleTargets.all { target ->
+            target.childItems().any { it.className == "SlewScopeToRaDec" } &&
+                target.childItems().any { it.className == "Center" } &&
+                target.childItems().any { it.className == "SequentialContainer" }
+        })
+
+        runtime.importJson("mosaic.json", simpleRoot.toJson())
+        val importedSecond = runtime.document.value!!.childItems()
+            .first { it.className == "TargetAreaContainer" }
+            .childItems()[1]
+        val center = importedSecond.childItems().first { it.className == "Center" }
+        runtime.execute(center, "Center")
+        assertEquals(0.75, checkNotNull(hardware.centerRaHours), 1e-9)
+        assertEquals(41.2, checkNotNull(hardware.centerDecDeg), 1e-9)
+
+        val advancedRuntime = SequenceRuntime(
+            templatesDir = Files.createTempDirectory("sequence-templates").toFile(),
+            sessionsDir = Files.createTempDirectory("sequence-sessions").toFile(),
+            scope = this,
+            hardware = RecordingSequenceHardware()
+        )
+        advancedRuntime.addMosaic(plan, SequenceEditorMode.Advanced)
+        advancedRuntime.addMosaic(
+            plan.copy(positionAngleDeg = 40.0),
+            SequenceEditorMode.Advanced
+        )
+        val advancedTargets = advancedRuntime.document.value!!.childItems()
+            .first { it.className == "TargetAreaContainer" }
+            .childItems()
+        assertEquals(2, advancedTargets.size)
+        assertEquals(40.0, checkNotNull(dsoPositionAngle(advancedTargets.first())), 1e-9)
+        assertTrue(advancedTargets.all { it.childItems().any { child -> child.className == "SequentialContainer" } })
+        assertEquals(40.0, checkNotNull(advancedRuntime.mosaicPlan()).positionAngleDeg, 1e-9)
+    }
 }
 
 private class RecordingSequenceHardware : SequenceHardware {
@@ -128,6 +197,8 @@ private class RecordingSequenceHardware : SequenceHardware {
     var usbLimitValue: Int? = null
     var flatLightOn: Boolean? = null
     var flatBrightnessValue: Int? = null
+    var centerRaHours: Double? = null
+    var centerDecDeg: Double? = null
 
     override suspend fun takeExposure(
         seconds: Double,
@@ -150,7 +221,10 @@ private class RecordingSequenceHardware : SequenceHardware {
     }
 
     override suspend fun slew(raHours: Double, decDeg: Double) = Unit
-    override suspend fun center(raHours: Double, decDeg: Double) = Unit
+    override suspend fun center(raHours: Double, decDeg: Double) {
+        centerRaHours = raHours
+        centerDecDeg = decDeg
+    }
     override suspend fun plateSolve(): Pair<Double, Double> = 0.0 to 0.0
     override suspend fun syncMount(raHours: Double, decDeg: Double) = Unit
 

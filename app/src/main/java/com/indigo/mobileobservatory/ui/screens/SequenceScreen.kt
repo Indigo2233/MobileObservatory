@@ -586,6 +586,96 @@ private fun SimpleEditor(
             modifier = Modifier.weight(1f)
         )
     }
+    if (draft.targets.isNotEmpty()) {
+        Text(
+            stringResource(
+                R.string.sequence_mosaic_panel_summary,
+                draft.targets.count { it.enabled },
+                draft.targets.size
+            ),
+            style = MaterialTheme.typography.labelLarge
+        )
+        draft.targets.forEachIndexed { index, target ->
+            Card(Modifier.fillMaxWidth()) {
+                Column(
+                    Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        FilterChip(
+                            selected = target.enabled,
+                            onClick = {
+                                if (enabled) {
+                                    onChange(
+                                        draft.copy(
+                                            targets = draft.targets.mapIndexed { targetIndex, current ->
+                                                if (targetIndex == index) {
+                                                    current.copy(enabled = !current.enabled)
+                                                } else {
+                                                    current
+                                                }
+                                            }
+                                        )
+                                    )
+                                }
+                            },
+                            enabled = enabled,
+                            label = { Text(target.name) }
+                        )
+                        TextButton(
+                            onClick = {
+                                onChange(
+                                    draft.copy(
+                                        targets = draft.targets.mapIndexed { targetIndex, current ->
+                                            current.copy(enabled = targetIndex == index)
+                                        }
+                                    )
+                                )
+                            },
+                            enabled = enabled
+                        ) {
+                            Text(stringResource(R.string.sequence_only_this_panel))
+                        }
+                    }
+                    Text(
+                        stringResource(
+                            R.string.sequence_mosaic_panel_coordinates,
+                            target.panelRow ?: 1,
+                            target.panelColumn ?: 1,
+                            target.raHours,
+                            target.decDegrees
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        TextButton(
+                            onClick = {
+                                if (index > 0) {
+                                    val reordered = draft.targets.toMutableList()
+                                    val item = reordered.removeAt(index)
+                                    reordered.add(index - 1, item)
+                                    onChange(draft.copy(targets = reordered))
+                                }
+                            },
+                            enabled = enabled && index > 0
+                        ) { Text(stringResource(R.string.sequence_move_up)) }
+                        TextButton(
+                            onClick = {
+                                if (index < draft.targets.lastIndex) {
+                                    val reordered = draft.targets.toMutableList()
+                                    val item = reordered.removeAt(index)
+                                    reordered.add(index + 1, item)
+                                    onChange(draft.copy(targets = reordered))
+                                }
+                            },
+                            enabled = enabled && index < draft.targets.lastIndex
+                        ) { Text(stringResource(R.string.sequence_move_down)) }
+                    }
+                }
+            }
+        }
+    }
     draft.rows.forEachIndexed { index, row ->
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -676,6 +766,9 @@ private fun SimpleEditor(
     }, enabled = enabled) { Text(stringResource(R.string.sequence_add_row)) }
     ToggleLine(stringResource(R.string.sequence_slew), draft.slewBefore, enabled) { onChange(draft.copy(slewBefore = it)) }
     ToggleLine(stringResource(R.string.sequence_center), draft.centerBefore, enabled) { onChange(draft.copy(centerBefore = it)) }
+    ToggleLine(stringResource(R.string.sequence_rotate_to_angle), draft.rotateBefore, enabled) {
+        onChange(draft.copy(rotateBefore = it))
+    }
     ToggleLine(stringResource(R.string.sequence_guide), draft.guideBefore, enabled) { onChange(draft.copy(guideBefore = it)) }
     ToggleLine(stringResource(R.string.sequence_autofocus_before), draft.autofocusBefore, enabled) { onChange(draft.copy(autofocusBefore = it)) }
     ToggleLine(stringResource(R.string.sequence_end_guide), draft.endStopGuide, enabled) { onChange(draft.copy(endStopGuide = it)) }

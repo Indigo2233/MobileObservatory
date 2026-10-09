@@ -30,7 +30,8 @@ class StarMapMosaicConfigTest {
             scripts[0]
         )
         assertEquals(
-            "window.MercStarMap && window.MercStarMap.setTargetFovMosaic(2,3,15,true,true);",
+            "window.MercStarMap && window.MercStarMap.setTargetFovMosaic(" +
+                "2,3,15,true,\"SNAKE\",\"TOP_LEFT\",true);",
             scripts[1]
         )
     }

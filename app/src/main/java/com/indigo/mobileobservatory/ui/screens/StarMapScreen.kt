@@ -43,6 +43,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -76,14 +77,20 @@ import androidx.webkit.WebViewAssetLoader
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.astro.FovInstrumentMode
 import com.indigo.mobileobservatory.astro.FovSkyAnchor
+import com.indigo.mobileobservatory.astro.MosaicStartCorner
+import com.indigo.mobileobservatory.astro.MosaicTraversal
 import com.indigo.mobileobservatory.astro.OpticsEquipment
 import com.indigo.mobileobservatory.astro.OpticsPrefReader
 import com.indigo.mobileobservatory.astro.OpticsTrainConfig
 import com.indigo.mobileobservatory.astro.OpticsTrainId
 import com.indigo.mobileobservatory.astro.StarMapFovOverlay
 import com.indigo.mobileobservatory.astro.StarMapMosaicConfig
+import com.indigo.mobileobservatory.astro.StarMapMosaicPlanner
 import com.indigo.mobileobservatory.astro.StarMapOpticsPrefs
+import com.indigo.mobileobservatory.astro.SensorAngleCalibration
 import com.indigo.mobileobservatory.sequence.SequenceEditorMode
+import com.indigo.mobileobservatory.sequence.SequenceMosaicPanel
+import com.indigo.mobileobservatory.sequence.SequenceMosaicPlan
 import com.indigo.mobileobservatory.astro.UserOpticsCatalog
 import com.indigo.mobileobservatory.astro.resolveTelescopeFl
 import com.indigo.mobileobservatory.catalog.AssetDeepSkyCatalog
@@ -258,10 +265,15 @@ fun StarMapScreen(
     cameraPixelSizeUm: Float? = null,
     cameraFrameWidthPx: Int = 0,
     cameraFrameHeightPx: Int = 0,
+    lastSolvedPositionAngleDeg: Double? = null,
+    rotatorConnected: Boolean = false,
+    rotatorMechanicalAngleDeg: Double = 0.0,
+    initialSequencePlan: SequenceMosaicPlan? = null,
     onGoto: (StarMapTarget) -> Unit,
     onSync: (StarMapTarget) -> Unit = {},
     onPrecisionGoto: (StarMapTarget, Double) -> Unit = { _, _ -> },
-    onAddToSequence: (StarMapTarget, SequenceEditorMode) -> Unit = { _, _ -> },
+    onAddToSequence: (SequenceMosaicPlan, SequenceEditorMode) -> Unit = { _, _ -> },
+    onMoveRotator: (Double) -> Unit = {},
     showSequenceActions: Boolean = true,
     onTargetSelected: (StarMapTarget) -> Unit = {},
     onSlewRateChange: (MountSlewRate) -> Unit = {},
@@ -275,7 +287,19 @@ fun StarMapScreen(
 ) {
     var webView by remember { mutableStateOf<WebView?>(null) }
     var webViewSession by remember { mutableIntStateOf(0) }
-    var selectedTarget by remember { mutableStateOf<StarMapTarget?>(null) }
+    var selectedTarget by remember {
+        mutableStateOf(
+            initialSequencePlan?.let {
+                StarMapTarget(
+                    it.name,
+                    it.centerRaHours,
+                    it.centerDecDeg,
+                    "J2000",
+                    it.positionAngleDeg
+                )
+            }
+        )
+    }
     var engineState by remember { mutableStateOf<StarMapEngineState>(StarMapEngineState.Loading) }
     var gotoConfirmation by remember { mutableStateOf<StarMapTarget?>(null) }
     var syncConfirmation by remember { mutableStateOf<StarMapTarget?>(null) }
@@ -284,8 +308,10 @@ fun StarMapScreen(
     var overlaysVisible by remember { mutableStateOf(true) }
     var overlaysLocked by remember { mutableStateOf(false) }
     var targetExpanded by remember { mutableStateOf(false) }
-    var importAngleText by remember { mutableStateOf("0") }
-    var sequenceImportTarget by remember { mutableStateOf<StarMapTarget?>(null) }
+    var importAngleText by remember {
+        mutableStateOf(positionAngleText(initialSequencePlan?.positionAngleDeg ?: 0.0))
+    }
+    var sequenceImportPlan by remember { mutableStateOf<SequenceMosaicPlan?>(null) }
     var searchDialogVisible by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var searchResults by remember { mutableStateOf<List<CatalogObject>>(emptyList()) }
@@ -298,6 +324,14 @@ fun StarMapScreen(
     val context = LocalContext.current
     val prefs = remember {
         context.getSharedPreferences("mobile_observatory", android.content.Context.MODE_PRIVATE)
+    }
+    var sensorAngleCalibration by remember {
+        mutableStateOf(
+            SensorAngleCalibration(
+                offsetDeg = prefs.getFloat(SensorAngleCalibration.OFFSET_PREF, 0f).toDouble(),
+                reversed = prefs.getBoolean(SensorAngleCalibration.REVERSED_PREF, false)
+            )
+        )
     }
     val hipsCache = remember { HipsTileCache.create(context.applicationContext) }
     val catalog = remember { AssetDeepSkyCatalog(context.applicationContext) }
@@ -419,12 +453,23 @@ fun StarMapScreen(
     var mosaicConfig by remember {
         mutableStateOf(
             StarMapMosaicConfig(
-                rows = prefs.getInt(StarMapMosaicConfig.ROWS_PREF, 1),
-                columns = prefs.getInt(StarMapMosaicConfig.COLUMNS_PREF, 1),
-                overlapPercent = prefs.getInt(StarMapMosaicConfig.OVERLAP_PREF, 10),
+                rows = initialSequencePlan?.rows
+                    ?: prefs.getInt(StarMapMosaicConfig.ROWS_PREF, 1),
+                columns = initialSequencePlan?.columns
+                    ?: prefs.getInt(StarMapMosaicConfig.COLUMNS_PREF, 1),
+                overlapPercent = initialSequencePlan?.overlapPercent
+                    ?: prefs.getInt(StarMapMosaicConfig.OVERLAP_PREF, 10),
                 showPanelNumbers = prefs.getBoolean(
                     StarMapMosaicConfig.SHOW_NUMBERS_PREF,
                     true
+                ),
+                traversal = MosaicTraversal.fromPref(
+                    initialSequencePlan?.traversal
+                        ?: prefs.getString(StarMapMosaicConfig.TRAVERSAL_PREF, null)
+                ),
+                startCorner = MosaicStartCorner.fromPref(
+                    initialSequencePlan?.startCorner
+                        ?: prefs.getString(StarMapMosaicConfig.START_CORNER_PREF, null)
                 )
             ).normalized()
         )
@@ -581,6 +626,8 @@ fun StarMapScreen(
                 StarMapMosaicConfig.SHOW_NUMBERS_PREF,
                 mosaicConfig.showPanelNumbers
             )
+            .putString(StarMapMosaicConfig.TRAVERSAL_PREF, mosaicConfig.traversal.name)
+            .putString(StarMapMosaicConfig.START_CORNER_PREF, mosaicConfig.startCorner.name)
             .putBoolean("star_map_equatorial_grid", equatorialGrid)
             .putBoolean("star_map_azimuthal_grid", azimuthalGrid)
             .putBoolean("star_map_meridian", meridianLine)
@@ -744,6 +791,56 @@ fun StarMapScreen(
     fun adjustImportAngle(delta: Double) {
         val current = importAngleText.toDoubleOrNull() ?: 0.0
         importAngleText = positionAngleText(current + delta)
+    }
+
+    fun updateSensorAngleCalibration(next: SensorAngleCalibration) {
+        sensorAngleCalibration = next
+        prefs.edit()
+            .putFloat(SensorAngleCalibration.OFFSET_PREF, next.offsetDeg.toFloat())
+            .putBoolean(SensorAngleCalibration.REVERSED_PREF, next.reversed)
+            .apply()
+    }
+
+    fun sequenceMosaicPlan(target: StarMapTarget): SequenceMosaicPlan {
+        val angle = normalizePositionAngle(importAngleText.toDoubleOrNull() ?: 0.0)
+        val computation = activeComputation
+        val panels = if (
+            computation?.mode == FovInstrumentMode.SENSOR &&
+            computation.rectWidthDeg != null &&
+            computation.rectHeightDeg != null
+        ) {
+            StarMapMosaicPlanner.panels(
+                centerRaHours = target.raHours,
+                centerDecDegrees = target.decDegrees,
+                widthDeg = computation.rectWidthDeg,
+                heightDeg = computation.rectHeightDeg,
+                positionAngleDeg = angle,
+                config = mosaicConfig
+            ).map { panel ->
+                SequenceMosaicPanel(
+                    number = panel.number,
+                    row = panel.row + 1,
+                    column = panel.column + 1,
+                    raHours = panel.raHours,
+                    decDeg = panel.decDegrees
+                )
+            }
+        } else {
+            listOf(SequenceMosaicPanel(1, 1, 1, target.raHours, target.decDegrees))
+        }
+        return SequenceMosaicPlan(
+            name = target.name,
+            centerRaHours = target.raHours,
+            centerDecDeg = target.decDegrees,
+            positionAngleDeg = angle,
+            rows = if (panels.size > 1) mosaicConfig.rows else 1,
+            columns = if (panels.size > 1) mosaicConfig.columns else 1,
+            overlapPercent = if (panels.size > 1) mosaicConfig.overlapPercent else 0,
+            traversal = mosaicConfig.traversal.name,
+            startCorner = mosaicConfig.startCorner.name,
+            panels = panels,
+            rotateWithRotator = rotatorConnected
+        )
     }
 
     fun centerOnRaDec(raHours: Double, decDegrees: Double, frame: String = "JNOW") {
@@ -1517,15 +1614,96 @@ fun StarMapScreen(
                                 ) { Text("$angle°", maxLines = 1) }
                             }
                         }
+                        lastSolvedPositionAngleDeg?.let { solvedAngle ->
+                            val plannedAngle = normalizePositionAngle(
+                                importAngleText.toDoubleOrNull() ?: 0.0
+                            )
+                            val error = SensorAngleCalibration.angularError(plannedAngle, solvedAngle)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    stringResource(
+                                        R.string.fov_solved_sensor_angle,
+                                        positionAngleText(solvedAngle)
+                                    ),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                TextButton(onClick = {
+                                    importAngleText = positionAngleText(solvedAngle)
+                                }) {
+                                    Text(stringResource(R.string.fov_use_solved_angle))
+                                }
+                            }
+                            if (error > 1.0) {
+                                Text(
+                                    stringResource(R.string.fov_sensor_angle_error, error),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
+                        }
+                        if (rotatorConnected) {
+                            val plannedAngle = normalizePositionAngle(
+                                importAngleText.toDoubleOrNull() ?: 0.0
+                            )
+                            val targetMechanical = sensorAngleCalibration.mechanicalAngle(plannedAngle)
+                            Text(
+                                stringResource(
+                                    R.string.fov_rotator_angle_summary,
+                                    rotatorMechanicalAngleDeg,
+                                    targetMechanical,
+                                    sensorAngleCalibration.offsetDeg
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                FilterChip(
+                                    selected = sensorAngleCalibration.reversed,
+                                    onClick = {
+                                        updateSensorAngleCalibration(
+                                            sensorAngleCalibration.copy(
+                                                reversed = !sensorAngleCalibration.reversed
+                                            )
+                                        )
+                                    },
+                                    label = { Text(stringResource(R.string.fov_rotator_reverse_mapping)) }
+                                )
+                                TextButton(
+                                    enabled = lastSolvedPositionAngleDeg != null,
+                                    onClick = {
+                                        val solved = lastSolvedPositionAngleDeg ?: return@TextButton
+                                        updateSensorAngleCalibration(
+                                            sensorAngleCalibration.calibrated(
+                                                solved,
+                                                rotatorMechanicalAngleDeg
+                                            )
+                                        )
+                                    }
+                                ) {
+                                    Text(stringResource(R.string.fov_calibrate_rotator_angle))
+                                }
+                            }
+                            OutlinedButton(
+                                onClick = { onMoveRotator(targetMechanical) },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(stringResource(R.string.fov_rotate_to_composition))
+                            }
+                        }
                         if (showSequenceActions) {
                             OutlinedButton(
                                 onClick = {
                                     overlaysVisible = true
-                                    sequenceImportTarget = target.copy(
-                                        positionAngleDeg = normalizePositionAngle(
-                                            importAngleText.toDoubleOrNull() ?: 0.0
-                                        )
-                                    )
+                                    sequenceImportPlan = sequenceMosaicPlan(target)
                                 },
                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
                                 modifier = Modifier.fillMaxWidth()
@@ -1662,33 +1840,34 @@ fun StarMapScreen(
         )
     }
 
-    sequenceImportTarget?.let { target ->
+    sequenceImportPlan?.let { plan ->
         AlertDialog(
-            onDismissRequest = { sequenceImportTarget = null },
+            onDismissRequest = { sequenceImportPlan = null },
             title = { Text(stringResource(R.string.sequence_import_destination)) },
             text = {
                 Text(
                     stringResource(
-                        R.string.sequence_import_destination_detail,
-                        target.name,
-                        positionAngleText(target.positionAngleDeg)
+                        R.string.sequence_import_mosaic_detail,
+                        plan.name,
+                        plan.panels.size,
+                        positionAngleText(plan.positionAngleDeg)
                     )
                 )
             },
             confirmButton = {
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     TextButton(onClick = {
-                        sequenceImportTarget = null
-                        onAddToSequence(target, SequenceEditorMode.Simple)
+                        sequenceImportPlan = null
+                        onAddToSequence(plan, SequenceEditorMode.Simple)
                     }) { Text(stringResource(R.string.sequence_simple)) }
                     TextButton(onClick = {
-                        sequenceImportTarget = null
-                        onAddToSequence(target, SequenceEditorMode.Advanced)
+                        sequenceImportPlan = null
+                        onAddToSequence(plan, SequenceEditorMode.Advanced)
                     }) { Text(stringResource(R.string.sequence_advanced)) }
                 }
             },
             dismissButton = {
-                TextButton(onClick = { sequenceImportTarget = null }) {
+                TextButton(onClick = { sequenceImportPlan = null }) {
                     Text(stringResource(R.string.cancel))
                 }
             }

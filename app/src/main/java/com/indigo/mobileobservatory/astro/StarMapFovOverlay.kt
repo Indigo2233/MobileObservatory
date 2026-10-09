@@ -30,7 +30,8 @@ object StarMapFovOverlay {
             "window.MercStarMap && window.MercStarMap.setTargetFovRotation(${js(angle)});",
             "window.MercStarMap && window.MercStarMap.setTargetFovMosaic(" +
                 "${normalized.rows},${normalized.columns},${normalized.overlapPercent}," +
-                "${normalized.showPanelNumbers},$alsoZoom);"
+                "${normalized.showPanelNumbers},\"${normalized.traversal.name}\"," +
+                "\"${normalized.startCorner.name}\",$alsoZoom);"
         )
     }
 

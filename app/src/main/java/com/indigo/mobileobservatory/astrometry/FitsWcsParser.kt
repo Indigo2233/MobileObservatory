@@ -30,14 +30,17 @@ object FitsWcsParser {
         if (cd11 != null && cd12 != null && cd21 != null && cd22 != null) {
             scaleXDeg = hypot(cd11, cd21)
             scaleYDeg = hypot(cd12, cd22)
-            rotation = atan2(cd21, cd11) * 180.0 / PI
+            // The first CD column describes image-right in the WCS east/north
+            // plane. Sensor PA is image-up measured north through east; a
+            // north-up astronomical image has image-right pointing west.
+            rotation = normalize360(180.0 - atan2(cd21, cd11) * 180.0 / PI)
         } else {
             val cdelt1 = header.doubleValue("CDELT1")
             val cdelt2 = header.doubleValue("CDELT2")
             if (cdelt1 == null || cdelt2 == null) return ParsedWcs(ra, dec, null, null, null, null, source)
             scaleXDeg = kotlin.math.abs(cdelt1)
             scaleYDeg = kotlin.math.abs(cdelt2)
-            rotation = header.doubleValue("CROTA2")
+            rotation = header.doubleValue("CROTA2")?.let(::normalize360)
         }
 
         return ParsedWcs(
@@ -63,6 +66,8 @@ object FitsWcsParser {
         val normalized = ra % 360.0
         return if (normalized < 0) normalized + 360.0 else normalized
     }
+
+    private fun normalize360(value: Double): Double = ((value % 360.0) + 360.0) % 360.0
 }
 
 data class ParsedWcs(

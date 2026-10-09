@@ -18,6 +18,29 @@ data class SequenceSkyTarget(
     val positionAngleDeg: Double = 0.0
 )
 
+data class SequenceMosaicPanel(
+    val number: Int,
+    val row: Int,
+    val column: Int,
+    val raHours: Double,
+    val decDeg: Double,
+    val enabled: Boolean = true
+)
+
+data class SequenceMosaicPlan(
+    val name: String,
+    val centerRaHours: Double,
+    val centerDecDeg: Double,
+    val positionAngleDeg: Double,
+    val rows: Int,
+    val columns: Int,
+    val overlapPercent: Int,
+    val traversal: String = "SNAKE",
+    val startCorner: String = "TOP_LEFT",
+    val panels: List<SequenceMosaicPanel>,
+    val rotateWithRotator: Boolean = false
+)
+
 data class SessionFrame(
     val name: String,
     val filter: String?,
@@ -343,7 +366,7 @@ class SequenceRuntime(
     }
 
     override suspend fun execute(instruction: NinaNode, className: String) {
-        val target = targetCoordinates()
+        val target = targetCoordinates(instruction)
         when (className) {
             "TakeExposure" -> {
                 if (guidingWanted && !hardware.guidingLocked()) throw GuideLost()
@@ -477,7 +500,8 @@ class SequenceRuntime(
                 title = name,
                 raHours = raHours,
                 decDegrees = decDeg,
-                positionAngleDeg = positionAngleDeg
+                positionAngleDeg = positionAngleDeg,
+                targets = emptyList()
             )
             _mode.value = SequenceEditorMode.Simple
             return
@@ -488,6 +512,124 @@ class SequenceRuntime(
             appendChild(area, deepSkyNode(name, raHours, decDeg, positionAngleDeg))
             true
         }
+    }
+
+    fun addMosaic(
+        plan: SequenceMosaicPlan,
+        destination: SequenceEditorMode = _mode.value
+    ) {
+        val panelTargets = plan.panels.map { panel ->
+            SimpleSequenceTarget(
+                name = "${plan.name} · P${panel.number}",
+                raHours = panel.raHours,
+                decDegrees = panel.decDeg,
+                positionAngleDeg = plan.positionAngleDeg,
+                enabled = panel.enabled,
+                panelNumber = panel.number,
+                panelRow = panel.row,
+                panelColumn = panel.column,
+                mosaicRows = plan.rows,
+                mosaicColumns = plan.columns,
+                overlapPercent = plan.overlapPercent,
+                mosaicPlanName = plan.name,
+                mosaicTraversal = plan.traversal,
+                mosaicStartCorner = plan.startCorner,
+                mosaicCenterRaHours = plan.centerRaHours,
+                mosaicCenterDecDeg = plan.centerDecDeg
+            )
+        }
+        val mosaicDraft = _draft.value.copy(
+            title = plan.name,
+            raHours = plan.centerRaHours,
+            decDegrees = plan.centerDecDeg,
+            positionAngleDeg = plan.positionAngleDeg,
+            slewBefore = true,
+            centerBefore = true,
+            rotateBefore = plan.rotateWithRotator,
+            targets = panelTargets
+        )
+        if (destination == SequenceEditorMode.Simple) {
+            _draft.value = mosaicDraft
+            _mode.value = SequenceEditorMode.Simple
+            return
+        }
+        val generatedTargets = mosaicDraft.toNinaSequence()
+            .childItems()
+            .first { it.className == "TargetAreaContainer" }
+            .childItems()
+        editSequence { root ->
+            val area = root.childItems().firstOrNull { it.className == "TargetAreaContainer" }
+                ?: return@editSequence false
+            val areaId = area.id ?: return@editSequence false
+            area.childItems()
+                .filter { it.textField("MosaicPlanName") == plan.name }
+                .mapNotNull { it.id }
+                .forEach { deleteSequenceNode(root, it) }
+            generatedTargets.fold(false) { changed, target ->
+                insertSequenceSnippet(root, areaId, target.toJson(), "Items") || changed
+            }
+        }
+    }
+
+    fun mosaicPlan(): SequenceMosaicPlan? {
+        if (_mode.value == SequenceEditorMode.Simple) {
+            val draft = _draft.value
+            val panels = draft.targets.filter { it.panelNumber != null }
+            val first = panels.firstOrNull() ?: return null
+            return SequenceMosaicPlan(
+                name = first.mosaicPlanName ?: draft.title,
+                centerRaHours = first.mosaicCenterRaHours ?: draft.raHours,
+                centerDecDeg = first.mosaicCenterDecDeg ?: draft.decDegrees,
+                positionAngleDeg = first.positionAngleDeg,
+                rows = first.mosaicRows ?: 1,
+                columns = first.mosaicColumns ?: panels.size,
+                overlapPercent = first.overlapPercent ?: 0,
+                traversal = first.mosaicTraversal ?: "SNAKE",
+                startCorner = first.mosaicStartCorner ?: "TOP_LEFT",
+                panels = panels.map { panel ->
+                    SequenceMosaicPanel(
+                        number = panel.panelNumber ?: 1,
+                        row = panel.panelRow ?: 1,
+                        column = panel.panelColumn ?: 1,
+                        raHours = panel.raHours,
+                        decDeg = panel.decDegrees,
+                        enabled = panel.enabled
+                    )
+                },
+                rotateWithRotator = draft.rotateBefore
+            )
+        }
+        val targets = _document.value
+            ?.childItems()
+            ?.firstOrNull { it.className == "TargetAreaContainer" }
+            ?.childItems()
+            ?.filter { it.textField("MosaicPlanName") != null }
+            .orEmpty()
+        val first = targets.firstOrNull() ?: return null
+        return SequenceMosaicPlan(
+            name = first.textField("MosaicPlanName") ?: dsoTargetName(first).orEmpty(),
+            centerRaHours = first.doubleField("MosaicCenterRaHours") ?: dsoRaHours(first) ?: 0.0,
+            centerDecDeg = first.doubleField("MosaicCenterDecDeg") ?: dsoDecDegrees(first) ?: 0.0,
+            positionAngleDeg = dsoPositionAngle(first) ?: 0.0,
+            rows = first.intField("MosaicRows") ?: 1,
+            columns = first.intField("MosaicColumns") ?: targets.size,
+            overlapPercent = first.intField("MosaicOverlapPercent") ?: 0,
+            traversal = first.textField("MosaicTraversal") ?: "SNAKE",
+            startCorner = first.textField("MosaicStartCorner") ?: "TOP_LEFT",
+            panels = targets.map { target ->
+                SequenceMosaicPanel(
+                    number = target.intField("MosaicPanelNumber") ?: 1,
+                    row = target.intField("MosaicRow") ?: 1,
+                    column = target.intField("MosaicColumn") ?: 1,
+                    raHours = dsoRaHours(target) ?: 0.0,
+                    decDeg = dsoDecDegrees(target) ?: 0.0,
+                    enabled = !sequenceNodeDisabled(target)
+                )
+            },
+            rotateWithRotator = targets.any { target ->
+                target.childItems().any { it.className == "CenterAndRotate" }
+            }
+        )
     }
 
     fun applySkyTarget(id: String, sky: SequenceSkyTarget) {
@@ -594,11 +736,15 @@ class SequenceRuntime(
         SequenceEditorMode.Advanced -> _document.value ?: _draft.value.toNinaSequence()
     }
 
-    private fun targetCoordinates(): Pair<Double, Double>? {
+    private fun targetCoordinates(instruction: NinaNode? = null): Pair<Double, Double>? {
         val root = _document.value ?: return null
-        val target = root.childItems().getOrNull(1)?.childItems()?.firstOrNull {
-            it.className == "DeepSkyObjectContainer"
-        } ?: return null
+        val targets = root.childItems().firstOrNull { it.className == "TargetAreaContainer" }
+            ?.childItems()
+            ?.filter { it.className == "DeepSkyObjectContainer" }
+            .orEmpty()
+        val target = instruction?.id?.let { instructionId ->
+            targets.firstOrNull { findSequenceNode(it, instructionId) != null }
+        } ?: targets.firstOrNull() ?: return null
         val input = ((target.fields["Target"] as? NinaValue.Obj)?.node
             ?.fields?.get("InputCoordinates") as? NinaValue.Obj)?.node ?: return null
         val ra = (input.intField("RAHours") ?: 0) +

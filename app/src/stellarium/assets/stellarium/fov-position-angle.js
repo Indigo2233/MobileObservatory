@@ -89,7 +89,9 @@
         positionAngleDeg,
         rows,
         columns,
-        overlapPercent
+        overlapPercent,
+        traversal,
+        startCorner
     ) {
         const rowCount = clamp(Math.round(Number(rows) || 1), 1, 10);
         const columnCount = clamp(Math.round(Number(columns) || 1), 1, 10);
@@ -98,6 +100,31 @@
         const halfHeight = Math.tan(clamp(Number(heightDeg), 0.000001, 179) * DEG_TO_RAD / 2);
         const stepRight = 2 * halfWidth * (1 - overlap);
         const stepUp = 2 * halfHeight * (1 - overlap);
+        const topFirst = String(startCorner || "TOP_LEFT").indexOf("TOP_") === 0;
+        const leftFirst = String(startCorner || "TOP_LEFT").slice(-4) === "LEFT";
+        const rowOrder = Array.from({ length: rowCount }, function (_, index) {
+            return topFirst ? index : rowCount - 1 - index;
+        });
+        const columnOrder = Array.from({ length: columnCount }, function (_, index) {
+            return leftFirst ? index : columnCount - 1 - index;
+        });
+        const cells = [];
+        if (traversal === "COLUMNS") {
+            columnOrder.forEach(function (column) {
+                rowOrder.forEach(function (row) { cells.push([row, column]); });
+            });
+        } else {
+            rowOrder.forEach(function (row, rowIndex) {
+                const scan = traversal === "SNAKE" && rowIndex % 2 === 1
+                    ? columnOrder.slice().reverse()
+                    : columnOrder;
+                scan.forEach(function (column) { cells.push([row, column]); });
+            });
+        }
+        const sequenceNumbers = {};
+        cells.forEach(function (cell, index) {
+            sequenceNumbers[cell[0] + ":" + cell[1]] = index + 1;
+        });
         const panels = [];
         for (let row = 0; row < rowCount; row += 1) {
             const centerUp = ((rowCount - 1) / 2 - row) * stepUp;
@@ -110,7 +137,7 @@
                     [centerRight - halfWidth, centerUp - halfHeight]
                 ];
                 panels.push({
-                    number: row * columnCount + column + 1,
+                    number: sequenceNumbers[row + ":" + column],
                     row: row,
                     column: column,
                     center: tangentPlanePoint(

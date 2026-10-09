@@ -360,7 +360,9 @@
             Number(spec.positionAngleDeg) || 0,
             Number(spec.rows) || 1,
             Number(spec.columns) || 1,
-            Number(spec.overlapPercent) || 0
+            Number(spec.overlapPercent) || 0,
+            spec.traversal || "SNAKE",
+            spec.startCorner || "TOP_LEFT"
         );
         const projected = panels.map(function (panel) {
             const corners = panel.corners.map(function (corner) {
@@ -1004,6 +1006,8 @@
             columns,
             overlapPercent,
             showPanelNumbers,
+            traversal,
+            startCorner,
             alsoZoom
         ) {
             if (!pendingTargetFov || pendingTargetFov.shape !== "rect") return false;
@@ -1014,6 +1018,12 @@
                 Math.min(90, Number(overlapPercent) || 0)
             );
             pendingTargetFov.showPanelNumbers = Boolean(showPanelNumbers);
+            pendingTargetFov.traversal = ["ROWS", "SNAKE", "COLUMNS"].indexOf(traversal) >= 0
+                ? traversal
+                : "SNAKE";
+            pendingTargetFov.startCorner = [
+                "TOP_LEFT", "TOP_RIGHT", "BOTTOM_LEFT", "BOTTOM_RIGHT"
+            ].indexOf(startCorner) >= 0 ? startCorner : "TOP_LEFT";
             lastOverlayFovKey = "";
             if (alsoZoom) zoomToTargetFov();
             applyFovOverlay(fovTargetElement, pendingTargetFov);

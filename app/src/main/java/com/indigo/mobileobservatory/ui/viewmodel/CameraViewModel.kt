@@ -20,6 +20,7 @@ import com.indigo.mobileobservatory.license.License
 import com.indigo.mobileobservatory.astrometry.AstapRunner
 import com.indigo.mobileobservatory.astrometry.D50Manager
 import com.indigo.mobileobservatory.astrometry.FitsSolveHintReader
+import com.indigo.mobileobservatory.astrometry.PlateSolveResult
 import com.indigo.mobileobservatory.mount.MountModule
 import com.indigo.mobileobservatory.mount.MountCoordinates
 import com.indigo.mobileobservatory.mount.MountDirection
@@ -37,6 +38,7 @@ import com.indigo.mobileobservatory.mount.SkyWatcherEquatorialMath
 import com.indigo.mobileobservatory.sequence.AutofocusRun
 import com.indigo.mobileobservatory.sequence.DeviceUnavailable
 import com.indigo.mobileobservatory.sequence.SequenceEditorMode
+import com.indigo.mobileobservatory.sequence.SequenceMosaicPlan
 import com.indigo.mobileobservatory.sequence.SequenceEphemeris
 import com.indigo.mobileobservatory.sequence.SequenceRuntime
 import com.indigo.mobileobservatory.sequence.SequenceSettings
@@ -566,6 +568,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
     private val _sequenceSkyPick = MutableStateFlow<SequenceSkyTarget?>(null)
     val sequenceSkyPick: StateFlow<SequenceSkyTarget?> = _sequenceSkyPick.asStateFlow()
+    private val _sequenceMosaicPlan = MutableStateFlow<SequenceMosaicPlan?>(null)
+    val sequenceMosaicPlan: StateFlow<SequenceMosaicPlan?> = _sequenceMosaicPlan.asStateFlow()
+    private val _lastPlateSolvePositionAngleDeg = MutableStateFlow(
+        prefs.getFloat("last_plate_solve_position_angle_deg", Float.NaN)
+            .takeIf { it.isFinite() }
+            ?.toDouble()
+    )
+    val lastPlateSolvePositionAngleDeg: StateFlow<Double?> =
+        _lastPlateSolvePositionAngleDeg.asStateFlow()
 
     fun rememberSequenceSkyTarget(
         name: String,
@@ -585,6 +596,27 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     ) {
         rememberSequenceSkyTarget(name, raHours, decDeg, positionAngleDeg)
         sequenceRuntime.addTarget(name, raHours, decDeg, positionAngleDeg, destination)
+    }
+
+    fun addSequenceMosaic(
+        plan: SequenceMosaicPlan,
+        destination: SequenceEditorMode
+    ) {
+        _sequenceMosaicPlan.value = plan
+        rememberSequenceSkyTarget(
+            plan.name,
+            plan.centerRaHours,
+            plan.centerDecDeg,
+            plan.positionAngleDeg
+        )
+        sequenceRuntime.addMosaic(plan, destination)
+    }
+
+    fun recordPlateSolveResult(result: PlateSolveResult) {
+        val angle = result.rotationDeg?.takeIf { result.success && it.isFinite() } ?: return
+        val normalized = ((angle % 360.0) + 360.0) % 360.0
+        _lastPlateSolvePositionAngleDeg.value = normalized
+        prefs.edit().putFloat("last_plate_solve_position_angle_deg", normalized.toFloat()).apply()
     }
 
     val mountBusy = mountModule.mountBusy
