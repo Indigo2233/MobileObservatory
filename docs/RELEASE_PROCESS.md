@@ -92,6 +92,10 @@ pushing the release tag (`v1.0.7`) or dispatching it manually. It builds the
 signed APK, generates `update.json`, and creates the GitHub Release with the APK,
 checksum, build information, and manifest attached.
 
+`Write-UpdateManifest.ps1` rejects debug variants, missing Stellarium assets,
+enabled sequence entry points, and unexpected current or legacy certificate
+fingerprints before publication.
+
 The in-app updater reads `update.json` from the newest published release, so a
 release without the manifest is not distributed to existing installations.
 See `docs/APP_UPDATE.md` for the manifest format and verification steps.

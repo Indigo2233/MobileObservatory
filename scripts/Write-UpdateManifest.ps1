@@ -42,6 +42,23 @@ foreach ($line in Get-Content -LiteralPath $buildInfoFile.FullName) {
 }
 
 $versionName = $buildInfo["versionName"]
+$expectedSigningDigest = "46a82d0f1ba2989f42448b7ef9845a8283a9a2cb8e8938bb49a7bae3a27aaa3a"
+$expectedLegacyDigest = "bc4b926780ae1826eb2b66c3c2bea99a546bac91f5bc9f6274547680cc86c374"
+if ($buildInfo["variant"] -ne "release") {
+    throw "Update manifests require a release build: $($buildInfoFile.FullName)"
+}
+if ($buildInfo["stellariumIncluded"] -ne "True") {
+    throw "Published builds must include the licensed Stellarium assets."
+}
+if ($buildInfo["sequenceEnabled"] -ne "False") {
+    throw "Published builds must keep the unfinished sequence entry points disabled."
+}
+if ($buildInfo["signingCertificateSha256"] -ne $expectedSigningDigest) {
+    throw "Build information does not contain the maintainer signing certificate."
+}
+if ($buildInfo["legacySigningCertificateSha256"] -ne $expectedLegacyDigest) {
+    throw "Build information does not contain the v1.0.6 upgrade certificate."
+}
 $versionCode = 0
 if (-not [int]::TryParse($buildInfo["versionCode"], [ref]$versionCode) -or $versionCode -le 0) {
     throw "Build information does not contain a valid versionCode: $($buildInfoFile.FullName)"

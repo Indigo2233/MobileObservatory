@@ -16,10 +16,6 @@ on:
         description: "Mark this update as required"
         type: boolean
         default: false
-      enable_sequence:
-        description: "Include the unfinished sequence feature (development only)"
-        type: boolean
-        default: false
       min_supported_version_code:
         description: "Minimum version code allowed to keep running (0 disables)"
         required: false
@@ -110,10 +106,7 @@ jobs:
           ANDROID_RELEASE_OLD_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_OLD_STORE_PASSWORD }}
           ANDROID_RELEASE_OLD_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_OLD_KEY_ALIAS }}
           ANDROID_RELEASE_OLD_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_OLD_KEY_PASSWORD }}
-        run: |
-          $arguments = @("-Release", "-NonCommercial")
-          if ('${{ inputs.enable_sequence }}' -eq 'true') { $arguments += "-ShowSequence" }
-          & .\Build.ps1 @arguments
+        run: .\Build.ps1 -Release -NonCommercial
 
       - name: Write release notes
         id: write-notes
