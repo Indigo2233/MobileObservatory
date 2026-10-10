@@ -21,6 +21,20 @@ Configure the following secrets in the protected GitHub `release` environment:
 - `ANDROID_RELEASE_STORE_PASSWORD`
 - `ANDROID_RELEASE_KEY_ALIAS`
 - `ANDROID_RELEASE_KEY_PASSWORD`
+- `ANDROID_RELEASE_OLD_KEYSTORE_BASE64`
+- `ANDROID_RELEASE_OLD_STORE_PASSWORD`
+- `ANDROID_RELEASE_OLD_KEY_ALIAS`
+- `ANDROID_RELEASE_OLD_KEY_PASSWORD`
+
+The four `ANDROID_RELEASE_OLD_*` values hold the certificate used by `v1.0.6`.
+`Build.ps1` creates an APK Signature Scheme v3 lineage at build time. Android 8
+receives an APK Signature Scheme v2 signature from the legacy certificate, and
+Android 9 or newer receives the maintainer certificate through the rotation
+lineage. The build verifies the legacy SHA-256 fingerprint before producing the
+installer. The maintainer certificate SHA-256 fingerprint is
+`46a82d0f1ba2989f42448b7ef9845a8283a9a2cb8e8938bb49a7bae3a27aaa3a`.
+The legacy `v1.0.6` certificate fingerprint is
+`bc4b926780ae1826eb2b66c3c2bea99a546bac91f5bc9f6274547680cc86c374`.
 
 The keystore Base64 value can be generated locally with:
 
@@ -30,9 +44,10 @@ The keystore Base64 value can be generated locally with:
 ) | Set-Clipboard
 ```
 
-For local release builds, set `ANDROID_RELEASE_KEYSTORE` to the keystore path and
-set the other three variables directly. Gradle rejects missing credentials,
-`debug.keystore`, and the standard `androiddebugkey` alias.
+For local release builds, set `ANDROID_RELEASE_KEYSTORE` and
+`ANDROID_RELEASE_OLD_KEYSTORE` to their keystore paths and set the other six
+variables directly. Gradle validates the maintainer key before `Build.ps1`
+applies and verifies the rotation lineage.
 
 ## Build a release candidate
 
@@ -85,6 +100,8 @@ See `docs/APP_UPDATE.md` for the manifest format and verification steps.
 
 - Android CI passes for the exact release commit.
 - The APK certificate matches the stored production certificate fingerprint.
+- Android 8 verification reports the `v1.0.6` certificate and Android 9+
+  verification reports the maintainer certificate.
 - Version code is greater than every published build.
 - Required rows in `docs/testing/HARDWARE_SMOKE_TESTS.md` have dated evidence.
 - Camera, mount, guide, accessory, STOP, reconnect, and permission paths pass on

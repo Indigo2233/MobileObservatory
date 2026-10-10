@@ -42,6 +42,20 @@ jobs:
             [Convert]::FromBase64String($env:ANDROID_RELEASE_KEYSTORE_BASE64)
           )
 
+      - name: Decode legacy release keystore
+        shell: pwsh
+        env:
+          ANDROID_RELEASE_OLD_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_OLD_KEYSTORE_BASE64 }}
+          ANDROID_RELEASE_OLD_KEYSTORE: ${{ runner.temp }}\indigo-release-legacy.jks
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:ANDROID_RELEASE_OLD_KEYSTORE_BASE64)) {
+            throw "ANDROID_RELEASE_OLD_KEYSTORE_BASE64 is not configured in the release environment."
+          }
+          [IO.File]::WriteAllBytes(
+            $env:ANDROID_RELEASE_OLD_KEYSTORE,
+            [Convert]::FromBase64String($env:ANDROID_RELEASE_OLD_KEYSTORE_BASE64)
+          )
+
       - name: Build signed release
         shell: pwsh
         env:
@@ -49,6 +63,10 @@ jobs:
           ANDROID_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_STORE_PASSWORD }}
           ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
           ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+          ANDROID_RELEASE_OLD_KEYSTORE: ${{ runner.temp }}\indigo-release-legacy.jks
+          ANDROID_RELEASE_OLD_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_OLD_STORE_PASSWORD }}
+          ANDROID_RELEASE_OLD_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_OLD_KEY_ALIAS }}
+          ANDROID_RELEASE_OLD_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_OLD_KEY_PASSWORD }}
         run: .\Build.ps1 -Release -NonCommercial
 
       - name: Upload release candidate

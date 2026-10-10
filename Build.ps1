@@ -125,6 +125,62 @@ try {
         $apkElement.versionCode
     )
 
+    $signingCertificateSha256 = ""
+    $legacySigningCertificateSha256 = ""
+    $signingRotationMinSdkVersion = ""
+    if ($Release) {
+        $androidSdkRoot = Get-AndroidSdkRoot
+        $apkSigner = Get-ChildItem -Path (Join-Path $androidSdkRoot "build-tools") `
+            -File -Recurse |
+            Where-Object { $_.Name -in @("apksigner", "apksigner.bat") } |
+            Sort-Object FullName |
+            Select-Object -Last 1
+        if ($null -eq $apkSigner) {
+            throw "apksigner was not found under $androidSdkRoot."
+        }
+
+        $rotationMinSdkVersion = 28
+        & "$root\scripts\Sign-RotatedRelease.ps1" `
+            -ApkPath $apk `
+            -ApkSignerPath $apkSigner.FullName `
+            -RotationMinSdkVersion $rotationMinSdkVersion
+        if ($LASTEXITCODE -ne 0) {
+            throw "Release APK signing-certificate rotation failed."
+        }
+
+        $signatureReport = & $apkSigner.FullName verify --print-certs `
+            --min-sdk-version 28 --max-sdk-version 32 $apk 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "Release APK signature verification failed for Android 9+: $signatureReport"
+        }
+        $legacySignatureReport = & $apkSigner.FullName verify --print-certs `
+            --min-sdk-version 26 --max-sdk-version 27 $apk 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "Release APK signature verification failed for Android 8: $legacySignatureReport"
+        }
+
+        $digestLine = $signatureReport | Where-Object {
+            $_ -match '^Signer #1 certificate SHA-256 digest:'
+        } | Select-Object -First 1
+        $legacyDigestLine = $legacySignatureReport | Where-Object {
+            $_ -match '^Signer #1 certificate SHA-256 digest:'
+        } | Select-Object -First 1
+        if (-not $digestLine -or -not $legacyDigestLine) {
+            throw "Release APK signing certificate digests were not reported."
+        }
+        $signingCertificateSha256 = ($digestLine -split ': ', 2)[1].Trim().ToLowerInvariant()
+        $legacySigningCertificateSha256 = ($legacyDigestLine -split ': ', 2)[1].Trim().ToLowerInvariant()
+        $expectedLegacyDigest = "bc4b926780ae1826eb2b66c3c2bea99a546bac91f5bc9f6274547680cc86c374"
+        $expectedSigningDigest = "46a82d0f1ba2989f42448b7ef9845a8283a9a2cb8e8938bb49a7bae3a27aaa3a"
+        if ($legacySigningCertificateSha256 -ne $expectedLegacyDigest) {
+            throw "Android 8 signer does not match the v1.0.6 certificate."
+        }
+        if ($signingCertificateSha256 -ne $expectedSigningDigest) {
+            throw "Android 9+ signer does not match the maintainer certificate."
+        }
+        $signingRotationMinSdkVersion = [string]$rotationMinSdkVersion
+    }
+
     New-Item -ItemType Directory -Path (Split-Path $apkOut) -Force | Out-Null
     Copy-Item -LiteralPath $apk -Destination $apkOut -Force
     Copy-Item -LiteralPath $apk -Destination $versionedApkOut -Force
@@ -139,32 +195,6 @@ try {
     $checksumOut = "$versionedApkOut.sha256"
     Set-Content -LiteralPath $checksumOut -Encoding ascii -Value "$sha256  $([IO.Path]::GetFileName($versionedApkOut))"
 
-    $signingCertificateSha256 = ""
-    if ($Release) {
-        $androidSdkRoot = Get-AndroidSdkRoot
-        $apkSigner = Get-ChildItem (Join-Path $androidSdkRoot "build-tools") \
-            -Filter "apksigner*" -File -Recurse |
-            Sort-Object FullName |
-            Select-Object -Last 1
-        if ($null -eq $apkSigner) {
-            throw "apksigner was not found under $androidSdkRoot."
-        }
-        $signatureReport = & $apkSigner.FullName verify --print-certs $versionedApkOut 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            throw "Release APK signature verification failed: $signatureReport"
-        }
-        if ($signatureReport -match 'androiddebugkey') {
-            throw "Release APK uses the Android debug signing identity."
-        }
-        $digestLine = $signatureReport | Where-Object {
-            $_ -match '^Signer #1 certificate SHA-256 digest:'
-        } | Select-Object -First 1
-        if (-not $digestLine) {
-            throw "Release APK signing certificate digest was not reported."
-        }
-        $signingCertificateSha256 = ($digestLine -split ': ', 2)[1].Trim()
-    }
-
     $commit = (& git -C $root rev-parse HEAD).Trim()
     if ($LASTEXITCODE -ne 0) {
         throw "Unable to resolve the source commit for build metadata."
@@ -178,6 +208,8 @@ try {
         "commit=$commit"
         "sha256=$sha256"
         "signingCertificateSha256=$signingCertificateSha256"
+        "legacySigningCertificateSha256=$legacySigningCertificateSha256"
+        "signingRotationMinSdkVersion=$signingRotationMinSdkVersion"
         "stellariumIncluded=$($NonCommercial.IsPresent)"
         "sequenceEnabled=$sequenceEnabled"
         "emulatorTest=$($EmulatorTest.IsPresent)"
