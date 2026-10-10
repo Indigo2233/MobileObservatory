@@ -250,3 +250,23 @@
 **代码：** `SequenceAdvancedEditor.kt`、`ui/screens/sequence/SequenceTree.kt`
 
 **回归：** `SequencePortraitUsabilityTest.shortNumericFieldsShareARow`、`tappingAnOpenInstructionAgainCollapsesItsFields`、`draggingToFixedRightRailDeletesWithoutVerticalScroll`
+
+---
+
+## 壳层：全局状态带与自适应导航
+
+夜间野外的第一步是「一眼知道所有设备现在什么状态」，所以壳层常驻一条设备状态带；主导航按可用宽度分档。
+
+| 点 | 约定 |
+|---|---|
+| 状态带 | 常驻顶部 48dp：相机 / 赤道仪 / 导星 / 制冷 / 滤镜轮 / 电调焦，颜色 + 文字 + 图标三重编码；点胶囊跳转到对应页面；右侧固定红色夜视与设置入口 |
+| 主导航 | 相机 / 赤道仪 / 星图 / 器材 / 工具。手机竖屏用底部导航；手机横屏与平板（宽 ≥600dp，或横屏且宽 ≥520dp）用左侧导航栏，平板显示文字标签，窄横屏只显示图标 |
+| 设置 | 不再是主导航项，改为状态带右侧的全局入口，任何页面一键可达 |
+| 工具台 | 图像解析 / 极轴校准 / 导星 / 文件浏览集中在工具台页；序列编辑器仍只受 `SequenceFeature.ENABLED` 控制，发布包不出现入口 |
+| 相机控制面板 | 常驻读数条（曝光 / 增益 / 制冷 / 帧率，点击跳到对应分区）+ 任务分页（拍摄 / 设备 / 图像 / ROI / 信息）；望远镜与制冷控制在「设备」分页内 |
+| 触控尺寸 | 主操作目标 ≥48dp；状态胶囊与分组选择器可视高 40dp；预览浮层按钮 44dp 视觉 + 48dp 触控区；相邻步进/危险控件间隔 ≥12dp |
+| 字色 | 正文中文下限 13sp；曝光、RA/Dec、温度等连续变化数值使用等宽字体 |
+
+**代码：** `ObservatoryStatusBar.kt`、`ObservatoryNavigation.kt`、`ObservatoryPills.kt`、`ToolsScreen.kt`、`CameraScreen.kt`（壳层部分）、`ControlPanel.kt`、`ui/theme/Tokens.kt`、`ui/theme/Type.kt`
+
+**回归：** `ObservingUiWiringTest` 全部保留（星图跟随、全局 STOP、板解焦距、零位用语等断言未修改）
