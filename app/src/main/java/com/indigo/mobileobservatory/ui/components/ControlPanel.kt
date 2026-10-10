@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -34,6 +35,9 @@ import com.indigo.mobileobservatory.mount.MountDirection
 import com.indigo.mobileobservatory.mount.MountSlewRate
 import com.indigo.mobileobservatory.mount.MountTransportType
 import com.indigo.mobileobservatory.mount.MountUsbDevice
+import com.indigo.mobileobservatory.ui.theme.ObservatoryTheme
+import com.indigo.mobileobservatory.ui.theme.ObservatoryType
+import com.indigo.mobileobservatory.util.ImageUtils
 import kotlinx.coroutines.flow.StateFlow
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -162,10 +166,7 @@ fun ControlPanel(
 ) {
     val exposureMin by exposureMinFlow.collectAsState()
     val exposureMax by exposureMaxFlow.collectAsState()
-    var deviceExpanded by remember { mutableStateOf(true) }
-    var captureExpanded by remember { mutableStateOf(true) }
-    var imageExpanded by remember { mutableStateOf(true) }
-    var roiExpanded by remember { mutableStateOf(false) }
+    var activeSection by remember { mutableStateOf(ControlPanelSection.CAPTURE) }
     var mountExpanded by remember { mutableStateOf(true) }
     val decreaseCoarseFocusDescription = stringResource(R.string.decrease_coarse_focus)
     val decreaseFineFocusDescription = stringResource(R.string.decrease_fine_focus)
@@ -183,26 +184,27 @@ fun ControlPanel(
 
     Column(
         modifier = modifier
-            .width(280.dp)
+            .width(300.dp)
             .fillMaxHeight()
             .verticalScroll(rememberScrollState())
             .padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        // FPS display
-        Text(
-            stringResource(R.string.fps_format).format(fps),
-            style = MaterialTheme.typography.titleSmall.copy(
-                fontFamily = FontFamily.Monospace,
-                fontSize = 14.sp
-            ),
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.padding(bottom = 4.dp)
+        // ── Always-visible readouts: tap a value to jump to its section ───────
+        PanelQuickStrip(
+            fps = fps,
+            exposureUs = exposureUs,
+            gain = gain,
+            coolerOn = coolerOn,
+            sensorTempTenths = sensorTempTenths,
+            targetTempTenths = targetTempTenths,
+            onJumpTo = { section -> activeSection = section }
         )
 
+        PanelSectionTabs(active = activeSection, onSelect = { activeSection = it })
+
         // ── Device ───────
-        SectionHeader(stringResource(R.string.section_device), deviceExpanded) { deviceExpanded = !deviceExpanded }
-        AnimatedVisibility(visible = deviceExpanded) {
+        if (activeSection == ControlPanelSection.DEVICE) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 // Camera
                 Row(
@@ -914,8 +916,7 @@ fun ControlPanel(
         Divider(color = MaterialTheme.colorScheme.outlineVariant)
 
         // ── Capture Settings ───────
-        SectionHeader(stringResource(R.string.section_capture), captureExpanded) { captureExpanded = !captureExpanded }
-        AnimatedVisibility(visible = captureExpanded) {
+        if (activeSection == ControlPanelSection.CAPTURE) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 ExposureSlider(
                     exposureUs = exposureUs,
@@ -1136,8 +1137,7 @@ fun ControlPanel(
         Divider(color = MaterialTheme.colorScheme.outlineVariant)
 
         // ── Image Control ───────
-        SectionHeader(stringResource(R.string.section_image), imageExpanded) { imageExpanded = !imageExpanded }
-        AnimatedVisibility(visible = imageExpanded) {
+        if (activeSection == ControlPanelSection.IMAGE) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 HistogramView(histogramData = histogram)
 
@@ -1231,8 +1231,7 @@ fun ControlPanel(
 
         if (showHostRoi) {
         // ── ROI ───────
-        SectionHeader(stringResource(R.string.section_roi), roiExpanded) { roiExpanded = !roiExpanded }
-        AnimatedVisibility(visible = roiExpanded) {
+        if (activeSection == ControlPanelSection.ROI) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
                     "${roi.width} x ${roi.height}  @  (${roi.x}, ${roi.y})",
@@ -1359,9 +1358,7 @@ fun ControlPanel(
         if (cameraInfo != null) {
             Divider(color = MaterialTheme.colorScheme.outlineVariant)
 
-            var infoExpanded by remember { mutableStateOf(false) }
-            SectionHeader(stringResource(R.string.section_info), infoExpanded) { infoExpanded = !infoExpanded }
-            AnimatedVisibility(visible = infoExpanded) {
+            if (activeSection == ControlPanelSection.INFO) {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     InfoRow(stringResource(R.string.info_camera), cameraInfo.name)
                     InfoRow(stringResource(R.string.info_sn), cameraInfo.serialNumber)
@@ -1691,6 +1688,151 @@ private fun MountDirectionButton(
     ) {
         Box(contentAlignment = Alignment.Center) {
             Text(label, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface)
+        }
+    }
+}
+
+/**
+ * Task-oriented sections of the camera control panel. Only one section is
+ * visible at a time; the tabs replace the previous seven stacked collapsible
+ * groups so a parameter is at most one tap away.
+ */
+enum class ControlPanelSection(val labelRes: Int) {
+    CAPTURE(R.string.section_capture),
+    DEVICE(R.string.section_device),
+    IMAGE(R.string.section_image),
+    ROI(R.string.section_roi),
+    INFO(R.string.section_info),
+}
+
+/** Always-visible readout strip; tapping a value jumps to its section. */
+@Composable
+private fun PanelQuickStrip(
+    fps: Float,
+    exposureUs: Float,
+    gain: Float,
+    coolerOn: Boolean,
+    sensorTempTenths: Int,
+    targetTempTenths: Int,
+    onJumpTo: (ControlPanelSection) -> Unit
+) {
+    val dimens = ObservatoryTheme.dimens
+    Surface(
+        color = ObservatoryTheme.colors.card,
+        shape = RoundedCornerShape(dimens.radiusMedium),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            QuickCell(
+                label = stringResource(R.string.exposure),
+                value = ImageUtils.formatExposure(exposureUs),
+                modifier = Modifier.weight(1f),
+                onClick = { onJumpTo(ControlPanelSection.CAPTURE) }
+            )
+            QuickCell(
+                label = stringResource(R.string.gain),
+                value = "%.0f".format(gain),
+                modifier = Modifier.weight(1f),
+                onClick = { onJumpTo(ControlPanelSection.CAPTURE) }
+            )
+            QuickCell(
+                label = stringResource(R.string.cooler),
+                value = if (coolerOn || sensorTempTenths != 0) {
+                    "%.1f°C".format(sensorTempTenths / 10f)
+                } else {
+                    "—"
+                },
+                detail = if (coolerOn) "→ %.1f°C".format(targetTempTenths / 10f) else null,
+                modifier = Modifier.weight(1.2f),
+                onClick = { onJumpTo(ControlPanelSection.DEVICE) }
+            )
+            QuickCell(
+                label = stringResource(R.string.fps_label_short),
+                value = "%.0f".format(fps),
+                modifier = Modifier.weight(0.8f),
+                onClick = null
+            )
+        }
+    }
+}
+
+@Composable
+private fun QuickCell(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    detail: String? = null,
+    onClick: (() -> Unit)? = null
+) {
+    Column(
+        modifier = modifier
+            .heightIn(min = 44.dp)
+            .then(if (onClick != null) Modifier.clickable { onClick() } else Modifier),
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1
+        )
+        Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(
+                text = value,
+                style = ObservatoryType.readoutMedium,
+                color = ObservatoryTheme.colors.readout,
+                maxLines = 1
+            )
+            if (detail != null) {
+                Text(
+                    text = detail,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1
+                )
+            }
+        }
+    }
+}
+
+/** Section switcher: large targets, horizontally scrollable for narrow panels. */
+@Composable
+private fun PanelSectionTabs(
+    active: ControlPanelSection,
+    onSelect: (ControlPanelSection) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        ControlPanelSection.entries.forEach { section ->
+            val selected = section == active
+            Surface(
+                color = if (selected) MaterialTheme.colorScheme.primaryContainer
+                else MaterialTheme.colorScheme.surfaceVariant,
+                shape = RoundedCornerShape(50),
+                modifier = Modifier
+                    .height(40.dp)
+                    .clickable { onSelect(section) }
+            ) {
+                Box(
+                    modifier = Modifier.padding(horizontal = 14.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = stringResource(section.labelRes),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1
+                    )
+                }
+            }
         }
     }
 }

@@ -3,7 +3,11 @@ package com.indigo.mobileobservatory.ui.components
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CenterFocusWeak
 import androidx.compose.material.icons.filled.ChevronLeft
@@ -21,7 +25,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.SmallFloatingActionButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -32,7 +36,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.indigo.mobileobservatory.R
 
@@ -69,39 +76,36 @@ fun CameraPreviewTools(
         verticalAlignment = Alignment.Top
     ) {
         if (connected) {
-            SmallFloatingActionButton(
+            PreviewChromeButton(
                 onClick = onTogglePanel,
-                containerColor = MaterialTheme.colorScheme.surfaceVariant
+                description = stringResource(R.string.toggle_panel)
             ) {
                 Icon(
                     if (showPanel) Icons.Default.ChevronRight else Icons.Default.ChevronLeft,
-                    stringResource(R.string.toggle_panel),
+                    contentDescription = null,
                     tint = MaterialTheme.colorScheme.onSurface
                 )
             }
-            SmallFloatingActionButton(
+            PreviewChromeButton(
                 onClick = onFitToView,
-                containerColor = MaterialTheme.colorScheme.surfaceVariant
+                description = stringResource(R.string.fit_to_view)
             ) {
                 Icon(
                     Icons.Default.FitScreen,
-                    stringResource(R.string.fit_to_view),
+                    contentDescription = null,
                     tint = MaterialTheme.colorScheme.onSurface
                 )
             }
         }
         Box {
-            SmallFloatingActionButton(
+            PreviewChromeButton(
                 onClick = { menuOpen = true },
-                containerColor = if (focusAssistEnabled || showCenterMarker || redNightMode) {
-                    MaterialTheme.colorScheme.primaryContainer
-                } else {
-                    MaterialTheme.colorScheme.surfaceVariant
-                }
+                description = stringResource(R.string.camera_preview_tools),
+                highlighted = focusAssistEnabled || showCenterMarker || redNightMode
             ) {
                 Icon(
                     Icons.Default.MoreVert,
-                    stringResource(R.string.camera_preview_tools),
+                    contentDescription = null,
                     tint = MaterialTheme.colorScheme.onSurface
                 )
             }
@@ -175,6 +179,33 @@ fun CameraPreviewTools(
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * Preview chrome button: 44dp visual with a 48dp minimum touch target, so it
+ * still works with gloves while staying out of the preview's way.
+ */
+@Composable
+private fun PreviewChromeButton(
+    onClick: () -> Unit,
+    description: String,
+    highlighted: Boolean = false,
+    content: @Composable () -> Unit
+) {
+    Surface(
+        color = if (highlighted) MaterialTheme.colorScheme.primaryContainer
+        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.92f),
+        shape = CircleShape,
+        shadowElevation = 2.dp,
+        modifier = Modifier
+            .size(44.dp)
+            .clickable(onClick = onClick)
+            .semantics { contentDescription = description }
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            content()
         }
     }
 }
