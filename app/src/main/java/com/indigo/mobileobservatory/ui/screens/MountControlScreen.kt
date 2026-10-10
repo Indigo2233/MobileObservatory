@@ -7,6 +7,9 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,6 +28,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -46,6 +51,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -73,6 +79,9 @@ import com.indigo.mobileobservatory.permissions.AppSettingsNavigator
 import com.indigo.mobileobservatory.permissions.BluetoothPermissionPolicy
 import com.indigo.mobileobservatory.ui.MountConnectionAction
 import com.indigo.mobileobservatory.ui.MountConnectionUiState
+import com.indigo.mobileobservatory.ui.components.deviceStatusColor
+import com.indigo.mobileobservatory.ui.components.DeviceStatusCode
+import com.indigo.mobileobservatory.ui.theme.ObservatoryTheme
 import com.indigo.mobileobservatory.ui.viewmodel.CameraViewModel
 import kotlinx.coroutines.launch
 
@@ -214,23 +223,49 @@ fun MountControlScreen(
         viewModel.scanMountUsbDevices()
     }
 
+    var setupExpanded by rememberSaveable { mutableStateOf(true) }
+    LaunchedEffect(connected) { setupExpanded = !connected }
+
     Column(
         modifier = modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(16.dp),
+            .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Column {
-            Text(
-                stringResource(R.string.mount_control_title),
-                style = MaterialTheme.typography.titleLarge
-            )
-            Text(
-                stringResource(R.string.mount_connection_hint),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.outline
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        stringResource(R.string.mount_control_title),
+                        style = MaterialTheme.typography.titleLarge
+                    )
+                    Text(
+                        stringResource(R.string.mount_connection_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline
+                    )
+                }
+                MountStateChip(
+                    code = when (connectionState) {
+                        MountConnectionState.Disconnected -> DeviceStatusCode.OFF
+                        MountConnectionState.Connecting -> DeviceStatusCode.CONNECTING
+                        MountConnectionState.Connected -> if (busy) DeviceStatusCode.ACTIVE
+                        else DeviceStatusCode.READY
+                        is MountConnectionState.Error -> DeviceStatusCode.ERROR
+                    },
+                    label = when (val state = connectionState) {
+                        MountConnectionState.Disconnected -> stringResource(R.string.disconnected)
+                        MountConnectionState.Connecting -> stringResource(R.string.connecting)
+                        MountConnectionState.Connected -> stringResource(R.string.connected)
+                        is MountConnectionState.Error -> stringResource(R.string.error)
+                    }
+                )
+            }
         }
 
         Card(
@@ -243,6 +278,50 @@ fun MountControlScreen(
                 modifier = Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { setupExpanded = !setupExpanded },
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            stringResource(R.string.section_device),
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        if (!setupExpanded) {
+                            val transportLabel = when (transport) {
+                                MountTransportType.TCP -> "$host:$port"
+                                MountTransportType.USB_SERIAL -> usbDevices
+                                    .firstOrNull { it.deviceId == usbDeviceId }?.label
+                                    ?: stringResource(R.string.usb_serial)
+                                MountTransportType.BLUETOOTH -> bluetoothAddress.ifBlank {
+                                    stringResource(R.string.bluetooth)
+                                }
+                                MountTransportType.SYNSCAN_WIFI -> "$synScanHost:$synScanPort"
+                            }
+                            Text(
+                                transportLabel,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1
+                            )
+                        }
+                    }
+                    Icon(
+                        imageVector = if (setupExpanded) Icons.Default.ExpandLess
+                        else Icons.Default.ExpandMore,
+                        contentDescription = if (setupExpanded) {
+                            stringResource(R.string.collapse)
+                        } else {
+                            stringResource(R.string.expand)
+                        },
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                if (setupExpanded) {
                 if (connectionUi.showSetupPanel) {
                 Row(
                     modifier = Modifier.horizontalScroll(rememberScrollState()),
@@ -484,7 +563,8 @@ fun MountControlScreen(
                                 }
                             }
                         },
-                        enabled = connectionUi.actionEnabled
+                        enabled = connectionUi.actionEnabled,
+                        modifier = Modifier.height(48.dp)
                     ) {
                         if (connectionUi.showProgress) {
                             CircularProgressIndicator(
@@ -506,7 +586,8 @@ fun MountControlScreen(
                     }
                     OutlinedButton(
                         onClick = viewModel::readMountCoordinates,
-                        enabled = connected && !busy
+                        enabled = connected && !busy,
+                        modifier = Modifier.height(48.dp)
                     ) {
                         Icon(Icons.Default.Refresh, contentDescription = null)
                         Text(stringResource(R.string.refresh_coordinates))
@@ -571,6 +652,7 @@ fun MountControlScreen(
                             Text(stringResource(R.string.sync_site))
                         }
                     }
+                }
                 }
             }
         }
@@ -795,8 +877,38 @@ private fun TrackingRateChip(
     FilterChip(
         selected = selected,
         onClick = onClick,
-        label = { Text(label, maxLines = 1) }
+        label = { Text(label, maxLines = 1) },
+        modifier = Modifier.height(40.dp)
     )
+}
+
+/** Connection state pill for the mount page header. */
+@Composable
+private fun MountStateChip(code: DeviceStatusCode, label: String) {
+    val accent = deviceStatusColor(code)
+    Surface(
+        color = accent.copy(alpha = 0.18f),
+        shape = CircleShape,
+        modifier = Modifier.height(36.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .background(accent, CircleShape)
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                color = ObservatoryTheme.colors.readout,
+                maxLines = 1
+            )
+        }
+    }
 }
 
 @Composable
