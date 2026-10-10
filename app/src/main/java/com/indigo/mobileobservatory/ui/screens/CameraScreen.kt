@@ -3,6 +3,7 @@ package com.indigo.mobileobservatory.ui.screens
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -27,6 +28,7 @@ import com.indigo.mobileobservatory.camera.DeviceEntry
 import com.indigo.mobileobservatory.camera.FrameProcessor
 import com.indigo.mobileobservatory.camera.GainCapability
 import com.indigo.mobileobservatory.ui.components.*
+import com.indigo.mobileobservatory.ui.theme.ObservatoryTheme
 import com.indigo.mobileobservatory.ui.viewmodel.CameraViewModel
 import com.indigo.mobileobservatory.ui.viewmodel.UpdateViewModel
 import com.indigo.mobileobservatory.mount.MountMotionState
@@ -45,6 +47,7 @@ private enum class MainControlTab {
     MOUNT,
     STAR_MAP,
     ACCESSORIES,
+    TOOLS,
     SEQUENCE
 }
 
@@ -297,86 +300,177 @@ fun CameraScreen(
     val roiMinW = viewModel.cameraManager.activeCamera?.roiMinWidth ?: 8
     val roiMinH = viewModel.cameraManager.activeCamera?.roiMinHeight ?: 8
 
-    Column(
+    // Global status strip: one glance shows what the rig is doing right now.
+    val guideConnectionState by viewModel.guideConnectionState.collectAsState()
+    val guideRunning by viewModel.guideRunning.collectAsState()
+    val cameraConnected = connectionState is ConnectionState.Connected
+    val mountConnected =
+        mountConnectionState is com.indigo.mobileobservatory.mount.MountConnectionState.Connected
+    val cameraPillValue = when {
+        isRecording -> "REC ${recordingFrameCount}"
+        cameraConnected -> "%.0f fps".format(fps)
+        else -> null
+    }
+    val cameraPillCode = when {
+        !cameraConnected -> DeviceStatusCode.OFF
+        isRecording -> DeviceStatusCode.ACTIVE
+        else -> DeviceStatusCode.READY
+    }
+    val mountPillValue = when {
+        !mountConnected -> null
+        globalMountMotionState.showsGlobalStop -> stringResource(R.string.stop)
+        mountTrackingEnabled -> stringResource(R.string.tracking)
+        else -> stringResource(R.string.tracking_stopped)
+    }
+    val mountPillCode = when {
+        !mountConnected -> DeviceStatusCode.OFF
+        globalMountMotionState.showsGlobalStop -> DeviceStatusCode.ACTIVE
+        mountTrackingEnabled -> DeviceStatusCode.ACTIVE
+        else -> DeviceStatusCode.READY
+    }
+    val guidePillValue = when {
+        guideRunning -> stringResource(R.string.guiding)
+        guideConnectionState is ConnectionState.Connected -> null
+        else -> null
+    }
+    val guidePillCode = when {
+        guideRunning -> DeviceStatusCode.ACTIVE
+        guideConnectionState is ConnectionState.Connected -> DeviceStatusCode.READY
+        guideConnectionState is ConnectionState.Connecting -> DeviceStatusCode.CONNECTING
+        guideConnectionState is ConnectionState.Error -> DeviceStatusCode.ERROR
+        else -> DeviceStatusCode.OFF
+    }
+    val coolerPillValue = if (coolerOn || coolingInfo != null) {
+        "%.1f°C".format(sensorTempTenths / 10f)
+    } else {
+        null
+    }
+    val statusDevices = listOf(
+        DeviceStatus(
+            key = "camera",
+            label = stringResource(R.string.camera),
+            value = cameraPillValue,
+            code = cameraPillCode,
+            icon = Icons.Default.CameraAlt
+        ),
+        DeviceStatus(
+            key = "mount",
+            label = stringResource(R.string.tab_mount),
+            value = mountPillValue,
+            code = mountPillCode,
+            icon = Icons.Default.Explore
+        ),
+        DeviceStatus(
+            key = "guide",
+            label = stringResource(R.string.guiding),
+            value = guidePillValue,
+            code = guidePillCode,
+            icon = Icons.Default.CenterFocusWeak
+        ),
+        DeviceStatus(
+            key = "cooler",
+            label = stringResource(R.string.cooler),
+            value = coolerPillValue,
+            code = when {
+                coolingInfo == null && !coolerOn -> DeviceStatusCode.OFF
+                rampStatus.isNotEmpty() -> DeviceStatusCode.ACTIVE
+                coolerOn -> DeviceStatusCode.ACTIVE
+                else -> DeviceStatusCode.READY
+            },
+            icon = Icons.Default.AcUnit
+        ),
+        DeviceStatus(
+            key = "filter",
+            label = stringResource(R.string.filter_wheel),
+            value = if (fwConnected) {
+                fwSlotNames.getOrNull(fwPosition) ?: "${fwPosition + 1}"
+            } else {
+                null
+            },
+            code = when {
+                !fwConnected -> DeviceStatusCode.OFF
+                fwMoving -> DeviceStatusCode.ACTIVE
+                else -> DeviceStatusCode.READY
+            },
+            icon = Icons.Default.FilterAlt
+        ),
+        DeviceStatus(
+            key = "focuser",
+            label = stringResource(R.string.focuser),
+            value = if (eafConnected) "$eafPosition" else null,
+            code = when {
+                !eafConnected -> DeviceStatusCode.OFF
+                eafMoving -> DeviceStatusCode.ACTIVE
+                else -> DeviceStatusCode.READY
+            },
+            icon = Icons.Default.Tune
+        )
+    )
+
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
-        if (selectedTab != MainControlTab.STAR_MAP || !BuildConfig.STELLARIUM_ENABLED) {
-            val visibleTabCount = if (sequenceEnabled) {
-                MainControlTab.entries.size
-            } else {
-                MainControlTab.entries.size - 1
-            }
-            ScrollableTabRow(
-                selectedTabIndex = selectedTab.ordinal.coerceIn(0, visibleTabCount - 1),
-                modifier = Modifier.height(48.dp),
-                edgePadding = 8.dp
-            ) {
-                Tab(
-                    selected = selectedTab == MainControlTab.CAMERA,
-                    onClick = { selectedTab = MainControlTab.CAMERA },
-                    text = {
-                        Text(
-                            stringResource(R.string.tab_camera),
-                            style = MaterialTheme.typography.labelLarge
-                        )
-                    }
-                )
-                Tab(
-                    selected = selectedTab == MainControlTab.MOUNT,
-                    onClick = { selectedTab = MainControlTab.MOUNT },
-                    text = {
-                        Text(
-                            stringResource(R.string.tab_mount),
-                            style = MaterialTheme.typography.labelLarge
-                        )
-                    }
-                )
-                Tab(
-                    selected = selectedTab == MainControlTab.STAR_MAP,
-                    onClick = { selectedTab = MainControlTab.STAR_MAP },
-                    text = {
-                        Text(
-                            stringResource(R.string.star_map),
-                            style = MaterialTheme.typography.labelLarge
-                        )
-                    }
-                )
-                Tab(
-                    selected = selectedTab == MainControlTab.ACCESSORIES,
-                    onClick = { selectedTab = MainControlTab.ACCESSORIES },
-                    text = {
-                        Text(
-                            stringResource(R.string.tab_accessories),
-                            style = MaterialTheme.typography.labelLarge
-                        )
-                    }
-                )
-                if (sequenceEnabled) {
-                    Tab(
-                        selected = selectedTab == MainControlTab.SEQUENCE,
-                        onClick = { selectedTab = MainControlTab.SEQUENCE },
-                        text = {
-                            Text(
-                                stringResource(R.string.tab_sequence),
-                                style = MaterialTheme.typography.labelLarge
-                            )
-                        }
-                    )
-                }
-                Tab(
-                    selected = false,
-                    onClick = { showSettings = true },
-                    text = {
-                        Text(
-                            stringResource(R.string.settings),
-                            style = MaterialTheme.typography.labelLarge
-                        )
-                    }
-                )
-                }
+        val railLayout = maxWidth >= 600.dp || (maxWidth >= 520.dp && maxWidth > maxHeight)
+        val railLabels = maxWidth >= 600.dp
+        val toolsWideLayout = maxWidth >= 700.dp
+        val navCameraLabel = stringResource(R.string.tab_camera)
+        val navMountLabel = stringResource(R.string.tab_mount)
+        val navStarMapLabel = stringResource(R.string.star_map)
+        val navRigLabel = stringResource(R.string.tab_accessories)
+        val navToolsLabel = stringResource(R.string.cockpit_tab_tools)
+        val navEntries = remember(
+            navCameraLabel,
+            navMountLabel,
+            navStarMapLabel,
+            navRigLabel,
+            navToolsLabel
+        ) {
+            listOf(
+                ObservatoryNavEntry("CAMERA", navCameraLabel, Icons.Default.CameraAlt),
+                ObservatoryNavEntry("MOUNT", navMountLabel, Icons.Default.Explore),
+                ObservatoryNavEntry("STAR_MAP", navStarMapLabel, Icons.Default.Star),
+                ObservatoryNavEntry("ACCESSORIES", navRigLabel, Icons.Default.Build),
+                ObservatoryNavEntry("TOOLS", navToolsLabel, Icons.Default.Widgets)
+            )
         }
+        val navSelectedKey =
+            if (selectedTab == MainControlTab.SEQUENCE) "TOOLS" else selectedTab.name
+        val selectTab: (String) -> Unit = { key ->
+            when (key) {
+                "CAMERA" -> selectedTab = MainControlTab.CAMERA
+                "MOUNT" -> selectedTab = MainControlTab.MOUNT
+                "STAR_MAP" -> selectedTab = MainControlTab.STAR_MAP
+                "ACCESSORIES" -> selectedTab = MainControlTab.ACCESSORIES
+                "TOOLS" -> selectedTab = MainControlTab.TOOLS
+            }
+        }
+
+        Row(modifier = Modifier.fillMaxSize()) {
+            if (railLayout) {
+                ObservatoryNavRail(
+                    entries = navEntries,
+                    selectedKey = navSelectedKey,
+                    onSelect = selectTab,
+                    showLabels = railLabels
+                )
+            }
+            Column(modifier = Modifier.weight(1f).fillMaxSize()) {
+                ObservatoryStatusBar(
+                    devices = statusDevices,
+                    redNightMode = redNightMode,
+                    onToggleRedNight = { enabled -> onRedNightModeChange(enabled) },
+                    onOpenSettings = { showSettings = true },
+                    onDeviceClick = { device ->
+                        when (device.key) {
+                            "camera" -> selectedTab = MainControlTab.CAMERA
+                            "mount" -> selectedTab = MainControlTab.MOUNT
+                            "guide" -> showGuide = true
+                            else -> selectedTab = MainControlTab.ACCESSORIES
+                        }
+                    }
+                )
 
         if (sequenceEnabled) {
             val sequenceState by viewModel.sequenceRuntime.state.collectAsState()
@@ -534,6 +628,18 @@ fun CameraScreen(
                     onOpenMount = { selectedTab = MainControlTab.MOUNT }
                 )
             }
+            MainControlTab.TOOLS -> {
+                ToolsScreen(
+                    onOpenPlateSolve = { showPlateSolve = true },
+                    onOpenPolarAlignment = { showPolarAlign = true },
+                    onOpenGuide = { showGuide = true },
+                    onOpenPlayer = { viewModel.openPlayer() },
+                    showSequenceEntry = sequenceEnabled,
+                    onOpenSequence = { selectedTab = MainControlTab.SEQUENCE },
+                    modifier = Modifier.weight(1f),
+                    wideLayout = toolsWideLayout
+                )
+            }
             MainControlTab.CAMERA -> Column(
                 modifier = Modifier
                     .weight(1f)
@@ -623,15 +729,17 @@ fun CameraScreen(
                             Surface(
                                 modifier = Modifier
                                     .align(Alignment.BottomStart)
-                                    .padding(8.dp),
-                                color = Color(0xAA000000),
-                                shape = MaterialTheme.shapes.small
+                                    .padding(12.dp)
+                                    .widthIn(max = 440.dp),
+                                color = ObservatoryTheme.colors.scrim,
+                                shape = RoundedCornerShape(10.dp)
                             ) {
                                 Text(
                                     statusMessage,
-                                    color = Color.White,
-                                    fontSize = 11.sp,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    color = ObservatoryTheme.colors.onImage,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                    maxLines = 3
                                 )
                             }
                         }
@@ -900,6 +1008,15 @@ fun CameraScreen(
         }
             }
         }
+                if (!railLayout) {
+                    ObservatoryBottomBar(
+                        entries = navEntries,
+                        selectedKey = navSelectedKey,
+                        onSelect = selectTab
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -947,12 +1064,18 @@ private fun DisconnectedOverlay(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.outline
         )
-        Button(onClick = onConnect) {
+        Button(
+            onClick = onConnect,
+            modifier = Modifier.height(48.dp)
+        ) {
             Icon(Icons.Default.Usb, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))
             Text(stringResource(R.string.scan_devices))
         }
-        OutlinedButton(onClick = onPlateSolve) {
+        OutlinedButton(
+            onClick = onPlateSolve,
+            modifier = Modifier.height(48.dp)
+        ) {
             Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))
             Text(stringResource(R.string.plate_solve_image))

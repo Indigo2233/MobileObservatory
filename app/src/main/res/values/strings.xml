@@ -1039,4 +1039,18 @@
     <string name="update_verify_failed">The downloaded package failed verification: %1$s</string>
     <string name="update_download_failed">Download failed: %1$s</string>
     <string name="update_required_hint">This update is required to continue.</string>
+
+    <!-- Night cockpit shell -->
+    <string name="cockpit_tab_tools">Tools</string>
+    <string name="cockpit_tools_title">Tool bench</string>
+    <string name="cockpit_tools_plate_solve_hint">Solve a captured frame or a loaded image</string>
+    <string name="cockpit_tools_polar_hint">Three-point polar alignment</string>
+    <string name="cockpit_tools_guide_hint">Calibrate the guide camera and run guiding</string>
+    <string name="cockpit_tools_player_hint">Browse captures and recordings</string>
+    <string name="cockpit_tools_sequence_hint">Advanced sequence editor</string>
+    <string name="cockpit_red_night">Red night vision</string>
+    <string name="cockpit_open_settings">Settings</string>
+    <string name="cockpit_device_status">Device status</string>
+    <string name="cockpit_status_idle">Idle</string>
+    <string name="fps_label_short">FPS</string>
 </resources>
