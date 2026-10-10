@@ -159,17 +159,21 @@ try {
             throw "Release APK signature verification failed for Android 8: $legacySignatureReport"
         }
 
-        $digestLine = $signatureReport | Where-Object {
-            $_ -match '^Signer #1 certificate SHA-256 digest:'
-        } | Select-Object -First 1
-        $legacyDigestLine = $legacySignatureReport | Where-Object {
-            $_ -match '^Signer #1 certificate SHA-256 digest:'
-        } | Select-Object -First 1
-        if (-not $digestLine -or -not $legacyDigestLine) {
+        $signatureText = $signatureReport -join [Environment]::NewLine
+        $legacySignatureText = $legacySignatureReport -join [Environment]::NewLine
+        $digestMatch = [regex]::Match(
+            $signatureText,
+            'certificate SHA-256 digest:\s*([0-9a-fA-F]{64})'
+        )
+        $legacyDigestMatch = [regex]::Match(
+            $legacySignatureText,
+            'certificate SHA-256 digest:\s*([0-9a-fA-F]{64})'
+        )
+        if (-not $digestMatch.Success -or -not $legacyDigestMatch.Success) {
             throw "Release APK signing certificate digests were not reported."
         }
-        $signingCertificateSha256 = ($digestLine -split ': ', 2)[1].Trim().ToLowerInvariant()
-        $legacySigningCertificateSha256 = ($legacyDigestLine -split ': ', 2)[1].Trim().ToLowerInvariant()
+        $signingCertificateSha256 = $digestMatch.Groups[1].Value.ToLowerInvariant()
+        $legacySigningCertificateSha256 = $legacyDigestMatch.Groups[1].Value.ToLowerInvariant()
         $expectedLegacyDigest = "bc4b926780ae1826eb2b66c3c2bea99a546bac91f5bc9f6274547680cc86c374"
         $expectedSigningDigest = "46a82d0f1ba2989f42448b7ef9845a8283a9a2cb8e8938bb49a7bae3a27aaa3a"
         if ($legacySigningCertificateSha256 -ne $expectedLegacyDigest) {
