@@ -359,7 +359,7 @@ private fun CameraSettingsPage(viewModel: CameraViewModel) = SettingsPage {
                 )
             }
         } else {
-            var heaterDraft by remember(cameraInfo?.serialNumber, heaterLevel) {
+            var heaterDraft by remember(cameraInfo.serialNumber, heaterLevel) {
                 mutableIntStateOf(heaterLevel)
             }
             Row(
@@ -401,7 +401,7 @@ private fun CameraSettingsPage(viewModel: CameraViewModel) = SettingsPage {
                 )
             }
         } else {
-            var fanDraft by remember(cameraInfo?.serialNumber, fanLevel) {
+            var fanDraft by remember(cameraInfo.serialNumber, fanLevel) {
                 mutableIntStateOf(fanLevel)
             }
             Row(

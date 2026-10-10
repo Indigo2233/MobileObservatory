@@ -167,6 +167,15 @@ fun ControlPanel(
     val exposureMin by exposureMinFlow.collectAsState()
     val exposureMax by exposureMaxFlow.collectAsState()
     var activeSection by remember { mutableStateOf(ControlPanelSection.CAPTURE) }
+    val availableSections = controlPanelSections(
+        showHostRoi = showHostRoi,
+        hasCameraInfo = cameraInfo != null
+    )
+    LaunchedEffect(availableSections) {
+        if (activeSection !in availableSections) {
+            activeSection = ControlPanelSection.CAPTURE
+        }
+    }
     var mountExpanded by remember { mutableStateOf(true) }
     val decreaseCoarseFocusDescription = stringResource(R.string.decrease_coarse_focus)
     val decreaseFineFocusDescription = stringResource(R.string.decrease_fine_focus)
@@ -201,7 +210,11 @@ fun ControlPanel(
             onJumpTo = { section -> activeSection = section }
         )
 
-        PanelSectionTabs(active = activeSection, onSelect = { activeSection = it })
+        PanelSectionTabs(
+            sections = availableSections,
+            active = activeSection,
+            onSelect = { activeSection = it }
+        )
 
         // ── Device ───────
         if (activeSection == ControlPanelSection.DEVICE) {
@@ -1705,6 +1718,14 @@ enum class ControlPanelSection(val labelRes: Int) {
     INFO(R.string.section_info),
 }
 
+internal fun controlPanelSections(
+    showHostRoi: Boolean,
+    hasCameraInfo: Boolean
+): List<ControlPanelSection> = ControlPanelSection.entries.filter { section ->
+    (section != ControlPanelSection.ROI || showHostRoi) &&
+        (section != ControlPanelSection.INFO || hasCameraInfo)
+}
+
 /** Always-visible readout strip; tapping a value jumps to its section. */
 @Composable
 private fun PanelQuickStrip(
@@ -1801,6 +1822,7 @@ private fun QuickCell(
 /** Section switcher: large targets, horizontally scrollable for narrow panels. */
 @Composable
 private fun PanelSectionTabs(
+    sections: List<ControlPanelSection>,
     active: ControlPanelSection,
     onSelect: (ControlPanelSection) -> Unit
 ) {
@@ -1810,7 +1832,7 @@ private fun PanelSectionTabs(
             .horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        ControlPanelSection.entries.forEach { section ->
+        sections.forEach { section ->
             val selected = section == active
             Surface(
                 color = if (selected) MaterialTheme.colorScheme.primaryContainer

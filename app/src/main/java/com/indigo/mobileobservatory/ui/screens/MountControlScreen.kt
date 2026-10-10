@@ -258,7 +258,7 @@ fun MountControlScreen(
                         else DeviceStatusCode.READY
                         is MountConnectionState.Error -> DeviceStatusCode.ERROR
                     },
-                    label = when (val state = connectionState) {
+                    label = when (connectionState) {
                         MountConnectionState.Disconnected -> stringResource(R.string.disconnected)
                         MountConnectionState.Connecting -> stringResource(R.string.connecting)
                         MountConnectionState.Connected -> stringResource(R.string.connected)
