@@ -20,10 +20,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
-import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -34,6 +32,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import com.indigo.mobileobservatory.ui.components.ObservatoryPill
+import com.indigo.mobileobservatory.ui.components.ObservatoryPillRow
+import com.indigo.mobileobservatory.ui.theme.ObservatoryTheme
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -79,15 +80,34 @@ fun AccessoriesScreen(
     LaunchedEffect(Unit) { viewModel.scanAccessories() }
 
     Column(modifier = modifier.fillMaxSize()) {
-        ScrollableTabRow(selectedTabIndex = selectedTab.ordinal) {
-            DeviceTab.entries.forEach { tab ->
-                Tab(
-                    selected = tab == selectedTab,
-                    onClick = { selectedTab = tab },
-                    text = { Text(deviceTabTitle(tab)) }
-                )
+        val pills = DeviceTab.entries.map { tab ->
+            val connected = when (tab) {
+                DeviceTab.CONNECTIONS -> null
+                DeviceTab.CAMERA -> cameraConnection is ConnectionState.Connected
+                DeviceTab.MOUNT -> mountConnection is com.indigo.mobileobservatory.mount
+                    .MountConnectionState.Connected
+                DeviceTab.FILTER_WHEEL -> filterWheelConnected
+                DeviceTab.FOCUSER -> focuserConnected
+                DeviceTab.COVER -> coverConnected
+                DeviceTab.POWER -> powerBoxConnected
+                DeviceTab.ROTATOR -> rotatorConnected
             }
+            ObservatoryPill(
+                key = tab.name,
+                label = deviceTabTitle(tab),
+                statusColor = connected?.let { isOn ->
+                    if (isOn) ObservatoryTheme.colors.status.ready
+                    else ObservatoryTheme.colors.status.neutral
+                }
+            )
         }
+        ObservatoryPillRow(
+            items = pills,
+            selectedKey = selectedTab.name,
+            onSelect = { key ->
+                selectedTab = DeviceTab.entries.firstOrNull { it.name == key } ?: selectedTab
+            }
+        )
 
         when (selectedTab) {
             DeviceTab.CONNECTIONS -> DeviceConnectionPage(

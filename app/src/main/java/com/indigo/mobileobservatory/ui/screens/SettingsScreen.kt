@@ -23,10 +23,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
-import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -50,6 +48,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.indigo.mobileobservatory.BuildConfig
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.sequence.SequenceFeature
+import com.indigo.mobileobservatory.ui.components.ObservatoryPill
+import com.indigo.mobileobservatory.ui.components.ObservatoryPillRow
 import com.indigo.mobileobservatory.ui.AppOrientationMode
 import com.indigo.mobileobservatory.ui.RememberAppOrientation
 import com.indigo.mobileobservatory.camera.ConnectionState
@@ -113,15 +113,15 @@ fun SettingsScreen(
         }
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
-            ScrollableTabRow(selectedTabIndex = sections.indexOf(selectedSection).coerceAtLeast(0)) {
-                sections.forEach { section ->
-                    Tab(
-                        selected = section == selectedSection,
-                        onClick = { selectedSection = section },
-                        text = { Text(settingsSectionTitle(section)) }
-                    )
+            ObservatoryPillRow(
+                items = sections.map { section ->
+                    ObservatoryPill(key = section.name, label = settingsSectionTitle(section))
+                },
+                selectedKey = selectedSection.name,
+                onSelect = { key ->
+                    selectedSection = sections.firstOrNull { it.name == key } ?: selectedSection
                 }
-            }
+            )
             when (selectedSection) {
                 SettingsSection.GENERAL -> GeneralSettingsPage(updateViewModel)
                 SettingsSection.SEQUENCE -> {
