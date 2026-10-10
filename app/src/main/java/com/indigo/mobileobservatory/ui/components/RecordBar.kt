@@ -47,7 +47,7 @@ private fun FormatToggle(
         modifier = modifier
             .clip(shape)
             .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f), shape)
-            .height(28.dp),
+            .height(40.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         options.forEachIndexed { index, option ->
@@ -69,7 +69,7 @@ private fun FormatToggle(
             ) {
                 Text(
                     option,
-                    fontSize = 10.sp,
+                    fontSize = 12.sp,
                     fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
                     color = if (isActive) activeColor else inactiveColor
                 )
@@ -104,16 +104,16 @@ private fun RecordLimitSelector(
                 .clip(shape)
                 .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f), shape)
                 .clickable { expanded = true }
-                .padding(horizontal = 8.dp, vertical = 4.dp)
-                .height(20.dp),
+                .padding(horizontal = 12.dp, vertical = 4.dp)
+                .height(40.dp),
             contentAlignment = Alignment.Center
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(stringResource(R.string.limit_label), fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(stringResource(R.string.limit_label), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.width(4.dp))
                 Text(
                     limit.displayText(),
-                    fontSize = 10.sp,
+                    fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
                     color = if (limit.type == RecordLimitType.NONE) 
                         MaterialTheme.colorScheme.onSurfaceVariant 
@@ -187,7 +187,7 @@ fun RecordBar(
         modifier = modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surface)
-            .padding(horizontal = 12.dp, vertical = 6.dp),
+            .padding(horizontal = 12.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -202,7 +202,7 @@ fun RecordBar(
                     ),
                     style = MaterialTheme.typography.labelSmall.copy(
                         fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp
+                        fontSize = 13.sp
                     ),
                     color = Color(0xFFFF6666)
                 )
@@ -220,7 +220,7 @@ fun RecordBar(
                     targets.forEach { t ->
                         Text(
                             t,
-                            fontSize = 10.sp,
+                            fontSize = 12.sp,
                             color = if (targetName == t) MaterialTheme.colorScheme.primary
                             else MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier
@@ -230,7 +230,7 @@ fun RecordBar(
                                     if (targetName == t) MaterialTheme.colorScheme.primaryContainer
                                     else Color.Transparent
                                 )
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                                .padding(horizontal = 8.dp, vertical = 6.dp)
                         )
                     }
                 }
@@ -258,12 +258,12 @@ fun RecordBar(
         }
 
         Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
                 modifier = Modifier
-                    .size(48.dp)
+                    .size(60.dp)
                     .clip(CircleShape)
                     .border(2.dp, MaterialTheme.colorScheme.onSurfaceVariant, CircleShape)
                     .clickable { onCapture() },
@@ -273,13 +273,13 @@ fun RecordBar(
                     Icons.Default.Camera,
                     contentDescription = stringResource(R.string.capture_desc),
                     tint = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.size(22.dp)
+                    modifier = Modifier.size(28.dp)
                 )
             }
 
             Box(
                 modifier = Modifier
-                    .size(48.dp)
+                    .size(60.dp)
                     .clip(CircleShape)
                     .border(
                         2.dp,
@@ -294,14 +294,14 @@ fun RecordBar(
                         Icons.Default.Stop,
                         contentDescription = stringResource(R.string.stop_recording),
                         tint = Color(0xFFFF4444),
-                        modifier = Modifier.size(26.dp)
+                        modifier = Modifier.size(30.dp)
                     )
                 } else {
                     Icon(
                         Icons.Default.FiberManualRecord,
                         contentDescription = stringResource(R.string.start_recording),
                         tint = Color(0xFFFF4444),
-                        modifier = Modifier.size(22.dp)
+                        modifier = Modifier.size(28.dp)
                     )
                 }
             }

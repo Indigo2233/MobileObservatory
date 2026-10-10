@@ -123,18 +123,19 @@ fun ExposureSlider(
         )
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
             for (preset in presets) {
                 TextButton(
                     onClick = { onExposureChange(preset) },
                     enabled = enabled,
-                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
-                    modifier = Modifier.height(28.dp)
+                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+                    modifier = Modifier.height(40.dp)
                 ) {
                     Text(
                         ImageUtils.formatExposure(preset),
-                        fontSize = 10.sp,
+                        fontSize = 11.sp,
                         color = if (kotlin.math.abs(exposureUs - preset) < preset * 0.05f)
                             MaterialTheme.colorScheme.primary
                         else

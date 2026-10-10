@@ -1039,4 +1039,18 @@
     <string name="update_verify_failed">安装包校验未通过：%1$s</string>
     <string name="update_download_failed">下载失败：%1$s</string>
     <string name="update_required_hint">此更新为继续使用的必要版本。</string>
+
+    <!-- Night cockpit shell -->
+    <string name="cockpit_tab_tools">工具</string>
+    <string name="cockpit_tools_title">工具台</string>
+    <string name="cockpit_tools_plate_solve_hint">解析拍摄帧或载入图像</string>
+    <string name="cockpit_tools_polar_hint">三点极轴校准</string>
+    <string name="cockpit_tools_guide_hint">校准导星相机并运行导星</string>
+    <string name="cockpit_tools_player_hint">浏览拍摄与录像文件</string>
+    <string name="cockpit_tools_sequence_hint">高级序列编辑器</string>
+    <string name="cockpit_red_night">红色夜视</string>
+    <string name="cockpit_open_settings">设置</string>
+    <string name="cockpit_device_status">设备状态</string>
+    <string name="cockpit_status_idle">空闲</string>
+    <string name="fps_label_short">帧率</string>
 </resources>
