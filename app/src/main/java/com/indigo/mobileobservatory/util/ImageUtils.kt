@@ -6,6 +6,46 @@ import com.indigo.mobileobservatory.camera.PixelFormat
 
 object ImageUtils {
 
+    /**
+     * Applies the infrared LP750 color matrix to normalized RGB values.
+     * Source: https://space.bilibili.com/455218677
+     */
+    fun lp750Matrix(r: Float, g: Float, b: Float): FloatArray {
+        return floatArrayOf(
+            (-0.3649013871 * r - 0.7934794639 * g + 2.7793761244 * b).toFloat(),
+            (0.0713524433 * r + 1.0864368006 * g - 0.2364007716 * b).toFloat(),
+            (3.1869189013 * r - 1.5490042912 * g - 1.6877848393 * b).toFloat()
+        )
+    }
+
+    /**
+     * Computes per-image gray-world gains after LP750 conversion.
+     * The image average is the source of the white-balance decision.
+     */
+    fun lp750WhiteBalanceGains(r: Float, g: Float, b: Float): FloatArray {
+        val converted = lp750Matrix(r, g, b)
+        val target = converted[1].coerceAtLeast(0.001f)
+        return floatArrayOf(
+            (target / converted[0].coerceAtLeast(0.001f)).coerceIn(0.25f, 4.0f),
+            1.0f,
+            (target / converted[2].coerceAtLeast(0.001f)).coerceIn(0.25f, 4.0f)
+        )
+    }
+
+    /**
+     * Converts normalized RGB values with the infrared LP750 color matrix.
+     * The matrix is applied to the demosaiced/decoded channels before they are
+     * quantized for display. Values outside the displayable range are clipped.
+     */
+    fun applyLp750Matrix(r: Float, g: Float, b: Float): IntArray {
+        val converted = lp750Matrix(r, g, b)
+        return intArrayOf(
+            (converted[0] * 255f).coerceIn(0f, 255f).toInt(),
+            (converted[1] * 255f).coerceIn(0f, 255f).toInt(),
+            (converted[2] * 255f).coerceIn(0f, 255f).toInt()
+        )
+    }
+
     fun mono8ToBitmap(data: ByteArray, width: Int, height: Int): Bitmap {
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val pixels = IntArray(width * height)

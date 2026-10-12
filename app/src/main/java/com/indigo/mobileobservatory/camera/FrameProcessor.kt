@@ -2,6 +2,7 @@ package com.indigo.mobileobservatory.camera
 
 import android.graphics.Bitmap
 import com.indigo.mobileobservatory.util.FileLogger
+import com.indigo.mobileobservatory.util.ImageUtils
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -100,6 +101,8 @@ class FrameProcessor {
     private var lastFocusComputeMs = 0L
 
     var autoStretchEnabled: Boolean = true
+    /** Apply the LP750 conversion to monochrome Bayer preview frames. */
+    var lp750Enabled: Boolean = true
     var manualBlackPoint: Int = 0
     var manualWhitePoint: Int = 255
 
@@ -190,6 +193,10 @@ class FrameProcessor {
             fillMonoPixels(preview, pixels, w, h)
         }
 
+        if (lp750Enabled && preview.pixelFormat.isBayer) {
+            applyLp750ToPreviewPixels(pixels)
+        }
+
         bitmap.setPixels(pixels, 0, w, 0, 0, w, h)
 
         if (focusAssistEnabled) {
@@ -201,6 +208,35 @@ class FrameProcessor {
         }
 
         return bitmap
+    }
+
+    private fun applyLp750ToPreviewPixels(pixels: IntArray) {
+        if (pixels.isEmpty()) return
+        val step = (pixels.size / 10000).coerceAtLeast(1)
+        var sumR = 0f; var sumG = 0f; var sumB = 0f; var count = 0
+        for (i in pixels.indices step step) {
+            val p = pixels[i]
+            sumR += ((p ushr 16) and 0xFF) / 255f
+            sumG += ((p ushr 8) and 0xFF) / 255f
+            sumB += (p and 0xFF) / 255f
+            count++
+        }
+        if (count == 0) return
+        val gains = ImageUtils.lp750WhiteBalanceGains(
+            sumR / count, sumG / count, sumB / count
+        )
+        for (i in pixels.indices) {
+            val p = pixels[i]
+            val converted = ImageUtils.lp750Matrix(
+                ((p ushr 16) and 0xFF) / 255f,
+                ((p ushr 8) and 0xFF) / 255f,
+                (p and 0xFF) / 255f
+            )
+            val r = (converted[0] * gains[0] * 255f).coerceIn(0f, 255f).toInt()
+            val g = (converted[1] * gains[1] * 255f).coerceIn(0f, 255f).toInt()
+            val b = (converted[2] * gains[2] * 255f).coerceIn(0f, 255f).toInt()
+            pixels[i] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+        }
     }
 
     private fun downsampleForPreview(frame: FrameData): FrameData {

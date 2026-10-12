@@ -2,6 +2,7 @@ package com.indigo.mobileobservatory.recording
 
 import android.graphics.Bitmap
 import android.util.Log
+import com.indigo.mobileobservatory.util.ImageUtils
 import java.io.File
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
@@ -21,6 +22,9 @@ data class SERHeader(
 )
 
 class SERReader(private val file: File) {
+
+    /** LP750 conversion with per-frame white balance for Bayer playback. */
+    var lp750Enabled: Boolean = true
 
     companion object {
         private const val TAG = "SERReader"
@@ -215,10 +219,40 @@ class SERReader(private val file: File) {
                     pixels[i] = (0xFF shl 24) or (sv shl 16) or (sv shl 8) or sv
                 }
             }
+            if (lp750Enabled && h.colorId in 8..11) {
+                applyLp750ToPixels(pixels)
+            }
             Bitmap.createBitmap(pixels, w, ht, Bitmap.Config.ARGB_8888)
         } catch (e: OutOfMemoryError) {
             Log.e(TAG, "OOM in frameToBitmap: ${w}x${ht}")
             null
+        }
+    }
+
+    private fun applyLp750ToPixels(pixels: IntArray) {
+        if (pixels.isEmpty()) return
+        val step = (pixels.size / 10000).coerceAtLeast(1)
+        var sumR = 0f; var sumG = 0f; var sumB = 0f; var count = 0
+        for (i in pixels.indices step step) {
+            val p = pixels[i]
+            sumR += ((p ushr 16) and 0xFF) / 255f
+            sumG += ((p ushr 8) and 0xFF) / 255f
+            sumB += (p and 0xFF) / 255f
+            count++
+        }
+        if (count == 0) return
+        val gains = ImageUtils.lp750WhiteBalanceGains(sumR / count, sumG / count, sumB / count)
+        for (i in pixels.indices) {
+            val p = pixels[i]
+            val converted = ImageUtils.lp750Matrix(
+                ((p ushr 16) and 0xFF) / 255f,
+                ((p ushr 8) and 0xFF) / 255f,
+                (p and 0xFF) / 255f
+            )
+            val r = (converted[0] * gains[0] * 255f).coerceIn(0f, 255f).toInt()
+            val g = (converted[1] * gains[1] * 255f).coerceIn(0f, 255f).toInt()
+            val b = (converted[2] * gains[2] * 255f).coerceIn(0f, 255f).toInt()
+            pixels[i] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
         }
     }
 
