@@ -1968,6 +1968,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 ImageUtils.formatExposure(clamped)
             )
         }
+        if (pendingCaptureChanges.get() == 0 && clamped == cam.currentExposureUs) {
+            _exposureUs.value = cam.currentExposureUs
+            return
+        }
         changeCaptureSettings(cam) {
             exposureWriteMutex.withLock {
                 cam.setExposureTime(clamped)

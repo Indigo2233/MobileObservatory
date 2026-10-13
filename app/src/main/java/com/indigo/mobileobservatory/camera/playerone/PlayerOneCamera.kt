@@ -363,23 +363,28 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
         FileLogger.i(TAG, "Capture started")
     }
 
-    @Synchronized override fun stopCapture() {
-        captureGeneration.stop()
-        if (!_isCapturing.value && !running.get() && captureThread?.isAlive != true &&
-            deliveryThread?.isAlive != true && !captureStopFailed) return
-        running.set(false)
-        _isCapturing.value = false
-        frameCallback = null
-        captureStopFailed = if (disconnected) true else runCatching {
-            checkNotNull(poa).stopExposure(); false
-        }.getOrDefault(true)
-        val reader = captureThread
-        val delivery = deliveryThread
-        reader?.interrupt(); delivery?.interrupt()
+    override fun stopCapture() {
+        val threads = synchronized(this) {
+            captureGeneration.stop()
+            if (!_isCapturing.value && !running.get() && captureThread?.isAlive != true &&
+                deliveryThread?.isAlive != true && !captureStopFailed) return
+            running.set(false)
+            _isCapturing.value = false
+            frameCallback = null
+            captureStopFailed = if (disconnected) true else runCatching {
+                checkNotNull(poa).stopExposure(); false
+            }.getOrDefault(true)
+            (captureThread to deliveryThread).also { (reader, delivery) ->
+                reader?.interrupt(); delivery?.interrupt()
+            }
+        }
+        val (reader, delivery) = threads
         if (reader !== Thread.currentThread()) reader?.join(3000)
         if (delivery !== Thread.currentThread()) delivery?.join(3000)
-        if (reader?.isAlive != true) captureThread = null
-        if (delivery?.isAlive != true) deliveryThread = null
+        synchronized(this) {
+            if (captureThread === reader && reader?.isAlive != true) captureThread = null
+            if (deliveryThread === delivery && delivery?.isAlive != true) deliveryThread = null
+        }
         FileLogger.i(TAG, "Capture stopped")
     }
 

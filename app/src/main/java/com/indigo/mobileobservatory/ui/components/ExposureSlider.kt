@@ -111,6 +111,10 @@ fun ExposureSlider(
             onValueChange = { pos ->
                 sliderPos = pos
                 val logVal = logMin + pos * (logMax - logMin)
+                textValue = ImageUtils.formatExposure(exp(logVal))
+            },
+            onValueChangeFinished = {
+                val logVal = logMin + sliderPos * (logMax - logMin)
                 onExposureChange(exp(logVal))
             },
             enabled = enabled,

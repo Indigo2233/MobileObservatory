@@ -646,21 +646,24 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
         }
     }
 
-    @Synchronized override fun stopCapture() {
-        captureGeneration.stop()
-        if (!_isCapturing.value && captureThread?.isAlive != true && !captureStopFailed) return
-        _isCapturing.value = false
-        frameCallback = null
-        captureStopFailed = runCatching {
-            (if (useSingleFrameMode) synchronized(singleExposureStartLock) { QhyccdJni.cancelExposing() }
-             else QhyccdJni.stopLive()) != QhyccdJni.QHYCCD_SUCCESS
-        }.getOrDefault(true)
-        val thread = captureThread
-        thread?.interrupt()
+    override fun stopCapture() {
+        val thread = synchronized(this) {
+            captureGeneration.stop()
+            if (!_isCapturing.value && captureThread?.isAlive != true && !captureStopFailed) return
+            _isCapturing.value = false
+            frameCallback = null
+            captureStopFailed = runCatching {
+                (if (useSingleFrameMode) synchronized(singleExposureStartLock) { QhyccdJni.cancelExposing() }
+                 else QhyccdJni.stopLive()) != QhyccdJni.QHYCCD_SUCCESS
+            }.getOrDefault(true)
+            captureThread.also { it?.interrupt() }
+        }
         try {
             if (thread !== Thread.currentThread()) thread?.join(5000)
         } catch (_: InterruptedException) {}
-        if (thread?.isAlive != true) captureThread = null
+        synchronized(this) {
+            if (captureThread === thread && thread?.isAlive != true) captureThread = null
+        }
     }
 
     @Synchronized override fun setExposureTime(us: Float) {

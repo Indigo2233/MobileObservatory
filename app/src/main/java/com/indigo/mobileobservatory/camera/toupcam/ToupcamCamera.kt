@@ -364,17 +364,21 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
         Log.i(TAG, "Capture started (${currentRoi.width}x${currentRoi.height})")
     }
 
-    @Synchronized override fun stopCapture() {
-        captureGeneration.stop()
-        if (!_isCapturing.value && captureThread?.isAlive != true && !captureStopFailed) return
-        running.set(false)
-        _isCapturing.value = false
-        frameCallback = null
-        captureStopFailed = !runCatching { ToupcamJni.stop() }.getOrDefault(false)
-        val thread = captureThread
+    override fun stopCapture() {
+        val thread = synchronized(this) {
+            captureGeneration.stop()
+            if (!_isCapturing.value && captureThread?.isAlive != true && !captureStopFailed) return
+            running.set(false)
+            _isCapturing.value = false
+            frameCallback = null
+            captureStopFailed = !runCatching { ToupcamJni.stop() }.getOrDefault(false)
+            captureThread
+        }
         if (thread !== Thread.currentThread()) thread?.join(2000)
-        if (thread?.isAlive != true) captureThread = null
-        hasNewFrame.set(false)
+        synchronized(this) {
+            if (captureThread === thread && thread?.isAlive != true) captureThread = null
+            hasNewFrame.set(false)
+        }
         Log.i(TAG, "Capture stopped")
     }
 

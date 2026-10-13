@@ -333,20 +333,26 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
         FileLogger.i(TAG, "Capture started")
     }
 
-    @Synchronized override fun stopCapture() {
-        captureGeneration.stop()
-        if (!_isCapturing.value && captureThread?.isAlive != true && !captureStopFailed) return
-        running.set(false)
-        _isCapturing.value = false
-        frameCallback = null
-        // Stop the SDK first so a long blocking read can return before joining its thread.
-        captureStopFailed = runCatching {
-            zwoCamera?.stopVideoCapture()?.intVal != ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS
-        }.getOrDefault(true)
-        val thread = captureThread
+    override fun stopCapture() {
+        val thread = synchronized(this) {
+            captureGeneration.stop()
+            if (!_isCapturing.value && captureThread?.isAlive != true && !captureStopFailed) return
+            running.set(false)
+            _isCapturing.value = false
+            frameCallback = null
+            // Stop the SDK first so a long blocking read can return before joining its thread.
+            captureStopFailed = runCatching {
+                zwoCamera?.stopVideoCapture()?.intVal != ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS
+            }.getOrDefault(true)
+            captureThread
+        }
+        // A callback may be finishing an auto-exposure write that acquires this camera's
+        // monitor. Do not hold the monitor while waiting for the capture thread.
         if (thread !== Thread.currentThread()) thread?.join(3000)
-        if (thread?.isAlive != true) captureThread = null
-        bufferPool.clear()
+        synchronized(this) {
+            if (captureThread === thread && thread?.isAlive != true) captureThread = null
+            if (captureThread == null) bufferPool.clear()
+        }
         FileLogger.i(TAG, "Capture stopped")
     }
 
