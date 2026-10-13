@@ -44,6 +44,7 @@
 ### 最终自动化结果
 
 - 全量 JVM：**917 项通过，0 失败/错误/跳过**，见 `wf-stop-verified-build.log` 和 Gradle XML。
+- `lintDebug` 通过：**0 错误、204 警告、13 条信息**。检查修正了 Android 9 的兼容边界：`LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID` 只在 API 29+ 读取；修复后全量 JVM 再次通过。记录在 `wf-final-lint-retest.log`，未用隐藏告警或提高 minSdk 规避检查。
 - 含 Stellarium：最终覆盖 **91 项通过、1 项原生星图专属跳过**。`wf-stellarium-accepted-ui.log` 的最后一项回环断言误将控制器既有的“双 STOP”（即时急停＋协议同步停止）计作重复调用；按实际协议修正后，七项回环在相同生产代码下独立重跑 **7/7**，见 `wf-stellarium-protocol-final.log`。其他场景没有失败。
 - 不含 Stellarium：**83/83 通过，116.187 秒，无跳过**，见 `wf-native-accepted-ui.log`。含完整壳层、原生光路面板、共享地点、相机/制冷、草稿/恢复、颜色/CFA、外部文件、真实边缘手势及七项协议回环。
 - 星图 JavaScript **13/13**；离线原型 DOM **18/18**；Python 基线工具 **16/16**；索引 `--check` 一致。

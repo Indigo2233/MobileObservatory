@@ -392,7 +392,7 @@ class PhoneSkyCapture(private val context: Context) {
         val calibration = frameCalibration ?: capability.lensCalibration
         return PhoneCaptureMetadata(
             logicalCameraId = openCameraId,
-            physicalCameraId = physicalCameraId ?: if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P)
+            physicalCameraId = physicalCameraId ?: if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
                 result.get(CaptureResult.LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID) else null,
             focalLengthMm = focal,
             sensorWidthMm = capability.sensorWidthMm?.toDouble(), sensorHeightMm = capability.sensorHeightMm?.toDouble(),
