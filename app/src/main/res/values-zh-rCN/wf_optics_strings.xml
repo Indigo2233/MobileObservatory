@@ -1,0 +1,8 @@
+<resources>
+    <string name="wf_optics_resample">光路已改变，请重新采样</string>
+    <string name="wf_optics_advanced_field">高级视场设置</string>
+    <string name="wf_optics_use_shared">使用光路配置</string>
+    <string name="wf_optics_title">光路配置</string>
+    <string name="wf_optics_use_setup">使用这套配置</string>
+    <string name="wf_optics_confirmed">配置已确认</string>
+</resources>

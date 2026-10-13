@@ -142,6 +142,7 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
         private set
     private var currentBin = 1
     override val currentHardwareBin: Int get() = currentBin
+    override val roiSensorScale: Int get() = currentBin
     override var supportedHardwareBins: List<Int> = listOf(1); private set
     private var hardwareBinControlAvailable = false
     private var currentImgType = ASI_IMG_RAW8
@@ -229,7 +230,9 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
                 cam.setControlValue(ASI_GAIN, currentGain.roundToLong(), 0)
             }
 
-            val serialNumber = readSerialNumber(cam)
+            // Frozen Android ABI uses the same connected index for all calls on this open
+            // ZwoCamera. prop.cameraID is MaxHeight in that JNI and is never an identity.
+            val serialNumber = UsbHelper.zwoFactorySerial(cameraID)
 
             cameraInfo = CameraInfo(
                 name = modelName,
@@ -1172,26 +1175,6 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
             "Initial format: ${currentPixelFormat.name} (imgType=$currentImgType) " +
                 "${currentRoi.width}x${currentRoi.height} bin=$currentBin"
         )
-    }
-
-    private fun readSerialNumber(cam: ZwoCamera): String {
-        return try {
-            val idRet = cam.getID()
-            if (asiOk(idRet)) {
-                val idBytes = idRet?.obj
-                if (idBytes is CharArray) {
-                    idBytes.map { String.format("%02x", it.code) }.joinToString("")
-                } else if (idBytes is ByteArray) {
-                    idBytes.joinToString("") { String.format("%02x", it.toInt() and 0xFF) }
-                } else {
-                    "ZWO-$cameraID"
-                }
-            } else {
-                "ZWO-$cameraID"
-            }
-        } catch (e: Throwable) {
-            "ZWO-$cameraID"
-        }
     }
 
     private fun defaultBayer8(): PixelFormat = when (bayerPattern) {

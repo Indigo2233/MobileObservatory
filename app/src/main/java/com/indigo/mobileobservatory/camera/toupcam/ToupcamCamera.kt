@@ -150,6 +150,7 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
     private var tecVoltageMax = 0
 
     fun open(fd: Int, vendorId: Int, productId: Int, modelName: String): Boolean {
+        if (!CameraSdkLease.process.claim("toupcam", this)) return false
         FileLogger.i(TAG, "open begin model=$modelName fd=$fd VID=0x${vendorId.toString(16)} PID=0x${productId.toString(16)}")
         try {
             val opened = ToupcamJni.open(fd, vendorId, productId)
@@ -221,11 +222,12 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
 
             cameraInfo = CameraInfo(
                 name = modelName,
-                serialNumber = "TC-${vendorId.toString(16)}-${productId.toString(16)}",
+                serialNumber = runCatching { ToupcamJni.getSerialNumber().trim() }.getOrDefault(""),
                 sensorWidth = sensorW,
                 sensorHeight = sensorH,
                 maxBitDepth = rawBits,
-                sensorName = CameraInfo.lookupSensor(modelName)
+                sensorName = CameraInfo.lookupSensor(modelName),
+                pixelSizeUm = pixelSize.takeIf { it.isFinite() && it > 0f }
             )
 
             readExposureRange()
@@ -246,10 +248,15 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
             FileLogger.i(TAG, "Opened: $modelName ${sensorW}x${sensorH} ${rawBits}bit mono=$isMono px=${pixelSize}um")
             Log.i(TAG, "Opened: $modelName ${sensorW}x${sensorH} ${rawBits}bit mono=$isMono px=${pixelSize}um flag=0x${modelFlag.toString(16)}")
             return true
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             FileLogger.e(TAG, "open failed: ${e.message}", e)
             Log.e(TAG, "open failed: ${e.message}", e)
             return false
+        } finally {
+            if (!_isOpen.value) {
+                runCatching { ToupcamJni.close() }
+                CameraSdkLease.process.release("toupcam", this)
+            }
         }
     }
 
@@ -310,6 +317,8 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
     }
 
     override fun close() {
+        if (!CameraSdkLease.process.owns("toupcam", this)) return
+        try {
         try { stopRamp() } catch (_: Exception) {}
         try { stopTempPolling() } catch (_: Exception) {}
         stopCapture()
@@ -326,6 +335,7 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
         _tempHistory.value = emptyList()
         cameraInfo = null
         Log.i(TAG, "Camera closed")
+        } finally { CameraSdkLease.process.release("toupcam", this) }
     }
 
     @Synchronized override fun startCapture(callback: FrameCallback) {
@@ -694,6 +704,9 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
         var frameSeq = 0L
         var lastLoggedW = 0
         var lastLoggedH = 0
+        val pulledDimensions = IntArray(4)
+        val expectedFinalSize = ToupcamJni.getFinalSize()
+        var partialPullScratch: ByteArray? = null
         var lastFrameTimeNs = System.nanoTime()
         val stallTimeoutNs = 2_000_000_000L
 
@@ -709,52 +722,50 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
                     continue
                 }
             }
-
             try {
                 val fmt = currentPixelFormat
                 val bpp = fmt.bytesPerPixel
                 val bits = when (fmt) {
                     PixelFormat.RGB48 -> 48
+                    PixelFormat.RGB24 -> 24
                     else -> if (fmt.is8bit) 8 else 16
                 }
-
-                val sz = ToupcamJni.getSize()
-                val sdkW = sz[0]
-                val sdkH = sz[1]
+                val size = ToupcamJni.getSize()
+                val sdkW = size[0]; val sdkH = size[1]
                 if (sdkW <= 0 || sdkH <= 0) continue
-
-                val roiW = currentRoi.width
-                val roiH = currentRoi.height
-                val frameW = if (roiW in 1 until sdkW) roiW else sdkW
-                val frameH = if (roiH in 1 until sdkH) roiH else sdkH
-
-                if (frameW != lastLoggedW || frameH != lastLoggedH) {
-                    Log.i(TAG, "Capture frame: ${frameW}x${frameH} (sdk=${sdkW}x${sdkH}) bpp=$bpp fmt=${fmt.name}")
-                    lastLoggedW = frameW
-                    lastLoggedH = frameH
+                val basePixels = sdkW.toLong() * sdkH
+                if (basePixels > Int.MAX_VALUE / bpp) continue
+                // SDK original resolution bounds a safe pull buffer even for old queued frames.
+                val pullBytes = (basePixels * bpp).toInt()
+                val finalPixels = expectedFinalSize[0].toLong() * expectedFinalSize[1]
+                val usePrivateScratch = finalPixels in 1 until basePixels
+                val pull = if (usePrivateScratch) {
+                    partialPullScratch?.takeIf { it.size == pullBytes }
+                        ?: ByteArray(pullBytes).also { partialPullScratch = it }
+                } else getBuffer(pullBytes)
+                val hr = ToupcamJni.pullImageRawWithSize(pull, bits, pulledDimensions)
+                if (!captureGeneration.isActive(generation)) { if (!usePrivateScratch) recycleBuffer(pull); break }
+                if (hr != 0) { if (!usePrivateScratch) recycleBuffer(pull); continue }
+                val layout = ToupcamFrameLayout.validate(sdkW, sdkH, pulledDimensions[0], pulledDimensions[1],
+                    pulledDimensions[2], pulledDimensions[3], bpp, pull.size.toLong())
+                if (layout == null) { if (!usePrivateScratch) recycleBuffer(pull); continue }
+                // The private SDK scratch is never handed to preview/recording. Cropped/binned
+                // consumers own a compact pooled copy, without stale tail pixels or mixed pools.
+                val delivered = if (usePrivateScratch || layout.payloadBytes != pull.size) {
+                    getBuffer(layout.payloadBytes).also {
+                        layout.copyPayloadInto(pull, it)
+                        if (!usePrivateScratch) recycleBuffer(pull)
+                    }
+                } else pull
+                if (layout.width != lastLoggedW || layout.height != lastLoggedH) {
+                    Log.i(TAG, "Capture final frame: ${layout.width}x${layout.height} (base=${sdkW}x${sdkH}) bpp=$bpp fmt=${fmt.name}")
+                    lastLoggedW = layout.width; lastLoggedH = layout.height
                 }
-
-                val pullBufSize = sdkW * sdkH * bpp
-                val buf = getBuffer(pullBufSize)
-                val hr = ToupcamJni.pullImageRaw(buf, bits)
-                if (!captureGeneration.isActive(generation)) { recycleBuffer(buf); break }
-                if (hr != 0) {
-                    recycleBuffer(buf)
-                    continue
-                }
-
                 lastFrameTimeNs = System.nanoTime()
                 frameSeq++
-                val frame = FrameData(
-                    data = buf,
-                    width = frameW,
-                    height = frameH,
-                    pixelFormat = fmt,
-                    frameId = frameSeq,
-                    timestamp = System.currentTimeMillis(),
-                    captureGeneration = generation
-                )
-                if (captureGeneration.isActive(generation)) callback.onFrame(frame) else recycleBuffer(buf)
+                val frame = FrameData(delivered, layout.width, layout.height, fmt, frameSeq,
+                    System.currentTimeMillis(), generation)
+                if (captureGeneration.isActive(generation)) callback.onFrame(frame) else recycleBuffer(delivered)
             } catch (e: Exception) {
                 Log.e(TAG, "Capture error: ${e.message}")
                 if (!running.get()) break

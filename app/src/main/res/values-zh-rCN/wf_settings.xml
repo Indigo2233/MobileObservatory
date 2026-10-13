@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="wf_edit_unsaved_title">还有未保存的修改</string>
+    <string name="wf_edit_unsaved_message">离开前保存这些设置？</string>
+    <string name="wf_edit_save_leave">保存并返回</string>
+    <string name="wf_edit_discard">放弃修改</string>
+    <string name="wf_edit_keep">继续编辑</string>
+    <string name="wf_edit_saved">设置已保存</string>
+    <string name="wf_edit_saving">正在保存设置…</string>
+    <string name="wf_edit_device_changed">器材已断开或更换。草稿已保留，重新连接原器材后可保存。</string>
+    <string name="wf_edit_invalid">请检查标红的参数。</string>
+    <string name="wf_device_settings">设备设置</string>
+    <string name="wf_device_runtime">即时控制</string>
+    <string name="wf_device_runtime_hint">这里的操作会立即生效。</string>
+    <string name="wf_edit_failed">设置未能保存，草稿已保留。</string>
+    <string name="wf_edit_valid_range">可用范围：%1$s</string>
+    <string name="wf_edit_use_current_device">将草稿用于 %1$s</string>
+    <string name="wf_focus_stop">停止调焦</string>
+    <string name="wf_focus_zero">重设调焦位置为零</string>
+    <string name="wf_focus_zero_confirm">将调焦器当前位置设为零？之后的位置移动将使用新的零点。</string>
+</resources>

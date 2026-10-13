@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -99,31 +100,32 @@ fun PolarAlignmentScreen(
     val latestMountCoordinates = rememberUpdatedState(mountCoordinates)
     val latestMountBusy = rememberUpdatedState(mountBusy)
 
-    var latitudeText by remember { mutableStateOf(prefs.getFloat("polar_latitude_deg", 0f).toString()) }
-    var longitudeText by remember { mutableStateOf(prefs.getFloat("polar_longitude_deg", 0f).toString()) }
-    var elevationText by remember { mutableStateOf(prefs.getFloat("polar_elevation_m", 0f).toString()) }
-    var temperatureText by remember { mutableStateOf(prefs.getFloat("polar_temperature_c", 15f).toString()) }
-    var pressureText by remember { mutableStateOf(prefs.getFloat("polar_pressure_hpa", 0f).takeIf { it > 0f }?.toString() ?: "") }
-    var focalLengthText by remember { mutableStateOf(prefs.getFloat("plate_focal_length_mm", 0f).takeIf { it > 0f }?.toString() ?: "") }
-    var pixelSizeText by remember {
+    // Restore input drafts only; an interrupted solve/movement must not resume as a valid result.
+    var latitudeText by rememberSaveable { mutableStateOf(prefs.getFloat("polar_latitude_deg", 0f).toString()) }
+    var longitudeText by rememberSaveable { mutableStateOf(prefs.getFloat("polar_longitude_deg", 0f).toString()) }
+    var elevationText by rememberSaveable { mutableStateOf(prefs.getFloat("polar_elevation_m", 0f).toString()) }
+    var temperatureText by rememberSaveable { mutableStateOf(prefs.getFloat("polar_temperature_c", 15f).toString()) }
+    var pressureText by rememberSaveable { mutableStateOf(prefs.getFloat("polar_pressure_hpa", 0f).takeIf { it > 0f }?.toString() ?: "") }
+    var focalLengthText by rememberSaveable { mutableStateOf(prefs.getFloat("plate_focal_length_mm", 0f).takeIf { it > 0f }?.toString() ?: "") }
+    var pixelSizeText by rememberSaveable {
         mutableStateOf(
             prefs.getFloat("plate_pixel_size_um", 0f).takeIf { it > 0f }?.let { formatPixelSizeUm(it.toDouble()) }
                 ?: cameraPixelSizeUm?.takeIf { it > 0f }?.let { formatPixelSizeUm(it.toDouble()) }
                 ?: ""
         )
     }
-    var selectedSensorId by remember { mutableStateOf(prefs.getString("plate_sensor_id", "") ?: "") }
+    var selectedSensorId by rememberSaveable { mutableStateOf(prefs.getString("plate_sensor_id", "") ?: "") }
     var computedFovDeg by remember { mutableStateOf<Double?>(null) }
-    var manualMode by remember { mutableStateOf(prefs.getBoolean("polar_manual_mode", false)) }
-    var startFromCurrent by remember { mutableStateOf(prefs.getBoolean("polar_start_current", true)) }
-    var eastDirection by remember { mutableStateOf(prefs.getBoolean("polar_east_direction", true)) }
-    var targetDistanceText by remember { mutableStateOf(prefs.getInt("polar_target_distance_deg", 10).toString()) }
-    var moveRateText by remember { mutableStateOf(prefs.getFloat("polar_move_rate_deg_sec", 3f).toString()) }
-    var searchRadiusText by remember { mutableStateOf(prefs.getFloat("polar_search_radius_deg", 30f).toString()) }
-    var alignmentToleranceText by remember { mutableStateOf(prefs.getFloat("polar_alignment_tolerance_arcmin", 0f).toString()) }
-    var refractionAdjustment by remember { mutableStateOf(prefs.getBoolean("polar_refraction_adjustment", true)) }
-    var continuousEstimator by remember { mutableStateOf(prefs.getBoolean("polar_continuous_estimator", false)) }
-    var selectedSlot by remember { mutableIntStateOf(0) }
+    var manualMode by rememberSaveable { mutableStateOf(prefs.getBoolean("polar_manual_mode", false)) }
+    var startFromCurrent by rememberSaveable { mutableStateOf(prefs.getBoolean("polar_start_current", true)) }
+    var eastDirection by rememberSaveable { mutableStateOf(prefs.getBoolean("polar_east_direction", true)) }
+    var targetDistanceText by rememberSaveable { mutableStateOf(prefs.getInt("polar_target_distance_deg", 10).toString()) }
+    var moveRateText by rememberSaveable { mutableStateOf(prefs.getFloat("polar_move_rate_deg_sec", 3f).toString()) }
+    var searchRadiusText by rememberSaveable { mutableStateOf(prefs.getFloat("polar_search_radius_deg", 30f).toString()) }
+    var alignmentToleranceText by rememberSaveable { mutableStateOf(prefs.getFloat("polar_alignment_tolerance_arcmin", 0f).toString()) }
+    var refractionAdjustment by rememberSaveable { mutableStateOf(prefs.getBoolean("polar_refraction_adjustment", true)) }
+    var continuousEstimator by rememberSaveable { mutableStateOf(prefs.getBoolean("polar_continuous_estimator", false)) }
+    var selectedSlot by rememberSaveable { mutableIntStateOf(0) }
     var solvingSlot by remember { mutableStateOf<Int?>(null) }
     var runningAuto by remember { mutableStateOf(false) }
     var workflowStatus by remember { mutableStateOf("") }

@@ -75,8 +75,17 @@ fun StarMapFovSheet(
     onTelescopesChange: (List<TelescopeSpec>) -> Unit,
     onEyepiecesChange: (List<EyepieceSpec>) -> Unit,
     onCamerasChange: (List<SensorSpec>) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    configurationConfirmed: Boolean = false,
+    onConfirmConfiguration: () -> Unit = {},
+    showFramingControls: Boolean = true,
+    showOverlaySwitch: Boolean = true,
+    onInvalidConfigurationDraft: () -> Unit = {},
+    showTrainSelector: Boolean = true,
+    showEndpointSelector: Boolean = true
 ) {
+    var telescopeDraftValid by remember(editingTrain, config.telescopeId, config.focalLengthMm(telescopes)) { mutableStateOf(true) }
+    var endpointDraftValid by remember(editingTrain, config.mode, config.eyepieceId, config.sensorId) { mutableStateOf(true) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -99,7 +108,7 @@ fun StarMapFovSheet(
                 style = MaterialTheme.typography.titleMedium
             )
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (showTrainSelector) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(
                     selected = editingTrain == OpticsTrainId.PRIMARY,
                     onClick = { onEditingTrainChange(OpticsTrainId.PRIMARY) },
@@ -112,7 +121,7 @@ fun StarMapFovSheet(
                 )
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (showEndpointSelector) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(
                     selected = config.mode == FovInstrumentMode.EYEPIECE,
                     onClick = { onConfigChange(config.copy(mode = FovInstrumentMode.EYEPIECE)) },
@@ -124,6 +133,10 @@ fun StarMapFovSheet(
                     label = { Text(stringResource(R.string.fov_mode_sensor)) }
                 )
             }
+            if (!showTrainSelector || !showEndpointSelector) Text(
+                stringResource(if (editingTrain == OpticsTrainId.PRIMARY) R.string.star_map_train_primary else R.string.star_map_train_secondary) +
+                    " · " + stringResource(if (config.mode == FovInstrumentMode.EYEPIECE) R.string.fov_mode_eyepiece else R.string.fov_mode_sensor),
+                style = MaterialTheme.typography.titleSmall)
 
             Text(
                 stringResource(R.string.fov_telescope),
@@ -178,7 +191,8 @@ fun StarMapFovSheet(
             val selectedScope = telescopes.firstOrNull { it.id == config.telescopeId }
             if (selectedScope != null) {
                 TelescopeEditor(
-                    spec = selectedScope,
+                    spec = selectedScope.copy(focalLengthMm = config.focalLengthMm(telescopes) ?: selectedScope.focalLengthMm),
+                    onValidityChange = { telescopeDraftValid = it; if (!it) onInvalidConfigurationDraft() },
                     onChange = { updated ->
                         onTelescopesChange(UserOpticsCatalog.replaceTelescope(telescopes, updated))
                         onConfigChange(
@@ -249,6 +263,7 @@ fun StarMapFovSheet(
                     if (selectedEyepiece != null) {
                         EyepieceEditor(
                             spec = selectedEyepiece,
+                            onValidityChange = { endpointDraftValid = it; if (!it) onInvalidConfigurationDraft() },
                             onChange = { updated ->
                                 onEyepiecesChange(UserOpticsCatalog.replaceEyepiece(eyepieces, updated))
                                 onConfigChange(
@@ -314,6 +329,7 @@ fun StarMapFovSheet(
                         CameraEditor(
                             spec = selectedSensor,
                             locked = selectedSensor.id == OpticsEquipment.CONNECTED_SENSOR_ID,
+                            onValidityChange = { endpointDraftValid = it; if (!it) onInvalidConfigurationDraft() },
                             onChange = { updated ->
                                 onCamerasChange(
                                     UserOpticsCatalog.replaceCamera(
@@ -331,7 +347,7 @@ fun StarMapFovSheet(
                             }
                         )
                     }
-                    MosaicFramingControls(
+                    if (showFramingControls) MosaicFramingControls(
                         config = mosaicConfig,
                         positionAngleText = positionAngleText,
                         onConfigChange = onMosaicConfigChange,
@@ -340,9 +356,12 @@ fun StarMapFovSheet(
                 }
             }
 
-            LiveFovSummary(computation)
+            LiveFovSummary(computation.takeIf { telescopeDraftValid && endpointDraftValid })
+            TextButton(onClick = onConfirmConfiguration, enabled = computation?.hasOverlay == true && telescopeDraftValid && endpointDraftValid && !configurationConfirmed) {
+                Text(stringResource(if (configurationConfirmed) R.string.wf_optics_confirmed else R.string.wf_optics_use_setup))
+            }
 
-            Row(
+            if (showOverlaySwitch) Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxWidth()
@@ -429,13 +448,14 @@ private fun NamedEquipmentChips(
 @Composable
 private fun TelescopeEditor(
     spec: TelescopeSpec,
+    onValidityChange: (Boolean) -> Unit,
     onChange: (TelescopeSpec) -> Unit
 ) {
     var name by remember(spec.id, spec.name) { mutableStateOf(spec.name) }
-    var focalLength by remember(spec.id) {
+    var focalLength by remember(spec.id, spec.focalLengthMm) {
         mutableStateOf(formatEquipmentNumber(spec.focalLengthMm))
     }
-    var aperture by remember(spec.id) {
+    var aperture by remember(spec.id, spec.apertureMm) {
         mutableStateOf(spec.apertureMm?.let(::formatEquipmentNumber).orEmpty())
     }
     OutlinedTextField(
@@ -453,9 +473,11 @@ private fun TelescopeEditor(
         onValueChange = {
             focalLength = it
             val fl = it.toDoubleOrNull()
-            if (fl != null && fl > 0.0) onChange(spec.copy(focalLengthMm = fl))
+            onValidityChange(fl != null && fl.isFinite() && fl > 0)
+            if (fl != null && fl.isFinite() && fl > 0.0) onChange(spec.copy(focalLengthMm = fl))
         },
         label = { Text(stringResource(R.string.focal_length_mm)) },
+        isError = focalLength.toDoubleOrNull()?.let { it.isFinite() && it > 0 } != true,
         singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
         modifier = Modifier.fillMaxWidth()
@@ -477,13 +499,14 @@ private fun TelescopeEditor(
 @Composable
 private fun EyepieceEditor(
     spec: EyepieceSpec,
+    onValidityChange: (Boolean) -> Unit,
     onChange: (EyepieceSpec) -> Unit
 ) {
     var name by remember(spec.id, spec.name) { mutableStateOf(spec.name) }
-    var focalLength by remember(spec.id) {
+    var focalLength by remember(spec.id, spec.focalLengthMm) {
         mutableStateOf(formatEquipmentNumber(spec.focalLengthMm))
     }
-    var apparentFov by remember(spec.id) {
+    var apparentFov by remember(spec.id, spec.apparentFovDeg) {
         mutableStateOf(formatEquipmentNumber(spec.apparentFovDeg))
     }
     OutlinedTextField(
@@ -501,7 +524,8 @@ private fun EyepieceEditor(
         onValueChange = {
             focalLength = it
             val fl = it.toDoubleOrNull()
-            if (fl != null && fl > 0.0) onChange(spec.copy(focalLengthMm = fl))
+            onValidityChange(fl != null && fl.isFinite() && fl > 0 && apparentFov.toDoubleOrNull()?.let { it.isFinite() && it > 0 } == true)
+            if (fl != null && fl.isFinite() && fl > 0.0) onChange(spec.copy(focalLengthMm = fl))
         },
         label = { Text(stringResource(R.string.eyepiece_focal_length_mm)) },
         singleLine = true,
@@ -513,7 +537,8 @@ private fun EyepieceEditor(
         onValueChange = {
             apparentFov = it
             val afov = it.toDoubleOrNull()
-            if (afov != null && afov > 0.0) onChange(spec.copy(apparentFovDeg = afov))
+            onValidityChange(afov != null && afov.isFinite() && afov > 0 && focalLength.toDoubleOrNull()?.let { it.isFinite() && it > 0 } == true)
+            if (afov != null && afov.isFinite() && afov > 0.0) onChange(spec.copy(apparentFovDeg = afov))
         },
         label = { Text(stringResource(R.string.eyepiece_apparent_fov)) },
         singleLine = true,
@@ -710,12 +735,15 @@ private fun formatPositionAngle(value: Double): String {
 private fun CameraEditor(
     spec: SensorSpec,
     locked: Boolean,
+    onValidityChange: (Boolean) -> Unit,
     onChange: (SensorSpec) -> Unit
 ) {
     var name by remember(spec.id, spec.name) { mutableStateOf(spec.name) }
-    var pixel by remember(spec.id) { mutableStateOf(formatEquipmentNumber(spec.pixelSizeUm)) }
-    var width by remember(spec.id) { mutableStateOf(spec.widthPx.toString()) }
-    var height by remember(spec.id) { mutableStateOf(spec.heightPx.toString()) }
+    var pixel by remember(spec.id, spec.pixelSizeUm) { mutableStateOf(formatEquipmentNumber(spec.pixelSizeUm)) }
+    var width by remember(spec.id, spec.widthPx) { mutableStateOf(spec.widthPx.toString()) }
+    var height by remember(spec.id, spec.heightPx) { mutableStateOf(spec.heightPx.toString()) }
+    fun validDraft() = pixel.toDoubleOrNull()?.let { it.isFinite() && it > 0 } == true &&
+        width.toIntOrNull()?.let { it > 0 } == true && height.toIntOrNull()?.let { it > 0 } == true
     OutlinedTextField(
         value = name,
         onValueChange = {
@@ -732,7 +760,8 @@ private fun CameraEditor(
         onValueChange = {
             pixel = it
             val um = it.toDoubleOrNull()
-            if (um != null && um > 0.0) onChange(spec.copy(pixelSizeUm = um))
+            onValidityChange(validDraft())
+            if (um != null && um.isFinite() && um > 0.0) onChange(spec.copy(pixelSizeUm = um))
         },
         enabled = !locked,
         label = { Text(stringResource(R.string.sensor_pixel_size_um)) },
@@ -745,6 +774,7 @@ private fun CameraEditor(
             value = width,
             onValueChange = {
                 width = it
+            onValidityChange(validDraft())
                 val px = it.toIntOrNull()
                 if (px != null && px > 0) onChange(spec.copy(widthPx = px))
             },
@@ -758,6 +788,7 @@ private fun CameraEditor(
             value = height,
             onValueChange = {
                 height = it
+            onValidityChange(validDraft())
                 val px = it.toIntOrNull()
                 if (px != null && px > 0) onChange(spec.copy(heightPx = px))
             },

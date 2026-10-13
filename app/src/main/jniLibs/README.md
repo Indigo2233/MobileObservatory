@@ -6,6 +6,8 @@
 
 **禁止升级、替换或用上游版本重新编译这个文件。**
 
+打包时也通过 `keepDebugSymbols` 保留原始字节，避免通用 strip 工具重新排列其 ELF 节表。验收可直接比较 APK 内该库与本目录文件的 SHA-256。
+
 - 它不是官方交付物，而是社区定制编译的旧版 libusb（约 1.0.21 基线），用于绕开 Android 10+ 的
   SELinux 限制——上游同期版本通过 `opendir("/sys/bus/usb/devices")` + `open("/dev/bus/usb/BBB/DDD")`
   访问设备，在 app 域会被直接拦死。

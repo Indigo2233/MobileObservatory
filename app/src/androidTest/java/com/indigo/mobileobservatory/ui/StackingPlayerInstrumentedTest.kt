@@ -1,7 +1,13 @@
 package com.indigo.mobileobservatory.ui
 
 import android.system.Os
+import android.app.Application
+import androidx.compose.foundation.layout.Box
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.test.assertIsDisplayed
@@ -15,12 +21,19 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.ViewModelStore
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.camera.FrameData
 import com.indigo.mobileobservatory.camera.PixelFormat
 import com.indigo.mobileobservatory.recording.SERWriter
 import com.indigo.mobileobservatory.stacking.LinearImage
 import com.indigo.mobileobservatory.stacking.StackFitsWriter
+import com.indigo.mobileobservatory.stacking.StackMode
+import com.indigo.mobileobservatory.stacking.StackTaskPhase
+import com.indigo.mobileobservatory.ui.screens.ObservatoryPageHost
+import com.indigo.mobileobservatory.ui.screens.StackingScreen
+import com.indigo.mobileobservatory.ui.viewmodel.CameraViewModel
 import com.indigo.mobileobservatory.ui.screens.PlayerScreen
 import java.io.File
 import java.io.RandomAccessFile
@@ -60,11 +73,40 @@ class StackingPlayerInstrumentedTest {
         assertEquals(0, descriptorsFor(source))
     }
 
-    @Test fun playbackStackActionWaitsForReaderClosureBeforeCallback() {
-        val source = recording(180)
+    @Test fun playbackStackActionPausesAndReturnsToUsablePlayer() {
+        val source = recording(900)
         val selected = AtomicReference<File?>()
         val openAtCallback = AtomicInteger(-1)
-        showPlayer { file -> openAtCallback.set(descriptorsFor(file)); selected.set(file) }
+        val returned = AtomicInteger()
+        val store = ViewModelStore()
+        lateinit var vm: CameraViewModel
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        instrumentation.runOnMainSync {
+            vm = ViewModelProvider(store, ViewModelProvider.AndroidViewModelFactory(context.applicationContext as Application))[CameraViewModel::class.java]
+        }
+        try {
+        var stackCovered by mutableStateOf(false)
+        compose.setContent {
+            MaterialTheme {
+                Box {
+                    ObservatoryPageHost(!stackCovered) {
+                        PlayerScreen(File(directory, "recordings"), File(directory, "captures"),
+                            onStackFile = { file ->
+                                openAtCallback.set(descriptorsFor(file))
+                                selected.set(file)
+                                vm.openPlanetaryStack(file)
+                                stackCovered = true
+                            }, onBack = { returned.incrementAndGet() })
+                    }
+                    if (stackCovered) ObservatoryPageHost(true) {
+                        StackingScreen(vm, StackMode.PLANETARY, onBack = {
+                            vm.stacking.leave()
+                            stackCovered = false
+                        })
+                    }
+                }
+            }
+        }
         compose.waitUntil(10_000) { compose.onAllNodesWithText(source.name).fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText(source.name).performClick()
         val framePrefix = context.getString(R.string.frame_desc, 0).substringBefore('0')
@@ -79,8 +121,31 @@ class StackingPlayerInstrumentedTest {
         compose.onNodeWithContentDescription(context.getString(R.string.stack_planetary)).assertIsDisplayed().performClick()
         compose.waitUntil(15_000) { selected.get() != null }
         assertEquals(source.canonicalPath, selected.get()!!.canonicalPath)
-        assertEquals("No frame/timestamp reader may remain open when stacking starts", 0, openAtCallback.get())
+        assertTrue("A covered player's reader is retained for return", openAtCallback.get() > 0)
+        compose.waitUntil(20_000) { vm.stacking.task.value.phase in setOf(StackTaskPhase.READY, StackTaskPhase.FAILED) }
+        assertEquals(vm.stacking.task.value.message, StackTaskPhase.READY, vm.stacking.task.value.phase)
+        compose.onNodeWithContentDescription(context.getString(R.string.back)).performClick()
+        compose.waitUntil(10_000) {
+            compose.onAllNodes(hasContentDescription(context.getString(R.string.play))).fetchSemanticsNodes().isNotEmpty()
+        }
+        fun displayedFrame(): Int {
+            val node = compose.onAllNodes(hasContentDescription(framePrefix, substring = true)).fetchSemanticsNodes().single()
+            val description = node.config[SemanticsProperties.ContentDescription].single()
+            return Regex("\\d+").find(description)!!.value.toInt()
+        }
+        val pausedFrame = displayedFrame()
+        compose.onNodeWithContentDescription(context.getString(R.string.play)).performClick()
+        compose.onNodeWithContentDescription(context.getString(R.string.pause)).assertIsDisplayed()
+        compose.waitUntil(10_000) { displayedFrame() > pausedFrame }
+        compose.onNodeWithContentDescription(context.getString(R.string.back)).performClick()
+        compose.waitUntil(10_000) {
+            compose.onAllNodesWithText(context.getString(R.string.media_stack_action)).fetchSemanticsNodes().isNotEmpty()
+        }
+        assertEquals("Leaving playback must still close its reader", 0, descriptorsFor(source))
+        compose.onNodeWithContentDescription(context.getString(R.string.back)).performClick()
+        compose.runOnIdle { assertEquals(1, returned.get()) }
         assertTrue(source.isFile)
+        } finally { instrumentation.runOnMainSync { store.clear() } }
     }
 
     @Test fun normalizedFloatFitsReopensAsVisibleImageAndShowsEmbeddedMetadata() {

@@ -1,7 +1,10 @@
 package com.indigo.mobileobservatory.pointing
 
 import kotlin.math.abs
-import kotlin.math.hypot
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.sin
+import kotlin.math.sqrt
 import kotlin.math.sign
 
 enum class GuidanceProximity {
@@ -46,8 +49,32 @@ object PushToGuidance {
         return d
     }
 
-    fun separationDeg(deltaAlt: Double, deltaAz: Double): Double =
-        hypot(deltaAlt, deltaAz)
+    /** Stable great-circle angle, including the azimuth seam, zenith and antipodes. */
+    fun separationDeg(currentAltDeg: Double, currentAzDeg: Double,
+        targetAltDeg: Double, targetAzDeg: Double): Double {
+        require(listOf(currentAltDeg, currentAzDeg, targetAltDeg, targetAzDeg).all { it.isFinite() })
+        require(currentAltDeg in -90.0..90.0 && targetAltDeg in -90.0..90.0)
+        val a = Math.toRadians(currentAltDeg)
+        val b = Math.toRadians(targetAltDeg)
+        val longitude = Math.toRadians(shortestAzimuthDelta(currentAzDeg, targetAzDeg))
+        val crossX = cos(b) * sin(longitude)
+        val crossY = cos(a) * sin(b) - sin(a) * cos(b) * cos(longitude)
+        val dot = sin(a) * sin(b) + cos(a) * cos(b) * cos(longitude)
+        return Math.toDegrees(atan2(sqrt(crossX * crossX + crossY * crossY), dot))
+    }
+
+    /** Angular offsets in the local altitude-up / increasing-azimuth tangent basis. */
+    fun fieldOffsets(currentAltDeg: Double, currentAzDeg: Double,
+        targetAltDeg: Double, targetAzDeg: Double): Pair<Double, Double>? {
+        val a = Math.toRadians(currentAltDeg)
+        val b = Math.toRadians(targetAltDeg)
+        val longitude = Math.toRadians(shortestAzimuthDelta(currentAzDeg, targetAzDeg))
+        val forward = sin(a) * sin(b) + cos(a) * cos(b) * cos(longitude)
+        if (forward <= 0) return null
+        val right = cos(b) * sin(longitude)
+        val up = cos(a) * sin(b) - sin(a) * cos(b) * cos(longitude)
+        return Math.toDegrees(atan2(right, forward)) to Math.toDegrees(atan2(up, forward))
+    }
 
     /**
      * Compute guidance from current telescope pointing to target (both alt/az degrees).
@@ -64,7 +91,7 @@ object PushToGuidance {
         val fov = eyepieceFovDeg.coerceAtLeast(0.1)
         val dAlt = targetAltDeg - currentAltDeg
         val dAz = shortestAzimuthDelta(currentAzDeg, targetAzDeg)
-        val sep = separationDeg(dAlt, dAz)
+        val sep = separationDeg(currentAltDeg, currentAzDeg, targetAltDeg, targetAzDeg)
         val zenith = currentAltDeg >= ZENITH_DEGENERATE_ALT_DEG ||
             targetAltDeg >= ZENITH_DEGENERATE_ALT_DEG
         val proximity = classifyProximity(sep, fov, previousProximity)

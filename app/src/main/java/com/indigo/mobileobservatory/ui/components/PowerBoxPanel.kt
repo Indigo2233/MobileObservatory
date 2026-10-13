@@ -51,7 +51,8 @@ fun PowerBoxPanel(
     onSetDewEnabled: (Int, Boolean) -> Unit,
     onSetDewMode: (Int, DewHeaterMode) -> Unit,
     onSetDewPower: (Int, Int) -> Unit,
-    onSaveInterfaceNames: (Map<String, String>) -> Unit
+    onSaveInterfaceNames: (Map<String, String>) -> Unit,
+    onEditNames: (() -> Unit)? = null
 ) {
     val discovered = capabilities
     val live = telemetry
@@ -121,7 +122,7 @@ fun PowerBoxPanel(
                 ),
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            TextButton(onClick = { showNameEditor = true }) {
+            TextButton(onClick = onEditNames ?: { showNameEditor = true }) {
                 Text(stringResource(R.string.edit_interface_names))
             }
             if (live.inputVoltageV != null &&

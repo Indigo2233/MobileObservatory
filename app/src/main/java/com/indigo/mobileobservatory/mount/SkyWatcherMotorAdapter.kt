@@ -1,6 +1,7 @@
 package com.indigo.mobileobservatory.mount
 
 import java.time.Instant
+import com.indigo.mobileobservatory.pointing.AxisReadingKind
 
 /**
  * Direct motor-controller session for Sky-Watcher / SynScan Wi-Fi modules.
@@ -10,11 +11,16 @@ internal class SkyWatcherMotorAdapter(
     private val exchange: (payload: ByteArray) -> ByteArray,
     private var site: MountSite = MountSite(0.0, 0.0),
     private val mode: SkyWatcherMountMode = SkyWatcherMountMode.EQUATORIAL,
-    private val now: () -> Instant = { Instant.now() }
+    private val now: () -> Instant = { Instant.now() },
+    private val initializeMotors: Boolean = true
 ) : SkyWatcherMountSession {
     override var modelName: String = "Sky-Watcher Wi-Fi"
         private set
     override val supportsSync: Boolean = true
+    override val coordinateMode: String get() = mode.name
+    override val pointingCapabilities get() = super.pointingCapabilities.copy(
+        axisReading = AxisReadingKind.MOTOR_COUNTER, observesReleasedClutch = false,
+        writeSite = false, siteUsesLocalConfiguration = true)
 
     private lateinit var geometry: SkyWatcherMountGeometry
     private var slewRate = MountSlewRate.DEFAULT
@@ -43,17 +49,21 @@ internal class SkyWatcherMotorAdapter(
                 highSpeedRatio = runCatching { queryLong('g', SkyWatcherAxis.DEC) }.getOrDefault(16).coerceAtLeast(1)
             )
         )
-        initializeAxis(SkyWatcherAxis.RA)
-        initializeAxis(SkyWatcherAxis.DEC)
+        if (initializeMotors) {
+            initializeAxis(SkyWatcherAxis.RA)
+            initializeAxis(SkyWatcherAxis.DEC)
+        }
         modelName = modelNameFor(firmware)
         return readCoordinates()
     }
 
-    override fun readCoordinates(): MountCoordinates {
+    override fun readCoordinates(): MountCoordinates = readCoordinatesWithAxes().coordinates
+
+    override fun readCoordinatesWithAxes(): MountSessionCoordinates {
         val raSteps = queryPosition(SkyWatcherAxis.RA)
         val decSteps = queryPosition(SkyWatcherAxis.DEC)
         val lst = SkyWatcherEquatorialMath.localSiderealHours(site.longitudeDeg, now())
-        return if (mode == SkyWatcherMountMode.ALTAZ) {
+        val coordinates = if (mode == SkyWatcherMountMode.ALTAZ) {
             val altAz = SkyWatcherEquatorialMath.encoderToAltAz(geometry, raSteps, decSteps)
             val (hourAngle, decDeg) = SkyWatcherEquatorialMath.horizontalToEq(altAz, site.latitudeDeg)
             MountCoordinates(
@@ -73,6 +83,11 @@ internal class SkyWatcherMotorAdapter(
                 decDeg = eq.decDeg.coerceIn(-90.0, 90.0)
             )
         }
+        // :j is the firmware motor position counter. No auxiliary-clutch encoder was queried.
+        fun angle(counter: Long, total: Long) = ((counter - SkyWatcherMotorCodec.POSITION_OFFSET).toDouble() * 360.0 / total).mod(360.0)
+        return MountSessionCoordinates(coordinates, MountRawAxisCoordinates(angle(raSteps, geometry.ra.totalSteps),
+            angle(decSteps, geometry.dec.totalSteps), maxOf(360.0 / geometry.ra.totalSteps, 360.0 / geometry.dec.totalSteps),
+            AxisReadingKind.MOTOR_COUNTER))
     }
 
     override fun slewTo(targetNow: MountCoordinates) {
@@ -128,6 +143,12 @@ internal class SkyWatcherMotorAdapter(
                 applyTracking(true)
             }
         }
+    }
+
+    override fun abortMotion() {
+        trackingEnabled = false; trackingRate = MountTrackingRate.OFF
+        stopAxis(SkyWatcherAxis.RA); stopAxis(SkyWatcherAxis.DEC)
+        axisMotionSign.clear()
     }
 
     override fun setMoveRate(rate: MountSlewRate) {

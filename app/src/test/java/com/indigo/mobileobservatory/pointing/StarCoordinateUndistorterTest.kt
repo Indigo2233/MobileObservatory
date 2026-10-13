@@ -2,6 +2,7 @@ package com.indigo.mobileobservatory.pointing
 
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import com.indigo.mobileobservatory.camera.PhoneMonoFrameConverter
 
 class StarCoordinateUndistorterTest {
     private val calibration = CameraLensCalibration(
@@ -71,6 +72,25 @@ class StarCoordinateUndistorterTest {
             0, 0, 2_000, 1_500, 2_000, 1_125, alreadyCorrectedByCamera = false
         )
         assertEquals(idealY - 187.5, result.stars.single().y.toDouble(), 0.5)
+    }
+
+    @Test fun mapsAveragedRawPixelCentersThroughTheExactRetainedFootprint() {
+        val plan = PhoneMonoFrameConverter.plan(2000, 1500, 300, true)
+        val footprint = plan.footprint(0.0, 0.0, 2000.0, 1500.0)
+        val idealX = 1400.0; val idealY = 350.0
+        val x = (idealX - calibration.principalX) / calibration.focalX
+        val y = (idealY - calibration.principalY) / calibration.focalY
+        val r2 = x*x + y*y
+        val radial = 1 + calibration.radialK1*r2 + calibration.radialK2*r2*r2
+        val distortedX = calibration.principalX + x*radial*calibration.focalX
+        val distortedY = calibration.principalY + y*radial*calibration.focalY
+        val scaleX = plan.outputWidth / footprint.widthPx; val scaleY = plan.outputHeight / footprint.heightPx
+        val distorted = star(((distortedX - footprint.firstPixelCenterX)*scaleX).toFloat(),
+            ((distortedY - footprint.firstPixelCenterY)*scaleY).toFloat())
+        val result = StarCoordinateUndistorter.correct(StarExtractionResult(listOf(distorted), 32, 5f, null, 10f, 1f),
+            calibration, 0, 0, 2000, 1500, plan.outputWidth, plan.outputHeight, false, sampledFootprint = footprint)
+        assertEquals((idealX - footprint.firstPixelCenterX)*scaleX, result.stars.single().x.toDouble(), .001)
+        assertEquals((idealY - footprint.firstPixelCenterY)*scaleY, result.stars.single().y.toDouble(), .001)
     }
 
     private fun star(x: Float, y: Float) = ExtractedStar(x, y, 100f, 50f, 20f, 10f)

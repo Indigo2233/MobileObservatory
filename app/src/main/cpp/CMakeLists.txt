@@ -31,4 +31,4 @@ endif()
 
 # USB fd helper used by ZWO (and optionally other USB open paths).
 add_library(usb_helper_jni SHARED usb_helper_jni.cpp)
-target_link_libraries(usb_helper_jni log)
+target_link_libraries(usb_helper_jni log dl)

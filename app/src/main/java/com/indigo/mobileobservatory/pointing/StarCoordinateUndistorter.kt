@@ -1,5 +1,7 @@
 package com.indigo.mobileobservatory.pointing
 
+import com.indigo.mobileobservatory.camera.CameraPixelFootprint
+
 /**
  * Brown-Conrady lens calibration reported by Camera2. Intrinsics are in pre-correction-array pixels;
  * distortion maps ideal normalized coordinates to the captured, distorted coordinates.
@@ -40,13 +42,20 @@ object StarCoordinateUndistorter {
         frameWidth: Int,
         frameHeight: Int,
         alreadyCorrectedByCamera: Boolean,
-        coordinateDomain: LensCalibrationCoordinateDomain = LensCalibrationCoordinateDomain.PRE_CORRECTION
+        coordinateDomain: LensCalibrationCoordinateDomain = LensCalibrationCoordinateDomain.PRE_CORRECTION,
+        sampledFootprint: CameraPixelFootprint? = null
     ): StarExtractionResult {
         if (calibration == null || alreadyCorrectedByCamera || coordinateDomain != LensCalibrationCoordinateDomain.PRE_CORRECTION ||
             cropLeftPx == null || cropTopPx == null || cropWidthPx == null || cropHeightPx == null ||
             cropWidthPx <= 0 || cropHeightPx <= 0 || frameWidth <= 0 || frameHeight <= 0
         ) return extraction
-        val scaled = calibration.scaleToCrop(
+        val scaled = if (sampledFootprint != null) calibration.copy(
+            focalX = calibration.focalX * frameWidth / sampledFootprint.widthPx,
+            focalY = calibration.focalY * frameHeight / sampledFootprint.heightPx,
+            principalX = (calibration.principalX - sampledFootprint.firstPixelCenterX) * frameWidth / sampledFootprint.widthPx,
+            principalY = (calibration.principalY - sampledFootprint.firstPixelCenterY) * frameHeight / sampledFootprint.heightPx,
+            skew = calibration.skew * frameWidth / sampledFootprint.widthPx
+        ) else calibration.scaleToCrop(
             cropLeftPx, cropTopPx, cropWidthPx, cropHeightPx, frameWidth, frameHeight
         )
         return extraction.copy(stars = extraction.stars.map { star -> star.copyPosition(scaled) })

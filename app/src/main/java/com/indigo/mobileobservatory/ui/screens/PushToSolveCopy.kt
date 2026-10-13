@@ -5,6 +5,7 @@ import com.indigo.mobileobservatory.pointing.WideFieldSolveFailure
 
 internal object PushToSolveCopy {
     fun messageRes(failure: WideFieldSolveFailure?, starCount: Int): Int = when (failure) {
+        WideFieldSolveFailure.RESOURCE_LIMIT -> R.string.wfp_resource_heap
         WideFieldSolveFailure.INSUFFICIENT_STARS -> R.string.push_to_fail_few_stars
         WideFieldSolveFailure.DEVICE_MOTION -> R.string.push_to_fail_motion
         WideFieldSolveFailure.AMBIGUOUS_CANDIDATE -> R.string.push_to_fail_ambiguous

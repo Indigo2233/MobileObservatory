@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="wf_edit_unsaved_title">Unsaved changes</string>
+    <string name="wf_edit_unsaved_message">Save these settings before leaving?</string>
+    <string name="wf_edit_save_leave">Save and leave</string>
+    <string name="wf_edit_discard">Discard changes</string>
+    <string name="wf_edit_keep">Keep editing</string>
+    <string name="wf_edit_saved">Settings saved</string>
+    <string name="wf_edit_saving">Saving settings…</string>
+    <string name="wf_edit_device_changed">This device disconnected or changed. Your draft is kept; reconnect the original device to save.</string>
+    <string name="wf_edit_invalid">Check the highlighted values.</string>
+    <string name="wf_device_settings">Device settings</string>
+    <string name="wf_device_runtime">Live controls</string>
+    <string name="wf_device_runtime_hint">These controls take effect immediately.</string>
+    <string name="wf_edit_failed">Could not save settings. Your draft is kept.</string>
+    <string name="wf_edit_valid_range">Allowed: %1$s</string>
+    <string name="wf_edit_use_current_device">Use this draft for %1$s</string>
+    <string name="wf_focus_stop">Stop focuser</string>
+    <string name="wf_focus_zero">Reset focus position to zero</string>
+    <string name="wf_focus_zero_confirm">Set the current focuser position to zero? This changes the reference for future position moves.</string>
+</resources>

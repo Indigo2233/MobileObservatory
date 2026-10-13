@@ -2,6 +2,12 @@ package com.indigo.mobileobservatory.camera
 
 import kotlin.math.atan
 
+/** Exact sensor-pixel rectangle represented by the derived solve frame. */
+data class CameraPixelFootprint(val leftPx: Double, val topPx: Double, val widthPx: Double, val heightPx: Double,
+    val firstPixelCenterX: Double = leftPx, val firstPixelCenterY: Double = topPx) {
+    init { require(listOf(leftPx, topPx, widthPx, heightPx, firstPixelCenterX, firstPixelCenterY).all { it.isFinite() } && widthPx > 0 && heightPx > 0) }
+}
+
 /** Values recorded for one Camera2 still capture, independent of Android framework classes. */
 data class CameraFovInput(
     val focalLengthMm: Double,
@@ -14,7 +20,8 @@ data class CameraFovInput(
     val cropWidthPx: Int,
     val cropHeightPx: Int,
     val outputWidthPx: Int,
-    val outputHeightPx: Int
+    val outputHeightPx: Int,
+    val sampledFootprint: CameraPixelFootprint? = null
 )
 
 data class CameraFovEstimate(
@@ -33,11 +40,11 @@ object CameraFovCalculator {
             input.outputWidthPx <= 0 || input.outputHeightPx <= 0
         ) return null
 
-        val cropWidth = input.cropWidthPx.coerceIn(1, input.activeWidthPx).toDouble()
-        val cropHeight = input.cropHeightPx.coerceIn(1, input.activeHeightPx).toDouble()
+        val cropWidth = input.sampledFootprint?.widthPx ?: input.cropWidthPx.coerceIn(1, input.activeWidthPx).toDouble()
+        val cropHeight = input.sampledFootprint?.heightPx ?: input.cropHeightPx.coerceIn(1, input.activeHeightPx).toDouble()
         val cropAspect = cropWidth / cropHeight
         val outputAspect = input.outputWidthPx.toDouble() / input.outputHeightPx
-        val (usedWidthPx, usedHeightPx) = if (outputAspect > cropAspect) {
+        val (usedWidthPx, usedHeightPx) = if (input.sampledFootprint != null) cropWidth to cropHeight else if (outputAspect > cropAspect) {
             cropWidth to (cropWidth / outputAspect).coerceAtMost(cropHeight)
         } else {
             (cropHeight * outputAspect).coerceAtMost(cropWidth) to cropHeight

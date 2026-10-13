@@ -12,6 +12,7 @@ import com.indigo.mobileobservatory.stacking.PixelTraits
 import com.indigo.mobileobservatory.stacking.SampleAlignment
 import com.indigo.mobileobservatory.stacking.DemosaicAlgorithm
 import com.indigo.mobileobservatory.util.BayerDemosaic
+import com.indigo.mobileobservatory.stacking.SerCfaInterpretation
 import java.io.File
 import java.io.IOException
 import java.io.RandomAccessFile
@@ -39,14 +40,15 @@ data class SERHeader(
 enum class SerEndianConvention { COMPATIBILITY, SPECIFICATION }
 
 class SERReader(private val file: File,
-                val endianConvention: SerEndianConvention = SerEndianConvention.COMPATIBILITY) : AutoCloseable {
+                val endianConvention: SerEndianConvention = SerEndianConvention.COMPATIBILITY,
+                val cfaInterpretation: SerCfaInterpretation = SerCfaInterpretation.AUTO) : AutoCloseable {
 
     var sampleAlignment: SampleAlignment = SampleAlignment.AUTO
     var lastError: String? = null
         private set
 
     /** LP750 conversion with per-frame white balance for Bayer playback. */
-    var lp750Enabled: Boolean = true
+    var lp750Enabled: Boolean = false
 
     companion object {
         private const val TAG = "SERReader"
@@ -108,9 +110,11 @@ class SERReader(private val file: File,
             val height = bb.getInt()
             val pixelDepth = bb.getInt()
             val frameCount = bb.getInt()
+            require(colorId >= 0) { "invalid_source" }
             require(endianFlag == 0 || endianFlag == 1) { "Invalid SER byte-order flag" }
-            require(colorId == 0 || colorId in 8..11 || colorId == 100 || colorId == 101) {
-                "Unsupported SER color ID: $colorId"
+            val effectiveColorId = cfaInterpretation.effectiveColorId(colorId)
+            require(effectiveColorId == 0 || effectiveColorId in 8..11 || effectiveColorId == 100 || effectiveColorId == 101) {
+                "cfa_unknown_header"
             }
             require(width > 0 && height > 0) { "Invalid SER dimensions" }
             require(pixelDepth in 1..16) { "Invalid SER sample depth" }
@@ -206,7 +210,7 @@ class SERReader(private val file: File,
             val size = if (h.isPSER) (h.width.toLong()*h.height*h.pixelDepth+7L)/8L
                 else h.width.toLong()*h.height*(if (h.pixelDepth > 8) 2 else 1)*(if (h.colorId >= 100) 3 else 1)
             try {
-                SERPreviewDecoder.read(r,h,Math.addExact(HEADER_SIZE.toLong(),Math.multiplyExact(size,index.toLong())),size,
+                SERPreviewDecoder.read(r,h.copy(colorId = cfaInterpretation.effectiveColorId(h.colorId)),Math.addExact(HEADER_SIZE.toLong(),Math.multiplyExact(size,index.toLong())),size,
                     pixelByteOrder(h) == ByteOrder.LITTLE_ENDIAN,sampleAlignment,maxPixels,cancelCheck)
             } catch (e: IOException) {
                 lastError = e.message ?: "Could not read SER preview"
@@ -240,7 +244,7 @@ class SERReader(private val file: File,
             val blue = if (image.channels == 3) display(image.pixels[p+2]) else red
             pixels[i] = -0x1000000 or (red shl 16) or (green shl 8) or blue
         }
-        if (lp750Enabled && h.colorId in 8..11) applyLp750ToPixels(pixels,cancelCheck)
+        if (lp750Enabled && sensorFormat.isBayer) applyLp750ToPixels(pixels,cancelCheck)
         cancelCheck()
         return Bitmap.createBitmap(pixels,image.width,image.height,Bitmap.Config.ARGB_8888)
     }
@@ -293,14 +297,7 @@ class SERReader(private val file: File,
 
     val sensorFormat: PixelFormat get() {
         val h = checkNotNull(header) { "Reader is closed" }
-        return when (h.colorId) {
-            100, 101 -> if (h.pixelDepth <= 8) PixelFormat.RGB24 else PixelFormat.RGB48
-            else -> {
-                val prefix = when (h.colorId) { 8 -> "BAYER_RG"; 9 -> "BAYER_GR"; 10 -> "BAYER_GB"; 11 -> "BAYER_BG"; else -> "MONO" }
-                val bits = if (h.pixelDepth <= 8) 8 else 16
-                PixelFormat.valueOf("$prefix$bits")
-            }
-        }
+        return cfaInterpretation.sensorFormat(h.colorId, h.pixelDepth)
     }
 
     val sensorTraits: PixelTraits get() {
@@ -365,7 +362,7 @@ class SERReader(private val file: File,
         }
     }
     fun frameToBitmap(frameData: ByteArray): Bitmap? {
-        val h = header ?: return null
+        val h = header?.let { it.copy(colorId = cfaInterpretation.effectiveColorId(it.colorId)) } ?: return null
         val gray8 = decodeFrameTo8bit(frameData)
         val w = h.width
         val ht = h.height
@@ -399,7 +396,7 @@ class SERReader(private val file: File,
                     pixels[i] = (0xFF shl 24) or (sv shl 16) or (sv shl 8) or sv
                 }
             }
-            if (lp750Enabled && h.colorId in 8..11) {
+            if (lp750Enabled && sensorFormat.isBayer) {
                 applyLp750ToPixels(pixels)
             }
             Bitmap.createBitmap(pixels, w, ht, Bitmap.Config.ARGB_8888)

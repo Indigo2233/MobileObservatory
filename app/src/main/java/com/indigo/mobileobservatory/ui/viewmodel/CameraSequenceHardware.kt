@@ -100,7 +100,8 @@ class CameraSequenceHardware(
             delay(400)
         }
         val progress = viewModel.precisionGotoProgress.value
-        if (progress.phase == PrecisionGotoPhase.FAILED) {
+        if (progress.phase != PrecisionGotoPhase.SUCCEEDED) {
+            if (progress.isActive) viewModel.stopMountMotion()
             throw IllegalStateException(progress.message.ifBlank { "center" })
         }
     }

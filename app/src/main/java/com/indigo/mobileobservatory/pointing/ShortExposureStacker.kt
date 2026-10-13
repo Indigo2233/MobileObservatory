@@ -2,7 +2,11 @@ package com.indigo.mobileobservatory.pointing
 
 import com.indigo.mobileobservatory.camera.FrameData
 import com.indigo.mobileobservatory.camera.PixelFormat
+import com.indigo.mobileobservatory.camera.PhoneSkyResourceBudget
+import com.indigo.mobileobservatory.camera.PhoneSkyResourceException
+import com.indigo.mobileobservatory.camera.PhoneSkyResourceLimit
 import kotlin.math.tan
+import kotlin.math.roundToInt
 
 data class ShortExposureStackResult(
     val frame: FrameData,
@@ -13,7 +17,9 @@ data class ShortExposureStackResult(
 
 internal data class BurstAttitude(
     val opticalAxis: Direction3,
-    val imageUp: Direction3
+    val imageUp: Direction3,
+    /** These are normalized optical axes; raw reflected pixel X runs in the opposite direction. */
+    val mirrored: Boolean = false
 )
 
 /**
@@ -40,13 +46,22 @@ object ShortExposureStacker {
         require(frames.all {
             it.width == first.width && it.height == first.height && it.pixelFormat == first.pixelFormat
         }) { "All burst frames must have matching geometry and pixel format" }
+        if (frames.size > 16) throw PhoneSkyResourceException(PhoneSkyResourceLimit.HEAP)
+        val frameBytes = PhoneSkyResourceBudget.frameBytes(first.width, first.height, first.pixelFormat.bytesPerPixel)
+        require(first.pixelFormat.isMono && frames.all { it.data.size.toLong() >= frameBytes }) { "Phone stack requires tightly packed mono frames" }
         if (frames.size == 1) return ShortExposureStackResult(first, 1, 0)
 
         var rejectedMotion = 0
-        val aligned = ArrayList<FrameData>(frames.size)
+        val aligned = ArrayList<Pair<FrameData, WarpSampler?>>(frames.size)
         val reference = attitudes.getOrNull(0)
+        require(attitudes.filterNotNull().map { it.mirrored }.toSet().size <= 1) {
+            "Image parity changed during the burst"
+        }
         val canWarp = reference != null && fovWidthDeg != null && fovHeightDeg != null &&
             fovWidthDeg > 1.0 && fovHeightDeg > 1.0
+        if (reference?.mirrored == true && (!canWarp || attitudes.size != frames.size || attitudes.any { it == null })) {
+            return ShortExposureStackResult(first, 1, 0)
+        }
         for (index in frames.indices) {
             val frame = frames[index]
             val pose = attitudes.getOrNull(index)
@@ -54,35 +69,38 @@ object ShortExposureStacker {
                 val lookError = pose.opticalAxis.angleDeg(reference!!.opticalAxis)
                 val rollError = pose.imageUp.angleDeg(reference.imageUp)
                 if (lookError > MAXIMUM_ALIGN_DEG || rollError > MAXIMUM_ROLL_DEG) {
-                    if (index == 0) aligned += frame else rejectedMotion++
+                    if (index == 0) aligned += frame to null else rejectedMotion++
                     continue
                 }
-                aligned += if (index == 0) frame else warp(
-                    source = frame,
+                aligned += frame to if (index == 0) null else WarpSampler(
+                    width = frame.width, height = frame.height,
                     sourceAttitude = pose,
                     referenceAttitude = reference,
                     fovWidthDeg = fovWidthDeg!!,
                     fovHeightDeg = fovHeightDeg!!
                 )
             } else {
-                aligned += frame
+                aligned += frame to null
             }
         }
-        if (aligned.isEmpty()) aligned += first
+        if (aligned.isEmpty()) aligned += first to null
         if (aligned.size == 1) {
-            return ShortExposureStackResult(aligned[0], 1, 0, rejectedMotion)
+            return ShortExposureStackResult(aligned[0].first, 1, 0, rejectedMotion)
         }
 
         val sampleCount = aligned.size
         val pixels = first.width * first.height
         val bpp = first.pixelFormat.bytesPerPixel
         require(bpp == 1 || bpp >= 2) { "Unsupported format ${first.pixelFormat}" }
+        PhoneSkyResourceBudget.requireStackOutput(first.width, first.height, bpp, sampleCount)
         val out = ByteArray(pixels * bpp)
         val samples = IntArray(sampleCount)
         var rejected = 0
         for (pixel in 0 until pixels) {
             for (frameIndex in aligned.indices) {
-                samples[frameIndex] = sample(aligned[frameIndex], pixel, bpp)
+                val (frame, mapping) = aligned[frameIndex]
+                val sourcePixel = mapping?.sourceIndex(pixel) ?: pixel
+                samples[frameIndex] = if (sourcePixel < 0) 0 else sample(frame, sourcePixel, bpp)
             }
             samples.sort()
             val trim = if (sampleCount >= 4) 1 else 0
@@ -116,46 +134,59 @@ object ShortExposureStacker {
         fovWidthDeg: Double,
         fovHeightDeg: Double
     ): FrameData {
+        require(sourceAttitude.mirrored == referenceAttitude.mirrored) { "Image parity changed during the burst" }
         val bpp = source.pixelFormat.bytesPerPixel
         val width = source.width
         val height = source.height
-        val out = ByteArray(width * height * bpp)
-        val srcRight = basisRight(sourceAttitude)
-        val srcUp = sourceAttitude.imageUp.unit()
-        val srcLook = sourceAttitude.opticalAxis.unit()
-        val refRight = basisRight(referenceAttitude)
-        val refUp = referenceAttitude.imageUp.unit()
-        val refLook = referenceAttitude.opticalAxis.unit()
-        val tanW = tan(Math.toRadians(fovWidthDeg / 2.0))
-        val tanH = tan(Math.toRadians(fovHeightDeg / 2.0))
-        for (y in 0 until height) {
-            val ny = (1.0 - (y + 0.5) / height * 2.0) * tanH
-            for (x in 0 until width) {
-                val nx = ((x + 0.5) / width * 2.0 - 1.0) * tanW
-                val inv = 1.0 / kotlin.math.sqrt(nx * nx + ny * ny + 1.0)
-                val camX = nx * inv
-                val camY = ny * inv
-                val camZ = inv
-                val east = refRight.east * camX + refUp.east * camY + refLook.east * camZ
-                val north = refRight.north * camX + refUp.north * camY + refLook.north * camZ
-                val up = refRight.up * camX + refUp.up * camY + refLook.up * camZ
-                val sX = east * srcRight.east + north * srcRight.north + up * srcRight.up
-                val sY = east * srcUp.east + north * srcUp.north + up * srcUp.up
-                val sZ = east * srcLook.east + north * srcLook.north + up * srcLook.up
-                if (sZ <= 1e-6) continue
-                val sx = ((sX / sZ) / tanW + 1.0) * 0.5 * width - 0.5
-                val sy = (1.0 - (sY / sZ) / tanH) * 0.5 * height - 0.5
-                val ix = sx.toInt()
-                val iy = sy.toInt()
-                if (ix !in 0 until width || iy !in 0 until height) continue
-                copyPixel(source, ix, iy, out, x, y, bpp)
-            }
+        require(source.pixelFormat.isMono)
+        require(source.data.size.toLong() >= PhoneSkyResourceBudget.frameBytes(width, height, bpp))
+        PhoneSkyResourceBudget.requireStackOutput(width, height, bpp, 1)
+        val mapping = WarpSampler(width, height, sourceAttitude, referenceAttitude, fovWidthDeg, fovHeightDeg)
+        val out = ByteArray(PhoneSkyResourceBudget.frameBytes(width, height, bpp).toInt())
+        for (pixel in 0 until width * height) {
+            val index = mapping.sourceIndex(pixel)
+            if (index < 0) continue
+            val src = index * bpp; val dst = pixel * bpp
+            out[dst] = source.data[src]
+            if (bpp >= 2) out[dst + 1] = source.data[src + 1]
         }
         return FrameData(out, width, height, source.pixelFormat, source.frameId, source.timestamp)
     }
 
     private fun basisRight(attitude: BurstAttitude): Direction3 =
-        attitude.imageUp.cross(attitude.opticalAxis).unit()
+        attitude.imageUp.cross(attitude.opticalAxis).unit() * if (attitude.mirrored) -1.0 else 1.0
+
+    /** Same Double operations as materialized warp, evaluated directly while stacking. */
+    private class WarpSampler(private val width: Int, private val height: Int,
+        sourceAttitude: BurstAttitude, referenceAttitude: BurstAttitude, fovWidthDeg: Double, fovHeightDeg: Double) {
+        private val srcRight = basisRight(sourceAttitude)
+        private val srcUp = sourceAttitude.imageUp.unit()
+        private val srcLook = sourceAttitude.opticalAxis.unit()
+        private val refRight = basisRight(referenceAttitude)
+        private val refUp = referenceAttitude.imageUp.unit()
+        private val refLook = referenceAttitude.opticalAxis.unit()
+        private val tanW = tan(Math.toRadians(fovWidthDeg / 2.0))
+        private val tanH = tan(Math.toRadians(fovHeightDeg / 2.0))
+        init { require(fovWidthDeg.isFinite() && fovHeightDeg.isFinite() && fovWidthDeg in 1.0..140.0 && fovHeightDeg in 1.0..140.0) }
+        fun sourceIndex(pixel: Int): Int {
+            val x = pixel % width; val y = pixel / width
+            val ny = (1.0 - (y + 0.5) / height * 2.0) * tanH
+            val nx = ((x + 0.5) / width * 2.0 - 1.0) * tanW
+            val inv = 1.0 / kotlin.math.sqrt(nx * nx + ny * ny + 1.0)
+            val camX = nx * inv; val camY = ny * inv; val camZ = inv
+            val east = refRight.east * camX + refUp.east * camY + refLook.east * camZ
+            val north = refRight.north * camX + refUp.north * camY + refLook.north * camZ
+            val up = refRight.up * camX + refUp.up * camY + refLook.up * camZ
+            val sX = east * srcRight.east + north * srcRight.north + up * srcRight.up
+            val sY = east * srcUp.east + north * srcUp.north + up * srcUp.up
+            val sZ = east * srcLook.east + north * srcLook.north + up * srcLook.up
+            if (sZ <= 1e-6) return -1
+            val sx = ((sX / sZ) / tanW + 1.0) * 0.5 * width - 0.5
+            val sy = (1.0 - (sY / sZ) / tanH) * 0.5 * height - 0.5
+            val ix = sx.roundToInt(); val iy = sy.roundToInt()
+            return if (ix !in 0 until width || iy !in 0 until height) -1 else iy * width + ix
+        }
+    }
 
     private fun sample(frame: FrameData, pixel: Int, bpp: Int): Int {
         val offset = pixel * bpp
@@ -173,18 +204,4 @@ object ShortExposureStacker {
         if (bpp >= 2) data[offset + 1] = ((value ushr 8) and 0xFF).toByte()
     }
 
-    private fun copyPixel(
-        source: FrameData,
-        sx: Int,
-        sy: Int,
-        dest: ByteArray,
-        dx: Int,
-        dy: Int,
-        bpp: Int
-    ) {
-        val src = (sy * source.width + sx) * bpp
-        val dst = (dy * source.width + dx) * bpp
-        dest[dst] = source.data[src]
-        if (bpp >= 2) dest[dst + 1] = source.data[src + 1]
-    }
 }

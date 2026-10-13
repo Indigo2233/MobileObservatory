@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="wf_equipment_title">器材</string>
+    <string name="wf_device_control">控制</string>
+    <string name="wf_device_connection">连接</string>
+    <string name="wf_device_details">设备详情</string>
+    <string name="wf_device_usb_identity">USB 设备 #%1$d</string>
+    <string name="wf_device_unrecognized">尚未识别协议，请确认器材类型后连接。</string>
+    <string name="wf_device_connect_hint">接入该器材后，重新扫描。</string>
+    <string name="wf_device_cooler_unavailable">该相机未提供可控制的制冷功能。</string>
+    <string name="wf_device_focus_position">位置（步）</string>
+    <string name="wf_device_move_to">移动到位置</string>
+    <string name="wf_device_focus_step">步长 %1$d</string>
+    <string name="wf_device_sensor_temperature">传感器 %1$.1f °C · 制冷功率 %2$.0f%%</string>
+    <string name="wf_device_apply_temperature">设置温度</string>
+    <string name="wf_device_open_capture">前往拍摄</string>
+</resources>

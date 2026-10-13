@@ -48,11 +48,38 @@ class PreviewScaleTest {
         val h = 4
         val src = ByteArray(w * h) { i -> i.toByte() }
         val dst = ByteArray(w * h)
-        val (outW, outH) = PreviewScale.subsample(src, w, h, 1, 2, dst)
+        val (outW, outH) = PreviewScale.subsample(src, w, h, 1, 2, dst, keepBayerPhase = true)
         assertEquals(4, outW)
         assertEquals(2, outH)
         assertEquals(0.toByte(), dst[0])
-        assertEquals(2.toByte(), dst[1])
-        assertEquals(16.toByte(), dst[outW])
+        assertEquals(1.toByte(), dst[1])
+        assertEquals(8.toByte(), dst[outW])
+    }
+
+    @Test
+    fun downsamplingKeepsAllFourCfaSitesForEveryPatternAndWordSize() {
+        val patterns = listOf(
+            intArrayOf(201, 81, 82, 31), // RGGB
+            intArrayOf(81, 201, 31, 82), // GRBG
+            intArrayOf(81, 31, 201, 82), // GBRG
+            intArrayOf(31, 81, 82, 201)  // BGGR
+        )
+        for (tile in patterns) for (bpp in listOf(1, 2)) for (step in listOf(2, 4)) {
+            val w = 32; val h = 32
+            val src = ByteArray(w * h * bpp)
+            for (y in 0 until h) for (x in 0 until w) {
+                val value = tile[(y % 2) * 2 + x % 2]
+                val i = (y * w + x) * bpp
+                src[i] = value.toByte()
+                if (bpp == 2) src[i + 1] = 3
+            }
+            val dst = ByteArray(src.size)
+            val (outW, outH) = PreviewScale.subsample(src, w, h, bpp, step, dst, keepBayerPhase = true)
+            for (y in 0 until outH) for (x in 0 until outW) {
+                val i = (y * outW + x) * bpp
+                assertEquals(tile[(y % 2) * 2 + x % 2], dst[i].toInt() and 255)
+                if (bpp == 2) assertEquals(3, dst[i + 1].toInt())
+            }
+        }
     }
 }

@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>靛空台 · WF 第零批交互原型</title>
+<style>
+:root{color-scheme:dark;--bg:#0b0d13;--surface:#141720;--raised:#20232e;--line:#373b47;--text:#ecedf5;--muted:#b0b4c3;--accent:#afb8ff;--accent-bg:#303952;--warn:#f3c988;--stop:#f19091;--star:#d9dce9}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,"Microsoft YaHei",sans-serif}body.red{--bg:#0e0505;--surface:#1c0909;--raised:#2c0f0f;--line:#643232;--text:#f5b1aa;--muted:#d68b84;--accent:#ffc0b5;--accent-bg:#67302b;--warn:#f2ac83;--stop:#ffada2;--star:#dc8279}button,input,select{font:inherit;color:inherit}button{cursor:pointer;min-height:48px;min-width:48px;padding:10px 15px;border:1px solid var(--line);background:var(--raised);border-radius:12px;text-align:center}button:hover{border-color:var(--accent)}button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid var(--accent);outline-offset:3px}button:disabled{opacity:.48;cursor:default}a{color:var(--accent)}input,select{width:100%;min-height:48px;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px}input[type=checkbox]{width:22px;min-height:22px;accent-color:var(--accent)}label{display:grid;gap:5px}h1,h2,h3,p{margin:0}h1{font-size:21px}h2{font-size:21px}h3{font-size:18px}.muted{color:var(--muted)}.tiny{font-size:13px}.primary{background:var(--accent-bg);color:var(--accent);border-color:var(--accent)}.quiet{background:transparent}.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.spread{justify-content:space-between}.grow{flex:1}.stack{display:grid;gap:14px}.card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:17px}.notice{color:var(--warn);font-size:14px}.wide{width:100%}.badge{display:inline-block;padding:3px 9px;background:var(--raised);border-radius:30px;font-size:12px;color:var(--muted)}.page-wrap{max-width:1100px;margin:auto;padding:18px}.outside{margin-bottom:15px}.outside>p{max-width:820px;margin-top:5px}.app{position:relative;display:flex;flex-direction:column;border:1px solid var(--line);border-radius:22px;background:var(--surface);overflow:hidden;min-height:760px}.app-head{padding:14px 16px 8px;border-bottom:1px solid var(--line);z-index:2;background:var(--surface)}.app-head .row{flex-wrap:nowrap}.app-head h1{white-space:nowrap}.device-strip{display:flex;gap:7px;overflow:auto;padding:7px 0}.device-strip button{white-space:nowrap;min-height:48px;font-size:14px;background:transparent;padding:8px 12px}.device-strip button span{display:block;font-size:12px;color:var(--muted)}.app-body{flex:1;position:relative;min-height:540px;display:flex;flex-direction:column}.content{padding:18px;flex:1}.toolbar{padding:12px 16px;display:flex;align-items:center;gap:12px;border-bottom:1px solid var(--line)}.toolbar h2{font-size:18px}.nav{display:flex;gap:5px;padding:8px;border-top:1px solid var(--line);background:var(--surface)}.nav button{flex:1;border:0;background:transparent;padding:8px 4px;color:var(--muted)}.nav .selected{background:var(--accent-bg);color:var(--accent)}.nav button b{display:block;font-weight:500;font-size:14px}.nav button span{font-size:20px}.sky{position:relative;min-height:475px;flex:1;overflow:hidden;background:var(--bg);touch-action:pan-y}.sky svg{position:absolute;width:100%;height:100%;inset:0;pointer-events:none}.sky-grid{stroke:var(--line);stroke-width:.6;opacity:.5}.sky-star{fill:var(--star)}.sky-top{position:relative;display:flex;gap:8px;justify-content:space-between;flex-wrap:wrap;padding:16px;pointer-events:none}.sky-top>*{pointer-events:auto}.sky-target{position:absolute;left:49%;top:37%;background:transparent;border-color:var(--accent);border-radius:50%;height:50px;width:50px;padding:0}.sky-target:hover{background:var(--accent-bg)}.target-card{position:absolute;left:16px;right:16px;bottom:16px;background:var(--surface);border:1px solid var(--line);border-radius:17px;padding:16px;max-width:500px}.target-card .row{margin-top:12px}.summary{position:absolute;bottom:16px;left:16px;max-width:calc(100% - 32px)}.image{min-height:230px;background:var(--bg);border:1px solid var(--line);border-radius:14px;display:grid;place-items:center;text-align:center;position:relative;overflow:hidden}.image::before{content:"";width:180px;height:160px;border-radius:50%;position:absolute;background:radial-gradient(ellipse, var(--accent-bg), transparent 65%);transform:rotate(-24deg)}.image>div{position:relative}.image button{position:absolute;right:10px;bottom:10px}.live-summary{display:flex;gap:9px;flex-wrap:wrap;align-items:center;padding:10px 16px;background:var(--raised);font-size:14px}.live-summary span{flex:1}.media-row{display:flex;width:100%;gap:13px;align-items:center;text-align:left;padding:14px;background:var(--surface)}.thumb{width:56px;height:56px;border-radius:10px;background:var(--accent-bg);display:grid;place-items:center;flex-shrink:0;font-size:25px}.media-row .grow{display:grid;gap:4px}.filters{display:flex;gap:7px;overflow:auto}.filters button{white-space:nowrap;min-height:44px}.filters .selected{background:var(--accent-bg);color:var(--accent)}.overlay-host{position:absolute;inset:0;z-index:10;display:flex;align-items:flex-end;justify-content:center}.scrim{position:absolute;inset:0;background:#0009;border:0;border-radius:0;padding:0}.sheet{z-index:1;background:var(--surface);border:1px solid var(--line);border-radius:22px 22px 0 0;width:100%;max-width:660px;max-height:82%;overflow:auto;padding:20px}.sheet .header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:15px}.stop{position:absolute;right:12px;top:12px;z-index:25;background:#501b23;border-color:var(--stop);color:var(--stop);font-weight:700}.task-arrow{font-size:65px;color:var(--accent);text-align:center}.step{color:var(--muted);font-size:14px}.toast{padding:10px 16px;background:var(--raised);color:var(--accent);font-size:14px}.outside-tools{margin-top:14px}.outside-tools summary{cursor:pointer;padding:10px 0}.outside-tools .card{margin-top:10px}.lab{display:flex;gap:12px;flex-wrap:wrap}.lab label{display:flex;align-items:center;gap:7px}.fullscreen .nav,.fullscreen .app-head{display:none}.fullscreen .image{height:530px}.list{display:grid;gap:9px}.sliders{display:grid;grid-template-columns:1fr 1fr;gap:14px}input[type=range]{padding:0;accent-color:var(--accent)}.status-log{font-family:ui-monospace,monospace;font-size:12px;white-space:pre-wrap;max-height:230px;overflow:auto}.kbd{border:1px solid var(--line);border-radius:5px;padding:1px 6px;font-size:12px}
+@media(min-width:850px){.app{max-width:920px;margin:auto;min-height:720px}.app-body{min-height:510px}.nav{padding:8px 110px}.sky{min-height:440px}.content{padding:22px 40px}.device-strip{gap:10px}.overlay-host{align-items:center}.sheet{border-radius:22px;width:calc(100% - 60px)}}
+@media(max-width:430px){.page-wrap{padding:8px}.app{border-radius:14px;min-height:760px}.app-head h1{font-size:18px}.content{padding:14px}.sky-top{padding:12px}.sky-top button{padding:8px}.sliders{grid-template-columns:1fr}.target-card{left:10px;right:10px;padding:13px}.nav button b{font-size:14px}.sheet{padding:15px}}
+</style>
+</head>
+<body>
+<div class="page-wrap">
+  <header class="outside">
+    <div class="row"><h1>靛空台 · WF 交互原型</h1><span class="badge">第零批 · 2026-10-14</span></div>
+    <p class="muted tiny">用于试走入口、层级与返回。全部设备、图片、位置与任务均为模拟；没有硬件控制、拍摄、解析或有效标定。此原型不代表 Android 已实现或已验收。</p>
+  </header>
+  <div id="app" class="app" aria-label="靛空台应用交互原型"></div>
+  <div class="row outside-tools">
+    <button class="quiet" data-action="back">模拟系统返回</button>
+    <button class="quiet" data-action="reset">重置原型</button>
+    <span class="muted tiny">键盘 <span class="kbd">Esc</span> 同样逐层返回；Android 系统边缘手势另行验收。</span>
+  </div>
+  <details class="outside-tools">
+    <summary>走查工具与状态记录（首次找入口测试时保持收起）</summary>
+    <div class="card stack">
+      <p class="muted tiny">仅切换原型前置状态，不会操作设备。启用“模拟指向条件”也不产生真实标定。</p>
+      <div class="lab">
+        <label><input type="checkbox" data-lab="phoneReady">模拟指向条件已就绪</label>
+        <label><input type="checkbox" data-lab="cameraConnected">模拟相机已连接</label>
+        <label><input type="checkbox" data-lab="mountConnected">模拟赤道仪已连接</label>
+        <label><input type="checkbox" data-lab="failNext">下次任务模拟失败</label>
+      </div>
+      <div class="row"><button data-action="empty-media">切换空影像库</button><button data-action="show-log">刷新状态记录</button></div>
+      <pre id="status-log" class="status-log" aria-live="polite"></pre>
+    </div>
+  </details>
+</div>
+<script>
+'use strict';
+(() => {
+  const app = document.getElementById('app');
+  const logElement = document.getElementById('status-log');
+  const targets = [
+    {id:'M42', name:'猎户座大星云', type:'弥漫星云'},
+    {id:'M31', name:'仙女座星系', type:'星系'},
+    {id:'M45', name:'昴星团', type:'疏散星团'},
+    {id:'Sirius', name:'天狼星', type:'亮星'}
+  ];
+  const names = {sky:'星图',capture:'拍摄',media:'影像',equipment:'器材'};
+  const deviceNames = {camera:'相机',mount:'赤道仪',wheel:'滤镜轮',focuser:'调焦器',guide:'导星'};
+  const initialMedia = () => [
+    {id:'sample-result',name:'M42 · EAA 结果',kind:'result',time:'示例 · 22:18',format:'PNG / FITS'},
+    {id:'sample-video',name:'木星 · 录像',kind:'video',time:'示例 · 21:42',format:'SER'},
+    {id:'sample-photo',name:'M31 · 照片',kind:'photo',time:'示例 · 21:10',format:'FITS'}
+  ];
+  const fresh = () => ({workspace:'capture',pages:[],overlay:null,fullscreen:false,target:null,targetCard:false,
+    media:initialMedia(),category:'recent',phoneReady:false,cameraConnected:false,mountConnected:false,
+    wheelConnected:true,focuserConnected:true,guideConnected:false,wheelPosition:1,focusPosition:12000,
+    focusMoving:false,motion:false,red:false,failNext:false,emptyMedia:false,polarStep:0,calibrationStep:0,guideTask:null,
+    eaa:{phase:'empty',frames:0,target:null,brightness:50,stretch:50},notice:'',search:'',draft:'',optics:'主镜 · 600 mm',events:[]});
+  let state = fresh();
+  let focusTimer = null;
+  let pointer = null;
+  let previousOverlayFocus = null;
+  const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const current = () => state.pages.at(-1) || {kind:state.workspace};
+  const targetLabel = t => t ? `${t.id} · ${t.name}` : '未选择目标';
+  const button = (label, action, attrs='', style='') => `<button class="${style}" data-action="${action}" ${attrs}>${label}</button>`;
+  const captureSnapshot = () => JSON.parse(JSON.stringify(state));
+  function record(event) {
+    state.events.push({event,workspace:state.workspace,page:current().kind,overlay:state.overlay?.kind||null});
+    state.events = state.events.slice(-35);
+  }
+  function stopFocus() { state.focusMoving=false; clearInterval(focusTimer); focusTimer=null; }
+  function setOverlay(overlay) {
+    stopFocus();
+    if(!state.overlay) {
+      const focused=document.activeElement;
+      const attributes=Object.entries(focused?.dataset||{}).filter(([key])=>['action','device','input','direction'].includes(key));
+      previousOverlayFocus=attributes.length?`${focused.closest('.app-head')?'#app .app-head':'#app .app-body'} ${attributes.map(([key,value])=>`[data-${key}="${CSS.escape(value)}"]`).join('')}`:null;
+    }
+    state.overlay=overlay;
+  }
+  function closeOverlay() { stopFocus(); state.overlay=null; render(); if(previousOverlayFocus)document.querySelector(previousOverlayFocus)?.focus(); }
+  function push(kind, extra={}) { stopFocus(); state.fullscreen=false; state.overlay=null; state.pages.push({kind,...extra}); record('打开 '+kind); render(); }
+  function switchWorkspace(workspace) { stopFocus(); state.workspace=workspace; state.pages=[]; state.overlay=null; state.fullscreen=false; record('工作区 '+workspace); render(); }
+  function notify(message) { state.notice=message; }
+  function back() {
+    stopFocus();
+    if(state.overlay) { closeOverlay(); record('返回：关闭面板'); return; }
+    if(state.fullscreen) { state.fullscreen=false; record('返回：退出大图'); render(); return; }
+    if(current().kind==='sky' && state.targetCard) { state.targetCard=false; record('返回：关闭目标卡'); render(); return; }
+    if(current().kind==='polar' && state.polarStep>0) { state.polarStep--; record('返回：极轴上一步'); render(); return; }
+    if(current().kind==='calibration' && state.calibrationStep>0) { state.calibrationStep--; record('返回：指向校准上一步'); render(); return; }
+    if(current().kind==='optics-edit' && state.draft!==state.optics) { setOverlay({kind:'discard'}); render(); return; }
+    if(state.pages.length) { state.pages.pop(); record('返回：来源页面'); render(); return; }
+    if(state.workspace!=='capture') { switchWorkspace('capture'); return; }
+    notify('已到应用起始根页；真实 Android 此时由系统返回决定离开应用。'); record('返回：应用根页'); render();
+  }
+  function openDevice(device) { setOverlay({kind:'device',device}); record('状态带 '+device); render(); }
+  function connected(device) { return state[`${device}Connected`]; }
+  function mainHeader() {
+    return `<div class="app-head"><div class="row spread"><h1>靛空台</h1><div class="row">${button(state.red?'红光':'夜视','night','','quiet')}${button('设置','settings','','quiet')}</div></div>
+      <div class="device-strip" aria-label="设备状态">${Object.entries(deviceNames).map(([id,name]) => button(`${name}<span>${connected(id)?id==='wheel'?['L','R','G','B'][state.wheelPosition-1]:id==='focuser'?state.focusPosition+' 步':'已连接':'未连接'}</span>`,'device',`data-device="${id}"`)).join('')}</div></div>`;
+  }
+  function toolbar(title) { return `<div class="toolbar">${button('‹','back','aria-label="返回上一级"','quiet')}<h2 class="grow">${title}</h2><span class="badge">原型模拟</span></div>`; }
+  function nav() { return `<nav class="nav" aria-label="主工作区">${Object.entries(names).map(([id,name]) => button(`<span>${{sky:'✧',capture:'◎',media:'▧',equipment:'⚙'}[id]}</span><b>${name}</b>`,'workspace',`data-workspace="${id}" aria-current="${state.workspace===id?'page':'false'}"`,state.workspace===id?'selected':'')).join('')}</nav>`; }
+  function starGraphic() {
+    let seed=731; const rnd=()=>{seed=(seed*16807)%2147483647;return(seed-1)/2147483646;};
+    const stars=Array.from({length:105},()=>`<circle class="sky-star" cx="${rnd()*1000}" cy="${rnd()*700}" r="${.8+rnd()*1.5}" opacity="${.3+rnd()*.7}"/>`).join('');
+    return `<svg viewBox="0 0 1000 700" preserveAspectRatio="xMidYMid slice" aria-hidden="true"><g class="sky-grid">${[100,250,400,550,700,850].map(x=>`<path d="M${x} 0 Q${x-100} 350 ${x} 700" fill="none"/>`).join('')}${[100,250,400,550].map(y=>`<path d="M0 ${y} Q500 ${y+90} 1000 ${y}" fill="none"/>`).join('')}</g>${stars}</svg>`;
+  }
+  function sky() {
+    return `<div class="sky" data-sky="blank" aria-label="星图空白区域">${starGraphic()}<div class="sky-top"><div class="row">${button('搜索目标','targets','','primary')}${button('观测准备','preparation')}</div><span class="badge">示例星图 · 位置未解算</span></div>
+      ${button('✧','select',`data-target="M42" aria-label="选中 M42"`,'sky-target')}
+      ${state.target&&state.targetCard?`<section class="target-card" aria-label="目标卡"><div class="row spread"><div><h3>${esc(targetLabel(state.target))}</h3><p class="muted tiny">${esc(state.target.type)} · 主镜 ${esc(state.optics)}</p></div>${button('×','close-card','aria-label="关闭目标卡"','quiet')}</div><p class="notice">${state.phoneReady?'模拟指向条件已就绪':'手机与镜筒关系尚未标定'}</p><div class="row">${button(state.phoneReady?'开始推镜':'设置推镜','start-guide','','primary')}${state.mountConnected?button('移动到目标','goto'):''}${button('目标详情','target-detail')}</div></section>`:
+      `<div class="summary">${state.target?button(esc(targetLabel(state.target)),'show-card','','quiet'):'<span class="badge">在星图或搜索中选择目标</span>'}</div>`}</div>`;
+  }
+  function capture() {
+    return `<div class="content stack"><div class="row spread"><div><h2>拍摄</h2><p class="muted tiny">${esc(targetLabel(state.target))} · ${esc(state.optics)}</p></div>${button('选目标','targets')}</div><div class="image"><div><p>${state.cameraConnected?'模拟预览':'连接相机后显示预览'}</p><p class="muted tiny">原型占位图片</p></div></div>
+      ${state.cameraConnected?`<div class="row">${button('拍照','photo','','primary')}${button('录像','record')}${button('EAA 实时观测','eaa')}</div>`:`<div class="card stack"><p>还未连接拍摄相机</p>${button('连接相机','device','data-device="camera"','primary')}${button('查看 EAA 准备','eaa')}</div>`}
+      <div class="row">${button('对焦','device','data-device="focuser"')}${button('导星','device','data-device="guide"')}${button('观测准备','preparation')}</div>
+      ${state.media.length?button(`最近拍摄 · ${esc(state.media[0].name)}　›`,'open-media',`data-media="${esc(state.media[0].id)}"`,'wide quiet'):'<p class="muted">拍摄结果将在这里出现。</p>'}</div>`;
+  }
+  function targetList() {
+    const filtered=targets.filter(t=>targetLabel(t).toLowerCase().includes(state.search.toLowerCase()));
+    return `${toolbar('选目标')}<div class="content stack"><label>搜索天体<input type="search" data-input="search" placeholder="名称或编号，如 M42" value="${esc(state.search)}"></label><div class="filters"><span class="badge">目标库与今夜推荐共用此列表</span></div><div class="list">${filtered.map(t=>button(`<div class="grow"><b>${esc(targetLabel(t))}</b><span class="muted tiny">${esc(t.type)}</span></div>›`,'select',`data-target="${t.id}"`,'media-row')).join('')||'<p>没有匹配目标。换个名称或编号试试。</p>'}</div></div>`;
+  }
+  function preparation() { return `${toolbar('观测准备')}<div class="content stack"><p class="muted">按当前任务补齐所需条件。</p><div class="card stack"><h3>指向校准</h3><p class="muted tiny">手机固定到镜筒，用于手动推镜。</p>${button('校准手机与镜筒','calibration','','primary')}<p class="notice">${state.phoneReady?'仅模拟前置状态，不是有效标定':'本阶段仅试走流程，真实标定在后续 WF 批次完成'}</p></div><div class="card stack"><h3>极轴校准</h3><p class="muted tiny">适用于赤道式跟踪；手动 Dob 推镜不要求。</p>${button('开始极轴校准','polar')}</div></div>`; }
+  function calibration() {
+    const steps=['选择参考方式','对准参考天体','在另一方向验证'];
+    return `${toolbar('校准手机与镜筒')}<div class="content stack"><p class="step">${state.calibrationStep+1}/3 · ${steps[state.calibrationStep]}</p><div class="card stack"><h3>${steps[state.calibrationStep]}</h3>${state.calibrationStep===0?'<label>主镜当前使用<select><option>目镜 · 亮星居中</option><option>可解析相机 · 配对解算</option></select></label><p class="muted">手机支架需锁紧；不强制同轴。</p>':state.calibrationStep===1?'<p>将参考天体居中，然后拍摄手机星野。</p>':'<p>换一个方向，再次观测检查安装关系。</p>'}<p class="notice">此原型不采样，也不产生精度或有效标定。</p>${state.calibrationStep<2?button('试走下一步','calibration-next','','primary'):button('完成流程试走','calibration-done','','primary')}</div></div>`;
+  }
+  function polar() {
+    const steps=['检查地点和拍摄条件','采集不同方向图像','查看调整方向'];
+    return `${toolbar('极轴校准')}<div class="content stack"><p class="step">${state.polarStep+1}/3 · ${steps[state.polarStep]}</p><div class="card stack"><h3>${steps[state.polarStep]}</h3><p>${['地点和相机信息自动带入，允许核对。','真实流程会在授权的任务中采集并解析；运动可停止。','真实结果出现后，按误差方向微调架台。'][state.polarStep]}</p><p class="notice">原型没有采集、运动或极轴误差结果。</p>${state.polarStep<2?button('试走下一步','polar-next','','primary'):button('返回观测准备','polar-done','','primary')}</div></div>`;
+  }
+  function guide() {
+    const page=state.guideTask;
+    const phases={missing:['需要标定安装关系','开始校准'],moving:['按箭头移动镜筒','模拟已停稳'],verifying:['等待本次光学校验','模拟验证完成'],failed:['模拟定位失败','重试定位'],complete:['模拟验证结束','开始 EAA']};
+    const [title,label]=phases[page.phase];
+    return `${toolbar('推镜引导')}<div class="content stack"><div class="row spread"><h3>${esc(targetLabel(page.target))}</h3><span class="badge">任务目标已固定</span></div><p class="muted tiny">示例引导画面 · 无真实方向或到位判断</p>${page.phase==='moving'?'<div class="task-arrow" aria-hidden="true">↗</div>':''}<div class="card stack"><h3>${title}</h3><p class="muted">${page.phase==='missing'?'完成真实校准后才能可信地推算镜筒方向。':page.phase==='failed'?'保留当前任务和目标，可以重试。':'此状态仅用于检查下一步与返回。'}</p>${button(label,'guide-next','','primary')}${page.phase==='missing'?button('仅试走引导画面','guide-demo'):''}</div>${button('浏览其他目标','targets')}<p class="notice">浏览另一个目标不会改写当前运行任务。</p></div>`;
+  }
+  function eaa() {
+    const s=state.eaa;
+    return `${toolbar('EAA 实时观测')}<div class="content stack"><p>${esc(targetLabel(s.target||state.target))}</p><div class="image"><div><p>模拟 ${s.frames? '累积图像':'单帧预览'}</p><p class="muted tiny">${s.frames} 帧 · ${s.phase==='running'?'正在叠加':s.phase==='paused'?'已暂停':s.phase==='failed'?'模拟失败':'准备中'}</p></div>${button('大图观测','fullscreen')}</div>
+      ${!state.cameraConnected?`<div class="card stack"><p>还未连接拍摄相机</p>${button('连接相机','device','data-device="camera"','primary')}</div>`:`<div class="row">${button(s.phase==='running'?'暂停叠加':s.phase==='paused'?'继续叠加':s.phase==='failed'?'重试叠加':'开始叠加','toggle-eaa','','primary')}${s.phase==='running'?button('加入模拟帧','sample'):''}${button('保存结果','save',s.frames?'':'disabled')}</div>`}
+      ${s.phase==='failed'?'<p class="notice">模拟采集失败；已有参数和结果保留。</p>':''}<div class="sliders"><label>亮度<input type="range" min="0" max="100" data-input="brightness" value="${s.brightness}" aria-label="亮度"></label><label>拉伸<input type="range" min="0" max="100" data-input="stretch" value="${s.stretch}" aria-label="拉伸"></label></div><details class="card"><summary>校准帧与高级调整</summary><p class="muted tiny">自动 GC 默认启用，BIAS / DARK / FLAT 可选。真实参数在应用叠加工作区中配置。</p></details>
+      ${current().saved?`<div class="card stack"><p>结果已保存（原型列表）</p>${button('查看保存的图片','open-media',`data-media="${current().saved}"`,'primary')}</div>`:''}</div>`;
+  }
+  function media() {
+    const filters={recent:'最近',photo:'照片',video:'录像',result:'叠加结果'};
+    const list=state.emptyMedia?[]:state.media.filter(m=>state.category==='recent'||m.kind===state.category);
+    return `<div class="content stack"><div class="row spread"><h2>影像</h2>${button('导入','import','','quiet')}</div><div class="filters" aria-label="影像分类">${Object.entries(filters).map(([id,label])=>button(label,'category',`data-category="${id}"`,state.category===id?'selected':'')).join('')}</div>${list.length?`<div class="list">${list.map(m=>button(`<span class="thumb" aria-hidden="true">${m.kind==='video'?'▷':'✧'}</span><div class="grow"><b>${esc(m.name)}</b><span class="muted tiny">${esc(m.time)} · ${esc(m.format)}</span></div>›`,'open-media',`data-media="${esc(m.id)}"`,'media-row')).join('')}</div>`:`<div class="card stack"><h3>这里会显示你拍摄和保存的影像</h3><p class="muted">无需寻找文件目录。</p>${button('前往拍摄','workspace','data-workspace="capture"','primary')}${button('从其他位置导入','import')}</div>`}</div>`;
+  }
+  function mediaDetail(page) {
+    const m=state.media.find(m=>m.id===page.id);
+    if(!m) return `${toolbar('影像')}<div class="content"><p>文件暂不可用，返回选择其他影像。</p></div>`;
+    return `${toolbar(m.name)}<div class="content stack"><div class="image"><div><p>${m.kind==='video'?'模拟录像播放':'模拟图像预览'}</p><p class="muted tiny">${esc(m.format)}</p></div>${button('放大查看','fullscreen')}</div><div class="row">${m.kind==='video'?button('行星后处理','planetary','','primary'):button('单张解析','solve','','primary')}${button('导出 / 分享','export')}</div><details class="card"><summary>文件信息</summary><p class="muted tiny">${esc(m.time)} · 模拟素材；没有真实磁盘路径。</p></details></div>`;
+  }
+  function equipment() { return `<div class="content stack"><h2>器材</h2><p class="muted tiny">设备独立连接，选择一个设备查看详情。</p><div class="list">${Object.entries(deviceNames).map(([id,name])=>button(`<div class="grow"><b>${name}</b><span class="muted tiny">${connected(id)?'已连接 · 模拟设备':'未连接'}</span></div>›`,'device-detail',`data-device="${id}"`,'media-row')).join('')}</div>${button(`光路 · ${esc(state.optics)}　›`,'optics','','wide quiet')}</div>`; }
+  function deviceControls(device) {
+    if(!connected(device)) return `<p>还未连接${deviceNames[device]}</p><p class="muted tiny">只选择当前类型，不跳转到全设备导航。</p>${button('连接模拟设备','connect',`data-device="${device}"`,'primary')}`;
+    if(device==='wheel') return `<p>当前滤镜：${['L','R','G','B'][state.wheelPosition-1]}</p><div class="row">${['L','R','G','B'].map((label,i)=>button(label,'filter',`data-position="${i+1}"`,state.wheelPosition===i+1?'primary':'')).join('')}</div>`;
+    if(device==='focuser') return `<p>位置：<b id="focus-position">${state.focusPosition}</b> 步</p><p class="muted tiny">按住移动；松手、取消或面板关闭即停止。</p><div class="row">${button('向内','focus','data-direction="-1"')}${button('向外','focus','data-direction="1"')}${button('停止','focus-stop')}</div><span id="focus-status" class="notice">${state.focusMoving?'模拟移动中':'已停止'}</span>`;
+    if(device==='mount') return `<p>状态：${state.motion?'模拟移动中':'已连接 · 模拟设备'}</p><div class="row">${button('跟踪','tracking')}${button('方向控制','direction')}${state.target?button('移动到当前目标','goto'):''}</div><p class="notice">器材回读不等于已完成独立光学校验。</p>`;
+    if(device==='guide') return '<p>模拟导星设备已连接</p><p class="muted tiny">真实导星参数与运行控制归拍摄任务。</p>';
+    return '<p>模拟相机已连接</p><p class="muted tiny">预览、曝光与录像在拍摄工作区使用。</p>';
+  }
+  function deviceDetail(page) { return `${toolbar(deviceNames[page.device])}<div class="content stack">${deviceControls(page.device)}${connected(page.device)?button('断开模拟设备','disconnect',`data-device="${page.device}"`):''}</div>`; }
+  function settings() { return `${toolbar('设置')}<div class="content stack"><h3>通用</h3><div class="row spread"><p>红光夜视</p>${button(state.red?'关闭':'开启','night')}</div><p class="muted">设备专属设置从对应器材详情进入。</p><div class="card"><p>原型仅保留浏览器内状态，刷新后重新开始。真实 Android 的旋转与进程重建另测。</p></div></div>`; }
+  function renderPage() {
+    const page=current();
+    if(page.kind==='sky') return sky();
+    if(page.kind==='capture') return capture();
+    if(page.kind==='media') return media();
+    if(page.kind==='equipment') return equipment();
+    if(page.kind==='targets') return targetList();
+    if(page.kind==='preparation') return preparation();
+    if(page.kind==='calibration') return calibration();
+    if(page.kind==='polar') return polar();
+    if(page.kind==='guide') return guide();
+    if(page.kind==='eaa') return eaa();
+    if(page.kind==='media-detail') return mediaDetail(page);
+    if(page.kind==='device-detail') return deviceDetail(page);
+    if(page.kind==='settings') return settings();
+    if(page.kind==='target-detail') return `${toolbar('目标详情')}<div class="content stack"><h3>${esc(targetLabel(state.target))}</h3><p>${esc(state.target?.type)}</p><p class="muted">示例目录条目，返回恢复原来的星图与目标。</p>${button('开始推镜','start-guide','','primary')}</div>`;
+    if(page.kind==='optics-edit') return `${toolbar('光路配置')}<div class="content stack"><label>光路名称<input data-input="draft" value="${esc(state.draft)}"></label>${button('保存光路','save-optics','','primary')}</div>`;
+    if(page.kind==='planetary'||page.kind==='solve') return `${toolbar(page.kind==='planetary'?'行星后处理':'单张解析')}<div class="content stack"><p>已带入刚才的影像。</p><p class="notice">此原型只检查素材与返回来源；没有算法计算。</p>${button('返回影像','back','','primary')}</div>`;
+    return '<div class="content">无法识别的原型页面</div>';
+  }
+  function overlayContent() {
+    const o=state.overlay;
+    if(!o) return '';
+    let title='', content='';
+    if(o.kind==='device') { title=deviceNames[o.device]; content=`<div class="stack">${deviceControls(o.device)}${button('完整控制','full-device',`data-device="${o.device}"`,'quiet')}</div>`; }
+    else if(o.kind==='discard') { title='光路名称尚未保存'; content=`<div class="row">${button('继续编辑','close-overlay','','primary')}${button('放弃修改','discard')}</div>`; }
+    else if(o.kind==='goto') { title='移动到目标'; content=`<div class="stack"><p>${esc(targetLabel(state.target))}</p><p class="notice">仅模拟机械运动，不会发送命令。运动完成与光学到位分别表达。</p>${button('开始模拟运动','confirm-goto','','primary')}</div>`; }
+    else if(o.kind==='result') { title='已保存原型结果'; content=`<div class="stack"><p>结果已加入“影像 → 最近”。</p>${button('查看保存的图片','open-media',`data-media="${o.id}"`,'primary')}</div>`; }
+    else { title=o.title||'原型提示'; content=`<p>${esc(o.text)}</p>`; }
+    return `<div class="overlay-host"><button class="scrim" data-action="close-overlay" aria-label="关闭遮罩"></button><section class="sheet" role="dialog" aria-modal="true" aria-label="${esc(title)}" tabindex="-1"><div class="header"><h2>${title}</h2>${button('×','close-overlay','aria-label="关闭面板"','quiet')}</div>${content}</section></div>`;
+  }
+  function render() {
+    document.body.classList.toggle('red',state.red);
+    app.classList.toggle('fullscreen',state.fullscreen);
+    app.innerHTML=`${mainHeader()}${state.eaa.phase==='running'&&current().kind!=='eaa'?`<div class="live-summary"><span>EAA · ${esc(targetLabel(state.eaa.target))} · ${state.eaa.frames} 帧</span>${button('回到 EAA','eaa','','quiet')}</div>`:state.guideTask&&current().kind!=='guide'&&current().kind!=='calibration'?`<div class="live-summary"><span>推镜 · ${esc(targetLabel(state.guideTask.target))} · 模拟任务</span>${button('恢复推镜','resume-guide','','quiet')}</div>`:''}<main class="app-body">${renderPage()}${overlayContent()}${state.motion?button('STOP','stop','aria-label="停止模拟架台运动"','stop'):''}</main>${nav()}${state.notice?`<div class="toast" role="status">${esc(state.notice)}</div>`:''}`;
+    document.querySelectorAll('[data-lab]').forEach(input=>input.checked=state[input.dataset.lab]);
+    updateLog();
+    if(state.overlay) app.querySelector('.sheet')?.focus({preventScroll:true});
+  }
+  function updateLog() {
+    logElement.textContent=JSON.stringify({workspace:state.workspace,pages:state.pages.map(p=>p.kind),overlay:state.overlay?.kind||null,target:state.target?.id||null,targetCard:state.targetCard,taskTarget:state.guideTask?.target?.id||state.eaa.target?.id||null,fullscreen:state.fullscreen,eaa:state.eaa,focusMoving:state.focusMoving,motion:state.motion,events:state.events},null,2);
+  }
+  function dispatch(action, data={}) {
+    if(action!=='focus') stopFocus();
+    state.notice='';
+    if(action==='back') return back();
+    if(action==='reset') { state=fresh(); render(); return; }
+    if(action==='workspace') return switchWorkspace(data.workspace);
+    if(action==='device') return openDevice(data.device);
+    if(action==='close-overlay') return closeOverlay();
+    if(action==='night') state.red=!state.red;
+    else if(action==='settings') return push('settings');
+    else if(action==='targets') { state.search=''; return push('targets'); }
+    else if(action==='select') {
+      state.target={...targets.find(t=>t.id===data.target)}; state.targetCard=true;
+      if(current().kind==='targets') state.pages.pop();
+      if(!state.pages.length&&state.workspace!=='capture') state.workspace='sky';
+      notify('已选择 '+targetLabel(state.target)); record('选目标 '+data.target);
+    }
+    else if(action==='close-card') state.targetCard=false;
+    else if(action==='show-card') state.targetCard=true;
+    else if(action==='target-detail') return push('target-detail');
+    else if(action==='preparation') return push('preparation');
+    else if(action==='calibration') { state.calibrationStep=0; return push('calibration'); }
+    else if(action==='calibration-next') state.calibrationStep=Math.min(2,state.calibrationStep+1);
+    else if(action==='calibration-done') { state.pages.pop(); notify('流程试走结束；未创建真实标定。'); }
+    else if(action==='polar') { state.polarStep=0; return push('polar'); }
+    else if(action==='polar-next') state.polarStep=Math.min(2,state.polarStep+1);
+    else if(action==='polar-done') { state.polarStep=0; state.pages.pop(); }
+    else if(action==='start-guide') {
+      if(!state.guideTask||['missing','complete'].includes(state.guideTask.phase))state.guideTask={target:{...state.target},phase:state.phoneReady?'moving':'missing'};
+      else if(state.guideTask.target.id!==state.target?.id)notify('恢复正在进行的推镜任务；新选择不会改写运行目标。');
+      return push('guide');
+    }
+    else if(action==='resume-guide') return push('guide');
+    else if(action==='guide-demo') { state.guideTask.phase='moving'; notify('仅试走引导，不产生有效标定。'); }
+    else if(action==='guide-next') {
+      const p=state.guideTask;
+      if(p.phase==='missing') { state.calibrationStep=0; return push('calibration'); }
+      if(p.phase==='moving') p.phase='verifying';
+      else if(p.phase==='verifying') { p.phase=state.failNext?'failed':'complete'; state.failNext=false; }
+      else if(p.phase==='failed') p.phase='verifying';
+      else return push('eaa');
+    }
+    else if(action==='eaa') { if(current().kind==='eaa') return; return push('eaa'); }
+    else if(action==='toggle-eaa') {
+      if(!state.cameraConnected) return;
+      if(state.eaa.phase==='running') state.eaa.phase='paused';
+      else if(state.failNext) {state.eaa.phase='failed';state.failNext=false;}
+      else { state.eaa.phase='running'; if(!state.eaa.target) state.eaa.target={...(state.guideTask?.target||state.target||{id:'未命名',name:'观测'})}; }
+    }
+    else if(action==='sample') { if(state.eaa.phase==='running') state.eaa.frames+=12; }
+    else if(action==='save') {
+      if(!state.eaa.frames) return;
+      const id='result-'+state.media.length;
+      state.media.unshift({id,name:targetLabel(state.eaa.target)+' · EAA 结果',kind:'result',time:'原型 · 刚刚',format:'PNG / FITS'}); state.emptyMedia=false; current().saved=id; notify('已保存到原型影像列表，可直接查看。');
+    }
+    else if(action==='photo'||action==='record') {
+      if(!state.cameraConnected) return;
+      const id='capture-'+state.media.length;
+      state.media.unshift({id,name:targetLabel(state.target)+(action==='photo'?' · 照片':' · 录像'),kind:action==='photo'?'photo':'video',time:'原型 · 刚刚',format:action==='photo'?'FITS':'SER'}); state.emptyMedia=false; setOverlay({kind:'result',id});
+    }
+    else if(action==='open-media') return push('media-detail',{id:data.media});
+    else if(action==='category') state.category=data.category;
+    else if(action==='device-detail'||action==='full-device') return push('device-detail',{device:data.device});
+    else if(action==='connect') { state[`${data.device}Connected`]=true; notify('模拟设备已连接；原任务保留。'); }
+    else if(action==='disconnect') { state[`${data.device}Connected`]=false; if(data.device==='camera'&&state.eaa.phase==='running')state.eaa.phase='paused'; if(data.device==='mount')state.motion=false; }
+    else if(action==='filter') { state.wheelPosition=Number(data.position); notify('已切换模拟滤镜。真实叠加任务另按兼容性处理。'); }
+    else if(action==='focus-stop') stopFocus();
+    else if(action==='focus') { state.focusPosition=Math.max(0,state.focusPosition+Number(data.direction)*20); }
+    else if(action==='goto') { if(!state.mountConnected) return openDevice('mount'); setOverlay({kind:'goto'}); }
+    else if(action==='confirm-goto') { state.motion=true;state.overlay=null;notify('模拟运动中 · STOP 始终可达。'); }
+    else if(action==='stop') {state.motion=false;notify('模拟运动已停止。');}
+    else if(action==='fullscreen') state.fullscreen=true;
+    else if(action==='planetary') return push('planetary');
+    else if(action==='solve') return push('solve');
+    else if(action==='optics') {state.draft=state.optics;return push('optics-edit');}
+    else if(action==='save-optics') {state.optics=state.draft.trim()||state.optics;state.pages.pop();notify('光路已保存（原型）。');}
+    else if(action==='discard') {state.draft=state.optics;state.overlay=null;state.pages.pop();}
+    else if(action==='empty-media') state.emptyMedia=!state.emptyMedia;
+    else if(action==='import') setOverlay({kind:'message',title:'导入影像',text:'真实应用使用系统文件选择器；取消会回到当前影像列表。原型不读取文件。'});
+    else if(action==='export') setOverlay({kind:'message',title:'导出 / 分享',text:'真实应用使用只读文件 URI；原型不会创建或分享文件。'});
+    else if(action==='tracking'||action==='direction') setOverlay({kind:'message',title:'赤道仪快捷控制',text:'此原型只演示控制入口。真实运动沿用现有互斥与松手停止规则。'});
+    record(action); render();
+  }
+  document.addEventListener('click',event=>{
+    const element=event.target.closest('[data-action]');
+    if(element) { event.stopPropagation(); dispatch(element.dataset.action,element.dataset); return; }
+    const blank=event.target.closest('[data-sky="blank"]');
+    if(blank&&current().kind==='sky'&&pointer&&!pointer.moved) { state.targetCard=false;record('空白关闭：保留目标');render(); }
+  });
+  document.addEventListener('input',event=>{
+    if(event.target.dataset.input==='search') {
+      const start=event.target.selectionStart;
+      state.search=event.target.value;render();
+      const field=app.querySelector('[data-input="search"]');field.focus();field.setSelectionRange(start,start);
+    }
+    if(event.target.dataset.input==='draft') { state.draft=event.target.value;updateLog(); }
+    if(['brightness','stretch'].includes(event.target.dataset.input)) { state.eaa[event.target.dataset.input]=Number(event.target.value);updateLog(); }
+  });
+  document.addEventListener('change',event=>{
+    if(event.target.dataset.lab) {
+      state[event.target.dataset.lab]=event.target.checked;
+      if(!state.cameraConnected&&state.eaa.phase==='running')state.eaa.phase='paused';
+      if(!state.mountConnected)state.motion=false;
+      record('修改模拟前置状态');render();
+    }
+  });
+  document.addEventListener('pointerdown',event=>{
+    pointer={x:event.clientX,y:event.clientY,moved:false};
+    const element=event.target.closest('[data-action="focus"]');
+    if(!element) return;
+    stopFocus(); state.focusMoving=true; record('按住调焦');
+    const direction=Number(element.dataset.direction);
+    focusTimer=setInterval(()=>{state.focusPosition=Math.max(0,state.focusPosition+direction*20);const position=app.querySelector('#focus-position');if(position)position.textContent=state.focusPosition;updateLog();},100);
+    const label=app.querySelector('#focus-status');if(label)label.textContent='模拟移动中';
+    element.setPointerCapture(event.pointerId);
+  });
+  document.addEventListener('pointermove',event=>{if(pointer&&Math.hypot(event.clientX-pointer.x,event.clientY-pointer.y)>8)pointer.moved=true;});
+  function releaseFocus() {if(!state.focusMoving)return;stopFocus();record('松手 / 取消：停止调焦');const label=app.querySelector('#focus-status');if(label)label.textContent='已停止';updateLog();}
+  document.addEventListener('pointerup',releaseFocus);
+  document.addEventListener('pointercancel',()=>{if(pointer)pointer.moved=true;releaseFocus();});
+  window.addEventListener('blur',releaseFocus);
+  document.addEventListener('visibilitychange',()=>{if(document.hidden)releaseFocus();});
+  document.addEventListener('keydown',event=>{
+    if(event.key==='Escape'||(event.altKey&&event.key==='ArrowLeft')) {event.preventDefault();back();}
+    if(event.key==='Tab'&&state.overlay) {
+      const items=[...app.querySelector('.sheet').querySelectorAll('button:not(:disabled),input,select,[tabindex="0"]'),...app.querySelectorAll('.stop')];
+      if(!items.length)return;
+      const first=items[0],last=items.at(-1);
+      if(event.shiftKey&&(document.activeElement===first||document.activeElement.classList.contains('sheet'))){event.preventDefault();last.focus();}
+      else if(!event.shiftKey&&(document.activeElement===last||document.activeElement.classList.contains('sheet'))){event.preventDefault();first.focus();}
+    }
+  });
+  window.workflowPrototype={snapshot:captureSnapshot,reset:()=>dispatch('reset')};
+  render();
+})();
+</script>
+</body>
+</html>

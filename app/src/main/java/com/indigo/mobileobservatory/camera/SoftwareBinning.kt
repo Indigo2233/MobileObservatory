@@ -4,7 +4,8 @@ import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Host-side NxN average binning used when the camera cannot do the requested factor.
+ * Host-side average binning used when the camera cannot do the requested factor.
+ * Bayer frames average each CFA phase separately, never mix colours into a labelled mosaic.
  */
 class SoftwareBinning(
     poolCapacity: Int = 8
@@ -25,7 +26,9 @@ class SoftwareBinning(
         val outSize = outW * outH * bpp
         val dst = pool.acquire(outSize)
         owned.add(dst)
-        when (bpp) {
+        if (frame.pixelFormat.isBayer) {
+            binBayer(frame.data, frame.width, frame.height, dst, outW, outH, bin, bpp)
+        } else when (bpp) {
             1 -> binMono8(frame.data, frame.width, dst, outW, outH, bin)
             2 -> binMono16(frame.data, frame.width, dst, outW, outH, bin)
             3 -> binRgb24(frame.data, frame.width, dst, outW, outH, bin)
@@ -46,6 +49,34 @@ class SoftwareBinning(
     }
 
     companion object {
+        private fun binBayer(src: ByteArray, width: Int, height: Int, dst: ByteArray,
+                             outW: Int, outH: Int, bin: Int, bpp: Int) {
+            for (y in 0 until outH) for (x in 0 until outW) {
+                val firstX = (x / 2) * (2 * bin) + (x and 1)
+                val firstY = (y / 2) * (2 * bin) + (y and 1)
+                var sum = 0L
+                var count = 0
+                for (dy in 0 until bin) {
+                    val sy = firstY + dy * 2
+                    if (sy >= height) break
+                    for (dx in 0 until bin) {
+                        val sx = firstX + dx * 2
+                        if (sx >= width) break
+                        val offset = (sy * width + sx) * bpp
+                        val sample = (src[offset].toInt() and 255) or
+                            (if (bpp == 2) (src[offset + 1].toInt() and 255) shl 8 else 0)
+                        sum += sample
+                        count++
+                    }
+                }
+                // The last partial CFA cell can have fewer samples when dimensions are odd.
+                val value = (sum / count.coerceAtLeast(1)).toInt()
+                val offset = (y * outW + x) * bpp
+                dst[offset] = value.toByte()
+                if (bpp == 2) dst[offset + 1] = (value ushr 8).toByte()
+            }
+        }
+
         internal fun binMono8(
             src: ByteArray, srcW: Int, dst: ByteArray, outW: Int, outH: Int, bin: Int
         ) {

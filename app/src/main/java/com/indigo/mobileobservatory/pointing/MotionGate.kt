@@ -12,10 +12,11 @@ enum class MotionPhase {
  * without keeping the camera streaming.
  */
 class MotionGate(
-    private val moveOnDegPerSec: Double = 1.2,
-    private val stillBelowDegPerSec: Double = 0.35,
+    private val moveOnDegPerSec: Double = 0.12,
+    private val stillBelowDegPerSec: Double = 0.035,
     private val settleMs: Long = 400,
-    private val minPushDeg: Double = 0.8
+    private val minPushDeg: Double = 0.02,
+    private val motionNoiseFloorDegPerSec: Double = 0.015
 ) {
     var phase: MotionPhase = MotionPhase.STILL
         private set
@@ -30,27 +31,41 @@ class MotionGate(
      */
     var autoCaptureDue: Boolean = true
         private set
+    /** Every detectable movement invalidates a verification of the previous still window. */
+    var motionEpoch: Long = 0L
+        private set
+    val nextWakeAtMs: Long? get() = if (phase == MotionPhase.SETTLING && quietObserved) settleStartedMs + settleMs else null
 
-    private var lastTimestampMs: Long = 0L
+    private var lastTimestampMs: Long? = null
     private var settleStartedMs: Long = 0L
     private var pushAccumDeg: Double = 0.0
+    private var quietObserved = false
 
     fun ingest(rateDegPerSec: Double, timestampMs: Long): MotionPhase {
-        val dtSec = if (lastTimestampMs == 0L) 0.0 else (timestampMs - lastTimestampMs) / 1000.0
+        require(rateDegPerSec.isFinite() && timestampMs >= 0)
+        if (lastTimestampMs != null && timestampMs < lastTimestampMs!!) return phase
+        val dtSec = lastTimestampMs?.let { (timestampMs - it) / 1000.0 } ?: 0.0
         lastTimestampMs = timestampMs
-        if (dtSec in 0.001..1.0) {
+        val rate = kotlin.math.abs(rateDegPerSec)
+        if (dtSec in 0.001..1.0 && rate >= motionNoiseFloorDegPerSec) {
             pushAccumDeg += kotlin.math.abs(rateDegPerSec) * dtSec
             if (pushAccumDeg >= minPushDeg) movedSinceCapture = true
         }
 
-        val moving = rateDegPerSec >= moveOnDegPerSec
-        val quiet = rateDegPerSec < stillBelowDegPerSec
+        val moving = rate >= moveOnDegPerSec || (movedSinceCapture && rate >= motionNoiseFloorDegPerSec)
+        val quiet = rate < stillBelowDegPerSec && !moving
+        if (moving && phase != MotionPhase.MOVING) {
+            motionEpoch++
+            movedSinceCapture = true
+            autoCaptureDue = false
+        }
 
         phase = when (phase) {
             MotionPhase.STILL -> if (moving) MotionPhase.MOVING else MotionPhase.STILL
             MotionPhase.MOVING -> {
                 if (quiet) {
                     settleStartedMs = timestampMs
+                    quietObserved = true
                     MotionPhase.SETTLING
                 } else {
                     MotionPhase.MOVING
@@ -58,6 +73,11 @@ class MotionGate(
             }
             MotionPhase.SETTLING -> when {
                 moving -> MotionPhase.MOVING
+                quiet && !quietObserved -> {
+                    quietObserved = true
+                    settleStartedMs = timestampMs
+                    MotionPhase.SETTLING
+                }
                 quiet && timestampMs - settleStartedMs >= settleMs -> {
                     if (movedSinceCapture) autoCaptureDue = true
                     MotionPhase.STILL
@@ -68,6 +88,28 @@ class MotionGate(
         return phase
     }
 
+    /** A clock can finish settling without waiting for another sensor event. */
+    fun tick(nowMs: Long): MotionPhase {
+        if (phase == MotionPhase.SETTLING && quietObserved && nowMs >= settleStartedMs + settleMs) {
+            phase = MotionPhase.STILL
+            if (movedSinceCapture) autoCaptureDue = true
+        }
+        return phase
+    }
+
+    /** Missing samples are not evidence of stillness. A new quiet sample is required. */
+    fun invalidateForDiscontinuity(nowMs: Long) {
+        require(nowMs >= 0)
+        motionEpoch++
+        movedSinceCapture = true
+        autoCaptureDue = false
+        phase = MotionPhase.SETTLING
+        quietObserved = false
+        settleStartedMs = nowMs
+        lastTimestampMs = null
+        pushAccumDeg = 0.0
+    }
+
     /** Atomically take the pending auto-capture. */
     fun consumeAutoCapture(): Boolean {
         if (phase != MotionPhase.STILL || !autoCaptureDue) return false
@@ -75,11 +117,14 @@ class MotionGate(
         return true
     }
 
-    fun notifyCaptureFinished() {
+    fun notifyCaptureFinished(capturedMotionEpoch: Long = motionEpoch, success: Boolean = true) {
+        if (capturedMotionEpoch != motionEpoch) return
         movedSinceCapture = false
         pushAccumDeg = 0.0
-        autoCaptureDue = false
+        autoCaptureDue = !success
     }
+
+    fun requestVerification() { autoCaptureDue = true }
 
     /** On-target and still: do not keep shooting. */
     fun acknowledgeIdle() {
@@ -96,13 +141,15 @@ object PushToAutoSolve {
         solving: Boolean,
         nowMs: Long,
         lastSolveEndedMs: Long,
-        cooldownMs: Long = 1_500L
+        cooldownMs: Long = 1_500L,
+        verifiedForCurrentMotion: Boolean = false
     ): Boolean {
         if (solving) return false
         if (phase != MotionPhase.STILL) return false
         if (!autoCaptureDue) return false
         if (nowMs - lastSolveEndedMs < cooldownMs) return false
-        if (alreadySolved && onTarget) return false
+        // Legacy plateSolved describes an older camera solution, not this movement's proof.
+        if (verifiedForCurrentMotion && onTarget) return false
         return true
     }
 }

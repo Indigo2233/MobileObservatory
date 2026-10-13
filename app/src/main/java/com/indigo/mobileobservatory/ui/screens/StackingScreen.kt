@@ -75,7 +75,17 @@ fun StackingScreen(viewModel: CameraViewModel, mode: StackMode, onBack: () -> Un
     val documentPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let(coordinator::importFile)
     }
-    BackHandler(onBack = onBack)
+    val navigateBack: () -> Unit = {
+        when {
+            editBackground -> editBackground = false
+            editCalibration -> editCalibration = false
+            browseRecordings -> browseRecordings = false
+            drawRoi -> drawRoi = false
+            observingOnly -> observingOnly = false
+            else -> onBack()
+        }
+    }
+    BackHandler(onBack = navigateBack)
     if (editCalibration) CalibrationPanel(viewModel, onDismiss = { editCalibration = false }, onCamera = onCamera)
     if (browseRecordings) AppRecordingPicker(viewModel,
         onDismiss = { browseRecordings = false },
@@ -149,7 +159,7 @@ fun StackingScreen(viewModel: CameraViewModel, mode: StackMode, onBack: () -> Un
     }
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, stringResource(R.string.back)) }
+            IconButton(onClick = navigateBack) { Icon(Icons.Default.ArrowBack, stringResource(R.string.back)) }
             Text(stringResource(if (mode == StackMode.LIVE) R.string.stack_live else R.string.stack_planetary),
                 style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
             TextButton(onClick = coordinator::export, enabled = coordinator.hasResult(mode) && !task.busy) {
@@ -278,6 +288,7 @@ private fun PlanetaryControls(c: StackingCoordinator, task: StackingTaskState, d
     onChoose: () -> Unit, onBrowse: () -> Unit, onDrawRoi: () -> Unit) {
     val live by c.live.state.collectAsState()
     val algorithm by c.demosaicAlgorithm.collectAsState()
+    val interpretation by c.serCfaInterpretation.collectAsState()
     val calibration by c.calibration.state.collectAsState()
     val rendering by c.rendering.collectAsState()
     val source = task.source
@@ -289,24 +300,34 @@ private fun PlanetaryControls(c: StackingCoordinator, task: StackingTaskState, d
     var percent by rememberSaveable { mutableStateOf("25") }
     var count by rememberSaveable { mutableStateOf("") }
     var analyzedConfig by rememberSaveable { mutableStateOf("") }
-    val currentConfig = "$roiX,$roiY,$roiW,$roiH,$local,${source?.identity},${c.endianConvention},${c.sampleAlignment},$algorithm"
+    val currentConfig = "$roiX,$roiY,$roiW,$roiH,$local,${source?.identity},${c.endianConvention},${c.sampleAlignment},$algorithm,$interpretation"
     LaunchedEffect(drawn) { drawn?.let { roiX = it.left.toString(); roiY = it.top.toString(); roiW = it.width.toString(); roiH = it.height.toString() } }
     if (live.phase != LiveStackPhase.EMPTY) {
         Text(stackMessage("reset_live_first"), color = MaterialTheme.colorScheme.tertiary)
         TextButton(onClick = { c.open(StackMode.LIVE) }) { Text(stringResource(R.string.stack_eaa_title)) }
     }
+    if (source?.canOverrideCfa != false) SerCfaSelector(interpretation,
+        enabled = !task.busy && !calibration.busy && !rendering && live.phase == LiveStackPhase.EMPTY,
+        requiresResetConfirmation = task.histogram.isNotEmpty() || c.hasResult(StackMode.PLANETARY),
+        onSelect = c::setSerCfaInterpretation)
     Button(onClick = onBrowse, enabled = !task.busy, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.stack_local_files)) }
     OutlinedButton(onClick = onChoose, enabled = !task.busy, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.stack_import_other)) }
     if (source == null) Text(stringResource(R.string.stack_library_hint), style = MaterialTheme.typography.bodySmall)
     Text(stackTaskPhase(task.phase), style = MaterialTheme.typography.titleSmall)
     if (source != null) {
         Text(stringResource(R.string.stack_source, source.file.name, source.width, source.height, source.bits, source.frames))
+        val effectiveLayout = if (interpretation == SerCfaInterpretation.AUTO) source.effectiveLayout else interpretation.name
+        val layoutLabel = if (effectiveLayout == "MONO") stringResource(R.string.stack_cfa_mono) else effectiveLayout
+        Text(if (source.canOverrideCfa) stringResource(R.string.stack_cfa_detected, layoutLabel)
+            else stringResource(R.string.stack_cfa_rgb), style = MaterialTheme.typography.bodySmall)
         if (source.isBayer) DemosaicSelector(algorithm,
             enabled = !task.busy && !calibration.busy && !rendering && live.phase == LiveStackPhase.EMPTY,
             requiresResetConfirmation = task.histogram.isNotEmpty() || c.hasResult(StackMode.PLANETARY), onSelect = c::setDemosaicAlgorithm)
         var decodeExpanded by remember { mutableStateOf(false) }
         TextButton(onClick = { decodeExpanded = !decodeExpanded }) { Text(stringResource(R.string.stack_endian)) }
         if (decodeExpanded) {
+            Text(stringResource(R.string.stack_cfa_effective, layoutLabel, source.headerColorId),
+                style = MaterialTheme.typography.bodySmall)
             Text(stringResource(R.string.stack_decode_hint), style = MaterialTheme.typography.bodySmall)
             SerEndianConvention.values().forEach { convention ->
                 FilterChip(selected = c.endianConvention == convention, enabled = !task.busy,
@@ -470,14 +491,14 @@ internal fun AppRecordingPicker(vm: CameraViewModel, onDismiss: () -> Unit,
 
 /** Keep the camera controls honest when their preview is showing a retained EAA stack. */
 @Composable
-internal fun EaaSessionBar(vm: CameraViewModel) {
+internal fun EaaSessionBar(vm: CameraViewModel, onOpen: () -> Unit = { vm.stacking.open(StackMode.LIVE) }) {
     val state by vm.stacking.live.state.collectAsState()
     val showStack by vm.stacking.showLiveStack.collectAsState()
     if (state.phase == LiveStackPhase.EMPTY || state.phase == LiveStackPhase.CLOSED) return
     Surface(color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth()) {
         Row(Modifier.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextButton(onClick = { vm.stacking.open(StackMode.LIVE) }) { Text("EAA · ${stackLivePhase(state.phase)}") }
+            TextButton(onClick = onOpen) { Text("EAA · ${stackLivePhase(state.phase)}") }
             Text(stringResource(R.string.stack_eaa_summary, state.accepted, state.exposureSeconds),
                 Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
             TextButton(onClick = vm.stacking::toggleLiveDisplay) {
@@ -620,6 +641,8 @@ internal fun stackMessage(code: String): String {
         "calibration_changed_analyze_again", "demosaic_changed_analyze_again" -> R.string.stack_reason_analyze
         "demosaic_busy" -> R.string.stack_debayer_busy
         "demosaic_changed" -> R.string.stack_debayer_changed
+        "cfa_rgb_not_raw" -> R.string.stack_cfa_rgb_not_raw
+        "cfa_unknown_header" -> R.string.stack_cfa_unknown
         "calibration_selection_unavailable", "calibration_master_missing", "calibration_read_failed",
         "calibration_corrupt_master", "calibration_truncated_master", "calibration_invalid_master" -> R.string.stack_cal_unavailable
         "calibration_master_created" -> R.string.stack_cal_created

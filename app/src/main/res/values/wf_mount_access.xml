@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="wf_mount_read_only">Read only</string>
+    <string name="wf_mount_read_only_hint">Read coordinates and status; no movement or synchronization writes.</string>
+    <string name="wf_mount_site_time">Site and time</string>
+    <string name="wf_mount_local_site">Site is provided by the app configuration.</string>
+    <string name="wf_mount_read_app_site">Read app site</string>
+    <string name="wf_mount_phone_to_app_site">Use phone site in app</string>
+    <string name="wf_mount_connection_changed">The mount connection or model changed. Try again.</string>
+</resources>

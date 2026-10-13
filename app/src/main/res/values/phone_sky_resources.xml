@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="wfp_burst_image_only">Burst image solved. Use one exposure to verify the current pointing.</string>
+    <string name="wfp_verify_single_frame">Verify with one exposure</string>
+    <string name="wfp_resource_heap">Not enough memory. Use fewer burst frames or another lens.</string>
+    <string name="wfp_resource_camera">The camera stream is too large. Turn off RAW or choose another lens.</string>
+    <string name="wfp_resource_storage">Not enough storage. Free some space or use fewer frames.</string>
+</resources>

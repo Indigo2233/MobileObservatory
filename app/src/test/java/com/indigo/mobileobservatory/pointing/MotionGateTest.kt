@@ -38,10 +38,10 @@ class MotionGateTest {
         assertTrue(gate.movedSinceCapture)
 
         t += 50
-        gate.ingest(0.1, t)
+        gate.ingest(0.0, t)
         assertEquals(MotionPhase.SETTLING, gate.phase)
         t += 400
-        gate.ingest(0.1, t)
+        gate.ingest(0.0, t)
         assertEquals(MotionPhase.STILL, gate.phase)
         assertTrue(gate.autoCaptureDue)
         assertTrue(gate.consumeAutoCapture())
@@ -97,7 +97,8 @@ class PushToAutoSolveTest {
                 onTarget = true,
                 solving = false,
                 nowMs = 5_000,
-                lastSolveEndedMs = 0
+                lastSolveEndedMs = 0,
+                verifiedForCurrentMotion = true
             )
         )
     }

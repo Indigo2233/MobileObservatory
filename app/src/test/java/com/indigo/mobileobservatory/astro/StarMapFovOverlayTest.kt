@@ -34,7 +34,7 @@ class StarMapFovOverlayTest {
     }
 
     @Test
-    fun eyepieceTrainPushesDashedTargetWithoutAnExplicitAnchor() {
+    fun eyepiecePlanningNeverCreatesACurrentOpticalFrameAtTheMapCenter() {
         val scripts = StarMapFovOverlay.scripts(
             showOverlay = true,
             computation = circle,
@@ -42,10 +42,11 @@ class StarMapFovOverlayTest {
             targetLabel = "主镜 目标 1.50°",
             alsoZoom = true
         )
-        assertTrue(scripts[0].contains("setCurrentCircleFovOverlay(1.50000000,true,\"主镜 当前 1.50°\")"))
+        assertTrue(scripts[0].contains("clearCurrentFovOverlay"))
         assertTrue(scripts[1].contains("setTargetCircleFovOverlay(1.50000000,\"主镜 目标 1.50°\")"))
         assertFalse(scripts[1].contains("clearTargetFovOverlay"))
         assertFalse(scripts.any { it.contains("setCurrentRect") })
+        assertTrue(scripts.any { it.contains("zoomToTargetFov") })
     }
 
     @Test

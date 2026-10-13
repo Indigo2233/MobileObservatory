@@ -4,6 +4,9 @@ import android.graphics.Bitmap
 import com.indigo.mobileobservatory.util.FileLogger
 import com.indigo.mobileobservatory.util.BayerDemosaic
 import com.indigo.mobileobservatory.util.ImageUtils
+import com.indigo.mobileobservatory.stacking.PixelTraits
+import com.indigo.mobileobservatory.stacking.SampleAlignment
+import java.nio.ByteOrder
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -102,8 +105,8 @@ class FrameProcessor {
     private var lastFocusComputeMs = 0L
 
     var autoStretchEnabled: Boolean = true
-    /** Apply the LP750 conversion to monochrome Bayer preview frames. */
-    var lp750Enabled: Boolean = true
+    /** Infrared LP750 is an explicit display conversion, never the normal visible-light path. */
+    var lp750Enabled: Boolean = false
     var manualBlackPoint: Int = 0
     var manualWhitePoint: Int = 255
 
@@ -141,7 +144,7 @@ class FrameProcessor {
     private var previewSampleBuf: ByteArray? = null
     private var lastPreviewScaleLogKey: String? = null
 
-    fun frameToBitmap(frame: FrameData): Bitmap {
+    fun frameToBitmap(frame: FrameData, traits: PixelTraits? = null): Bitmap {
         val preview = downsampleForPreview(frame)
         val w = preview.width
         val h = preview.height
@@ -155,7 +158,7 @@ class FrameProcessor {
                 "Buffer too small: got ${preview.data.size}, need $expectedBytes for ${w}x${h} ${preview.pixelFormat.name}")
             val bpp = preview.pixelFormat.bytesPerPixel
             val safeW = (preview.data.size / bpp / h).coerceAtLeast(1)
-            return frameToBitmap(preview.copy(width = safeW.coerceAtMost(w)))
+            return frameToBitmap(preview.copy(width = safeW.coerceAtMost(w)), traits)
         }
 
         val bitmap: Bitmap
@@ -190,9 +193,9 @@ class FrameProcessor {
         } else if (preview.pixelFormat == PixelFormat.RGB24) {
             fillRgb24Pixels(preview, pixels, w, h)
         } else if (preview.pixelFormat.isBayer) {
-            fillBayerPixels(preview, pixels, w, h)
+            fillBayerPixels(preview, pixels, w, h, traits)
         } else {
-            fillMonoPixels(preview, pixels, w, h)
+            fillMonoPixels(preview, pixels, w, h, traits)
         }
 
         if (lp750Enabled && preview.pixelFormat.isBayer) {
@@ -247,7 +250,7 @@ class FrameProcessor {
         val bpp = frame.pixelFormat.bytesPerPixel.coerceAtLeast(1)
         val est = (w / step).coerceAtLeast(1) * (h / step).coerceAtLeast(1) * bpp
         val buf = previewSampleBuf?.takeIf { it.size >= est } ?: ByteArray(est).also { previewSampleBuf = it }
-        val (ow, oh) = PreviewScale.subsample(frame.data, w, h, bpp, step, buf)
+        val (ow, oh) = PreviewScale.subsample(frame.data, w, h, bpp, step, buf, keepBayerPhase = frame.pixelFormat.isBayer)
         val key = "${w}x${h}->${ow}x${oh} step=$step"
         if (lastPreviewScaleLogKey != key) {
             lastPreviewScaleLogKey = key
@@ -386,6 +389,7 @@ class FrameProcessor {
     }
 
     private fun fillRgb48Pixels(frame: FrameData, pixels: IntArray, w: Int, h: Int) {
+        detectedEffectiveBits = 16
         val numBins = 1024
         val bins = reusableHistogramBins(numBins)
         val data = frame.data
@@ -465,8 +469,8 @@ class FrameProcessor {
         }
     }
 
-    private fun fillMonoPixels(frame: FrameData, pixels: IntArray, w: Int, h: Int) {
-        val hist = computeHistogram(frame)
+    private fun fillMonoPixels(frame: FrameData, pixels: IntArray, w: Int, h: Int, traits: PixelTraits?) {
+        val hist = computeHistogram(frame, traits)
         publishHistogram(hist)
 
         val maxVal = if (frame.pixelFormat.is10bit) 1023 else 255
@@ -483,9 +487,7 @@ class FrameProcessor {
 
         if (frame.pixelFormat.is10bit) {
             for (i in 0 until w * h) {
-                val lo = frame.data[i * 2].toInt() and 0xFF
-                val hi = frame.data[i * 2 + 1].toInt() and 0xFF
-                var raw = (hi shl 8) or lo
+                var raw = readRaw16(frame.data, i * 2)
                 if (detectedBitShift > 0) raw = raw shr detectedBitShift
                 val stretched = ((raw - bp) * 255 / range).coerceIn(0, 255)
                 pixels[i] = (0xFF shl 24) or (stretched shl 16) or (stretched shl 8) or stretched
@@ -499,9 +501,13 @@ class FrameProcessor {
         }
     }
 
-    private fun fillBayerPixels(frame: FrameData, pixels: IntArray, w: Int, h: Int) {
-        val hist = computeHistogram(frame)
+    private fun fillBayerPixels(frame: FrameData, pixels: IntArray, w: Int, h: Int, traits: PixelTraits?) {
+        val hist = computeHistogram(frame, traits)
         publishHistogram(hist)
+        if (awbPending || awbMode == AwbMode.CONTINUOUS) {
+            computeGrayWorldWb(frame, w, h)
+            awbPending = false
+        }
 
         val maxVal = if (frame.pixelFormat.is10bit) 1023 else 255
         val bp: Int
@@ -526,34 +532,33 @@ class FrameProcessor {
         val pixelCount = w * h
         val raw8 = cachedBayerRaw8?.takeIf { it.size >= pixelCount }
             ?: IntArray(pixelCount).also { cachedBayerRaw8 = it }
+        val redX = if (pattern == "RGGB" || pattern == "GBRG") 0 else 1
+        val redY = if (pattern == "RGGB" || pattern == "GRBG") 0 else 1
         for (i in 0 until pixelCount) {
             val raw = getRawPixelFast(data, i, is10)
-            raw8[i] = ((raw - bp) * 255 / range).coerceIn(0, 255)
+            val xParity = (i % w) and 1
+            val yParity = (i / w) and 1
+            val gain = when {
+                xParity == redX && yParity == redY -> wbRedGain
+                xParity != redX && yParity != redY -> wbBlueGain
+                else -> wbGreenGain
+            }
+            // White balance is linear. Apply it before display black subtraction and
+            // clipping, otherwise a clipped channel cannot be recovered by AWB.
+            raw8[i] = (((raw * gain - bp) * 255f) / range).toInt().coerceIn(0, 255)
         }
         BayerDemosaic.demosaic8(
             raw8, w, h, pattern,
             if (focusAssistEnabled) BayerDemosaic.Mode.DIRECTIONAL else BayerDemosaic.Mode.BILINEAR,
             pixels
         )
-        for (i in 0 until pixelCount) {
-            val p = pixels[i]
-            val r = (((p ushr 16) and 0xFF) * wbRedGain).toInt().coerceIn(0, 255)
-            val g = (((p ushr 8) and 0xFF) * wbGreenGain).toInt().coerceIn(0, 255)
-            val b = ((p and 0xFF) * wbBlueGain).toInt().coerceIn(0, 255)
-            pixels[i] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
-        }
-
-        if (awbPending || awbMode == AwbMode.CONTINUOUS) {
-            computeGrayWorldWb(frame, w, h)
-            awbPending = false
-        }
     }
 
     private fun getRawPixelFast(data: ByteArray, idx: Int, is10: Boolean): Int {
         return if (is10) {
             val byteIdx = idx * 2
             if (byteIdx + 1 >= data.size) return 0
-            var v = (data[byteIdx].toInt() and 0xFF) or ((data[byteIdx + 1].toInt() and 0xFF) shl 8)
+            var v = readRaw16(data, byteIdx)
             if (detectedBitShift > 0) v = v shr detectedBitShift
             v
         } else {
@@ -619,7 +624,7 @@ class FrameProcessor {
         return if (is10) {
             val idx = (y * w + x) * 2
             if (idx + 1 >= data.size) return 0
-            var v = (data[idx].toInt() and 0xFF) or ((data[idx + 1].toInt() and 0xFF) shl 8)
+            var v = readRaw16(data, idx)
             if (detectedBitShift > 0) v = v shr detectedBitShift
             v
         } else {
@@ -664,12 +669,21 @@ class FrameProcessor {
     private var detectedBitShift = -1
     private var detectedEffectiveBits = 16
     private var forceDeclaredHighBitLayout = false
+    private var rawByteOrder: ByteOrder = ByteOrder.LITTLE_ENDIAN
     private val highBitLayoutDetector = HighBitLayoutDetector(HIGH_BIT_LAYOUT_STABLE_FRAMES)
 
-    fun computeHistogram(frame: FrameData): HistogramData {
+    private fun readRaw16(data: ByteArray, index: Int): Int {
+        val first = data[index].toInt() and 255
+        val second = data[index + 1].toInt() and 255
+        return if (rawByteOrder == ByteOrder.BIG_ENDIAN) (first shl 8) or second else first or (second shl 8)
+    }
+
+    fun computeHistogram(frame: FrameData, traits: PixelTraits? = null): HistogramData {
         val totalPixels = frame.width * frame.height
+        rawByteOrder = traits?.byteOrder ?: ByteOrder.LITTLE_ENDIAN
 
         if (frame.pixelFormat == PixelFormat.RGB48) {
+            detectedEffectiveBits = 16
             val numBins = 1024
             val bins = reusableHistogramBins(numBins)
             for (i in 0 until totalPixels) {
@@ -686,6 +700,7 @@ class FrameProcessor {
         }
 
         if (frame.pixelFormat == PixelFormat.RGB24) {
+            detectedEffectiveBits = 8
             val numBins = 256
             val bins = reusableHistogramBins(numBins)
             for (i in 0 until totalPixels) {
@@ -702,7 +717,11 @@ class FrameProcessor {
         }
 
         if (frame.pixelFormat.is10bit) {
-            if (forceDeclaredHighBitLayout) {
+            val confirmedBits = traits?.validBits?.takeIf { it in 10..16 }
+            if (traits != null && confirmedBits != null && traits.alignment != SampleAlignment.AUTO) {
+                detectedEffectiveBits = confirmedBits
+                detectedBitShift = if (traits.alignment == SampleAlignment.LEFT) 6 else (confirmedBits - 10).coerceAtLeast(0)
+            } else if (forceDeclaredHighBitLayout) {
                 detectedEffectiveBits = frame.pixelFormat.nativeBits
                 detectedBitShift = (frame.pixelFormat.nativeBits - 10).coerceAtLeast(0)
             } else if (highBitLayoutDetector.sampledFrames < HIGH_BIT_LAYOUT_MAX_SAMPLE_FRAMES) {
@@ -710,9 +729,7 @@ class FrameProcessor {
                 var lowBitsMask = 0
                 val sampleCount = totalPixels.coerceAtMost(10000)
                 for (i in 0 until sampleCount) {
-                    val lo = frame.data[i * 2].toInt() and 0xFF
-                    val hi = frame.data[i * 2 + 1].toInt() and 0xFF
-                    val v = (hi shl 8) or lo
+                    val v = readRaw16(frame.data, i * 2)
                     if (v > maxVal) maxVal = v
                     lowBitsMask = lowBitsMask or v
                 }
@@ -735,15 +752,15 @@ class FrameProcessor {
             val numBins = 1024
             val bins = reusableHistogramBins(numBins)
             for (i in 0 until totalPixels) {
-                val lo = frame.data[i * 2].toInt() and 0xFF
-                val hi = frame.data[i * 2 + 1].toInt() and 0xFF
-                var value = (hi shl 8) or lo
+                var value = readRaw16(frame.data, i * 2)
                 if (detectedBitShift > 0) value = value shr detectedBitShift
                 bins[value.coerceIn(0, 1023)]++
             }
             val maxCount = bins.max()
             return computeStretchPoints(bins, numBins, maxCount, totalPixels)
         } else {
+            detectedEffectiveBits = 8
+            detectedBitShift = 0
             val numBins = 256
             val bins = reusableHistogramBins(numBins)
             for (i in 0 until totalPixels) {

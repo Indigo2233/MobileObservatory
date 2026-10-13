@@ -15,8 +15,8 @@ data class FovSkyAnchor(
 
 /**
  * JS bridge for the active optical train. Target (dashed) is anchored to a
- * selected framing coordinate or the map centre. Current (solid) follows the
- * mount when connected, otherwise it also uses the map centre.
+ * selected framing coordinate or the map centre. Current (solid) requires an
+ * explicit optical-path anchor; a mount model or map centre is never that anchor.
  */
 object StarMapFovOverlay {
     fun targetSensorFramingScripts(
@@ -42,16 +42,21 @@ object StarMapFovOverlay {
         targetLabel: String,
         alsoZoom: Boolean,
         currentAnchor: FovSkyAnchor? = null,
-        targetAnchor: FovSkyAnchor? = null
+        targetAnchor: FovSkyAnchor? = null,
+        showCurrent: Boolean = currentAnchor != null,
+        currentPositionAngleDeg: Double? = null
     ): List<String> {
         val clearTarget = "window.MercStarMap && window.MercStarMap.clearTargetFovOverlay();"
         val clearCurrent = "window.MercStarMap && window.MercStarMap.clearCurrentFovOverlay();"
         if (!showOverlay || computation == null || !computation.hasOverlay) {
             return listOf(clearCurrent, clearTarget)
         }
-        val setCurrent = setter("Current", computation, currentLabel, alsoZoom, currentAnchor)
+        val setCurrent = if (showCurrent && currentAnchor != null)
+            setter("Current", computation, currentLabel, alsoZoom, currentAnchor, currentPositionAngleDeg)
+        else clearCurrent
         val setTarget = setter("Target", computation, targetLabel, alsoZoom = false, targetAnchor)
-        return listOf(setCurrent, setTarget)
+        return listOf(setCurrent, setTarget) + if (alsoZoom && !showCurrent)
+            listOf("window.MercStarMap && window.MercStarMap.zoomToTargetFov();") else emptyList()
     }
 
     fun overlayCaption(
@@ -74,12 +79,14 @@ object StarMapFovOverlay {
         computation: FovComputation,
         label: String,
         alsoZoom: Boolean,
-        anchor: FovSkyAnchor?
+        anchor: FovSkyAnchor?,
+        positionAngleDeg: Double? = null
     ): String {
         val labelJs = jsString(label)
         val extra = if (role == "Current") {
             val zoom = if (alsoZoom) "true" else "false"
-            "$zoom,$labelJs${anchorArgs(anchor)}"
+            "$zoom,$labelJs${anchorArgs(anchor)}" + if (computation.mode == FovInstrumentMode.SENSOR && positionAngleDeg != null)
+                ",${js(positionAngleDeg)}" else ""
         } else {
             "$labelJs${anchorArgs(anchor)}"
         }

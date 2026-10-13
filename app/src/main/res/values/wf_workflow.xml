@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="wf_import_video">Import video</string>
+    <string name="wf_phone_experimental">Experimental phone guidance · telescope not verified</string>
+    <string name="wf_phone_near_target">Phone direction near target · check the eyepiece</string>
+    <string name="wf_capture">Capture</string>
+    <string name="wf_media">Media</string>
+    <string name="wf_equipment">Equipment</string>
+    <string name="wf_recent">Recent</string>
+    <string name="wf_videos">Videos</string>
+    <string name="wf_media_empty">Your photos, videos and saved stacks will appear here.</string>
+    <string name="wf_go_capture">Go to capture</string>
+    <string name="wf_choose_target">Choose a target</string>
+    <string name="wf_preparation">Prepare</string>
+    <string name="wf_pointing_setup">Phone–telescope alignment</string>
+    <string name="wf_pointing_unavailable">Phone–telescope alignment is not available yet. Phone guidance is experimental and does not verify the telescope’s direction.</string>
+    <string name="wf_start_push_to">Push-to guidance</string>
+</resources>

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="wf_equipment_title">Equipment</string>
+    <string name="wf_device_control">Controls</string>
+    <string name="wf_device_connection">Connection</string>
+    <string name="wf_device_details">Device details</string>
+    <string name="wf_device_usb_identity">USB device #%1$d</string>
+    <string name="wf_device_unrecognized">Protocol not identified. Connect only if this is the correct device type.</string>
+    <string name="wf_device_connect_hint">Connect this device, then scan again.</string>
+    <string name="wf_device_cooler_unavailable">This camera does not report a controllable cooler.</string>
+    <string name="wf_device_focus_position">Position (steps)</string>
+    <string name="wf_device_move_to">Move to position</string>
+    <string name="wf_device_focus_step">Step %1$d</string>
+    <string name="wf_device_sensor_temperature">Sensor %1$.1f °C · Power %2$.0f%%</string>
+    <string name="wf_device_apply_temperature">Set temperature</string>
+    <string name="wf_device_open_capture">Open capture</string>
+</resources>

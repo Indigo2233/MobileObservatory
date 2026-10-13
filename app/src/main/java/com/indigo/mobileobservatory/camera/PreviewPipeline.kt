@@ -2,6 +2,7 @@ package com.indigo.mobileobservatory.camera
 
 import android.graphics.Bitmap
 import android.os.Debug
+import com.indigo.mobileobservatory.stacking.PixelTraits
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -39,17 +40,20 @@ data class PreviewPerformanceStats(
 class PreviewPipeline internal constructor(
     private val scope: CoroutineScope,
     private val renderFrame: (FrameData) -> Bitmap,
-    targetFps: Int
+    targetFps: Int,
+    private val renderWithTraits: ((FrameData, PixelTraits?) -> Bitmap)? = null
 ) {
     constructor(scope: CoroutineScope, processor: FrameProcessor, targetFps: Int) :
-        this(scope, processor::frameToBitmap, targetFps)
+        this(scope, { processor.frameToBitmap(it) }, targetFps, processor::frameToBitmap)
+
+    private data class PreviewSample(val frame: FrameData, val traits: PixelTraits?)
 
     private val frameIntervalMs = (1_000L / targetFps.coerceIn(1, 60)).coerceAtLeast(1L)
     private val lifecycleLock = Any()
     // A cancelled waiting successor must not allow a third worker to overtake a still
     // converting predecessor. FrameProcessor owns reusable, non-thread-safe buffers.
     private val rendererMutex = Mutex()
-    private val latestFrame = LatestFrameSlot<FrameData>()
+    private val latestFrame = LatestFrameSlot<PreviewSample>()
     private val _frame = MutableStateFlow<PreviewFrame?>(null)
     private val _performance = MutableStateFlow(PreviewPerformanceStats())
     private var acceptingFrames = false
@@ -60,14 +64,15 @@ class PreviewPipeline internal constructor(
     val frame: StateFlow<PreviewFrame?> = _frame.asStateFlow()
     val performance: StateFlow<PreviewPerformanceStats> = _performance.asStateFlow()
 
-    fun submit(frame: FrameData) {
-        val discarded: FrameData?
+    fun submit(frame: FrameData, traits: PixelTraits? = null) {
+        val discarded: PreviewSample?
         val recycler: (ByteArray) -> Unit
         synchronized(lifecycleLock) {
-            discarded = if (acceptingFrames) latestFrame.offer(frame) else frame
+            val sample = PreviewSample(frame, traits)
+            discarded = if (acceptingFrames) latestFrame.offer(sample) else sample
             recycler = recycleBuffer
         }
-        discarded?.let { releaseFrame(it, recycler) }
+        discarded?.let { releaseFrame(it.frame, recycler) }
     }
 
     fun start(
@@ -99,7 +104,7 @@ class PreviewPipeline internal constructor(
                         if (source != null) {
                             try {
                                 val processingStarted = System.nanoTime()
-                                val bitmap = renderFrame(source)
+                                val bitmap = renderWithTraits?.invoke(source.frame, source.traits) ?: renderFrame(source.frame)
                                 ensureActive()
                                 processingNanos += System.nanoTime() - processingStarted
                                 synchronized(lifecycleLock) {
@@ -108,13 +113,13 @@ class PreviewPipeline internal constructor(
                                         sampleRendered++
                                         sequence++
                                         _frame.value = PreviewFrame(bitmap, sequence)
-                                        onProcessed(source)
+                                        onProcessed(source.frame)
                                     }
                                 }
                             } catch (oom: OutOfMemoryError) {
-                                android.util.Log.e("PreviewPipeline", "OOM rendering ${source.width}x${source.height}", oom)
+                                android.util.Log.e("PreviewPipeline", "OOM rendering ${source.frame.width}x${source.frame.height}", oom)
                             } finally {
-                                releaseFrame(source, sessionRecycler)
+                                releaseFrame(source.frame, sessionRecycler)
                             }
                         }
                     }
@@ -157,7 +162,7 @@ class PreviewPipeline internal constructor(
         renderJob?.cancel()
         // Keep the predecessor until its synchronous conversion has returned. stop()
         // remains non-blocking, while the next worker waits before reusing its buffers.
-        latestFrame.clear()?.let { releaseFrame(it, recycleBuffer) }
+        latestFrame.clear()?.let { releaseFrame(it.frame, recycleBuffer) }
         recycleBuffer = {}
         if (clearFrame) _frame.value = null
     }

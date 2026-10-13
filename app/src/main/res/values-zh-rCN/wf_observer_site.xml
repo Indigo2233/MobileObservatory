@@ -1,0 +1,12 @@
+<resources>
+    <string name="wf_observer_site">观测地点</string>
+    <string name="wf_observer_missing">地点未设置</string>
+    <string name="wf_observer_manual">手填经纬度</string>
+    <string name="wf_observer_phone">使用手机位置</string>
+    <string name="wf_observer_locating">获取地点中…</string>
+    <string name="wf_observer_saved">已保存地点</string>
+    <string name="wf_observer_mount">架台地点</string>
+    <string name="wf_observer_latitude">纬度（−90…90°）</string>
+    <string name="wf_observer_longitude">经度（−180…180°）</string>
+    <string name="wf_observer_use">使用此地点</string>
+</resources>

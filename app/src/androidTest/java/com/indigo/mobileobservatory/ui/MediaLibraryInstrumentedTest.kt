@@ -15,6 +15,7 @@ import com.indigo.mobileobservatory.ui.screens.mediaVideoViewIntent
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicInteger
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
@@ -32,20 +33,34 @@ class MediaLibraryInstrumentedTest {
     @Before fun fixtures() { root = File(context.cacheDir, "media-library-${UUID.randomUUID()}").apply { check(mkdirs()) } }
     @After fun cleanUp() { root.deleteRecursively(); externalVideo?.delete() }
 
-    @Test fun exportedPngOpensDirectlyThenReturnsToResultsCategory() {
+    @Test fun exportedPngOpensDirectlyThenReturnsToCallingTask() {
         val result = File(root, "captures/JPG/stack-live-fixture.png").apply { parentFile!!.mkdirs() }
         val bitmap = Bitmap.createBitmap(8, 6, Bitmap.Config.ARGB_8888)
         bitmap.eraseColor(0xffa07040.toInt())
         result.outputStream().use { assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) }; bitmap.recycle()
         File(result.parentFile, "ordinary.jpg").writeBytes(byteArrayOf(1))
         File(result.parentFile, "stack-live-fixture.json").writeText("{}")
+        val returned = AtomicInteger()
         compose.setContent { MaterialTheme {
             PlayerScreen(File(root, "recordings"), File(root, "captures"),
-                initialFile = result, initialCategory = MediaCategory.STACK_RESULTS, onBack = {})
+                initialFile = result, initialCategory = MediaCategory.STACK_RESULTS, onBack = { returned.incrementAndGet() })
         } }
         compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription(context.getString(R.string.image_desc)).fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithContentDescription(context.getString(R.string.image_desc)).assertIsDisplayed()
         compose.onNodeWithContentDescription(context.getString(R.string.back)).performClick()
+        compose.runOnIdle { assertEquals(1, returned.get()) }
+    }
+
+    @Test fun resultsLibraryFindsExportWithoutShowingOrdinaryImagesOrSidecars() {
+        val result = File(root, "captures/JPG/stack-live-fixture.png").apply {
+            parentFile!!.mkdirs(); writeBytes(byteArrayOf(1))
+        }
+        File(result.parentFile, "ordinary.jpg").writeBytes(byteArrayOf(1))
+        File(result.parentFile, "stack-live-fixture.json").writeText("{}")
+        compose.setContent { MaterialTheme {
+            PlayerScreen(File(root, "recordings"), File(root, "captures"),
+                initialCategory = MediaCategory.STACK_RESULTS, onBack = {})
+        } }
         compose.waitUntil(10_000) { compose.onAllNodesWithText(result.name).fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText(context.getString(R.string.media_category_results)).assertIsSelected()
         compose.onNodeWithText(result.name).assertIsDisplayed()

@@ -63,4 +63,21 @@ class MediaLibraryTest {
         val png = file(captures, "JPG/stack-x.png", 2, 23)
         assertEquals(VideoFileInfo(png, png.name, 23, "PNG"), MediaLibrary.describe(png))
     }
+
+    @Test fun recentMergesPhotosRawFramesResultsAndVideosWithoutActiveOrPartialFiles() = withLibrary { recordings, captures ->
+        file(captures, "JPG/moon.jpg", 1000)
+        file(captures, "FITS/raw.fits", 3000)
+        file(captures, "JPG/stack-M42.png", 5000)
+        file(recordings, "PSER/jupiter.pser", 4000)
+        file(recordings, "MP4/moon.mp4", 2000)
+        val active = file(recordings, "SER/active.ser", 9000)
+        file(captures, "JPG/.hidden.png", 10000)
+        file(captures, "JPG/broken.partial.png", 11000)
+        assertEquals(listOf("stack-M42.png", "jupiter.pser", "raw.fits", "moon.mp4", "moon.jpg"),
+            MediaLibrary.list(recordings, captures, MediaCategory.RECENT, active).map { it.name })
+        assertEquals(listOf("jupiter.pser", "moon.mp4"),
+            MediaLibrary.list(recordings, captures, MediaCategory.VIDEOS, active).map { it.name })
+        assertEquals(listOf("stack-M42.png", "raw.fits", "moon.jpg"),
+            MediaLibrary.list(recordings, captures, MediaCategory.PHOTOS, active).map { it.name })
+    }
 }

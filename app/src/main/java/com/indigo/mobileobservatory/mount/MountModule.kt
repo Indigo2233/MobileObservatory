@@ -18,6 +18,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -47,6 +48,15 @@ class MountModule(
 
     private val prefs = application.getSharedPreferences("mobile_observatory", Context.MODE_PRIVATE)
     private val controller = Lx200MountController()
+    val mountAccessMode = controller.accessMode
+    val pointingCapabilities = controller.pointingCapabilities
+    val modelRevision = controller.modelRevision
+    val axisObservation = controller.axisObservation
+    init {
+        controller.setAccessMode(runCatching {
+            MountAccessMode.valueOf(prefs.getString("mount_access_mode", MountAccessMode.READ_WRITE.name) ?: MountAccessMode.READ_WRITE.name)
+        }.getOrDefault(MountAccessMode.READ_WRITE))
+    }
     private val motionRunner = MountMotionRunner(scope) { controller.abortMotion() }
     val motionState: StateFlow<MountMotionState> = motionRunner.state
 
@@ -204,8 +214,43 @@ class MountModule(
     }
 
     fun setSkyWatcherMountMode(mode: SkyWatcherMountMode) {
+        if (controller.isConnected && mode != _skyWatcherMountMode.value) {
+            _statusMessage.value = "Reconnect the mount before changing its coordinate mode."
+            return
+        }
         _skyWatcherMountMode.value = mode
         prefs.edit().putString("skywatcher_mount_mode", mode.name).apply()
+    }
+
+    fun setMountAccessMode(mode: MountAccessMode) {
+        if (mode == mountAccessMode.value) return
+        val ownedTracking = _mountTrackingEnabled.value
+        controller.setAccessMode(mode) // Immediately deny all subsequent device writes.
+        prefs.edit().putString("mount_access_mode", mode.name).apply()
+        if (mode == MountAccessMode.READ_ONLY) {
+            scope.launch {
+                motionRunner.stop()
+                if (ownedTracking && controller.isConnected) {
+                    runCatching { controller.stopTrackingForSafety() }
+                        .onSuccess { _mountTrackingRate.value = MountTrackingRate.OFF; _mountTrackingEnabled.value = false }
+                        .onFailure { _statusMessage.value = "Read-only. Tracking stop was not confirmed: ${it.message}" }
+                }
+                _mountBusy.value = false
+            }
+        }
+    }
+
+    fun setMountLocalSite(latitudeDeg: Double, longitudeDeg: Double) {
+        if (!controller.isConnected || !pointingCapabilities.value.siteUsesLocalConfiguration) return
+        scope.launch {
+            try {
+                val site = MountSite(latitudeDeg, longitudeDeg)
+                controller.setLocalSiteConfiguration(site)
+                _mountSite.value = site
+                _statusMessage.value = "Application site configuration updated; no location command sent to the mount."
+                refreshMountCoordinatesAfterCommand()
+            } catch (error: Throwable) { _statusMessage.value = "Application site configuration failed: ${error.message}" }
+        }
     }
 
     fun setMountTransport(type: MountTransportType) {
@@ -761,6 +806,81 @@ class MountModule(
      * [captureAndSolve] must wait for a fresh camera frame, plate-solve, and return the
      * solved sky pointing as mount coordinates (RA hours / Dec degrees).
      */
+    suspend fun verifyCalibrationEnvironment(expected: com.indigo.mobileobservatory.astro.ObserverSite) {
+        val capabilities = pointingCapabilities.value
+        check(capabilities.goto && (capabilities.readSite || capabilities.siteUsesLocalConfiguration)) {
+            application.getString(R.string.wfp_prepare_mount)
+        }
+        val site = controller.readSite()
+        val longitudeDifference = ((site.longitudeDeg - expected.longitudeDeg + 540.0) % 360.0) - 180.0
+        check(kotlin.math.abs(site.latitudeDeg - expected.latitudeDeg) <= .1 && kotlin.math.abs(longitudeDifference) <= .1) {
+            application.getString(R.string.wfp_prepare_mount)
+        }
+        _mountSite.value = site
+        if (capabilities.readTime) {
+            val time = controller.readTime()
+            check(kotlin.math.abs(time.epochMillis - System.currentTimeMillis()) <= 60_000) {
+                application.getString(R.string.wfp_prepare_mount)
+            }
+            _mountTime.value = time
+        }
+    }
+
+    suspend fun runCalibrationMotion(
+        operation: suspend (slew: suspend (name: String, coordinates: MountCoordinates) -> Unit) -> Unit
+    ) {
+        check(pointingCapabilities.value.goto) { "GOTO is unavailable for this mount connection" }
+        val owner = java.util.UUID.randomUUID().toString()
+        val completion = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val started = motionRunner.start(MountMotionState(MountMotionType.GOTO,
+            application.getString(R.string.wf_pointing_setup), holdStop = true, ownerToken = owner),
+            onError = { completion.completeExceptionally(it) }) {
+            _mountBusy.value = true
+            try {
+                operation { name, coordinates ->
+                    check(motionRunner.state.value.ownerToken == owner && pointingCapabilities.value.goto)
+                    _mountMoveStatus.value = application.getString(R.string.wfp_auto_moving, name)
+                    controller.slewTo(coordinates)
+                    awaitGotoTarget(name, coordinates)
+                    delay(1_000)
+                    _mountMoveStatus.value = application.getString(R.string.wfp_sampling)
+                }
+                completion.complete(Unit)
+            } catch (cancelled: CancellationException) {
+                completion.cancel(cancelled)
+                throw cancelled
+            } finally { _mountBusy.value = false }
+        }
+        check(started) { "Stop the current mount task before automatic calibration" }
+        try {
+            kotlinx.coroutines.coroutineScope {
+                // Cancellation can finish the runner before its lazy operation body ever starts.
+                // In that case the body's catch cannot resolve this caller's promise.
+                val ownerWatcher = launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+                    motionState.first { it.ownerToken != owner }
+                    if (!completion.isCompleted) {
+                        completion.cancel(CancellationException("Automatic calibration was stopped"))
+                    }
+                }
+                try { completion.await() } finally { ownerWatcher.cancel() }
+            }
+        }
+        catch (cancelled: CancellationException) {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { motionRunner.stop(owner) }
+            throw cancelled
+        }
+    }
+
+    /** Preflight failures belong to the pointing task, so its caller can display recovery. */
+    fun rejectPrecisionGoto(name: String, message: String): Boolean {
+        _statusMessage.value = message
+        if (!_precisionGotoProgress.value.isActive) {
+            _precisionGotoProgress.value = PrecisionGotoProgress(phase = PrecisionGotoPhase.FAILED,
+                targetName = name, message = message)
+        }
+        return false
+    }
+
     fun startPrecisionGoto(
         name: String,
         raHours: Double,
@@ -770,13 +890,7 @@ class MountModule(
         captureAndSolve: suspend (hint: MountCoordinates?) -> MountCoordinates
     ): Boolean {
         if (!controller.isConnected) {
-            _statusMessage.value = "Connect the mount before precision GOTO"
-            _precisionGotoProgress.value = PrecisionGotoProgress(
-                phase = PrecisionGotoPhase.FAILED,
-                targetName = name,
-                message = "Connect the mount before precision GOTO"
-            )
-            return false
+            return rejectPrecisionGoto(name, "Connect the mount before precision GOTO")
         }
         val target = MountCoordinates(raHours = raHours, decDeg = decDeg)
         val stopArcmin = PrecisionGotoMath.clampToleranceArcmin(toleranceArcmin)
@@ -852,6 +966,8 @@ class MountModule(
                             .format(java.util.Locale.US, errorArcmin)
                     )
                     if (PrecisionGotoMath.withinTolerance(errorArcmin, stopArcmin)) {
+                        var verifiedSolved = solved
+                        var verifiedErrorArcmin = errorArcmin
                         if (controller.supportsSync) {
                             publishPrecisionProgress(
                                 phase = PrecisionGotoPhase.SYNCING,
@@ -864,16 +980,25 @@ class MountModule(
                             )
                             controller.syncTo(solved)
                             refreshMountCoordinatesAfterCommand()
+                            publishPrecisionProgress(phase = PrecisionGotoPhase.SOLVING, name = name,
+                                iteration = iteration, maxIterations = maxIterations,
+                                message = "Verifying with a new optical exposure after sync")
+                            verifiedSolved = captureAndSolve(target)
+                            verifiedErrorArcmin = PrecisionGotoMath.angularSeparationDeg(target, verifiedSolved) * 60.0
+                            check(PrecisionGotoMath.withinTolerance(verifiedErrorArcmin, stopArcmin)) {
+                                "Independent optical verification after sync is outside tolerance (%.1f′)."
+                                    .format(java.util.Locale.US, verifiedErrorArcmin)
+                            }
                         }
                         publishPrecisionProgress(
                             phase = PrecisionGotoPhase.SUCCEEDED,
                             name = name,
                             iteration = iteration,
                             maxIterations = maxIterations,
-                            errorArcmin = errorArcmin,
-                            solved = solved,
+                            errorArcmin = verifiedErrorArcmin,
+                            solved = verifiedSolved,
                             message = "Precision GOTO complete (%.1f′)"
-                                .format(java.util.Locale.US, errorArcmin)
+                                .format(java.util.Locale.US, verifiedErrorArcmin)
                         )
                         _mountMoveStatus.value = _precisionGotoProgress.value.message
                         _statusMessage.value = _mountMoveStatus.value
@@ -919,7 +1044,7 @@ class MountModule(
             }
         }
         if (!started) {
-            _statusMessage.value = "Stop the current mount motion before precision GOTO"
+            rejectPrecisionGoto(name, "Stop the current mount motion before precision GOTO")
         }
         return started
     }
@@ -1038,6 +1163,10 @@ class MountModule(
                 runCatching { controller.abortMotion() }
             }
             _mountBusy.value = false
+            if (_precisionGotoProgress.value.isActive) {
+                _precisionGotoProgress.value = _precisionGotoProgress.value.copy(
+                    phase = PrecisionGotoPhase.CANCELLED, message = "Pointing cancelled")
+            }
             _mountMoveStatus.value = "Mount stopped"
             _statusMessage.value = _mountMoveStatus.value
             refreshMountCoordinatesAfterCommand()
@@ -1048,7 +1177,8 @@ class MountModule(
         val started = motionRunner.start(
             state = MountMotionState(
                 MountMotionType.MANUAL,
-                "Manual ${direction.name.lowercase(java.util.Locale.US)}"
+                "Manual ${direction.name.lowercase(java.util.Locale.US)}",
+                manualDirection = direction
             ),
             onError = { error ->
                 _mountConnectionState.value =
@@ -1069,8 +1199,8 @@ class MountModule(
         }
     }
 
-    fun stopMountManualMove(@Suppress("UNUSED_PARAMETER") direction: MountDirection? = null) {
-        if (motionState.value.type == MountMotionType.MANUAL) {
+    fun stopMountManualMove(direction: MountDirection? = null) {
+        if (motionState.value.permitsManualRelease(direction)) {
             stopMountMotion()
         }
     }

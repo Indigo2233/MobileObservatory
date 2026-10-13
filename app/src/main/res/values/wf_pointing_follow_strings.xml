@@ -1,0 +1,10 @@
+<resources>
+    <string name="wf_follow_pointing">Follow current optical path</string>
+    <string name="wf_center_pointing">Center on current optical path</string>
+    <string name="wf_follow_source_age">%1$s · %2$s · %3$d s</string>
+    <string name="wf_follow_refresh">Update pointing</string>
+    <string name="wf_follow_resume">Resume following</string>
+    <string name="wf_follow_source_phone">Calibrated phone</string>
+    <string name="wf_follow_source_aux">Calibrated auxiliary optics</string>
+    <string name="wf_follow_source_camera">Optical camera solve</string>
+</resources>

@@ -104,7 +104,8 @@ class SkyWatcherAdapter(
 
     override fun setTracking(enabled: Boolean) {
         val mode = if (enabled) 2 else 0 // 2 = sidereal EQ tracking.
-        command(byteArrayOf('T'.code.toByte(), mode.toByte()))
+        val response = command(byteArrayOf('T'.code.toByte(), mode.toByte()))
+        require(response.isEmpty() || response.toString(Charsets.US_ASCII) == "1") { "SynScan rejected tracking command." }
     }
 
     override fun readSite(): MountSite {

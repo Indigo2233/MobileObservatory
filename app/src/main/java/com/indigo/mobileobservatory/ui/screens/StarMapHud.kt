@@ -3,6 +3,7 @@
 package com.indigo.mobileobservatory.ui.screens
 
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -41,6 +42,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -56,6 +59,11 @@ import com.indigo.mobileobservatory.mount.MountSlewRate
 
 internal enum class StarMapCornerPanel { NONE, OBSERVING, SKY }
 
+/** Give the whole panel a touch surface, including padding between its controls. */
+internal fun Modifier.consumeStarMapPanelTouches(): Modifier = pointerInput(Unit) {
+    detectTapGestures(onTap = {})
+}
+
 /**
  * Stellarium Plus–style bottom-left chrome: two round buttons. One opens the
  * observing tools (mount pad, follow, FOV); the other opens sky drawing
@@ -68,6 +76,11 @@ internal fun StarMapCornerControls(
     panel: StarMapCornerPanel,
     onPanelChange: (StarMapCornerPanel) -> Unit,
     mountConnected: Boolean,
+    followAvailable: Boolean,
+    pointingSourceCaption: String,
+    canManualMove: Boolean,
+    canHome: Boolean,
+    homeEnabled: Boolean,
     moveEnabled: Boolean,
     mountSlewRate: MountSlewRate,
     followMount: Boolean,
@@ -92,7 +105,8 @@ internal fun StarMapCornerControls(
     onStopMount: () -> Unit,
     onConfirmHome: () -> Unit,
     onFollowMountChange: (Boolean) -> Unit,
-    onCenterOnMount: () -> Unit,
+    onCenterOnPointing: () -> Unit,
+    onRefreshPointing: () -> Unit,
     onActiveTrainChange: (OpticsTrainId) -> Unit,
     onOpenFov: () -> Unit,
     onOpenTimeSettings: () -> Unit,
@@ -127,6 +141,7 @@ internal fun StarMapCornerControls(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(max = 420.dp)
+                    .consumeStarMapPanelTouches()
             ) {
                 Column(
                     modifier = Modifier
@@ -141,6 +156,7 @@ internal fun StarMapCornerControls(
                         modifier = Modifier.fillMaxWidth()
                     )
                     if (mountConnected) {
+                        if (canManualMove) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -204,9 +220,14 @@ internal fun StarMapCornerControls(
                             onMoveStart = onManualMoveStart,
                             onMoveStop = onManualMoveStop
                         )
-                        OutlinedButton(
+                        } else {
+                            FilledTonalButton(onClick = onStopMount) {
+                                Icon(Icons.Default.Stop, contentDescription = stringResource(R.string.stop_mount))
+                            }
+                        }
+                        if (canHome) OutlinedButton(
                             onClick = onConfirmHome,
-                            enabled = moveEnabled,
+                            enabled = homeEnabled,
                             modifier = Modifier.height(36.dp)
                         ) {
                             Text(stringResource(R.string.home), fontSize = 12.sp)
@@ -220,18 +241,21 @@ internal fun StarMapCornerControls(
                         )
                     }
                     StarMapFlagSwitch(
-                        label = stringResource(R.string.follow_mount_pointing),
+                        label = stringResource(R.string.wf_follow_pointing),
                         checked = followMount,
-                        enabled = mountConnected,
+                        enabled = followAvailable,
+                        switchModifier = Modifier.testTag("pointing-follow"),
                         onCheckedChange = onFollowMountChange
                     )
                     OutlinedButton(
-                        onClick = onCenterOnMount,
-                        enabled = mountConnected,
-                        modifier = Modifier.fillMaxWidth().height(36.dp)
+                        onClick = onCenterOnPointing,
+                        enabled = followAvailable,
+                        modifier = Modifier.testTag("pointing-center").fillMaxWidth().height(36.dp)
                     ) {
-                        Text(stringResource(R.string.center_on_mount), fontSize = 12.sp)
+                        Text(stringResource(R.string.wf_center_pointing), fontSize = 12.sp)
                     }
+                    Text(pointingSourceCaption, style = MaterialTheme.typography.labelSmall)
+                    if (!followAvailable) TextButton(onClick = onRefreshPointing) { Text(stringResource(R.string.wf_follow_refresh)) }
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -302,6 +326,7 @@ internal fun StarMapCornerControls(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(max = 420.dp)
+                    .consumeStarMapPanelTouches()
             ) {
                 Column(
                     modifier = Modifier
@@ -454,6 +479,7 @@ private fun StarMapFlagSwitch(
     label: String,
     checked: Boolean,
     enabled: Boolean = true,
+    switchModifier: Modifier = Modifier,
     onCheckedChange: (Boolean) -> Unit
 ) {
     Row(
@@ -469,6 +495,7 @@ private fun StarMapFlagSwitch(
                 .padding(end = 8.dp)
         )
         Switch(
+            modifier = switchModifier,
             checked = checked,
             onCheckedChange = onCheckedChange,
             enabled = enabled

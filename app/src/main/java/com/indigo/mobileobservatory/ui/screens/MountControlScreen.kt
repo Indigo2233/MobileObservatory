@@ -46,6 +46,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -58,8 +59,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -68,6 +72,7 @@ import androidx.core.content.ContextCompat
 import com.indigo.mobileobservatory.BuildConfig
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.mount.MountConnectionState
+import com.indigo.mobileobservatory.mount.MountAccessMode
 import com.indigo.mobileobservatory.mount.MountDirection
 import com.indigo.mobileobservatory.mount.MountProtocolType
 import com.indigo.mobileobservatory.mount.MountSlewRate
@@ -82,7 +87,10 @@ import com.indigo.mobileobservatory.ui.MountConnectionUiState
 import com.indigo.mobileobservatory.ui.components.deviceStatusColor
 import com.indigo.mobileobservatory.ui.components.DeviceStatusCode
 import com.indigo.mobileobservatory.ui.theme.ObservatoryTheme
+import com.indigo.mobileobservatory.ui.devices.MomentaryDeviceMove
 import com.indigo.mobileobservatory.ui.viewmodel.CameraViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -94,7 +102,8 @@ fun MountControlScreen(
     onOpenGuiding: () -> Unit,
     onOpenPushTo: () -> Unit = {},
     onOpenTargetLibrary: () -> Unit = {},
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    showObservingShortcuts: Boolean = true
 ) {
     val connectionState by viewModel.mountConnectionState.collectAsState()
     val coordinates by viewModel.mountCoordinates.collectAsState()
@@ -117,6 +126,9 @@ fun MountControlScreen(
     val moveStatus by viewModel.mountMoveStatus.collectAsState()
     val slewRate by viewModel.mountSlewRate.collectAsState()
     val trackingRate by viewModel.mountTrackingRate.collectAsState()
+    val accessMode by viewModel.mountAccessMode.collectAsState()
+    val capabilities by viewModel.mountPointingCapabilities.collectAsState()
+    val motion by viewModel.mountMotionState.collectAsState()
     val connected = connectionState is MountConnectionState.Connected
     val connectionUi = MountConnectionUiState.from(
         connection = connectionState,
@@ -131,13 +143,20 @@ fun MountControlScreen(
     var siteSyncError by remember { mutableStateOf<String?>(null) }
 
     fun loadPhoneSiteAndSync() {
-        if (siteSyncBusy || busy) return
+        val allowed = viewModel.mountPointingCapabilities.value
+        if (siteSyncBusy || busy || (!allowed.writeSite && !allowed.siteUsesLocalConfiguration)) return
+        val expectedRevision = viewModel.mountModelRevision.value
         siteSyncBusy = true
         siteSyncError = null
         scope.launch {
             try {
                 val site = PhoneSiteProvider.currentSite(context.applicationContext)
-                viewModel.syncPhoneSiteToMount(site.latitudeDeg, site.longitudeDeg)
+                check(viewModel.mountModelRevision.value == expectedRevision) { context.getString(R.string.wf_mount_connection_changed) }
+                if (viewModel.mountPointingCapabilities.value.siteUsesLocalConfiguration) {
+                    viewModel.setMountLocalSite(site.latitudeDeg, site.longitudeDeg)
+                } else if (viewModel.mountPointingCapabilities.value.writeSite) {
+                    viewModel.syncPhoneSiteToMount(site.latitudeDeg, site.longitudeDeg)
+                } else error(context.getString(R.string.wf_mount_read_only_hint))
                 siteSyncDialogVisible = false
             } catch (error: Throwable) {
                 siteSyncError = error.message ?: context.getString(R.string.location_permission_required)
@@ -266,6 +285,18 @@ fun MountControlScreen(
                     }
                 )
             }
+        }
+
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween) {
+            Column(Modifier.weight(1f)) {
+                Text(stringResource(R.string.wf_mount_read_only), style = MaterialTheme.typography.titleSmall)
+                if (accessMode == MountAccessMode.READ_ONLY) Text(stringResource(R.string.wf_mount_read_only_hint),
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            androidx.compose.material3.Switch(checked = accessMode == MountAccessMode.READ_ONLY,
+                onCheckedChange = { viewModel.setMountAccessMode(if (it) MountAccessMode.READ_ONLY else MountAccessMode.READ_WRITE) },
+                modifier = Modifier.testTag("mount-read-only"))
         }
 
         Card(
@@ -586,7 +617,7 @@ fun MountControlScreen(
                     }
                     OutlinedButton(
                         onClick = viewModel::readMountCoordinates,
-                        enabled = connected && !busy,
+                        enabled = connected && capabilities.readCoordinates && !busy,
                         modifier = Modifier.height(48.dp)
                     ) {
                         Icon(Icons.Default.Refresh, contentDescription = null)
@@ -641,15 +672,18 @@ fun MountControlScreen(
                                     color = MaterialTheme.colorScheme.outline
                                 )
                             }
+                            if (capabilities.siteUsesLocalConfiguration) Text(stringResource(R.string.wf_mount_local_site),
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         OutlinedButton(
                             onClick = {
                                 siteSyncError = null
                                 siteSyncDialogVisible = true
                             },
-                            enabled = !busy && !siteSyncBusy
+                            enabled = !busy && !siteSyncBusy &&
+                                (capabilities.readSite || capabilities.writeSite || capabilities.readTime || capabilities.writeTime)
                         ) {
-                            Text(stringResource(R.string.sync_site))
+                            Text(stringResource(R.string.wf_mount_site_time))
                         }
                     }
                 }
@@ -678,19 +712,20 @@ fun MountControlScreen(
                             FilterChip(
                                 selected = rate == slewRate,
                                 onClick = { viewModel.setMountSlewRate(rate) },
+                                enabled = capabilities.manualMove && !busy,
                                 label = { Text(rate.label) }
                             )
                         }
                     }
-                    MountPressButton("N", stringResource(R.string.move_north), MountDirection.NORTH, viewModel)
+                    MountPressButton("N", stringResource(R.string.move_north), MountDirection.NORTH, viewModel, capabilities.manualMove && !busy)
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        MountPressButton("W", stringResource(R.string.move_west), MountDirection.WEST, viewModel)
+                        MountPressButton("W", stringResource(R.string.move_west), MountDirection.WEST, viewModel, capabilities.manualMove && !busy)
                         FilledTonalButton(onClick = viewModel::stopMountMotion) {
                             Icon(Icons.Default.Stop, contentDescription = stringResource(R.string.stop_mount))
                         }
-                        MountPressButton("E", stringResource(R.string.move_east), MountDirection.EAST, viewModel)
+                        MountPressButton("E", stringResource(R.string.move_east), MountDirection.EAST, viewModel, capabilities.manualMove && !busy)
                     }
-                    MountPressButton("S", stringResource(R.string.move_south), MountDirection.SOUTH, viewModel)
+                    MountPressButton("S", stringResource(R.string.move_south), MountDirection.SOUTH, viewModel, capabilities.manualMove && !busy)
                     if (moveStatus.isNotBlank()) {
                         Text(moveStatus, color = MaterialTheme.colorScheme.primary)
                     }
@@ -708,30 +743,34 @@ fun MountControlScreen(
                         TrackingRateChip(
                             selected = trackingRate == MountTrackingRate.OFF,
                             label = stringResource(R.string.tracking_stopped),
+                            enabled = capabilities.tracking && !busy,
                             onClick = { viewModel.setMountTrackingRate(MountTrackingRate.OFF) }
                         )
                         TrackingRateChip(
                             selected = trackingRate == MountTrackingRate.SIDEREAL,
                             label = stringResource(R.string.tracking_sidereal),
+                            enabled = capabilities.tracking && !busy,
                             onClick = { viewModel.setMountTrackingRate(MountTrackingRate.SIDEREAL) }
                         )
                         TrackingRateChip(
                             selected = trackingRate == MountTrackingRate.LUNAR,
                             label = stringResource(R.string.tracking_lunar),
+                            enabled = capabilities.tracking && !busy,
                             onClick = { viewModel.setMountTrackingRate(MountTrackingRate.LUNAR) }
                         )
                         TrackingRateChip(
                             selected = trackingRate == MountTrackingRate.SOLAR,
                             label = stringResource(R.string.tracking_solar),
+                            enabled = capabilities.tracking && !busy,
                             onClick = { viewModel.setMountTrackingRate(MountTrackingRate.SOLAR) }
                         )
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = viewModel::goMountHome) {
+                        OutlinedButton(onClick = viewModel::goMountHome, enabled = capabilities.home && !busy) {
                             Icon(Icons.Default.Home, contentDescription = null)
                             Text(stringResource(R.string.home))
                         }
-                        OutlinedButton(onClick = viewModel::setMountHomeHere) {
+                        OutlinedButton(onClick = viewModel::setMountHomeHere, enabled = capabilities.setHome && !busy) {
                             Text(stringResource(R.string.set_home))
                         }
                     }
@@ -744,9 +783,12 @@ fun MountControlScreen(
                 onDismissRequest = {
                     if (!siteSyncBusy) siteSyncDialogVisible = false
                 },
-                title = { Text(stringResource(R.string.sync_site_title)) },
+                title = { Text(stringResource(R.string.wf_mount_site_time)) },
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (motion.showsGlobalStop) MountMotionStopBanner(motion, viewModel::stopMountMotion)
+                        if (accessMode == MountAccessMode.READ_ONLY) Text(stringResource(R.string.wf_mount_read_only_hint),
+                            style = MaterialTheme.typography.bodySmall)
                         Text(
                             stringResource(R.string.sync_site_hint),
                             style = MaterialTheme.typography.bodySmall,
@@ -754,14 +796,14 @@ fun MountControlScreen(
                         )
                         FilledTonalButton(
                             onClick = { viewModel.readMountSite(); siteSyncDialogVisible = false },
-                            enabled = connected && !busy && !siteSyncBusy,
+                            enabled = connected && capabilities.readSite && !busy && !siteSyncBusy,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text(stringResource(R.string.mount_to_app))
+                            Text(stringResource(if (capabilities.siteUsesLocalConfiguration) R.string.wf_mount_read_app_site else R.string.mount_to_app))
                         }
                         FilledTonalButton(
                             onClick = ::requestPhoneSiteSync,
-                            enabled = connected && !busy && !siteSyncBusy,
+                            enabled = connected && (capabilities.writeSite || capabilities.siteUsesLocalConfiguration) && !busy && !siteSyncBusy,
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             if (siteSyncBusy) {
@@ -771,11 +813,11 @@ fun MountControlScreen(
                                 )
                                 Spacer(Modifier.width(6.dp))
                             }
-                            Text(stringResource(R.string.phone_to_mount))
+                            Text(stringResource(if (capabilities.siteUsesLocalConfiguration) R.string.wf_mount_phone_to_app_site else R.string.phone_to_mount))
                         }
                         FilledTonalButton(
                             onClick = { viewModel.readMountTime(); siteSyncDialogVisible = false },
-                            enabled = connected && viewModel.mountSupportsTimeSync &&
+                            enabled = connected && capabilities.readTime &&
                                 !busy && !siteSyncBusy,
                             modifier = Modifier.fillMaxWidth()
                         ) {
@@ -786,13 +828,13 @@ fun MountControlScreen(
                                 viewModel.syncPhoneTimeToMount()
                                 siteSyncDialogVisible = false
                             },
-                            enabled = connected && viewModel.mountSupportsTimeSync &&
+                            enabled = connected && capabilities.writeTime &&
                                 !busy && !siteSyncBusy,
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(stringResource(R.string.phone_time_to_mount))
                         }
-                        if (connected && !viewModel.mountSupportsTimeSync) {
+                        if (connected && !capabilities.readTime && !capabilities.writeTime) {
                             Text(
                                 stringResource(R.string.mount_time_sync_unsupported),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -819,47 +861,50 @@ fun MountControlScreen(
             )
         }
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            if (BuildConfig.STELLARIUM_ENABLED) {
-                FilledTonalButton(onClick = onOpenStarMap) {
-                    Text(stringResource(R.string.star_map))
+        if (showObservingShortcuts) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (BuildConfig.STELLARIUM_ENABLED) {
+                    FilledTonalButton(onClick = onOpenStarMap) {
+                        Text(stringResource(R.string.star_map))
+                    }
+                }
+                FilledTonalButton(onClick = onOpenPolarAlignment) {
+                    Text(stringResource(R.string.polar_alignment))
                 }
             }
-            FilledTonalButton(onClick = onOpenPolarAlignment) {
-                Text(stringResource(R.string.polar_alignment))
-            }
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            FilledTonalButton(onClick = onOpenPushTo) {
-                Text(stringResource(R.string.push_to_title))
-            }
-            FilledTonalButton(onClick = onOpenTargetLibrary) {
-                Text(stringResource(R.string.target_library_title))
-            }
-        }
-        Card(modifier = Modifier.fillMaxWidth()) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                    .padding(top = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(stringResource(R.string.guiding_module), style = MaterialTheme.typography.titleMedium)
-                    Text(stringResource(R.string.guiding_module_description),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline
-                    )
+                FilledTonalButton(onClick = onOpenPushTo) {
+                    Text(stringResource(R.string.push_to_title))
                 }
-                FilledTonalButton(onClick = onOpenGuiding) {
-                    Text(stringResource(R.string.guiding))
+                FilledTonalButton(onClick = onOpenTargetLibrary) {
+                    Text(stringResource(R.string.target_library_title))
+                }
+            }
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(stringResource(R.string.guiding_module), style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            stringResource(R.string.guiding_module_description),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                    }
+                    FilledTonalButton(onClick = onOpenGuiding) {
+                        Text(stringResource(R.string.guiding))
+                    }
                 }
             }
         }
@@ -872,10 +917,12 @@ fun MountControlScreen(
 private fun TrackingRateChip(
     selected: Boolean,
     label: String,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    enabled: Boolean = true
 ) {
     FilterChip(
         selected = selected,
+        enabled = enabled,
         onClick = onClick,
         label = { Text(label, maxLines = 1) },
         modifier = Modifier.height(40.dp)
@@ -916,22 +963,43 @@ private fun MountPressButton(
     label: String,
     contentDescription: String,
     direction: MountDirection,
-    viewModel: CameraViewModel
+    viewModel: CameraViewModel,
+    enabled: Boolean = true
 ) {
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val heldMove = remember(viewModel, direction) {
+        MomentaryDeviceMove(
+            start = { viewModel.startMountManualMove(direction) },
+            stop = { viewModel.stopMountManualMove(direction) }
+        )
+    }
+    DisposableEffect(heldMove, lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_PAUSE || event == Lifecycle.Event.ON_STOP) heldMove.end()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            heldMove.end()
+        }
+    }
     Surface(
         shape = MaterialTheme.shapes.large,
-        color = MaterialTheme.colorScheme.secondaryContainer,
-        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        color = if (enabled) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = if (enabled) 1f else .38f),
         tonalElevation = 1.dp,
         modifier = Modifier
             .size(56.dp)
-            .semantics { this.contentDescription = contentDescription }
-            .pointerInput(direction) {
-                detectTapGestures(
+            .semantics { this.contentDescription = contentDescription; if (!enabled) disabled() }
+            .pointerInput(heldMove, enabled) {
+                if (enabled) detectTapGestures(
                     onPress = {
-                        viewModel.startMountManualMove(direction)
-                        tryAwaitRelease()
-                        viewModel.stopMountManualMove(direction)
+                        heldMove.begin()
+                        try {
+                            tryAwaitRelease()
+                        } finally {
+                            heldMove.end()
+                        }
                     }
                 )
             }

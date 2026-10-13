@@ -141,6 +141,8 @@ android {
             keepDebugSymbols += setOf(
                 "**/libtoupcam.so",
                 "**/libASICamera2.so",
+                // Keep the irreplaceable community ZWO USB binary byte-for-byte in the APK.
+                "**/libusb-1.0.so",
                 "**/libastap_cli.so"
             )
         }

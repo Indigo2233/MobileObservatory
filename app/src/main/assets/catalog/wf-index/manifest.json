@@ -1,0 +1,63 @@
+{
+  "formatVersion": 1,
+  "source": "HYG Database v4.1",
+  "license": "CC BY-SA 4.0; see THIRD_PARTY_HYG.txt",
+  "catalogCsvSha256": "c679413b11fd171ac39dc0efd6626827092ef9ab90aefd42218adc35c4e05640",
+  "catalogGeometrySha256": "08a1a4a4ff643876a5e909e4148a6f3482adf407d931591f20063174fa206574",
+  "catalogStars": 5070,
+  "anchorMaximumMagnitude": 4.5,
+  "keyStepDeg": 0.35,
+  "buckets": [
+    {
+      "bucket": "WF_A",
+      "maxSideDeg": 50.0,
+      "neighbourCount": 12,
+      "anchorCount": 925,
+      "recordCount": 61050,
+      "uniqueKeys": 14692,
+      "keysWithMultipleRows": 10337,
+      "extraRowsOnSharedKeys": 46358,
+      "maxRowsPerKey": 48,
+      "uniqueUnorderedTriangles": 38139,
+      "bytes": 1465304,
+      "residentArrayBytes": 1221000,
+      "payloadSha256": "977853ca5d199ca790e7ee7507793416caa0de7a868c45a0177383ec1a02bcf0",
+      "fileSha256": "ae6f8a5a4abe21abdc12cf6100ae014373f021e6ef8d06890c032142f17621b9",
+      "file": "wf_a.wfidx"
+    },
+    {
+      "bucket": "WF_B",
+      "maxSideDeg": 32.0,
+      "neighbourCount": 10,
+      "anchorCount": 925,
+      "recordCount": 41587,
+      "uniqueKeys": 11044,
+      "keysWithMultipleRows": 7467,
+      "extraRowsOnSharedKeys": 30543,
+      "maxRowsPerKey": 46,
+      "uniqueUnorderedTriangles": 26150,
+      "bytes": 998192,
+      "residentArrayBytes": 831740,
+      "payloadSha256": "3670145ff892afb65ae63689bd3dfadfb24b643ac39f8a32960eb82191dfd5f2",
+      "fileSha256": "408f111ef0d94f5b137bcc9b09960417f46d4c5db9fde346d7b0de212d880ebe",
+      "file": "wf_b.wfidx"
+    },
+    {
+      "bucket": "WF_C",
+      "maxSideDeg": 22.0,
+      "neighbourCount": 8,
+      "anchorCount": 925,
+      "recordCount": 25208,
+      "uniqueKeys": 7264,
+      "keysWithMultipleRows": 4798,
+      "extraRowsOnSharedKeys": 17944,
+      "maxRowsPerKey": 33,
+      "uniqueUnorderedTriangles": 15747,
+      "bytes": 605096,
+      "residentArrayBytes": 504160,
+      "payloadSha256": "0fae9ecb031b2ed77dc52860665d1928c7a56324110b9ae242d691cf25b06d74",
+      "fileSha256": "8fa1e7f9762c914b3c2aee3c3290f762118aadc98ec3f54f69266867d6eb53fd",
+      "file": "wf_c.wfidx"
+    }
+  ]
+}

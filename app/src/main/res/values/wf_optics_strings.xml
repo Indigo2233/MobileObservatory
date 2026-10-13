@@ -1,0 +1,8 @@
+<resources>
+    <string name="wf_optics_resample">Optical setup changed. Start fresh samples.</string>
+    <string name="wf_optics_advanced_field">Advanced field settings</string>
+    <string name="wf_optics_use_shared">Use optical setup</string>
+    <string name="wf_optics_title">Optical setup</string>
+    <string name="wf_optics_use_setup">Use this setup</string>
+    <string name="wf_optics_confirmed">Setup confirmed</string>
+</resources>

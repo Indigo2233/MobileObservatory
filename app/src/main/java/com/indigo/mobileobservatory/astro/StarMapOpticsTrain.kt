@@ -25,14 +25,20 @@ data class OpticsTrainConfig(
     val customEyepieceAfov: String = "50",
     val customSensorPixelUm: String = "3.75",
     val customSensorWidth: String = "1920",
-    val customSensorHeight: String = "1080"
+    val customSensorHeight: String = "1080",
+    /** Per-train effective focal length; editing a shared catalog entry cannot replace the other train. */
+    val telescopeFocalLengthOverrideMm: Double? = null
 ) {
+    fun focalLengthMm(telescopes: List<TelescopeSpec>): Double? = telescopeFocalLengthOverrideMm?.let {
+        it.takeIf { value -> value.isFinite() && value > 0 }
+    } ?: if (telescopeFocalLengthOverrideMm == null) resolveTelescopeFl(telescopes, telescopeId, customTelescopeFl) else null
+
     fun compute(
         telescopes: List<TelescopeSpec> = OpticsEquipment.defaultTelescopes,
         eyepieces: List<EyepieceSpec> = OpticsEquipment.defaultEyepieces,
         sensors: List<SensorSpec>
     ): FovComputation? {
-        val fl = resolveTelescopeFl(telescopes, telescopeId, customTelescopeFl) ?: return null
+        val fl = focalLengthMm(telescopes) ?: return null
         return when (mode) {
             FovInstrumentMode.EYEPIECE -> {
                 val eyepiece = resolveEyepiece(
@@ -98,6 +104,7 @@ object StarMapOpticsPrefs {
     const val ACTIVE_TRAIN = "star_map_active_train"
     const val SHOW_OVERLAY = "star_map_show_fov_overlay"
     const val PLATE_FOCAL_LENGTH_MM = "plate_focal_length_mm"
+    fun focalOverrideKey(id: OpticsTrainId) = "star_map_${id.prefValue()}_telescope_focal_override_mm"
 
     private val PRIMARY_KEYS = TrainKeys(
         mode = "star_map_fov_mode",
@@ -172,6 +179,10 @@ object StarMapOpticsPrefs {
     fun shouldWritePlateFocalLength(train: OpticsTrainId, mode: FovInstrumentMode): Boolean =
         train == OpticsTrainId.SECONDARY && mode == FovInstrumentMode.SENSOR
 
+    fun shouldWritePlateFocalLength(before: OpticsTrainConfig, after: OpticsTrainConfig): Boolean =
+        shouldWritePlateFocalLength(after.id, after.mode) &&
+            (before.telescopeId != after.telescopeId || before.customTelescopeFl != after.customTelescopeFl)
+
     fun snapshot(
         primary: OpticsTrainConfig,
         secondary: OpticsTrainConfig,
@@ -196,7 +207,7 @@ object StarMapOpticsPrefs {
             FovInstrumentMode.SENSOR
         }
         val customFl = prefs.getString(keys.customScopeFl, null)
-            ?: prefs.getFloat(PLATE_FOCAL_LENGTH_MM, 0f).takeIf { it > 0f }?.let {
+            ?: prefs.getFloat(PLATE_FOCAL_LENGTH_MM, 0f).takeIf { id == OpticsTrainId.SECONDARY && it.isFinite() && it > 0f }?.let {
                 "%.1f".format(Locale.US, it)
             }
             ?: "500"
@@ -212,7 +223,8 @@ object StarMapOpticsPrefs {
             customEyepieceAfov = prefs.getString(keys.customEpAfov, "50") ?: "50",
             customSensorPixelUm = prefs.getString(keys.customSensorUm, "3.75") ?: "3.75",
             customSensorWidth = prefs.getString(keys.customSensorW, "1920") ?: "1920",
-            customSensorHeight = prefs.getString(keys.customSensorH, "1080") ?: "1080"
+            customSensorHeight = prefs.getString(keys.customSensorH, "1080") ?: "1080",
+            telescopeFocalLengthOverrideMm = prefs.getString(focalOverrideKey(id), null)?.toDoubleOrNull()
         )
     }
 
@@ -228,6 +240,7 @@ object StarMapOpticsPrefs {
         target[keys.customSensorUm] = train.customSensorPixelUm
         target[keys.customSensorW] = train.customSensorWidth
         target[keys.customSensorH] = train.customSensorHeight
+        target[focalOverrideKey(train.id)] = train.telescopeFocalLengthOverrideMm?.toString().orEmpty()
     }
 }
 
@@ -237,11 +250,11 @@ fun resolveTelescopeFl(
     customFl: String
 ): Double? {
     val selected = telescopes.firstOrNull { it.id == selectedId } ?: return null
-    return if (selected.id == "scope_custom") {
+    return (if (selected.id == "scope_custom") {
         customFl.toDoubleOrNull()
     } else {
         selected.focalLengthMm
-    }
+    })?.takeIf { it.isFinite() && it > 0 }
 }
 
 fun resolveEyepiece(

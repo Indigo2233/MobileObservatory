@@ -6,6 +6,7 @@ import com.indigo.mobileobservatory.astro.ObserverSite
 import com.indigo.mobileobservatory.astro.TopocentricCoordinates
 import com.indigo.mobileobservatory.astro.CoordinateTransform
 import java.time.Instant
+import java.io.InputStream
 
 data class PhoneCatalogStar(
     val raDeg: Double,
@@ -16,7 +17,10 @@ data class PhoneCatalogStar(
 )
 
 /** Small, attributable bright-star subset used by the phone wide-field matcher. */
-class PhoneBrightStarCatalog private constructor(val stars: List<PhoneCatalogStar>) {
+class PhoneBrightStarCatalog private constructor(val stars: List<PhoneCatalogStar>,
+    internal val indexResource: ((FovBucket) -> InputStream?)? = null,
+    internal val solveProbe: WideFieldSolveProbe? = null) {
+    internal val geometryFingerprint by lazy { WideFieldIndexCodec.fingerprint(stars).joinToString("") { "%02x".format(it) } }
     fun around(
         center: TopocentricCoordinates,
         radiusDeg: Double,
@@ -48,8 +52,12 @@ class PhoneBrightStarCatalog private constructor(val stars: List<PhoneCatalogSta
         private var loadedCatalog: PhoneBrightStarCatalog? = null
 
         fun load(context: Context): PhoneBrightStarCatalog = loadedCatalog ?: synchronized(this) {
-            loadedCatalog ?: context.assets.open(ASSET_PATH).bufferedReader().use { reader ->
-                fromCsvLines(reader.readLines()).also { loadedCatalog = it }
+            loadedCatalog ?: context.applicationContext.assets.open(ASSET_PATH).bufferedReader().use { reader ->
+                val parsed = fromCsvLines(reader.readLines())
+                val assets = context.applicationContext.assets
+                PhoneBrightStarCatalog(parsed.stars,
+                    indexResource = { bucket -> assets.open("catalog/wf-index/${bucket.name.lowercase()}.wfidx") },
+                    solveProbe = WideFieldSolveProbe(context.applicationContext)).also { loadedCatalog = it }
             }
         }
 
@@ -88,8 +96,11 @@ class PhoneBrightStarCatalog private constructor(val stars: List<PhoneCatalogSta
 
         internal fun of(stars: List<PhoneCatalogStar>): PhoneBrightStarCatalog {
             require(stars.isNotEmpty()) { "Phone bright-star catalog is empty" }
-            return PhoneBrightStarCatalog(stars)
+            return PhoneBrightStarCatalog(stars.toList())
         }
+
+        internal fun indexed(stars: List<PhoneCatalogStar>, resource: (FovBucket) -> InputStream?) =
+            PhoneBrightStarCatalog(stars.toList(), indexResource = resource)
 
     }
 

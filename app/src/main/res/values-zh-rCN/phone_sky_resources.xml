@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="wfp_burst_image_only">已解析连拍图像。请用单张曝光重新验证当前指向。</string>
+    <string name="wfp_verify_single_frame">用单张曝光验证</string>
+    <string name="wfp_resource_heap">内存不足。请减少连拍张数，或选择其他镜头。</string>
+    <string name="wfp_resource_camera">相机数据流过大。请关闭 RAW，或选择其他镜头。</string>
+    <string name="wfp_resource_storage">存储空间不足。请释放空间，或减少张数。</string>
+</resources>

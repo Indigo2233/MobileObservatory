@@ -11,13 +11,8 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
@@ -35,201 +30,24 @@ import com.indigo.mobileobservatory.camera.GainCapability
 import com.indigo.mobileobservatory.ui.components.*
 import com.indigo.mobileobservatory.ui.theme.ObservatoryTheme
 import com.indigo.mobileobservatory.ui.viewmodel.CameraViewModel
-import com.indigo.mobileobservatory.ui.viewmodel.UpdateViewModel
 import com.indigo.mobileobservatory.mount.MountMotionState
-import com.indigo.mobileobservatory.ui.viewmodel.CaptureFormat
-import com.indigo.mobileobservatory.ui.viewmodel.RecordFormat
-import com.indigo.mobileobservatory.BuildConfig
 import com.indigo.mobileobservatory.R
-import com.indigo.mobileobservatory.sequence.SequenceEditorMode
 import com.indigo.mobileobservatory.sequence.SequenceFeature
-import com.indigo.mobileobservatory.sequence.plannedFrames
-import com.indigo.mobileobservatory.ui.AppOrientationMode
-import com.indigo.mobileobservatory.ui.RememberAppOrientation
 import com.indigo.mobileobservatory.stacking.StackMode
 
-private enum class MainControlTab {
-    CAMERA,
-    MOUNT,
-    STAR_MAP,
-    ACCESSORIES,
-    TOOLS,
-    SEQUENCE
-}
-
 @Composable
-fun CameraScreen(
+internal fun CaptureWorkspaceScreen(
     viewModel: CameraViewModel,
-    redNightMode: Boolean = false,
-    onRedNightModeChange: (Boolean) -> Unit = {}
+    redNightMode: Boolean,
+    onRedNightModeChange: (Boolean) -> Unit,
+    onPlateSolve: () -> Unit,
+    onTargets: () -> Unit,
+    onGuide: () -> Unit,
+    onSequence: () -> Unit,
+    selectedTarget: String?,
+    onDeviceSettings: (String) -> Unit = {},
+    onOpenLiveStack: () -> Unit = { viewModel.stacking.open(StackMode.LIVE) }
 ) {
-    val stackDestination by viewModel.stacking.destination.collectAsState()
-    val stackScreenState = rememberSaveableStateHolder()
-    val lifecycleOwner = LocalLifecycleOwner.current
-    val hostContext = LocalContext.current
-    DisposableEffect(lifecycleOwner, viewModel) {
-        val observer = LifecycleEventObserver { _, event ->
-            var context = hostContext
-            while (context is android.content.ContextWrapper && context !is android.app.Activity) context = context.baseContext
-            if (event == Lifecycle.Event.ON_STOP && (context as? android.app.Activity)?.isChangingConfigurations != true) {
-                viewModel.stacking.onBackground()
-            }
-            if (event == Lifecycle.Event.ON_START) viewModel.stacking.onForeground()
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-    }
-    val showPlayer by viewModel.showPlayer.collectAsState()
-    var playerInitialFile by remember { mutableStateOf<java.io.File?>(null) }
-    var playerReturnMode by rememberSaveable { mutableStateOf<StackMode?>(null) }
-    var stackReturnToPlayer by rememberSaveable { mutableStateOf(false) }
-    var showPlateSolve by remember { mutableStateOf(false) }
-    var showPolarAlign by remember { mutableStateOf(false) }
-    var showGuide by remember { mutableStateOf(false) }
-    var showSettings by remember { mutableStateOf(false) }
-    val phoneNav = rememberPhonePlateSolveNavState()
-    var selectedTab by rememberSaveable { mutableStateOf(MainControlTab.CAMERA) }
-    val globalMountMotionState by viewModel.mountMotionState.collectAsState()
-    val mountTime by viewModel.mountTime.collectAsState()
-    val updateViewModel: UpdateViewModel = viewModel()
-    val updateState by updateViewModel.state.collectAsState()
-    val sequenceEnabled = SequenceFeature.ENABLED
-
-    val orientationMode = when {
-        stackDestination != null || showPlayer -> AppOrientationMode.SENSOR
-        showGuide -> AppOrientationMode.LANDSCAPE
-        selectedTab == MainControlTab.CAMERA -> AppOrientationMode.LANDSCAPE
-        else -> AppOrientationMode.PORTRAIT
-    }
-    RememberAppOrientation(orientationMode)
-
-    UpdateAvailableDialog(
-        state = updateState,
-        onDownload = updateViewModel::downloadAndInstall,
-        onInstall = updateViewModel::installOrRequestPermission,
-        onDismiss = updateViewModel::dismissPrompt,
-        onOpenInstallSettings = updateViewModel::openInstallPermissionSettings
-    )
-
-    if (selectedTab != MainControlTab.STAR_MAP || !BuildConfig.STELLARIUM_ENABLED) {
-        MountMotionStopPopup(
-            state = globalMountMotionState,
-            onStop = viewModel::stopMountMotion
-        )
-    }
-
-    if (phoneNav.destination != null) {
-        PhonePlateSolveScreens(
-            phoneNav,
-            onAddToSequence = { obj ->
-                viewModel.addSequenceSkyTarget(
-                    name = "${obj.id} · ${obj.name}",
-                    raHours = obj.raHours,
-                    decDeg = obj.decDeg
-                )
-            },
-            showSequenceActions = sequenceEnabled
-        )
-        return
-    }
-
-    if (showPlateSolve) {
-        val mountCoordinates by viewModel.mountCoordinates.collectAsState()
-        val connectionState by viewModel.connectionState.collectAsState()
-        PlateSolveScreen(
-            mountCoordinates = mountCoordinates,
-            cameraPixelSizeUm = (connectionState as? ConnectionState.Connected)
-                ?.info?.pixelSizeUm,
-            onSolved = viewModel::recordPlateSolveResult,
-            onBack = { showPlateSolve = false }
-        )
-        return
-    }
-
-    if (showPolarAlign) {
-        val mountCoordinates by viewModel.mountCoordinates.collectAsState()
-        val mountSite by viewModel.mountSite.collectAsState()
-        val mountBusy by viewModel.mountBusy.collectAsState()
-        val mountMoveStatus by viewModel.mountMoveStatus.collectAsState()
-        val connectionState by viewModel.connectionState.collectAsState()
-        PolarAlignmentScreen(
-            mountCoordinates = mountCoordinates,
-            mountSite = mountSite,
-            mountBusy = mountBusy,
-            mountMoveStatus = mountMoveStatus,
-            cameraPixelSizeUm = (connectionState as? ConnectionState.Connected)
-                ?.info?.pixelSizeUm,
-            onReadMountSite = { viewModel.readMountSite() },
-            onSyncPhoneSiteToMount = { lat, lon -> viewModel.syncPhoneSiteToMount(lat, lon) },
-            onMoveMountRaBy = { distance, east, rate -> viewModel.moveMountRaBy(distance, east, rate) },
-            onStopMountRaMove = { viewModel.stopMountRaMove() },
-            onCaptureFits = { viewModel.captureTempFitsForPlateSolve() },
-            onBack = { showPolarAlign = false }
-        )
-        return
-    }
-
-    if (showGuide) {
-        GuideScreen(
-            viewModel = viewModel,
-            onBack = { showGuide = false }
-        )
-        return
-    }
-
-    if (stackDestination != null) {
-        stackScreenState.SaveableStateProvider(stackDestination!!.name) {
-            StackingScreen(viewModel, stackDestination!!, onBack = {
-                viewModel.stacking.leave()
-                if (stackReturnToPlayer) { stackReturnToPlayer = false; viewModel.openPlayer() }
-            },
-                onCamera = {
-                    stackReturnToPlayer = false
-                    viewModel.stacking.leave()
-                    viewModel.closePlayer()
-                    selectedTab = MainControlTab.CAMERA
-                },
-                onOpenResult = { file ->
-                    playerReturnMode = stackDestination
-                    playerInitialFile = file
-                    viewModel.stacking.leave()
-                    viewModel.openPlayer()
-                })
-        }
-        return
-    }
-
-    if (showPlayer) {
-        val mountCoordinates by viewModel.mountCoordinates.collectAsState()
-        PlayerScreen(
-            recordingsDir = viewModel.getRecordingsDir(),
-            capturesDir = viewModel.getCapturesDir(),
-            mountCoordinates = mountCoordinates,
-            initialFile = playerInitialFile,
-            initialCategory = if (playerReturnMode != null) MediaCategory.STACK_RESULTS else MediaCategory.SER_PSER,
-            excludeFile = viewModel.getActiveRecordingFile(),
-            onStackFile = { file ->
-                playerInitialFile = null
-                playerReturnMode = null
-                stackReturnToPlayer = true
-                viewModel.openPlanetaryStack(file)
-            },
-            onBack = {
-                viewModel.closePlayer()
-                val returnMode = playerReturnMode
-                playerInitialFile = null
-                playerReturnMode = null
-                returnMode?.let { viewModel.stacking.open(it) }
-            }
-        )
-        return
-    }
-
-    if (showSettings) {
-        SettingsScreen(viewModel = viewModel, onBack = { showSettings = false })
-        return
-    }
-
     val connectionState by viewModel.connectionState.collectAsState()
 
     val exposureUs by viewModel.exposureUs.collectAsState()
@@ -281,7 +99,6 @@ fun CameraScreen(
     val fwSlotNames by viewModel.filterWheelSlotNames.collectAsState()
     val fwInfo by viewModel.filterWheelInfo.collectAsState()
     val fwBidirectional by viewModel.filterWheelBidirectional.collectAsState()
-    var showFwEditDialog by remember { mutableStateOf(false) }
 
     val eafConnected by viewModel.eafConnected.collectAsState()
     val eafPosition by viewModel.eafPosition.collectAsState()
@@ -300,7 +117,6 @@ fun CameraScreen(
     val mountMoveStatus by viewModel.mountMoveStatus.collectAsState()
     val mountSlewRate by viewModel.mountSlewRate.collectAsState()
     val mountTrackingEnabled by viewModel.mountTrackingEnabled.collectAsState()
-    val precisionGotoProgress by viewModel.precisionGotoProgress.collectAsState()
     val detectedBitDepth by viewModel.detectedBitDepth.collectAsState()
     val readoutMode by viewModel.readoutMode.collectAsState()
     val supportedReadoutModes by viewModel.supportedReadoutModes.collectAsState()
@@ -317,12 +133,14 @@ fun CameraScreen(
     val showDevicePicker by viewModel.showDevicePicker.collectAsState()
     val allDevices by viewModel.cameraManager.devices.collectAsState()
 
-    var showPanel by remember { mutableStateOf(true) }
-    var showOverlayPanel by remember { mutableStateOf(true) }
+    var showPanel by rememberSaveable { mutableStateOf(true) }
+    var showOverlayPanel by rememberSaveable { mutableStateOf(true) }
+    com.indigo.mobileobservatory.ui.components.ReportObservatoryImmersion(!showPanel)
+    androidx.activity.compose.BackHandler(enabled = !showPanel) { showPanel = true }
     var showCenterMarker by rememberSaveable { mutableStateOf(false) }
-    var viewResetTrigger by remember { mutableIntStateOf(0) }
+    var viewResetTrigger by rememberSaveable { mutableIntStateOf(0) }
 
-    if (showDevicePicker) {
+    if (showDevicePicker && rememberPageForeground()) {
         val connectable = viewModel.camerasAvailableToMain(allDevices)
         DevicePickerDialog(
             devices = connectable,
@@ -342,376 +160,25 @@ fun CameraScreen(
         )
     }
 
-    if (showFwEditDialog && fwInfo != null) {
-        FilterWheelEditDialog(
-            slotNames = fwSlotNames,
-            currentSlotCount = fwInfo?.slotCount ?: fwSlotNames.size,
-            onSave = { newNames, newSlotCount ->
-                if (newSlotCount != fwInfo?.slotCount) {
-                    viewModel.setFilterWheelSlotCount(newSlotCount)
-                }
-                newNames.forEachIndexed { index, name ->
-                    viewModel.setFilterWheelSlotName(index, name)
-                }
-                showFwEditDialog = false
-            },
-            onDismiss = { showFwEditDialog = false }
-        )
-    }
 
     val sensorWidth = imagingWidth
     val sensorHeight = imagingHeight
     val roiMinW = viewModel.cameraManager.activeCamera?.roiMinWidth ?: 8
     val roiMinH = viewModel.cameraManager.activeCamera?.roiMinHeight ?: 8
 
-    // Global status strip: one glance shows what the rig is doing right now.
-    val guideConnectionState by viewModel.guideConnectionState.collectAsState()
-    val guideRunning by viewModel.guideRunning.collectAsState()
-    val cameraConnected = connectionState is ConnectionState.Connected
-    val mountConnected =
-        mountConnectionState is com.indigo.mobileobservatory.mount.MountConnectionState.Connected
-    val cameraPillValue = when {
-        isRecording -> "REC ${recordingFrameCount}"
-        cameraConnected -> "%.0f fps".format(fps)
-        else -> null
-    }
-    val cameraPillCode = when {
-        !cameraConnected -> DeviceStatusCode.OFF
-        isRecording -> DeviceStatusCode.ACTIVE
-        else -> DeviceStatusCode.READY
-    }
-    val mountPillValue = when {
-        !mountConnected -> null
-        globalMountMotionState.showsGlobalStop -> stringResource(R.string.stop)
-        mountTrackingEnabled -> stringResource(R.string.tracking)
-        else -> stringResource(R.string.tracking_stopped)
-    }
-    val mountPillCode = when {
-        !mountConnected -> DeviceStatusCode.OFF
-        globalMountMotionState.showsGlobalStop -> DeviceStatusCode.ACTIVE
-        mountTrackingEnabled -> DeviceStatusCode.ACTIVE
-        else -> DeviceStatusCode.READY
-    }
-    val guidePillValue = when {
-        guideRunning -> stringResource(R.string.guiding)
-        guideConnectionState is ConnectionState.Connected -> null
-        else -> null
-    }
-    val guidePillCode = when {
-        guideRunning -> DeviceStatusCode.ACTIVE
-        guideConnectionState is ConnectionState.Connected -> DeviceStatusCode.READY
-        guideConnectionState is ConnectionState.Connecting -> DeviceStatusCode.CONNECTING
-        guideConnectionState is ConnectionState.Error -> DeviceStatusCode.ERROR
-        else -> DeviceStatusCode.OFF
-    }
-    val coolerPillValue = if (coolerOn || coolingInfo != null) {
-        "%.1f°C".format(sensorTempTenths / 10f)
-    } else {
-        null
-    }
-    val statusDevices = listOf(
-        DeviceStatus(
-            key = "camera",
-            label = stringResource(R.string.camera),
-            value = cameraPillValue,
-            code = cameraPillCode,
-            icon = Icons.Default.CameraAlt
-        ),
-        DeviceStatus(
-            key = "mount",
-            label = stringResource(R.string.tab_mount),
-            value = mountPillValue,
-            code = mountPillCode,
-            icon = Icons.Default.Explore
-        ),
-        DeviceStatus(
-            key = "guide",
-            label = stringResource(R.string.guiding),
-            value = guidePillValue,
-            code = guidePillCode,
-            icon = Icons.Default.CenterFocusWeak
-        ),
-        DeviceStatus(
-            key = "cooler",
-            label = stringResource(R.string.cooler),
-            value = coolerPillValue,
-            code = when {
-                coolingInfo == null && !coolerOn -> DeviceStatusCode.OFF
-                rampStatus.isNotEmpty() -> DeviceStatusCode.ACTIVE
-                coolerOn -> DeviceStatusCode.ACTIVE
-                else -> DeviceStatusCode.READY
-            },
-            icon = Icons.Default.AcUnit
-        ),
-        DeviceStatus(
-            key = "filter",
-            label = stringResource(R.string.filter_wheel),
-            value = if (fwConnected) {
-                fwSlotNames.getOrNull(fwPosition) ?: "${fwPosition + 1}"
-            } else {
-                null
-            },
-            code = when {
-                !fwConnected -> DeviceStatusCode.OFF
-                fwMoving -> DeviceStatusCode.ACTIVE
-                else -> DeviceStatusCode.READY
-            },
-            icon = Icons.Default.FilterAlt
-        ),
-        DeviceStatus(
-            key = "focuser",
-            label = stringResource(R.string.focuser),
-            value = if (eafConnected) "$eafPosition" else null,
-            code = when {
-                !eafConnected -> DeviceStatusCode.OFF
-                eafMoving -> DeviceStatusCode.ACTIVE
-                else -> DeviceStatusCode.READY
-            },
-            icon = Icons.Default.Tune
-        )
-    )
-
-    BoxWithConstraints(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-    ) {
-        val railLayout = maxWidth >= 600.dp || (maxWidth >= 520.dp && maxWidth > maxHeight)
-        val railLabels = maxWidth >= 600.dp
-        val toolsWideLayout = maxWidth >= 700.dp
-        val navCameraLabel = stringResource(R.string.tab_camera)
-        val navMountLabel = stringResource(R.string.tab_mount)
-        val navStarMapLabel = stringResource(R.string.star_map)
-        val navRigLabel = stringResource(R.string.tab_accessories)
-        val navToolsLabel = stringResource(R.string.cockpit_tab_tools)
-        val navEntries = remember(
-            navCameraLabel,
-            navMountLabel,
-            navStarMapLabel,
-            navRigLabel,
-            navToolsLabel
-        ) {
-            listOf(
-                ObservatoryNavEntry("CAMERA", navCameraLabel, Icons.Default.CameraAlt),
-                ObservatoryNavEntry("MOUNT", navMountLabel, Icons.Default.Explore),
-                ObservatoryNavEntry("STAR_MAP", navStarMapLabel, Icons.Default.Star),
-                ObservatoryNavEntry("ACCESSORIES", navRigLabel, Icons.Default.Build),
-                ObservatoryNavEntry("TOOLS", navToolsLabel, Icons.Default.Widgets)
-            )
-        }
-        val navSelectedKey =
-            if (selectedTab == MainControlTab.SEQUENCE) "TOOLS" else selectedTab.name
-        val selectTab: (String) -> Unit = { key ->
-            when (key) {
-                "CAMERA" -> selectedTab = MainControlTab.CAMERA
-                "MOUNT" -> selectedTab = MainControlTab.MOUNT
-                "STAR_MAP" -> selectedTab = MainControlTab.STAR_MAP
-                "ACCESSORIES" -> selectedTab = MainControlTab.ACCESSORIES
-                "TOOLS" -> selectedTab = MainControlTab.TOOLS
-            }
-        }
-
-        Row(modifier = Modifier.fillMaxSize()) {
-            if (railLayout) {
-                ObservatoryNavRail(
-                    entries = navEntries,
-                    selectedKey = navSelectedKey,
-                    onSelect = selectTab,
-                    showLabels = railLabels
-                )
-            }
-            Column(modifier = Modifier.weight(1f).fillMaxSize()) {
-                ObservatoryStatusBar(
-                    devices = statusDevices,
-                    redNightMode = redNightMode,
-                    onToggleRedNight = { enabled -> onRedNightModeChange(enabled) },
-                    onOpenSettings = { showSettings = true },
-                    onDeviceClick = { device ->
-                        when (device.key) {
-                            "camera" -> selectedTab = MainControlTab.CAMERA
-                            "mount" -> selectedTab = MainControlTab.MOUNT
-                            "guide" -> showGuide = true
-                            else -> selectedTab = MainControlTab.ACCESSORIES
-                        }
-                    }
-                )
-
-        if (sequenceEnabled) {
-            val sequenceState by viewModel.sequenceRuntime.state.collectAsState()
-            val sequenceDraft by viewModel.sequenceRuntime.draft.collectAsState()
-            val sequenceRunning =
-                sequenceState.phase == com.indigo.mobileobservatory.sequence.SequencePhase.Running ||
-                    sequenceState.phase == com.indigo.mobileobservatory.sequence.SequencePhase.Paused
-            if (sequenceRunning && selectedTab != MainControlTab.SEQUENCE) {
-                SequenceProgressStrip(
-                    title = sequenceState.currentClassName ?: stringResource(R.string.tab_sequence),
-                    detail = stringResource(R.string.sequence_progress, sequenceState.framesDone, sequenceDraft.plannedFrames()),
-                    paused = sequenceState.phase == com.indigo.mobileobservatory.sequence.SequencePhase.Paused,
-                    onOpen = { selectedTab = MainControlTab.SEQUENCE },
-                    onPause = viewModel.sequenceRuntime::pause,
-                    onResume = viewModel.sequenceRuntime::resume,
-                    onStop = viewModel.sequenceRuntime::stop
-                )
-            }
-        } else {
-            LaunchedEffect(Unit) {
-                if (selectedTab == MainControlTab.SEQUENCE) {
-                    selectedTab = MainControlTab.CAMERA
-                }
-            }
-        }
-
-        when (selectedTab) {
-            MainControlTab.MOUNT -> {
-                MountControlScreen(
-                    viewModel = viewModel,
-                    onOpenStarMap = { selectedTab = MainControlTab.STAR_MAP },
-                    onOpenPolarAlignment = { showPolarAlign = true },
-                    onOpenGuiding = { showGuide = true },
-                    onOpenPushTo = { phoneNav.destination = PhonePlateSolveDestination.PUSH_TO },
-                    onOpenTargetLibrary = { phoneNav.destination = PhonePlateSolveDestination.TARGET_LIBRARY },
-                    modifier = Modifier.weight(1f)
-                )
-            }
-            MainControlTab.STAR_MAP -> {
-                if (BuildConfig.STELLARIUM_ENABLED) {
-                    val mountSite by viewModel.mountSite.collectAsState()
-                    val solvedPositionAngle by viewModel.lastPlateSolvePositionAngleDeg.collectAsState()
-                    val sequenceMosaicPlan by viewModel.sequenceMosaicPlan.collectAsState()
-                    val sequenceGeneration by viewModel.sequenceRuntime.generation.collectAsState()
-                    val restoredSequencePlan = remember(sequenceMosaicPlan, sequenceGeneration) {
-                        viewModel.sequenceRuntime.mosaicPlan() ?: sequenceMosaicPlan
-                    }
-                    val rotatorConnected by viewModel.rotatorConnected.collectAsState()
-                    val rotatorAngle by viewModel.rotatorAngle.collectAsState()
-                    StarMapScreen(
-                        mountCoordinates = mountCoordinates,
-                        mountSite = mountSite,
-                        mountTime = mountTime,
-                        mountConnected = mountConnectionState is
-                            com.indigo.mobileobservatory.mount.MountConnectionState.Connected,
-                        mountSupportsSync = viewModel.mountSupportsSync,
-                        mountBusy = mountBusy,
-                        mountMotionState = globalMountMotionState,
-                        mountSlewRate = mountSlewRate,
-                        precisionGotoProgress = precisionGotoProgress,
-                        cameraPixelSizeUm = (connectionState as? ConnectionState.Connected)
-                            ?.info?.pixelSizeUm,
-                        cameraFrameWidthPx = roi.width,
-                        cameraFrameHeightPx = roi.height,
-                        lastSolvedPositionAngleDeg = solvedPositionAngle,
-                        rotatorConnected = rotatorConnected,
-                        rotatorMechanicalAngleDeg = rotatorAngle,
-                        initialSequencePlan = restoredSequencePlan,
-                        onGoto = { target ->
-                            viewModel.gotoMountTarget(
-                                name = target.name,
-                                raHours = target.raHours,
-                                decDeg = target.decDegrees,
-                                frame = target.frame
-                            )
-                        },
-                        onSync = { target ->
-                            viewModel.syncMountToTarget(
-                                name = target.name,
-                                raHours = target.raHours,
-                                decDeg = target.decDegrees,
-                                frame = target.frame
-                            )
-                        },
-                        onPrecisionGoto = { target, toleranceArcmin ->
-                            viewModel.startPrecisionGoto(
-                                name = target.name,
-                                raHours = target.raHours,
-                                decDeg = target.decDegrees,
-                                frame = target.frame,
-                                toleranceArcmin = toleranceArcmin
-                            )
-                        },
-                        onAddToSequence = viewModel::addSequenceMosaic,
-                        onMoveRotator = viewModel::moveRotatorTo,
-                        showSequenceActions = sequenceEnabled,
-                        onTargetSelected = { target ->
-                            viewModel.rememberSequenceSkyTarget(
-                                name = target.name,
-                                raHours = target.raHours,
-                                decDeg = target.decDegrees,
-                                positionAngleDeg = target.positionAngleDeg
-                            )
-                        },
-                        onSlewRateChange = viewModel::setMountSlewRate,
-                        onManualMoveStart = viewModel::startMountManualMove,
-                        onManualMoveStop = { viewModel.stopMountManualMove(it) },
-                        onStopMount = viewModel::stopMountMotion,
-                        onGoHome = viewModel::goMountHome,
-                        redNightMode = redNightMode,
-                        onRedNightModeChange = onRedNightModeChange,
-                        onBack = { selectedTab = MainControlTab.MOUNT }
-                    )
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxWidth(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Card(Modifier.padding(24.dp)) {
-                            Column(
-                                modifier = Modifier.padding(20.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Text(
-                                    stringResource(R.string.star_map),
-                                    style = MaterialTheme.typography.titleLarge
-                                )
-                                Text(stringResource(R.string.stellarium_assets_missing))
-                                Text(stringResource(R.string.stellarium_build_hint),
-                                    color = MaterialTheme.colorScheme.outline
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-            MainControlTab.SEQUENCE -> {
-                if (sequenceEnabled) {
-                    SequenceScreen(
-                        viewModel = viewModel,
-                        redNightMode = redNightMode,
-                        onOpenGuiding = { showGuide = true },
-                        onOpenAccessories = { selectedTab = MainControlTab.ACCESSORIES },
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-            }
-            MainControlTab.ACCESSORIES -> {
-                AccessoriesScreen(
-                    viewModel = viewModel,
-                    modifier = Modifier.weight(1f),
-                    onOpenCamera = { selectedTab = MainControlTab.CAMERA },
-                    onOpenMount = { selectedTab = MainControlTab.MOUNT }
-                )
-            }
-            MainControlTab.TOOLS -> {
-                ToolsScreen(
-                    onOpenPlateSolve = { showPlateSolve = true },
-                    onOpenPolarAlignment = { showPolarAlign = true },
-                    onOpenGuide = { showGuide = true },
-                    onOpenPlayer = { viewModel.openPlayer() },
-                    showSequenceEntry = sequenceEnabled,
-                    onOpenSequence = { selectedTab = MainControlTab.SEQUENCE },
-                    onOpenStacking = { viewModel.stacking.open(StackMode.PLANETARY) },
-                    onOpenLiveStacking = { viewModel.stacking.open(StackMode.LIVE) },
-                    modifier = Modifier.weight(1f),
-                    wideLayout = toolsWideLayout
-                )
-            }
-            MainControlTab.CAMERA -> Column(
+    Column(
                 modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
+                    .fillMaxSize()
             ) {
-        EaaSessionBar(viewModel)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = onTargets, modifier = Modifier.weight(1f)) {
+                Text(selectedTarget ?: stringResource(R.string.wf_choose_target), maxLines = 1)
+            }
+            TextButton(onClick = onOpenLiveStack) { Text("EAA") }
+            TextButton(onClick = onGuide) { Text(stringResource(R.string.guiding)) }
+            if (SequenceFeature.ENABLED) TextButton(onClick = onSequence) { Text(stringResource(R.string.tab_sequence)) }
+        }
+        EaaSessionBar(viewModel, onOpenLiveStack)
         // Main content area
         Row(modifier = Modifier.weight(1f)) {
             // Preview area
@@ -837,7 +304,7 @@ fun CameraScreen(
                     is ConnectionState.Disconnected -> {
                         DisconnectedOverlay(
                             onConnect = { viewModel.requestConnect() },
-                            onPlateSolve = { showPlateSolve = true },
+                            onPlateSolve = onPlateSolve,
                             modifier = Modifier.align(Alignment.Center)
                         )
                     }
@@ -909,9 +376,9 @@ fun CameraScreen(
                     onToggleOverlay = { showOverlayPanel = !showOverlayPanel },
                     onToggleFocusAssist = { viewModel.toggleFocusAssist() },
                     onToggleCenterMarker = { showCenterMarker = !showCenterMarker },
-                    onPlateSolve = { showPlateSolve = true },
+                    onPlateSolve = onPlateSolve,
                     onOpenLibrary = { viewModel.openPlayer() },
-                    onOpenLiveStack = { viewModel.stacking.open(StackMode.LIVE) },
+                    onOpenLiveStack = onOpenLiveStack,
                     modifier = Modifier.align(Alignment.TopEnd)
                 )
 
@@ -929,7 +396,7 @@ fun CameraScreen(
                     }
                     val camName = camInfo?.name ?: "—"
                     ControlPanel(
-                        onOpenLiveStack = { viewModel.stacking.open(StackMode.LIVE) },
+                        onOpenLiveStack = onOpenLiveStack,
                         exposureUs = exposureUs,
                         gain = gain,
                         gainWriteInProgress = gainWriteInProgress,
@@ -966,7 +433,9 @@ fun CameraScreen(
                         fwSlotCount = fwInfo?.slotCount ?: 0,
                         fwBidirectional = fwBidirectional,
                         onFwBidirectionalToggle = { viewModel.setFilterWheelBidirectional(it) },
-                        onFwEditNames = { showFwEditDialog = true },
+                        onFwEditNames = { onDeviceSettings("filter") },
+                        onEafSettings = { onDeviceSettings("focuser") },
+                        showLegacyFilterSettings = false,
                         eafConnected = eafConnected,
                         eafPosition = eafPosition,
                         eafMoving = eafMoving,
@@ -1076,21 +545,11 @@ fun CameraScreen(
             )
         }
             }
-        }
-                if (!railLayout) {
-                    ObservatoryBottomBar(
-                        entries = navEntries,
-                        selectedKey = navSelectedKey,
-                        onSelect = selectTab
-                    )
-                }
-            }
-        }
-    }
+
 }
 
 @Composable
-private fun MountMotionStopPopup(
+internal fun MountMotionStopPopup(
     state: MountMotionState,
     onStop: () -> Unit
 ) {
@@ -1209,17 +668,17 @@ fun FilterWheelEditDialog(
 ) {
     var editedSlotCount by remember { mutableIntStateOf(currentSlotCount) }
     var editedNames by remember { mutableStateOf(slotNames.toMutableList()) }
-    
+
     LaunchedEffect(editedSlotCount) {
         if (editedSlotCount != editedNames.size) {
             editedNames = List(editedSlotCount) { i ->
-                editedNames.getOrElse(i) { 
+                editedNames.getOrElse(i) {
                     listOf("L", "R", "G", "B", "R+", "UV", "CH4", "R+610").getOrElse(i) { "${i + 1}" }
                 }
             }.toMutableList()
         }
     }
-    
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.edit_filter_wheel)) },

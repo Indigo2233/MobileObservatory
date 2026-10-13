@@ -1,10 +1,13 @@
 package com.indigo.mobileobservatory.ui.components
 
 import android.graphics.Bitmap
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -12,9 +15,17 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import com.indigo.mobileobservatory.R
 import java.util.IdentityHashMap
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 
 internal object PreviewCenterMarker {
@@ -36,25 +47,36 @@ fun LivePreview(
     showCenterMarker: Boolean = false,
     modifier: Modifier = Modifier
 ) {
-    var scale by remember { mutableFloatStateOf(1f) }
-    var offset by remember { mutableStateOf(Offset.Zero) }
-    var lastBitmapSize by remember { mutableStateOf(0 to 0) }
-    var lastResetTrigger by remember { mutableIntStateOf(0) }
+    val offsetSaver = remember {
+        Saver<Offset, List<Float>>(save = { listOf(it.x, it.y) }, restore = { Offset(it[0], it[1]) })
+    }
+    var scale by rememberSaveable { mutableFloatStateOf(1f) }
+    var offset by rememberSaveable(stateSaver = offsetSaver) { mutableStateOf(Offset.Zero) }
+    var lastBitmapWidth by rememberSaveable { mutableIntStateOf(0) }
+    var lastBitmapHeight by rememberSaveable { mutableIntStateOf(0) }
+    var lastResetTrigger by rememberSaveable { mutableIntStateOf(resetTrigger) }
+
+    val resetView: () -> Unit = { scale = 1f; offset = Offset.Zero }
 
     if (resetTrigger != lastResetTrigger) {
         lastResetTrigger = resetTrigger
-        scale = 1f
-        offset = Offset.Zero
+        resetView()
     }
 
     val bmpW = bitmap?.width ?: 0
     val bmpH = bitmap?.height ?: 0
     if (bmpW > 0 && bmpH > 0
-        && (bmpW != lastBitmapSize.first || bmpH != lastBitmapSize.second)) {
-        lastBitmapSize = bmpW to bmpH
-        scale = 1f
-        offset = Offset.Zero
+        && (bmpW != lastBitmapWidth || bmpH != lastBitmapHeight)) {
+        lastBitmapWidth = bmpW
+        lastBitmapHeight = bmpH
+        resetView()
     }
+
+    val transformed = bitmap != null && (scale != 1f || offset != Offset.Zero)
+    BackHandler(enabled = transformed, onBack = resetView)
+    val zoomDescription = stringResource(R.string.wf_preview_zoom, (scale * 100).roundToInt())
+    val imageDescription = stringResource(R.string.image_desc)
+    val resetDescription = stringResource(R.string.fit_to_view)
 
     val imageBitmapCache = remember { IdentityHashMap<Bitmap, androidx.compose.ui.graphics.ImageBitmap>() }
     val imageBitmap = bitmap?.let { current ->
@@ -67,6 +89,13 @@ fun LivePreview(
     Canvas(
         modifier = modifier
             .fillMaxSize()
+            .semantics {
+                contentDescription = imageDescription
+                stateDescription = zoomDescription
+                if (transformed) customActions = listOf(
+                    CustomAccessibilityAction(resetDescription) { resetView(); true }
+                )
+            }
             .pointerInput(Unit) {
                 detectTransformGestures { _, pan, zoom, _ ->
                     scale = (scale * zoom).coerceIn(0.5f, 10f)

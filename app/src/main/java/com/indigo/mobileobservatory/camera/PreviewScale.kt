@@ -24,7 +24,8 @@ internal object PreviewScale {
         height: Int,
         bytesPerPixel: Int,
         step: Int,
-        dst: ByteArray
+        dst: ByteArray,
+        keepBayerPhase: Boolean = false
     ): Pair<Int, Int> {
         val bpp = bytesPerPixel.coerceIn(1, 6)
         val s = step.coerceAtLeast(1)
@@ -40,9 +41,13 @@ internal object PreviewScale {
         require(dst.size >= needed)
         var di = 0
         for (y in 0 until outH) {
-            val srcRow = y * s * width * bpp
+            // Select intact 2x2 sensor cells. An even stride alone would select only
+            // one CFA color at every output position and destroy the mosaic.
+            val sourceY = if (keepBayerPhase) (y / 2) * (2 * s) + y % 2 else y * s
+            val srcRow = sourceY * width * bpp
             for (x in 0 until outW) {
-                val si = srcRow + x * s * bpp
+                val sourceX = if (keepBayerPhase) (x / 2) * (2 * s) + x % 2 else x * s
+                val si = srcRow + sourceX * bpp
                 if (si + bpp > src.size) return outW to outH
                 src.copyInto(dst, di, si, si + bpp)
                 di += bpp

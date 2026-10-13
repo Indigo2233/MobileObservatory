@@ -1,0 +1,12 @@
+<resources>
+    <string name="wf_observer_site">Observing location</string>
+    <string name="wf_observer_missing">Location not set</string>
+    <string name="wf_observer_manual">Enter coordinates</string>
+    <string name="wf_observer_phone">Use phone location</string>
+    <string name="wf_observer_locating">Getting location…</string>
+    <string name="wf_observer_saved">Saved location</string>
+    <string name="wf_observer_mount">Mount location</string>
+    <string name="wf_observer_latitude">Latitude (−90…90°)</string>
+    <string name="wf_observer_longitude">Longitude (−180…180°)</string>
+    <string name="wf_observer_use">Use this location</string>
+</resources>

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="wf_star_map_preparation">观测准备</string>
+    <string name="wf_star_map_current_target">当前目标</string>
+    <string name="wf_star_map_target_details">更多目标操作</string>
+    <string name="wf_star_map_hide_details">收起目标详情</string>
+    <string name="wf_fov_cropped_frame">裁切／视场未确认 · 当前框隐藏</string>
+</resources>

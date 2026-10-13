@@ -64,7 +64,7 @@ class StarMapAssetsRegressionTest {
         assertTrue(js.contains("function installFollowPauseOnPan()"))
         assertTrue(js.contains("userPointerActive"))
         assertTrue(js.contains("notifyAndroid(\"onFollowMountChanged\", \"false\")"))
-        assertTrue(js.contains("if (followMount && stel && !userPointerActive)"))
+        assertTrue(js.contains("if (value && followMount && stel && !userPointerActive)"))
         assertTrue(js.contains("if (userPointerActive && enabled) return;"))
         assertTrue(js.contains("let followMount = false;"))
     }

@@ -2,6 +2,7 @@
 #include <android/log.h>
 #include <cstring>
 #include <cstdlib>
+#include <cstdint>
 #include "toupcam.h"
 
 #define TAG "ToupcamJNI"
@@ -137,6 +138,43 @@ JNIEXPORT jintArray JNICALL JNI_FN(nGetSize)(JNIEnv* env, jobject) {
     return arr;
 }
 
+JNIEXPORT jintArray JNICALL JNI_FN(nGetFinalSize)(JNIEnv* env, jobject) {
+    jint size[2] = {};
+    if (!g_hcam || FAILED(Toupcam_get_FinalSize(g_hcam, &size[0], &size[1]))) size[0] = size[1] = 0;
+    jintArray result = env->NewIntArray(2);
+    env->SetIntArrayRegion(result, 0, 2, size);
+    return result;
+}
+
+JNIEXPORT jint JNICALL JNI_FN(nPullImageRawWithSize)(JNIEnv* env, jobject, jbyteArray buffer, jint bits, jintArray dimensions) {
+    if (!g_hcam || !buffer || !dimensions || env->GetArrayLength(dimensions) < 4) return -1;
+    const jint empty[4] = {};
+    env->SetIntArrayRegion(dimensions, 0, 4, empty);
+    const int bytes_per_pixel = bits == 48 ? 6 : bits == 24 ? 3 : bits == 16 ? 2 : bits == 8 ? 1 : 0;
+    int base_width = 0, base_height = 0, final_width = 0, final_height = 0;
+    if (!bytes_per_pixel || FAILED(Toupcam_get_Size(g_hcam, &base_width, &base_height)) ||
+        FAILED(Toupcam_get_FinalSize(g_hcam, &final_width, &final_height)) ||
+        base_width <= 0 || base_height <= 0 || final_width <= 0 || final_height <= 0) return -1;
+    const int64_t capacity = env->GetArrayLength(buffer);
+    // Keep the full selected-resolution allocation, even for ROI/digital bin. An old
+    // queued frame must not overrun a buffer allocated just for a smaller new crop.
+    const int64_t base_pixels = static_cast<int64_t>(base_width) * base_height;
+    const int64_t final_pixels = static_cast<int64_t>(final_width) * final_height;
+    if (base_pixels > capacity / bytes_per_pixel || final_pixels > base_pixels) return -1;
+    jbyte* data = env->GetByteArrayElements(buffer, nullptr);
+    if (!data) return -1;
+    ToupcamFrameInfoV3 info = {};
+    // -1 fixes the dense byte convention, including processed RGB's default DIB padding.
+    const HRESULT hr = Toupcam_PullImageV3(g_hcam, data, 0, bits, -1, &info);
+    env->ReleaseByteArrayElements(buffer, data, SUCCEEDED(hr) ? 0 : JNI_ABORT);
+    if (FAILED(hr)) return static_cast<jint>(hr);
+    if (info.width != static_cast<unsigned>(final_width) || info.height != static_cast<unsigned>(final_height) ||
+        static_cast<int64_t>(info.width) * info.height * bytes_per_pixel > capacity) return -1;
+    const jint actual[4] = { static_cast<jint>(info.width), static_cast<jint>(info.height), final_width, final_height };
+    env->SetIntArrayRegion(dimensions, 0, 4, actual);
+    return 0;
+}
+
 JNIEXPORT jboolean JNICALL JNI_FN(nPutSize)(JNIEnv*, jobject, jint w, jint h) {
     if (!g_hcam) return JNI_FALSE;
     return SUCCEEDED(Toupcam_put_Size(g_hcam, w, h)) ? JNI_TRUE : JNI_FALSE;
@@ -229,6 +267,13 @@ JNIEXPORT jint JNICALL JNI_FN(nGetMaxBitDepth)(JNIEnv*, jobject) {
     int depth = Toupcam_get_MaxBitDepth(g_hcam);
     LOGI("getMaxBitDepth -> %d", depth);
     return (depth > 0 && depth <= 32) ? (jint)depth : 8;
+}
+
+JNIEXPORT jstring JNICALL JNI_FN(nGetSerialNumber)(JNIEnv* env, jobject) {
+    char serial[32] = {};
+    if (!g_hcam || FAILED(Toupcam_get_SerialNumber(g_hcam, serial))) return env->NewStringUTF("");
+    serial[31] = '\0';
+    return env->NewStringUTF(serial);
 }
 
 JNIEXPORT jboolean JNICALL JNI_FN(nPutAutoExpoEnable)(JNIEnv*, jobject, jint mode) {

@@ -22,7 +22,10 @@ enum class StackMode { LIVE, PLANETARY }
 enum class StackTaskPhase { EMPTY, READING, READY, ANALYZING, ANALYZED, REGISTERING, STACKING, PROCESSING, EXPORTING, COMPLETE, CANCELLED, FAILED }
 
 data class StackSourceInfo(val file: File, val width: Int, val height: Int, val channels: Int,
-    val bits: Int, val frames: Long, val identity: String, val isBayer: Boolean = false)
+    val bits: Int, val frames: Long, val identity: String, val isBayer: Boolean = false,
+    val headerColorId: Int = 0, val effectiveLayout: String = "MONO",
+    val decodingIdentity: String = identity,
+    val canOverrideCfa: Boolean = true)
 
 data class StackingTaskState(
     val phase: StackTaskPhase = StackTaskPhase.EMPTY,
@@ -76,6 +79,8 @@ class StackingCoordinator(
     val processing = _processing.asStateFlow()
     private val _demosaicAlgorithm = MutableStateFlow(DemosaicAlgorithm.DDFAPD)
     val demosaicAlgorithm = _demosaicAlgorithm.asStateFlow()
+    private val _serCfaInterpretation = MutableStateFlow(SerCfaInterpretation.AUTO)
+    val serCfaInterpretation = _serCfaInterpretation.asStateFlow()
     // Keep only small model statistics in state; full processed float images are not retained.
     private val _backgroundWarning = MutableStateFlow("")
     val backgroundWarning = _backgroundWarning.asStateFlow()
@@ -333,6 +338,26 @@ class StackingCoordinator(
         sourceFile?.let(::loadFile)
     }
 
+    /** Reinterpret raw sensor samples, invalidate scientific products, and rebuild the preview. */
+    fun setSerCfaInterpretation(interpretation: SerCfaInterpretation): Unit = synchronized(stateLock) {
+        if (closed || interpretation == _serCfaInterpretation.value) return
+        if (live.state.value.phase != LiveStackPhase.EMPTY) { report("reset_live_first"); return }
+        if (taskRunning || renderJob != null || calibration.state.value.busy) { report("demosaic_busy"); return }
+        if (_task.value.source?.canOverrideCfa == false && interpretation != SerCfaInterpretation.AUTO) {
+            report("cfa_rgb_not_raw"); return
+        }
+        cancelRenderingLocked()
+        _serCfaInterpretation.value = interpretation
+        analysis?.close(); analysis = null; analysisCalibration = null; analysisDemosaic = null
+        planetaryProduct = null; planetaryPreview = null
+        if (activeMode == StackMode.PLANETARY) _preview.value = null
+        val file = sourceFile
+        _task.update { it.copy(phase = if (file == null) StackTaskPhase.EMPTY else StackTaskPhase.READY,
+            completed = 0, total = 0, histogram = emptyList(), qualityFrames = 0, referenceFrame = 0,
+            stats = null, message = "", exportedFiles = emptyList()) }
+        if (file != null) loadFile(file)
+    }
+
     fun loadFile(file: File) = runTask(StackTaskPhase.READING) {
         ensureOfflineAvailable()
         check(!isSourceBusy(file)) { "recording_active" }
@@ -346,6 +371,7 @@ class StackingCoordinator(
             if (activeMode == StackMode.PLANETARY) _preview.value = null
         }
         _task.value = StackingTaskState(phase = StackTaskPhase.READING, source = retainedSource)
+        sourceFile = file // Retain a chosen file even if Auto cannot understand its CFA declaration.
         source(file).use { source ->
             val info = source.info
             // Keep a validated source selectable when the chosen decoder exceeds the budget
@@ -395,7 +421,16 @@ class StackingCoordinator(
             } ?: error("source_unreadable")
             // Validate the recording before publishing the import, but defer processing
             // budget checks: a valid file may fit a cheaper demosaic algorithm.
-            source(partial).use { }
+            try {
+                source(partial).use { }
+            } catch (failure: IllegalStateException) {
+                if (_serCfaInterpretation.value != SerCfaInterpretation.AUTO || failure.message != "cfa_unknown_header") throw failure
+                // A valid single-sample container with missing CFA metadata can be retained
+                // for the user's explicit choice. This inspection never decodes any pixels.
+                SERReader(partial, endianConvention, SerCfaInterpretation.MONO).use { reader ->
+                    check(reader.open()) { reader.lastError ?: "invalid_source" }
+                }
+            }
             check(partial.renameTo(target)) { "storage_unavailable" }
             analysis?.close(); analysis = null; analysisCalibration = null; analysisDemosaic = null
             planetaryProduct = null
@@ -405,6 +440,7 @@ class StackingCoordinator(
                 if (activeMode == StackMode.PLANETARY) _preview.value = null
             }
             _task.value = StackingTaskState(phase = StackTaskPhase.READING)
+            sourceFile = target
             source(target).use {
                 sourceFile = target
                 _task.value = StackingTaskState(phase = StackTaskPhase.READING, source = it.info)
@@ -432,7 +468,7 @@ class StackingCoordinator(
             val result = engine.analyze(source, options, cache, control())
             try { ensureActive(); analysis = result }
             catch (failure: Throwable) { result.close(); throw failure }
-            analysisIdentity = source.info.identity
+            analysisIdentity = source.info.decodingIdentity
             analysisCalibration = source.calibration
             analysisDemosaic = source.algorithm
             _task.update { it.copy(phase = StackTaskPhase.ANALYZED, source = source.info,
@@ -450,15 +486,19 @@ class StackingCoordinator(
         // allocating another stack. Export and rendering were already joined by runTask.
         planetaryProduct = null
         source(file).use { source ->
-            check(source.info.identity == analysisIdentity) { "source_changed" }
+            check(source.info.decodingIdentity == analysisIdentity) { "source_changed" }
             check(source.calibration === analysisCalibration) { "calibration_changed_analyze_again" }
             check(source.algorithm == analysisDemosaic) { "demosaic_changed_analyze_again" }
             val result = engine.stack(source, quality, selection, control())
             ensureActive()
-            check(identity(file) == analysisIdentity) { "source_changed" }
+            check(identity(file) == source.info.identity) { "source_changed" }
             val stats = result.stats.copy(estimatedPeakBytes = result.stats.estimatedPeakBytes + source.processingOverheadBytes)
             val meta = linkedMapOf(
                 "kind" to "planetary", "source" to file.name, "sourceIdentity" to source.info.identity,
+                "decodingIdentity" to source.info.decodingIdentity,
+                "cfaInterpretation" to source.interpretation.name,
+                "headerColorId" to source.info.headerColorId.toString(),
+                "effectiveSensorLayout" to source.info.effectiveLayout,
                 "frameCount" to stats.stackedFrames.toString(), "exposureSeconds" to stats.effectiveExposureSeconds.toString(),
                 "unknownExposureFrames" to stats.framesWithUnknownExposure.toString(),
                 "inputFormat" to "${source.reader.header?.colorId}/${source.info.bits}bit",
@@ -757,12 +797,14 @@ class StackingCoordinator(
     }
 
     private suspend fun CoroutineScope.source(file: File): SerSource =
-        SerSource(file, endianConvention, sampleAlignment, calibration.snapshot(), _demosaicAlgorithm.value) { ensureActive() }
+        SerSource(file, endianConvention, sampleAlignment, calibration.snapshot(), _demosaicAlgorithm.value,
+            _serCfaInterpretation.value) { ensureActive() }
 
     private class SerSource(file: File, endian: SerEndianConvention, alignment: SampleAlignment,
         val calibration: CalibrationSelection, val algorithm: DemosaicAlgorithm,
+        val interpretation: SerCfaInterpretation,
         private val cancelCheck: () -> Unit) : PlanetaryFrameSource {
-        val reader = SERReader(file, endian).apply { sampleAlignment = alignment }
+        val reader = SERReader(file, endian, interpretation).apply { sampleAlignment = alignment }
         private val demosaicWorkspace = DdfapdDemosaicer.Workspace()
         val info: StackSourceInfo
         private val capture: CalibrationCapture
@@ -774,11 +816,15 @@ class StackingCoordinator(
             try {
                 check(reader.open()) { reader.lastError ?: "invalid_source" }
                 val header = reader.header!!
+                geometry = CalibrationGeometry.from(header.width, header.height, reader.sensorFormat, reader.sensorTraits)
+                val fileIdentity = identity(file)
                 info = StackSourceInfo(file, header.width, header.height,
-                    if (header.colorId == 0) 1 else 3, header.pixelDepth, header.frameCount.toLong(), identity(file), reader.sensorFormat.isBayer)
+                    if (reader.sensorFormat.isMono) 1 else 3, header.pixelDepth, header.frameCount.toLong(), fileIdentity,
+                    reader.sensorFormat.isBayer, header.colorId, geometry.layout,
+                    interpretation.decodingIdentity(fileIdentity, endian.name, alignment.name, algorithm.name),
+                    header.colorId in 0..99)
                 capture = if (calibration.enabled) CalibrationCoordinator.recordingCapture(file)
                     else runCatching { CalibrationCoordinator.recordingCapture(file) }.getOrDefault(CalibrationCapture())
-                geometry = CalibrationGeometry.from(header.width, header.height, reader.sensorFormat, reader.sensorTraits)
                 calibration.validate(geometry, capture)
                 calibrationOverheadBytes = calibration.memoryBytes + if (calibration.enabled) geometry.sampleCount * 4L else 0L
                 demosaicScratchBytes = LinearPixelDecoder.demosaicExtraBytes(header.width, header.height, reader.sensorFormat, algorithm)
