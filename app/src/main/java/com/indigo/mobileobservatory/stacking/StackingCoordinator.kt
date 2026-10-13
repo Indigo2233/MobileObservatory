@@ -116,6 +116,8 @@ class StackingCoordinator(
     @Volatile private var liveCalibration = CalibrationSelection()
     @Volatile private var liveCalibrationWarnings: List<String> = emptyList()
     @Volatile private var liveDemosaicScratchBytes = 0L
+    private val liveDemosaicWorkspace = DdfapdDemosaicer.Workspace()
+    private val backgroundModelCache = BackgroundModelCache()
     val live: LiveStackSession = LiveStackSession(
         scope = scienceScope,
         engineFactory = { LiveDeepSkyEngine(memoryBudgetBytes - liveCalibration.memoryBytes - liveDemosaicScratchBytes) },
@@ -131,7 +133,7 @@ class StackingCoordinator(
             val sensor = LinearPixelDecoder.decodeSensor(frame, traits, cancelCheck = cancelCheck)
             val geometry = CalibrationGeometry.from(frame.width, frame.height, frame.pixelFormat, traits)
             val calibrated = fixedCalibration.apply(sensor, geometry, liveCapture(key), cancelCheck)
-            val decoded = LinearPixelDecoder.demosaicSensor(calibrated, frame.pixelFormat, traits, key.demosaicAlgorithm, cancelCheck)
+            val decoded = LinearPixelDecoder.demosaicSensor(calibrated, frame.pixelFormat, traits, key.demosaicAlgorithm, liveDemosaicWorkspace, cancelCheck)
             LinearPixelDecoder.bin(decoded, key.softwareBin)
         },
         onSnapshot = { snapshot -> synchronized(stateLock) {
@@ -142,11 +144,13 @@ class StackingCoordinator(
                 _livePreview.value = null
                 if (activeMode == StackMode.LIVE) _preview.value = null
             } else if (snapshot.state.generation == liveGeneration()) {
+                val imageChanged = liveProduct?.image !== snapshot.image
                 liveProduct = StackProduct(snapshot.image, snapshot.weights, liveMetadata(snapshot))
-                if (activeMode == StackMode.LIVE) scheduleRender(StackMode.LIVE, replaceRunning = false)
+                if (imageChanged && activeMode == StackMode.LIVE) scheduleRender(StackMode.LIVE, replaceRunning = false)
             }
         } },
-        nativeHeapBytes = { Debug.getNativeHeapAllocatedSize() }
+        nativeHeapBytes = { Debug.getNativeHeapAllocatedSize() },
+        onWorkerReset = liveDemosaicWorkspace::release
     )
 
     val calibration = CalibrationCoordinator(app, scienceScope, stateLock, memoryBudgetBytes,
@@ -250,6 +254,7 @@ class StackingCoordinator(
     fun acceptFrame(frame: FrameData, key: StackSessionKey) { live.offer(frame, key) }
     fun resetLive() = synchronized(stateLock) {
         cancelRenderingLocked()
+        backgroundModelCache.clear()
         if (pendingAutoStretchMode == StackMode.LIVE) pendingAutoStretchMode = null
         liveAutoStretchEligible = true
         live.reset()
@@ -337,8 +342,8 @@ class StackingCoordinator(
             _task.value = StackingTaskState(phase = StackTaskPhase.READING, source = info)
             checkBudget(source)
             val first = source.readFrame(0)
-            val processed = StackPostProcessor.process(first, StackProcessingParameters.preset(ProcessingPreset.NATURAL)) { !isActive }
-            val bitmap = StackBitmap.create(processed.image, 1280) { ensureActive() }
+            val processed = StackPostProcessor.prepare(first, StackProcessingParameters.preset(ProcessingPreset.NATURAL), backgroundModelCache) { !isActive }
+            val bitmap = StackBitmap.create(processed, 1280) { ensureActive() }
             publishPlanetaryPreview(bitmap)
             sourceFile = file
             _task.value = StackingTaskState(phase = StackTaskPhase.READY, source = info)
@@ -393,8 +398,8 @@ class StackingCoordinator(
                 _task.value = StackingTaskState(phase = StackTaskPhase.READING, source = it.info)
                 checkBudget(it)
                 val first = it.readFrame(0)
-                val processed = StackPostProcessor.process(first, StackProcessingParameters.preset(ProcessingPreset.NATURAL)) { !isActive }
-                publishPlanetaryPreview(StackBitmap.create(processed.image, 1280) { ensureActive() })
+                val processed = StackPostProcessor.prepare(first, StackProcessingParameters.preset(ProcessingPreset.NATURAL), backgroundModelCache) { !isActive }
+                publishPlanetaryPreview(StackBitmap.create(processed, 1280) { ensureActive() })
                 sourceFile = target
                 _task.value = StackingTaskState(phase = StackTaskPhase.READY, source = it.info)
             }
@@ -468,6 +473,7 @@ class StackingCoordinator(
     }
 
     fun clearPlanetary() = runTask(StackTaskPhase.EMPTY) {
+        backgroundModelCache.clear()
         analysis?.close(); analysis = null
         analysisCalibration = null
         analysisDemosaic = null
@@ -496,7 +502,7 @@ class StackingCoordinator(
         runTask(StackTaskPhase.EXPORTING) {
             // The immutable snapshot and recipe are captured together before the export starts.
             // Live accumulation may continue; these arrays belong to this completed snapshot.
-            val processed = StackPostProcessor.process(snapshot.image, parameters) { !isActive }
+            val processed = StackPostProcessor.prepare(snapshot.image, parameters, backgroundModelCache) { !isActive }
             val root = app.getExternalFilesDir("captures") ?: error("storage_unavailable")
             val fitsDir = File(root, "FITS").also { check(it.isDirectory || it.mkdirs()) }
             val pngDir = File(root, "JPG").also { check(it.isDirectory || it.mkdirs()) }
@@ -521,7 +527,7 @@ class StackingCoordinator(
                 StackFitsWriter.write(fits, snapshot.image, metadata) { ensureActive() }
                 created += fits
                 _task.update { it.copy(completed = 1, total = 3) }
-                val bitmap = StackBitmap.create(processed.image) { ensureActive() }
+                val bitmap = StackBitmap.create(processed) { ensureActive() }
                 try {
                     temporaryPng.outputStream().use { output -> check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) { "png_failed" } }
                 } finally { bitmap.recycle() }
@@ -627,9 +633,9 @@ class StackingCoordinator(
                     }
                     estimated ?: p
                 }
-                val result = StackPostProcessor.process(snapshot.image, effective) { !isActive || serial != renderSerial }
+                val result = StackPostProcessor.prepare(snapshot.image, effective, backgroundModelCache) { !isActive || serial != renderSerial }
                 ensureActive()
-                val bitmap = StackBitmap.create(result.image, 1280) { ensureActive() }
+                val bitmap = StackBitmap.create(result, 1280) { ensureActive() }
                 synchronized(stateLock) {
                     if (!closed && foreground && serial == renderSerial && activeMode == mode &&
                         (mode != StackMode.LIVE || liveEpoch == liveGeneration())) {
@@ -745,6 +751,7 @@ class StackingCoordinator(
         val calibration: CalibrationSelection, val algorithm: DemosaicAlgorithm,
         private val cancelCheck: () -> Unit) : PlanetaryFrameSource {
         val reader = SERReader(file, endian).apply { sampleAlignment = alignment }
+        private val demosaicWorkspace = DdfapdDemosaicer.Workspace()
         val info: StackSourceInfo
         private val capture: CalibrationCapture
         private val geometry: CalibrationGeometry
@@ -774,14 +781,14 @@ class StackingCoordinator(
             cancelCheck()
             val sensor = reader.readSensorFrame(index.toInt(), cancelCheck = cancelCheck) ?: error(reader.lastError ?: "read_failed")
             return LinearPixelDecoder.demosaicSensor(calibration.apply(sensor, geometry, capture, cancelCheck),
-                reader.sensorFormat, reader.sensorTraits, algorithm, cancelCheck)
+                reader.sensorFormat, reader.sensorTraits, algorithm, demosaicWorkspace, cancelCheck)
         }
         override fun exposureSeconds(index: Long): Double = capture.exposureUs?.div(1_000_000.0) ?: 0.0
         fun calibrationMetadata() = calibration.metadata() + mapOf(
             "calibrationWorkingBytes" to calibrationOverheadBytes.toString(),
             "calibrationUnknownSettings" to JSONArray(calibration.unknownWarnings(geometry, capture)).toString()
         )
-        override fun close() = reader.close()
+        override fun close() { try { reader.close() } finally { demosaicWorkspace.release() } }
     }
 
     private fun liveMetadata(snapshot: LiveStackSnapshot): Map<String, String> {
@@ -795,7 +802,7 @@ class StackingCoordinator(
             "frameCount" to s.accepted.toString(), "exposureSeconds" to s.exposureSeconds.toString(),
             "received" to s.received.toString(), "rejected" to s.rejected.toString(), "queueDropped" to s.dropped.toString(),
             "registrationRmsPx" to s.rmsPixels.toString(), "rotationDegrees" to s.rotationDegrees.toString(),
-            "stars" to s.stars.toString(), "exposureSource" to "locked_camera_exposure_per_completed_callback",
+            "stars" to s.stars.toString(), "exposureSource" to "verified_acquisition_generation",
             "javaPeakBytes" to s.javaPeakBytes.toString(), "nativePeakBytes" to s.nativePeakBytes.toString()
         )
     }
@@ -807,6 +814,7 @@ class StackingCoordinator(
             foreground = false
             cancelRenderingLocked()
             taskJob?.cancel()
+            backgroundModelCache.clear()
             calibration.close()
             live.close()
             liveProduct = null; planetaryProduct = null; planetaryPreview = null

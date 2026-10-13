@@ -17,6 +17,49 @@ import kotlin.math.abs
  * the asymmetric direction-cost kernel instead uses zero extension, matching the reference.
  */
 object DdfapdDemosaicer {
+    /** Scratch belongs to one science worker/session. Never share it between concurrent calls.
+     * Same dimensions reuse all five arrays; a dimension change drops the previous arrays.
+     * [release] must run on the owning worker after processing, never from a UI reset callback.
+     * Returned RGB images are independently owned and are never retained by this workspace.
+     */
+    class Workspace {
+        private var buffers: Buffers? = null
+        private var inUse = false
+        private var allocations = 0L
+
+        /** Primitive-array payload retained; object/header overhead is covered by [extraBytes]. */
+        val scratchBytes: Long @Synchronized get() = buffers?.let { it.width.toLong() * it.height * 33L } ?: 0L
+        /** Cumulative scratch-array allocations, useful for verifying steady-state reuse. */
+        val arrayAllocations: Long @Synchronized get() = allocations
+
+        @Synchronized internal fun acquire(width: Int, height: Int): Buffers {
+            check(!inUse) { "DDFAPD workspace is already in use" }
+            if (buffers?.width != width || buffers?.height != height) {
+                // Release the old full-frame allocation before allocating a different geometry.
+                buffers = null
+                buffers = Buffers(width, height)
+                allocations += 5
+            }
+            inUse = true
+            return checkNotNull(buffers)
+        }
+
+        @Synchronized internal fun finish() { inUse = false }
+
+        @Synchronized fun release() {
+            check(!inUse) { "Cannot release DDFAPD workspace while processing" }
+            buffers = null
+        }
+    }
+
+    internal class Buffers(val width: Int, val height: Int) {
+        val horizontal = DoubleArray(width * height)
+        val vertical = DoubleArray(width * height)
+        val deltaH = DoubleArray(width * height)
+        val deltaV = DoubleArray(width * height)
+        val direction = ByteArray(width * height)
+    }
+
     /** Four Double planes and one Byte direction plane; excludes input and returned RGB. */
     fun extraBytes(width: Int, height: Int): Long {
         require(width > 0 && height > 0)
@@ -24,17 +67,32 @@ object DdfapdDemosaicer {
     }
 
     fun demosaic(src: FloatArray, width: Int, height: Int, redX: Int, redY: Int,
-                 cancelCheck: () -> Unit = {}): LinearImage {
+                 cancelCheck: () -> Unit = {}): LinearImage =
+        demosaic(src, width, height, redX, redY, Workspace(), cancelCheck)
+
+    fun demosaic(src: FloatArray, width: Int, height: Int, redX: Int, redY: Int,
+                 workspace: Workspace, cancelCheck: () -> Unit = {}): LinearImage {
         require(width >= 2 && height >= 2) { "A Bayer image needs at least 2 x 2 pixels" }
         require(width.toLong() * height <= LinearImage.MAX_PIXELS && width.toLong() * height == src.size.toLong())
         require(redX in 0..1 && redY in 0..1)
         cancelCheck()
+        val buffers = workspace.acquire(width, height)
+        try {
+            return reconstruct(src, width, height, redX, redY, buffers, cancelCheck)
+        } finally {
+            // Cancellation or invalid samples may leave partial scratch, but never lock reuse.
+            workspace.finish()
+        }
+    }
+
+    private fun reconstruct(src: FloatArray, width: Int, height: Int, redX: Int, redY: Int,
+                            buffers: Buffers, cancelCheck: () -> Unit): LinearImage {
         val count = src.size
-        val horizontal = DoubleArray(count)
-        val vertical = DoubleArray(count)
-        val deltaH = DoubleArray(count)
-        val deltaV = DoubleArray(count)
-        val direction = ByteArray(count) // 1 = horizontal, including equal-cost ties.
+        val horizontal = buffers.horizontal
+        val vertical = buffers.vertical
+        val deltaH = buffers.deltaH
+        val deltaV = buffers.deltaV
+        val direction = buffers.direction // 1 = horizontal, including equal-cost ties.
         val rgb = FloatArray(count * 3)
 
         // Five-tap green interpolation h0 + h1, then C = R-G or B-G.
@@ -47,7 +105,13 @@ object DdfapdDemosaicer {
                 require(value.isFinite()) { "Non-finite Bayer sample" }
                 val colour = colour(x, y, redX, redY)
                 rgb[p * 3 + colour] = src[p]
-                if (colour == 1) continue
+                if (colour == 1) {
+                    // Every element is initialized on every invocation, also after cancellation.
+                    // A fresh allocation used to provide these zero decision-plane samples.
+                    horizontal[p] = 0.0
+                    vertical[p] = 0.0
+                    continue
+                }
                 val gh = .5 * (sample(src,width,height,x-1,y) + sample(src,width,height,x+1,y)) +
                     .5 * value - .25 * (sample(src,width,height,x-2,y) + sample(src,width,height,x+2,y))
                 val gv = .5 * (sample(src,width,height,x,y-1) + sample(src,width,height,x,y+1)) +

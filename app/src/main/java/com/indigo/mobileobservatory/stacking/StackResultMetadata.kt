@@ -52,7 +52,7 @@ object StackResultMetadata {
         )
     }
 
-    fun processing(result: ProcessedStack): JSONObject = JSONObject().apply {
+    fun processing(result: StackProcessingResult): JSONObject = JSONObject().apply {
         put("parameters", parameters(result.parameters))
         put("whiteBalanceGains", JSONArray(result.whiteBalanceGains))
         put("elapsedMs", result.elapsedMs)

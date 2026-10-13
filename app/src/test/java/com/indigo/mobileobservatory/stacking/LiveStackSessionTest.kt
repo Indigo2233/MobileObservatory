@@ -22,6 +22,7 @@ class LiveStackSessionTest {
         val samples = Collections.synchronizedList(mutableListOf<Float>())
         val exposures = Collections.synchronizedList(mutableListOf<Double>())
         var mean = 0f
+        var snapshotCopies = 0
         override fun add(image: LinearImage, exposureSeconds: Double, cancelled: () -> Boolean): LiveFrameOutcome {
             beforeAdd()
             if (cancelled()) throw java.util.concurrent.CancellationException()
@@ -30,8 +31,53 @@ class LiveStackSessionTest {
             if (accepted) { exposures += exposureSeconds; mean = exposures.size.let { n -> mean + (image.pixels[0] - mean) / n } }
             return LiveFrameOutcome(accepted, if (accepted) 8 else 0, .11, .25, if (accepted) "" else "too_few_stars")
         }
-        override fun snapshot(state: LiveStackState) = if (exposures.isEmpty()) null else
-            LiveStackSnapshot(LinearImage(2, 2, 1, FloatArray(4) { mean }), FloatArray(4) { exposures.size.toFloat() }, state)
+        override fun snapshot(state: LiveStackState): LiveStackSnapshot? {
+            if (exposures.isEmpty()) return null
+            snapshotCopies++
+            return LiveStackSnapshot(LinearImage(2, 2, 1, FloatArray(4) { mean }), FloatArray(4) { exposures.size.toFloat() }, state)
+        }
+    }
+
+    @Test fun repeatedRejectionsShareSnapshotPixelsAndOnlyAcceptedFramesAdvanceImageVersion() = runTest {
+        val engine = Engine()
+        var time = 1_000_000_000L
+        val session = LiveStackSession(this, { engine }, ::decode, {}, nowNanos = { time })
+        try {
+            session.start(key); session.offer(frame(1), key); runCurrent()
+            val first = session.latestSnapshot!!
+            repeat(10) { index ->
+                time += 1_000_000_000L
+                session.offer(frame(index + 2L, 0), key); runCurrent()
+                assertSame(first.image, session.latestSnapshot!!.image)
+                assertSame(first.weights, session.latestSnapshot!!.weights)
+                assertEquals(index + 1L, session.latestSnapshot!!.state.rejected)
+                assertEquals(1L, session.latestSnapshot!!.state.imageVersion)
+            }
+            session.pause(); runCurrent()
+            assertEquals(1, engine.snapshotCopies)
+            assertTrue(session.resume(key))
+            time += 1_000_000_000L
+            session.offer(frame(12, 128), key); runCurrent()
+            assertEquals(2, engine.snapshotCopies)
+            assertEquals(2L, session.latestSnapshot!!.state.imageVersion)
+            assertNotSame(first.image, session.latestSnapshot!!.image)
+            assertTrue(first.image.pixels.all { it == 64f / 255f })
+        } finally { session.close(); runCurrent() }
+    }
+
+    @Test fun rejectedFramePublishesAnyAcceptedPixelsWaitingForThrottle() = runTest {
+        var time = 1_000_000_000L
+        val session = LiveStackSession(this, { Engine() }, ::decode, {}, nowNanos = { time })
+        try {
+            session.start(key); session.offer(frame(1), key); runCurrent()
+            session.offer(frame(2, 128), key); runCurrent()
+            assertEquals(1L, session.latestSnapshot!!.state.imageVersion)
+            time += 1_000_000_000L
+            session.offer(frame(3, 0), key); runCurrent()
+            assertEquals(2L, session.latestSnapshot!!.state.imageVersion)
+            assertEquals(1L, session.latestSnapshot!!.state.rejected)
+            assertEquals(96f / 255f, session.latestSnapshot!!.image.pixels[0], 1e-6f)
+        } finally { session.close(); runCurrent() }
     }
 
     @Test fun ownedCopySurvivesCameraBufferRecyclingAndQueueIsBounded() = runTest {

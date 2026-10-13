@@ -12,6 +12,7 @@ import com.indigo.mobileobservatory.stacking.PixelTraits
 import com.indigo.mobileobservatory.stacking.SampleAlignment
 import com.indigo.mobileobservatory.stacking.DemosaicAlgorithm
 import java.io.File
+import java.io.IOException
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -110,9 +111,7 @@ class SERReader(private val file: File,
             require(colorId == 0 || colorId in 8..11 || colorId == 100 || colorId == 101) {
                 "Unsupported SER color ID: $colorId"
             }
-            require(width > 0 && height > 0 && width.toLong() * height <= LinearImage.MAX_PIXELS) {
-                "Invalid dimensions or image exceeds 16 MP reader limit"
-            }
+            require(width > 0 && height > 0) { "Invalid SER dimensions" }
             require(pixelDepth in 1..16) { "Invalid SER sample depth" }
             require(frameCount > 0) { "SER contains no readable frames" }
             if (isPSER) require(colorId < 100 && pixelDepth in listOf(8, 10, 12, 14, 16)) {
@@ -133,10 +132,10 @@ class SERReader(private val file: File,
             val dateTimeUtc = bb.getLong()
 
             bytesPerFrame = if (isPSER) {
-                (width.toLong() * height * pixelDepth + 7L) / 8L
+                Math.addExact(Math.multiplyExact(width.toLong() * height, pixelDepth.toLong()), 7L) / 8L
             } else {
                 val bpp = if (pixelDepth > 8) 2 else 1
-                width.toLong() * height * bpp * if (colorId >= 100) 3 else 1
+                Math.multiplyExact(width.toLong() * height, (bpp * if (colorId >= 100) 3 else 1).toLong())
             }
             require(bytesPerFrame in 1..Int.MAX_VALUE.toLong()) { "Frame allocation exceeds addressable memory" }
             val dataEnd = Math.addExact(HEADER_SIZE.toLong(), Math.multiplyExact(bytesPerFrame, frameCount.toLong()))
@@ -168,6 +167,11 @@ class SERReader(private val file: File,
         val r = raf ?: return null
         val h = header ?: return null
         if (index < 0 || index >= h.frameCount) return null
+        // Header inspection and streaming playback support larger sensors. A caller asking
+        // for a complete byte array still has the previous full-frame allocation ceiling.
+        require(h.width.toLong() * h.height <= LinearImage.MAX_PIXELS) {
+            "Full frame exceeds 16 MP raw buffer limit; use readPreviewFrame for playback"
+        }
 
         return try {
             val offset = frameOffset(index)
@@ -187,6 +191,57 @@ class SERReader(private val file: File,
         val h = checkNotNull(header) { "Reader is closed" }
         require(index in 0 until h.frameCount)
         return Math.addExact(HEADER_SIZE.toLong(), Math.multiplyExact(bytesPerFrame, index.toLong()))
+    }
+
+    /** Bounded display sampling, independent of the full-resolution scientific input budget. */
+    fun readPreviewFrame(index: Int, maxPixels: Int = SERPreviewDecoder.DEFAULT_PIXELS,
+                         cancelCheck: () -> Unit = {}): LinearImage? {
+        val r = raf ?: return null
+        val h = header ?: return null
+        if (index !in 0 until h.frameCount) return null
+        return synchronized(r) {
+            cancelCheck()
+            if (raf !== r || header !== h) return@synchronized null
+            val size = if (h.isPSER) (h.width.toLong()*h.height*h.pixelDepth+7L)/8L
+                else h.width.toLong()*h.height*(if (h.pixelDepth > 8) 2 else 1)*(if (h.colorId >= 100) 3 else 1)
+            try {
+                SERPreviewDecoder.read(r,h,Math.addExact(HEADER_SIZE.toLong(),Math.multiplyExact(size,index.toLong())),size,
+                    pixelByteOrder(h) == ByteOrder.LITTLE_ENDIAN,sampleAlignment,maxPixels,cancelCheck)
+            } catch (e: IOException) {
+                lastError = e.message ?: "Could not read SER preview"
+                Log.w(TAG,"Failed to read preview frame $index: ${e.message}")
+                null
+            }
+        }
+    }
+
+    /** The player's only file-to-bitmap path; large source frames are never materialized. */
+    fun readPreviewBitmap(index: Int, maxPixels: Int = SERPreviewDecoder.DEFAULT_PIXELS,
+                          cancelCheck: () -> Unit = {}): Bitmap? {
+        val h = header ?: return null
+        val image = readPreviewFrame(index,maxPixels,cancelCheck) ?: return null
+        val pixels = IntArray(image.pixelCount)
+        var low = 0f; var high = 1f
+        if (h.colorId < 100) {
+            low = Float.POSITIVE_INFINITY; high = Float.NEGATIVE_INFINITY
+            for (i in image.pixels.indices) {
+                if (i % 16384 == 0) cancelCheck()
+                low = minOf(low,image.pixels[i]); high = maxOf(high,image.pixels[i])
+            }
+        }
+        val range = (high-low).coerceAtLeast(1f/65535f)
+        fun display(value: Float) = ((value-low)*255f/range).toInt().coerceIn(0,255)
+        for (i in pixels.indices) {
+            if (i % 16384 == 0) cancelCheck()
+            val p = i*image.channels
+            val red = display(image.pixels[p])
+            val green = if (image.channels == 3) display(image.pixels[p+1]) else red
+            val blue = if (image.channels == 3) display(image.pixels[p+2]) else red
+            pixels[i] = -0x1000000 or (red shl 16) or (green shl 8) or blue
+        }
+        if (lp750Enabled && h.colorId in 8..11) applyLp750ToPixels(pixels,cancelCheck)
+        cancelCheck()
+        return Bitmap.createBitmap(pixels,image.width,image.height,Bitmap.Config.ARGB_8888)
     }
 
     fun readTimestamp(index: Int): Long? {
@@ -253,8 +308,7 @@ class SERReader(private val file: File,
             validBits = h.pixelDepth, channelOrder = if (h.colorId == 101) ChannelOrder.BGR else ChannelOrder.RGB)
     }
 
-    private fun pixelByteOrder(): ByteOrder {
-        val h = checkNotNull(header)
+    private fun pixelByteOrder(h: SERHeader = checkNotNull(header)): ByteOrder {
         val little = h.isPSER || if (endianConvention == SerEndianConvention.COMPATIBILITY) {
             h.littleEndianFlag == 0
         } else h.littleEndianFlag == 1
@@ -354,7 +408,7 @@ class SERReader(private val file: File,
         }
     }
 
-    private fun applyLp750ToPixels(pixels: IntArray) {
+    private fun applyLp750ToPixels(pixels: IntArray, cancelCheck: () -> Unit = {}) {
         if (pixels.isEmpty()) return
         val step = (pixels.size / 10000).coerceAtLeast(1)
         var sumR = 0f; var sumG = 0f; var sumB = 0f; var count = 0
@@ -368,6 +422,7 @@ class SERReader(private val file: File,
         if (count == 0) return
         val gains = ImageUtils.lp750WhiteBalanceGains(sumR / count, sumG / count, sumB / count)
         for (i in pixels.indices) {
+            if (i % 16384 == 0) cancelCheck()
             val p = pixels[i]
             val converted = ImageUtils.lp750Matrix(
                 ((p ushr 16) and 0xFF) / 255f,

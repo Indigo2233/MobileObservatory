@@ -219,9 +219,10 @@ private fun LiveStackControls(vm: CameraViewModel, state: LiveStackState, showSt
     val task by c.task.collectAsState()
     val algorithm by c.demosaicAlgorithm.collectAsState()
     val captureFormat by vm.liveStackPixelFormat.collectAsState()
+    val scienceReady by vm.scienceCaptureReady.collectAsState()
     val rendering by c.rendering.collectAsState()
     var readiness by remember { mutableStateOf(vm.liveStackStartIssue()) }
-    LaunchedEffect(vm) { while (true) { readiness = vm.liveStackStartIssue(); delay(500) } }
+    LaunchedEffect(vm, scienceReady) { while (true) { readiness = vm.liveStackStartIssue(); delay(500) } }
     val recording by vm.isRecording.collectAsState()
     val recordedFrames by vm.recordingFrameCount.collectAsState()
     var details by rememberSaveable { mutableStateOf(false) }
@@ -635,6 +636,7 @@ internal fun stackMessage(code: String): String {
         "unknown_science_layout" -> R.string.stack_reason_layout
         "bayer_hardware_bin" -> R.string.stack_reason_binning; "settings_busy", "filter_moving" -> R.string.stack_reason_busy
         "wait_frame" -> R.string.stack_reason_wait; "reset_live_first" -> R.string.stack_reason_reset_live
+        "high_bit_science_required" -> R.string.stack_reason_high_bit_science
         "capture_paused" -> R.string.stack_capture_paused
         "recording_active" -> R.string.stack_recording_excluded
         "auto_stretch_unavailable" -> R.string.stack_auto_stretch_unavailable

@@ -36,6 +36,22 @@ object BackgroundGradient {
     private data class Sample(val x: Double, val y: Double, val values: DoubleArray)
 
     fun correct(image: LinearImage, parameters: BackgroundParameters, cancelled: () -> Boolean = { false }): BackgroundResult {
+        val model = estimate(image,parameters,cancelled)
+        if (!model.applied) return BackgroundResult(image,model)
+        val values = BackgroundPixels(image,model)
+        val out = FloatArray(image.pixels.size)
+        for (y in 0 until image.height) {
+            if (cancelled()) throw CancellationException("Background correction cancelled")
+            for (x in 0 until image.width) for (c in 0 until image.channels) {
+                val p = y*image.width+x
+                out[p*image.channels+c] = values.sample(p,c)
+            }
+        }
+        return BackgroundResult(LinearImage(image.width,image.height,image.channels,out),model)
+    }
+
+    /** Fits/validates only the small model. No corrected image is materialized or retained. */
+    fun estimate(image: LinearImage, parameters: BackgroundParameters, cancelled: () -> Boolean = { false }): BackgroundModel {
         require(parameters.strength.isFinite() && parameters.strength in 0.0..1.0)
         val grid = parameters.gridSize.coerceIn(6, 24)
         val manual = parameters.mode == BackgroundMode.MANUAL
@@ -102,9 +118,9 @@ object BackgroundGradient {
         val before = summary(samples)
         val method = if (manual) "Robust masked quadratic; manual patch medians; positive residual clipping"
             else "Robust masked quadratic; tile 20th percentile; positive residual clipping"
-        fun unchanged(reason: String, coefficients: List<List<Double>> = emptyList(), anchors: List<Double> = emptyList()) = BackgroundResult(image,
+        fun unchanged(reason: String, coefficients: List<List<Double>> = emptyList(), anchors: List<Double> = emptyList()) =
             BackgroundModel(false, reason, grid, samples.size, coefficients, anchors, parameters.strength, before, before, parameters.targetMasks,
-                method, parameters.mode, parameters.sampleRadius, parameters.samplePoints))
+                method, parameters.mode, parameters.sampleRadius, parameters.samplePoints)
         if (!parameters.enabled || parameters.strength == 0.0) return unchanged("DISABLED")
         if (invalidPoints != null) return unchanged(invalidPoints)
         if (samples.size < if (manual) 12 else max(24, grid * grid / 3))
@@ -134,7 +150,6 @@ object BackgroundGradient {
         if (!fitError.isFinite() || fitError > max(.003, before.noise * 3 + before.gridSpread * .18)) return unchanged("IRREGULAR_BACKGROUND_MODEL",coeffList,anchors)
         val extrema = coefficients.flatMap { coef -> (-2..2).flatMap { y -> (-2..2).map { x -> evaluate(coef,x/2.0,y/2.0) } } }
         if (extrema.any { !it.isFinite() } || extrema.maxOrNull()!! - extrema.minOrNull()!! > max(.25,before.gridSpread*3.5)) return unchanged("UNSAFE_MODEL_EXTRAPOLATION",coeffList,anchors)
-        val out = FloatArray(image.pixels.size)
         var belowZero = 0
         for (y in 0 until image.height) {
             if (cancelled()) throw CancellationException("Background correction cancelled")
@@ -144,25 +159,33 @@ object BackgroundGradient {
                 for (c in 0 until image.channels) {
                     val i = (y * image.width + x) * image.channels + c
                     val v = image.pixels[i] - parameters.strength * (evaluate(coefficients[c],nx,ny) - anchors[c])
-                    out[i] = v.toFloat(); if (v < -3*before.noise) belowZero++
+                    if (v < -3*before.noise) belowZero++
                 }
             }
         }
-        if (belowZero > out.size / 50) return unchanged("CORRECTION_WOULD_CRUSH_SHADOWS",coeffList,anchors)
+        if (belowZero > image.pixels.size / 50) return unchanged("CORRECTION_WOULD_CRUSH_SHADOWS",coeffList,anchors)
         val correctedSamples = samples.map { sample -> sample.copy(values = DoubleArray(image.channels) { c -> sample.values[c] - parameters.strength * (evaluate(coefficients[c],sample.x,sample.y)-anchors[c]) }) }
         differences.clear()
-        val correctedImage = LinearImage(image.width,image.height,image.channels,out)
+        // Preserve the previous Float rounding before computing luminance statistics.
+        fun correctedLuminance(p: Int): Double {
+            val nx = 2.0*(p%image.width+.5)/image.width-1
+            val ny = 2.0*(p/image.width+.5)/image.height-1
+            fun value(c: Int) = (image.pixels[p*image.channels+c]-parameters.strength*
+                (evaluate(coefficients[c],nx,ny)-anchors[c])).toFloat()
+            return if (image.channels == 1) value(0).toDouble()
+                else value(0)*.2126+value(1)*.7152+value(2)*.0722
+        }
         val noiseStride = max(1,sqrt(image.width.toDouble()*image.height/12000).toInt())
         for (y in 0 until image.height step noiseStride) for(x in 0 until image.width-1 step noiseStride) {
             if(parameters.targetMasks.any { it.contains(x.toDouble()/image.width,y.toDouble()/image.height) }) continue
             val p=y*image.width+x
-            differences+=abs(StarRegistration.luminance(correctedImage,p)-StarRegistration.luminance(correctedImage,p+1))
+            differences+=abs(correctedLuminance(p)-correctedLuminance(p+1))
         }
         val after = summary(correctedSamples)
-        return BackgroundResult(correctedImage, BackgroundModel(true,
+        return BackgroundModel(true,
             if (manual) "APPLIED_MANUAL_BACKGROUND" else "APPLIED_MASK_LARGE_NEBULAE_MANUALLY",
             grid,selected.size,coeffList,anchors,parameters.strength,before,after,parameters.targetMasks,
-            method,parameters.mode,parameters.sampleRadius,parameters.samplePoints))
+            method,parameters.mode,parameters.sampleRadius,parameters.samplePoints)
     }
 
     private fun validatePoints(image: LinearImage, parameters: BackgroundParameters): String? {
@@ -211,5 +234,60 @@ object BackgroundGradient {
             for (r in 0..5) if (r != i) { val f = matrix[r][i]; for (j in i..6) matrix[r][j] -= f*matrix[i][j] }
         }
         return DoubleArray(6) { matrix[it][6] }
+    }
+}
+
+/** An immutable-image view applying a validated model on demand, with identical Float rounding. */
+internal class BackgroundPixels(val image: LinearImage, model: BackgroundModel?) {
+    private val coefficients = model?.takeIf { it.applied }?.coefficients?.map { it.toDoubleArray() }
+    private val anchors = model?.channelAnchors
+    private val strength = model?.strength ?: 0.0
+    val hasCorrection: Boolean get() = coefficients != null
+    fun sample(p: Int,c: Int): Float {
+        if (coefficients == null) return image.pixels[p*image.channels+c]
+        val x = 2.0*(p%image.width+.5)/image.width-1
+        val y = 2.0*(p/image.width+.5)/image.height-1
+        return sample(p,c,x,y)
+    }
+    /** Reuse one pixel's coordinates across RGB without changing arithmetic or Float rounding. */
+    fun sample(p: Int,c: Int,x: Double,y: Double): Float {
+        val value = image.pixels[p*image.channels+c]
+        val coef = coefficients?.get(c) ?: return value
+        val background = coef[0]+coef[1]*x+coef[2]*y+coef[3]*x*x+coef[4]*x*y+coef[5]*y*y
+        return (value-strength*(background-anchors!![c])).toFloat()
+    }
+    fun luminance(p: Int): Double = if (image.channels == 1) sample(p,0).toDouble()
+        else sample(p,0)*.2126+sample(p,1)*.7152+sample(p,2)*.0722
+}
+
+/** One small model per immutable image identity and recipe; no full-image output cache.
+ * The weak key does not extend the lifetime of discarded live snapshots. */
+class BackgroundModelCache {
+    private var imageRef = java.lang.ref.WeakReference<LinearImage>(null)
+    private var parameters: BackgroundParameters? = null
+    private var cached: BackgroundModel? = null
+    private var generation = 0L
+    @Volatile var fitCount: Long = 0L
+        private set
+
+    fun clear() = synchronized(this) { generation++; imageRef.clear(); parameters = null; cached = null }
+
+    fun model(image: LinearImage, requested: BackgroundParameters, cancelled: () -> Boolean = { false }): BackgroundModel {
+        if (cancelled()) throw CancellationException("Background model cancelled")
+        // Freeze list contents so later edits cannot mutate the stored cache key.
+        val key = requested.copy(targetMasks=requested.targetMasks.toList(),samplePoints=requested.samplePoints.toList())
+        val startedGeneration = synchronized(this) {
+            if (imageRef.get() === image && parameters == key) cached?.let { return it }
+            generation
+        }
+        val result = BackgroundGradient.estimate(image,key,cancelled)
+        if (cancelled()) throw CancellationException("Background model cancelled")
+        synchronized(this) {
+            if (generation == startedGeneration) {
+                imageRef = java.lang.ref.WeakReference(image); parameters = key; cached = result
+            }
+            fitCount++
+        }
+        return result
     }
 }

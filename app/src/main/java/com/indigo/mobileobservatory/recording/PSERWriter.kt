@@ -122,11 +122,12 @@ class PSERWriter(private val file: File) {
 
     fun close() {
         val r = raf ?: return
-        writeTimestampTrailer(r)
-        updateFrameCount(r)
-        r.close()
         raf = null
         packBuffer = null
+        r.use {
+            writeTimestampTrailer(it)
+            updateFrameCount(it)
+        }
     }
 
     val isOpen: Boolean get() = raf != null

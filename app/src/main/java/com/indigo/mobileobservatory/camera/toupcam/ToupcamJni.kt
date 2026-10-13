@@ -21,7 +21,7 @@ object ToupcamJni {
     const val OPTION_TECTARGET_RANGE = 0x6d
     const val OPTION_CG = 0x19
     const val OPTION_LOW_NOISE = 0x38
-    const val OPTION_FLUSH = 0x3f
+    const val OPTION_FLUSH = 0x3d
 
     const val PIXELFORMAT_RAW8 = 0x00
     const val PIXELFORMAT_RAW10 = 0x01
@@ -92,7 +92,7 @@ object ToupcamJni {
     fun open(fd: Int, vid: Int, pid: Int): Boolean = nOpen(fd, vid, pid)
     fun close() = nClose()
     fun startPull(callback: NativeEventCallback): Boolean = nStartPull(callback)
-    fun stop() = nStop()
+    fun stop(): Boolean = nStop()
 
     fun pullImageRaw(buf: ByteArray, bits: Int): Int = nPullImageRaw(buf, bits)
 
@@ -144,7 +144,7 @@ object ToupcamJni {
     private external fun nOpen(fd: Int, vid: Int, pid: Int): Boolean
     private external fun nClose()
     private external fun nStartPull(callback: NativeEventCallback): Boolean
-    private external fun nStop()
+    private external fun nStop(): Boolean
     private external fun nPullImageRaw(buf: ByteArray, bits: Int): Int
     private external fun nGetSize(): IntArray
     private external fun nPutSize(w: Int, h: Int): Boolean

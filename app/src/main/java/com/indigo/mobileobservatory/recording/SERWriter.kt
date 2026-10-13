@@ -116,10 +116,11 @@ class SERWriter(private val file: File) {
 
     fun close() {
         val r = raf ?: return
-        writeTimestampTrailer(r)
-        updateFrameCount(r)
-        r.close()
         raf = null
+        r.use {
+            writeTimestampTrailer(it)
+            updateFrameCount(it)
+        }
     }
 
     val isOpen: Boolean get() = raf != null

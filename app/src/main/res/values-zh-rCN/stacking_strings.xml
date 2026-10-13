@@ -113,6 +113,7 @@
     <string name="stack_reason_binning">偶数硬件 binning 后的 Bayer 相位未知。请使用 bin 1 或已验证的单色/RGB 输出。</string>
     <string name="stack_reason_busy">请等待相机设置或滤镜移动完成</string>
     <string name="stack_reason_wait">正在等待相机首帧</string>
+    <string name="stack_reason_high_bit_science">请切换到 16 位相机格式，再开始叠加</string>
     <string name="stack_reason_reset_live">请先保存并重置实时叠加会话，再进行离线处理</string>
     <string name="stack_reason_reset_offline">请先完成或清空离线工作区，再开始实时叠加</string>
     <string name="stack_reason_storage">存储空间不足，请清理空间后重试。</string>

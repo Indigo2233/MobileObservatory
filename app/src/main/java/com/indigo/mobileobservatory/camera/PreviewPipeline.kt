@@ -6,12 +6,14 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** A rendered preview frame. Sequence forces StateFlow emission for a reused Bitmap. */
 data class PreviewFrame(
@@ -32,100 +34,129 @@ data class PreviewPerformanceStats(
 
 /**
  * Owns preview backpressure, rendering cadence, and performance measurements.
- * Producers never block: when rendering falls behind, only the newest frame survives.
+ * Producers never wait for conversion: when rendering falls behind, only the newest frame survives.
  */
-class PreviewPipeline(
+class PreviewPipeline internal constructor(
     private val scope: CoroutineScope,
-    private val processor: FrameProcessor,
+    private val renderFrame: (FrameData) -> Bitmap,
     targetFps: Int
 ) {
+    constructor(scope: CoroutineScope, processor: FrameProcessor, targetFps: Int) :
+        this(scope, processor::frameToBitmap, targetFps)
+
     private val frameIntervalMs = (1_000L / targetFps.coerceIn(1, 60)).coerceAtLeast(1L)
+    private val lifecycleLock = Any()
+    // A cancelled waiting successor must not allow a third worker to overtake a still
+    // converting predecessor. FrameProcessor owns reusable, non-thread-safe buffers.
+    private val rendererMutex = Mutex()
     private val latestFrame = LatestFrameSlot<FrameData>()
     private val _frame = MutableStateFlow<PreviewFrame?>(null)
     private val _performance = MutableStateFlow(PreviewPerformanceStats())
-    private val acceptingFrames = AtomicBoolean(false)
-    @Volatile private var recycleBuffer: (ByteArray) -> Unit = {}
+    private var acceptingFrames = false
+    private var generation = 0L
+    private var recycleBuffer: (ByteArray) -> Unit = {}
     private var renderJob: Job? = null
 
     val frame: StateFlow<PreviewFrame?> = _frame.asStateFlow()
     val performance: StateFlow<PreviewPerformanceStats> = _performance.asStateFlow()
 
     fun submit(frame: FrameData) {
-        if (!acceptingFrames.get()) {
-            releaseFrame(frame, recycleBuffer)
-            return
+        val discarded: FrameData?
+        val recycler: (ByteArray) -> Unit
+        synchronized(lifecycleLock) {
+            discarded = if (acceptingFrames) latestFrame.offer(frame) else frame
+            recycler = recycleBuffer
         }
-        latestFrame.offer(frame)?.let { releaseFrame(it, recycleBuffer) }
-        if (!acceptingFrames.get()) {
-            latestFrame.clear()?.let { releaseFrame(it, recycleBuffer) }
-        }
+        discarded?.let { releaseFrame(it, recycler) }
     }
 
     fun start(
         paused: () -> Boolean = { false },
         onProcessed: (FrameData) -> Unit = {},
         recycleBuffer: (ByteArray) -> Unit = {}
-    ) {
-        stop(clearFrame = false)
+    ) = synchronized(lifecycleLock) {
+        stopLocked(clearFrame = false)
+        val predecessor = renderJob
         this.recycleBuffer = recycleBuffer
-        acceptingFrames.set(true)
+        acceptingFrames = true
+        val sessionGeneration = generation
         val sessionRecycler = recycleBuffer
         renderJob = scope.launch(Dispatchers.Default) {
-            var sequence = _frame.value?.sequence ?: 0L
-            var rendered = 0L
-            var processingNanos = 0L
-            var sampleRendered = 0L
-            var sampleStartedNanos = System.nanoTime()
-            while (isActive) {
-                val iterationStarted = System.nanoTime()
-                if (!paused()) {
-                    val source = latestFrame.takeLatest()
-                    if (source != null) {
-                        try {
-                            val processingStarted = System.nanoTime()
-                            val bitmap = processor.frameToBitmap(source)
-                            processingNanos += System.nanoTime() - processingStarted
-                            rendered++
-                            sampleRendered++
-                            sequence++
-                            _frame.value = PreviewFrame(bitmap, sequence)
-                            onProcessed(source)
-                        } catch (oom: OutOfMemoryError) {
-                            android.util.Log.e("PreviewPipeline", "OOM rendering ${source.width}x${source.height}", oom)
-                        } finally {
-                            releaseFrame(source, sessionRecycler)
+            predecessor?.join()
+            rendererMutex.withLock {
+                ensureActive()
+                var sequence = _frame.value?.sequence ?: 0L
+                var rendered = 0L
+                var processingNanos = 0L
+                var sampleRendered = 0L
+                var sampleStartedNanos = System.nanoTime()
+                while (isActive) {
+                    val iterationStarted = System.nanoTime()
+                    if (!paused()) {
+                        val source = synchronized(lifecycleLock) {
+                            if (isActive && generation == sessionGeneration) latestFrame.takeLatest() else null
+                        }
+                        if (source != null) {
+                            try {
+                                val processingStarted = System.nanoTime()
+                                val bitmap = renderFrame(source)
+                                ensureActive()
+                                processingNanos += System.nanoTime() - processingStarted
+                                synchronized(lifecycleLock) {
+                                    if (isActive && generation == sessionGeneration) {
+                                        rendered++
+                                        sampleRendered++
+                                        sequence++
+                                        _frame.value = PreviewFrame(bitmap, sequence)
+                                        onProcessed(source)
+                                    }
+                                }
+                            } catch (oom: OutOfMemoryError) {
+                                android.util.Log.e("PreviewPipeline", "OOM rendering ${source.width}x${source.height}", oom)
+                            } finally {
+                                releaseFrame(source, sessionRecycler)
+                            }
                         }
                     }
-                }
 
-                val now = System.nanoTime()
-                val sampleNanos = now - sampleStartedNanos
-                if (sampleNanos >= STATS_INTERVAL_NANOS) {
-                    _performance.value = PreviewPerformanceStats(
-                        receivedFrames = latestFrame.received,
-                        renderedFrames = rendered,
-                        droppedFrames = latestFrame.dropped,
-                        averageProcessingMs = if (rendered == 0L) 0.0 else
-                            processingNanos.toDouble() / rendered / 1_000_000.0,
-                        renderedFps = sampleRendered * 1_000_000_000.0 / sampleNanos,
-                        nativeHeapBytes = Debug.getNativeHeapAllocatedSize(),
-                        javaHeapBytes = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory(),
-                        gcCount = Debug.getRuntimeStats()["art.gc.gc-count"]?.toIntOrNull() ?: 0
-                    )
-                    sampleRendered = 0L
-                    sampleStartedNanos = now
-                }
+                    val now = System.nanoTime()
+                    val sampleNanos = now - sampleStartedNanos
+                    if (sampleNanos >= STATS_INTERVAL_NANOS) {
+                        val stats = PreviewPerformanceStats(
+                            receivedFrames = latestFrame.received,
+                            renderedFrames = rendered,
+                            droppedFrames = latestFrame.dropped,
+                            averageProcessingMs = if (rendered == 0L) 0.0 else
+                                processingNanos.toDouble() / rendered / 1_000_000.0,
+                            renderedFps = sampleRendered * 1_000_000_000.0 / sampleNanos,
+                            nativeHeapBytes = Debug.getNativeHeapAllocatedSize(),
+                            javaHeapBytes = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory(),
+                            gcCount = Debug.getRuntimeStats()["art.gc.gc-count"]?.toIntOrNull() ?: 0
+                        )
+                        synchronized(lifecycleLock) {
+                            if (isActive && generation == sessionGeneration) _performance.value = stats
+                        }
+                        sampleRendered = 0L
+                        sampleStartedNanos = now
+                    }
 
-                val elapsedMs = (System.nanoTime() - iterationStarted) / 1_000_000L
-                delay((frameIntervalMs - elapsedMs).coerceAtLeast(1L))
+                    val elapsedMs = (System.nanoTime() - iterationStarted) / 1_000_000L
+                    delay((frameIntervalMs - elapsedMs).coerceAtLeast(1L))
+                }
             }
         }
     }
 
-    fun stop(clearFrame: Boolean = true) {
-        acceptingFrames.set(false)
+    fun stop(clearFrame: Boolean = true) = synchronized(lifecycleLock) {
+        stopLocked(clearFrame)
+    }
+
+    private fun stopLocked(clearFrame: Boolean) {
+        generation++
+        acceptingFrames = false
         renderJob?.cancel()
-        renderJob = null
+        // Keep the predecessor until its synchronous conversion has returned. stop()
+        // remains non-blocking, while the next worker waits before reusing its buffers.
         latestFrame.clear()?.let { releaseFrame(it, recycleBuffer) }
         recycleBuffer = {}
         if (clearFrame) _frame.value = null

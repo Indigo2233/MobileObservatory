@@ -577,13 +577,10 @@ private fun PlaybackView(
                 withContext(Dispatchers.Main) {
                     totalFrames = reader.header?.frameCount ?: 0
                 }
-                val data = reader.readFrame(0)
-                if (data != null) {
-                    val bmp = reader.frameToBitmap(data)
-                    if (bmp != null) {
-                        withContext(Dispatchers.Main) {
-                            bitmap = bmp
-                        }
+                val bmp = reader.readPreviewBitmap(0) { ensureActive() }
+                if (bmp != null) {
+                    withContext(Dispatchers.Main) {
+                        if (!readerClosed) bitmap = bmp
                     }
                 }
             }
@@ -625,9 +622,7 @@ private fun PlaybackView(
         seekJob = scope.launch(Dispatchers.IO) {
             if (readerClosed) return@launch
             try {
-                val data = reader.readFrame(f) ?: return@launch
-                if (readerClosed || !isActive) return@launch
-                val bmp = reader.frameToBitmap(data) ?: return@launch
+                val bmp = reader.readPreviewBitmap(f) { ensureActive() } ?: return@launch
                 if (readerClosed || !isActive) return@launch
                 withContext(Dispatchers.Main) {
                     if (!readerClosed) bitmap = bmp
@@ -682,13 +677,12 @@ private fun PlaybackView(
                         }
 
                         val renderStart = System.currentTimeMillis()
-                        val data = withContext(Dispatchers.IO) {
-                            if (readerClosed) null else reader.readFrame(nextFrame)
+                        val bmp = withContext(Dispatchers.IO) {
+                            if (readerClosed) null else reader.readPreviewBitmap(nextFrame) { ensureActive() }
                         }
-                        if (data != null && !readerClosed) {
-                            val bmp = withContext(Dispatchers.IO) { reader.frameToBitmap(data) }
-                            if (bmp != null) {
-                                withContext(Dispatchers.Main) {
+                        if (bmp != null && !readerClosed) {
+                            withContext(Dispatchers.Main) {
+                                if (!readerClosed) {
                                     currentFrame = nextFrame
                                     bitmap = bmp
                                 }

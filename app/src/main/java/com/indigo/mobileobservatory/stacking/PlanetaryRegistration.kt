@@ -70,9 +70,20 @@ class PlanetaryRegistration(
         return result
     }
 
-    fun align(image: LinearImage): PlanetaryAlignment {
+    /** Owned luminance snapshot for one frame. Share it across registration and edge checks,
+     * then release it; no frame/image-identity cache survives into the next iteration. */
+    internal class PreparedFrame internal constructor(internal val pixels: FloatArray, internal val owner: PlanetaryRegistration)
+
+    internal fun prepareFrame(image: LinearImage): PreparedFrame {
         require(image.width == width && image.height == height && image.channels == reference.channels)
-        val src = PlanetarySampling.plane(image, checkCancelled)
+        return PreparedFrame(PlanetarySampling.plane(image, checkCancelled),this)
+    }
+
+    fun align(image: LinearImage): PlanetaryAlignment = align(prepareFrame(image))
+
+    internal fun align(frame: PreparedFrame): PlanetaryAlignment {
+        require(frame.owner === this) { "Prepared frame belongs to another registration" }
+        val src = frame.pixels
         val currentCenter = center(src)
         val startX = (currentCenter.first - referenceCenter.first).coerceIn(-options.maxGlobalShift.toDouble(), options.maxGlobalShift.toDouble())
         val startY = (currentCenter.second - referenceCenter.second).coerceIn(-options.maxGlobalShift.toDouble(), options.maxGlobalShift.toDouble())
@@ -106,8 +117,11 @@ class PlanetaryRegistration(
     }
 
     /** Strong limb/detail edges are checked after local warping; a split edge can have deceptively high NCC. */
-    internal fun edgeResidual(image: LinearImage, warp: PlanetaryWarp): Double {
-        val src = PlanetarySampling.plane(image, checkCancelled)
+    internal fun edgeResidual(image: LinearImage, warp: PlanetaryWarp): Double = edgeResidual(prepareFrame(image),warp)
+
+    internal fun edgeResidual(frame: PreparedFrame, warp: PlanetaryWarp): Double {
+        require(frame.owner === this) { "Prepared frame belongs to another registration" }
+        val src = frame.pixels
         val step = max(1, min(roi.width, roi.height) / 128)
         var peakGradient = 0.0
         for (y in max(roi.top, 1) until min(roi.bottom, height - 1) step step) {

@@ -30,6 +30,15 @@ object LinearPixelDecoder {
                cancelCheck: () -> Unit = {}): LinearImage =
         demosaicSensor(decodeSensor(frame, traits, maxPixels, cancelCheck), frame.pixelFormat, traits, algorithm, cancelCheck)
 
+    /** Session-owned DDFAPD scratch; input decoding and returned RGB remain independently owned. */
+    fun decode(frame: FrameData, traits: PixelTraits = PixelTraits(),
+               maxPixels: Long = LinearImage.DEFAULT_STACK_PIXELS,
+               algorithm: DemosaicAlgorithm = DemosaicAlgorithm.BILINEAR,
+               workspace: DdfapdDemosaicer.Workspace,
+               cancelCheck: () -> Unit = {}): LinearImage =
+        demosaicSensor(decodeSensor(frame, traits, maxPixels, cancelCheck), frame.pixelFormat, traits,
+            algorithm, workspace, cancelCheck)
+
     /** Owned sensor samples before demosaic/resampling: CFA is one channel, RGB is interleaved. */
     fun decodeSensor(frame: FrameData, traits: PixelTraits = PixelTraits(),
                      maxPixels: Long = LinearImage.DEFAULT_STACK_PIXELS,
@@ -85,7 +94,19 @@ object LinearPixelDecoder {
     /** Call after sensor-space calibration. Negative calibrated samples are deliberately retained. */
     fun demosaicSensor(sensor: LinearImage, format: PixelFormat, traits: PixelTraits = PixelTraits(),
                        algorithm: DemosaicAlgorithm = DemosaicAlgorithm.BILINEAR,
-                       cancelCheck: () -> Unit = {}): LinearImage {
+                       cancelCheck: () -> Unit = {}): LinearImage =
+        demosaicSensorImpl(sensor, format, traits, algorithm, null, cancelCheck)
+
+    /** Reuses scratch only for DDFAPD. The caller releases it when its worker/session ends. */
+    fun demosaicSensor(sensor: LinearImage, format: PixelFormat, traits: PixelTraits = PixelTraits(),
+                       algorithm: DemosaicAlgorithm = DemosaicAlgorithm.BILINEAR,
+                       workspace: DdfapdDemosaicer.Workspace,
+                       cancelCheck: () -> Unit = {}): LinearImage =
+        demosaicSensorImpl(sensor, format, traits, algorithm, workspace, cancelCheck)
+
+    private fun demosaicSensorImpl(sensor: LinearImage, format: PixelFormat, traits: PixelTraits,
+                                  algorithm: DemosaicAlgorithm, workspace: DdfapdDemosaicer.Workspace?,
+                                  cancelCheck: () -> Unit): LinearImage {
         cancelCheck()
         require(sensor.channels == if (format.isRgb) 3 else 1) { "Sensor channel layout does not match its format" }
         require(traits.binning > 0 && traits.roiX >= 0 && traits.roiY >= 0)
@@ -100,7 +121,9 @@ object LinearPixelDecoder {
         return when (algorithm) {
             DemosaicAlgorithm.BILINEAR -> debayer(sensor.pixels, sensor.width, sensor.height, redX, redY, cancelCheck)
             DemosaicAlgorithm.VNG -> VngDemosaicer.demosaic(sensor.pixels, sensor.width, sensor.height, redX, redY, cancelCheck)
-            DemosaicAlgorithm.DDFAPD -> DdfapdDemosaicer.demosaic(sensor.pixels, sensor.width, sensor.height, redX, redY, cancelCheck)
+            DemosaicAlgorithm.DDFAPD -> if (workspace == null)
+                DdfapdDemosaicer.demosaic(sensor.pixels, sensor.width, sensor.height, redX, redY, cancelCheck)
+            else DdfapdDemosaicer.demosaic(sensor.pixels, sensor.width, sensor.height, redX, redY, workspace, cancelCheck)
         }
     }
 

@@ -80,7 +80,9 @@ data class FrameData(
     val height: Int,
     val pixelFormat: PixelFormat,
     val frameId: Long,
-    val timestamp: Long
+    val timestamp: Long,
+    /** Fixed when the adapter's acquisition run starts, including delayed delivery slots. */
+    val captureGeneration: Long? = null
 ) {
     val bytesPerPixel: Int get() = pixelFormat.bytesPerPixel
     override fun equals(other: Any?): Boolean {

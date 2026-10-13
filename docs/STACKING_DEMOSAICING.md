@@ -102,7 +102,11 @@ measured 14.79 ms bilinear, 41.33 ms VNG and 35.33 ms DDFAPD. These are desktop
 measurements, not Android frame-rate or thermal claims.
 Reference scripts and tests are development-only dependencies.
 
-## Integration acceptance (2026-10-13)
+## Integration acceptance (2026-10-13, historical b081540)
+
+The following records the original demosaicing acceptance. The current APK,
+expanded tests and allocation changes are documented in
+[the correctness/performance follow-up](STACKING_REVIEW_PERFORMANCE.md).
 
 - JVM: **658 tests**, zero failures, errors or skipped tests.
 - Android 14 API 34 x86_64 emulator: **32 stacking/media/calibration/UI tests**,

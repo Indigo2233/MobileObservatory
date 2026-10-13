@@ -70,6 +70,14 @@ interface Camera {
      * is supplied by the session; a sensor CFA uses bayerPatternAtOutput=false.
      */
     val sciencePixelTraits: PixelTraits? get() = null
+    /** Verified acquisition run, not a per-frame exposure measurement. Null after any
+     * science-setting write or failed read-back; restart capture before scientific use.
+     * FrameData.captureGeneration must match this token and a run-bound settings snapshot.
+     */
+    val scienceCaptureGeneration: Long? get() = null
+
+    /** This adapter currently needs a high-bit single-frame path to verify capture provenance. */
+    val requiresHighBitScienceCapture: Boolean get() = false
 }
 
 enum class DslrStillFormat { JPEG, RAW, JPEG_PLUS_RAW }

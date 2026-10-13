@@ -113,6 +113,7 @@
     <string name="stack_reason_binning">Bayer phase is unknown after even hardware binning. Use bin 1 or a verified mono/RGB output.</string>
     <string name="stack_reason_busy">Wait for camera settings or filter motion to finish</string>
     <string name="stack_reason_wait">Waiting for the first camera frame</string>
+    <string name="stack_reason_high_bit_science">Select a 16-bit camera format to stack with verified exposure</string>
     <string name="stack_reason_reset_live">Save and reset the live session before offline processing</string>
     <string name="stack_reason_reset_offline">Finish or clear the offline workspace before starting live stacking</string>
     <string name="stack_reason_storage">Not enough storage. Free space and retry.</string>

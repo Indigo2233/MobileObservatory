@@ -9,8 +9,9 @@ import java.nio.ByteOrder
 
 /** Canonical scientific recording bytes, before SER/PSER serialization.
  *
- * Input belongs to the camera (or its callback-owned copy); output ALWAYS owns an independent
- * buffer. Geometry is unchanged. Samples are right-aligned, little-endian and RGB ordered.
+ * The default API returns an independent buffer. The recording queue may explicitly normalize
+ * its exclusively owned copy in place; SDK/preview buffers must never use that API. Geometry is
+ * unchanged. Samples are right-aligned, little-endian and RGB ordered.
  * CFA remains a mosaic: only its descriptor is shifted to the actual ROI origin. There is no
  * demosaic, white balance, display stretch or spatial binning here.
  */
@@ -35,6 +36,20 @@ object RawRecordingNormalizer {
     }
 
     fun normalize(frame: FrameData, traits: PixelTraits): FrameData {
+        return convert(frame, traits, null)
+    }
+
+    /** Reuse caller-owned destination storage; it must not alias the camera's input array. */
+    fun normalizeInto(frame: FrameData, traits: PixelTraits, destination: ByteArray): FrameData {
+        require(destination !== frame.data) { "Use normalizeOwnedInPlace only for an exclusively owned buffer" }
+        return convert(frame, traits, destination)
+    }
+
+    /** Mutates only the queue's exclusively owned copy. No frame-sized allocation or scratch.
+     * A failed conversion leaves this owned copy unusable and it must be discarded. */
+    fun normalizeOwnedInPlace(frame: FrameData, traits: PixelTraits): FrameData = convert(frame, traits, frame.data)
+
+    private fun convert(frame: FrameData, traits: PixelTraits, destinationBuffer: ByteArray?): FrameData {
         val outputFormat = canonicalFormat(frame.pixelFormat, traits)
         require(frame.width > 0 && frame.height > 0) { "Invalid raw recording dimensions" }
         val pixels = frame.width.toLong() * frame.height
@@ -49,9 +64,14 @@ object RawRecordingNormalizer {
         val maximum = (1 shl bits) - 1
         val outputMaximum = (1 shl outputFormat.nativeBits) - 1
         val shift = if (traits.alignment == SampleAlignment.LEFT) inputSampleBytes * 8 - bits else 0
-        val output = ByteArray((pixels * outputFormat.bytesPerPixel).toInt())
+        val outputBytes = (pixels * outputFormat.bytesPerPixel).toInt()
+        val output = destinationBuffer ?: ByteArray(outputBytes)
+        require(output.size >= outputBytes) { "Raw recording destination is too small" }
+        // The only container-size change is 16 -> 8 bit mono/CFA. Forward traversal can
+        // compact that case safely because each source sample is read before it is overwritten.
+        require(output !== frame.data || outputSampleBytes <= inputSampleBytes)
         val little = traits.byteOrder == ByteOrder.LITTLE_ENDIAN
-        for (index in 0 until pixels.toInt() * channels) {
+        fun readCanonical(index: Int): Int {
             val source = index * inputSampleBytes
             val a = frame.data[source].toInt() and 255
             val container = if (inputSampleBytes == 1) a else {
@@ -62,13 +82,29 @@ object RawRecordingNormalizer {
             require(value <= maximum) { "Raw sample exceeds explicit camera bit depth; recording stopped" }
             // RGB has only 8/16-bit descriptors. Expand lesser sensor depths to its declared range;
             // this mapping is monotone/injective and does not discard any original sensor code.
-            val canonical = if (maximum == outputMaximum) value else
+            return if (maximum == outputMaximum) value else
                 ((value.toLong() * outputMaximum + maximum / 2) / maximum).toInt()
-            val destinationSample = if (channels == 3 && traits.channelOrder == ChannelOrder.BGR)
-                index / 3 * 3 + 2 - index % 3 else index
-            val destination = destinationSample * outputSampleBytes
+        }
+        fun writeCanonical(index: Int, canonical: Int) {
+            val destination = index * outputSampleBytes
             output[destination] = canonical.toByte()
             if (outputSampleBytes == 2) output[destination + 1] = (canonical ushr 8).toByte()
+        }
+        if (channels == 1) {
+            for (index in 0 until pixels.toInt()) writeCanonical(index, readCanonical(index))
+        } else {
+            val bgr = traits.channelOrder == ChannelOrder.BGR
+            for (pixel in 0 until pixels.toInt()) {
+                val index = pixel * 3
+                // Capture all channels first: swapping R/B in the same array must not destroy
+                // the original first channel before it is written into the final channel.
+                val first = readCanonical(index)
+                val green = readCanonical(index + 1)
+                val last = readCanonical(index + 2)
+                writeCanonical(index, if (bgr) last else first)
+                writeCanonical(index + 1, green)
+                writeCanonical(index + 2, if (bgr) first else last)
+            }
         }
         return frame.copy(data = output, pixelFormat = outputFormat)
     }

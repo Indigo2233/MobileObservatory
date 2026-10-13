@@ -18,6 +18,9 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
     CameraEnvironmentControlCapable, CameraBinningCapable, CoolingCapable {
 
     override val sciencePixelTraits get() = if (scienceRoiVerified) CameraScienceLayouts.zwo(currentPixelFormat) else null
+    private val captureGeneration = CaptureGeneration()
+    override val scienceCaptureGeneration get() = captureGeneration.scienceGeneration
+    private var captureStopFailed = false
 
     companion object {
         private const val TAG = "ZwoAsiCam"
@@ -238,6 +241,7 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
                 pixelSizeUm = pixelSize.toFloat().takeIf { it > 0f }
             )
 
+            captureStopFailed = false
             _isOpen.value = true
             startTempPolling()
             FileLogger.i(
@@ -270,10 +274,29 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
         FileLogger.i(TAG, "Camera closed")
     }
 
-    override fun startCapture(callback: FrameCallback) {
+    @Synchronized override fun startCapture(callback: FrameCallback) {
         val cam = zwoCamera ?: return
         if (!_isOpen.value) return
+        if (running.get() || captureThread?.isAlive == true || captureStopFailed) {
+            FileLogger.w(TAG, "Cannot start while the previous capture has not stopped")
+            return
+        }
+        val verified = runCatching {
+            val exposureControl = cam.getControlValue(ASI_EXPOSURE)
+            val gainControl = cam.getControlValue(ASI_GAIN)
+            val exposure = asiLong(exposureControl)?.toFloat()
+            val gain = asiLong(gainControl)?.toFloat()
+            if (exposureControl?.extraBoolVal1 != false || gainControl?.extraBoolVal1 != false ||
+                exposure == null || exposure !in exposureRange.min..hwExposureMaxUs ||
+                gain == null || gain !in gainRange.min..gainRange.max) false
+            else { currentExposureUs = exposure; currentGain = gain; true }
+        }.getOrDefault(false)
         frameCallback = callback
+
+        val imageBytes = ZwoSdk.captureDirectBufferBytes(currentRoi.width, currentRoi.height, currentPixelFormat.bytesPerPixel)
+        val grabBytes = ZwoSdk.captureGrabBufferBytes(currentRoi.width, currentRoi.height, currentPixelFormat.bytesPerPixel)
+        // Reused by the reader after startup; do not allocate another full native frame for draining.
+        val startupBuffer = ASIImageBuffer.allocate(grabBytes)
 
         val ret = cam.startVideoCapture()
         if (ret?.intVal != ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
@@ -286,10 +309,21 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
                 "imgType=$currentImgType exp=${currentExposureUs.toInt()}us"
         )
 
+        val startup = CaptureStartupBarrier()
+        val drained = startup.drain {
+            startupBuffer.getmByteBuffer().clear()
+            when (cam.getVideoData(startupBuffer, imageBytes, 0)?.intVal) {
+                ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS -> CaptureStartupBarrier.Read.BUFFERED_FRAME
+                ASIConstants.ASI_ERROR_CODE.ASI_ERROR_TIMEOUT -> CaptureStartupBarrier.Read.EMPTY
+                else -> CaptureStartupBarrier.Read.FAILED
+            }
+        }
+        if (!drained) FileLogger.w(TAG, "Startup queue freshness unverified; preview only")
+        val generation = captureGeneration.begin(verified && drained)
         running.set(true)
         captureThread = Thread({
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY)
-            captureLoop()
+            captureLoop(generation, callback, startupBuffer, startup)
         }, "ZwoAsiCapture").apply {
             priority = Thread.MAX_PRIORITY
             start()
@@ -299,28 +333,35 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
         FileLogger.i(TAG, "Capture started")
     }
 
-    override fun stopCapture() {
-        if (!_isCapturing.value) return
+    @Synchronized override fun stopCapture() {
+        captureGeneration.stop()
+        if (!_isCapturing.value && captureThread?.isAlive != true && !captureStopFailed) return
         running.set(false)
-        captureThread?.join(3000)
-        captureThread = null
-
-        zwoCamera?.stopVideoCapture()
-        bufferPool.clear()
         _isCapturing.value = false
         frameCallback = null
+        // Stop the SDK first so a long blocking read can return before joining its thread.
+        captureStopFailed = runCatching {
+            zwoCamera?.stopVideoCapture()?.intVal != ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS
+        }.getOrDefault(true)
+        val thread = captureThread
+        if (thread !== Thread.currentThread()) thread?.join(3000)
+        if (thread?.isAlive != true) captureThread = null
+        bufferPool.clear()
         FileLogger.i(TAG, "Capture stopped")
     }
 
-    override fun setExposureTime(us: Float) {
+    @Synchronized override fun setExposureTime(us: Float) {
+        captureGeneration.invalidateScience()
         val cam = zwoCamera ?: return
         val clamped = us.coerceIn(exposureRange.min, hwExposureMaxUs)
-        currentExposureUs = clamped
-        cam.setControlValue(ASI_EXPOSURE, clamped.toLong(), 0)
+        if (cam.setControlValue(ASI_EXPOSURE, clamped.toLong(), 0) != ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) return
+        currentExposureUs = asiLong(cam.getControlValue(ASI_EXPOSURE))?.toFloat()
+            ?.takeIf { it in exposureRange.min..hwExposureMaxUs } ?: clamped
         FileLogger.i(TAG, "SetExposure: ${clamped.toInt()} us")
     }
 
-    override fun setGain(value: Float) {
+    @Synchronized override fun setGain(value: Float) {
+        captureGeneration.invalidateScience()
         val cam = zwoCamera ?: return
         val gain = GainValueNormalizer.normalize(gainCapability, value)
         val result = cam.setControlValue(ASI_GAIN, gain.roundToLong(), 0)
@@ -345,7 +386,8 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
             currentGain + GainConversions.zwoStopsToNative(stops)
         )
 
-    override fun setOffset(value: Float) {
+    @Synchronized override fun setOffset(value: Float) {
+        captureGeneration.invalidateScience()
         val cam = zwoCamera ?: return
         if (!offsetSupported) return
         val clamped = value.roundToLong().coerceIn(offsetRange.min.toLong(), offsetRange.max.toLong())
@@ -532,12 +574,14 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
         }
     }
 
-    override fun setPixelFormat(format: PixelFormat) {
+    @Synchronized override fun setPixelFormat(format: PixelFormat) {
+        captureGeneration.invalidateScience()
         if (format == currentPixelFormat) return
         val cam = zwoCamera ?: return
         val wasCapturing = _isCapturing.value
         val cb = frameCallback
         if (wasCapturing) stopCapture()
+        if (captureThread?.isAlive == true || captureStopFailed) return
 
         val imgType = pixelFormatToAsiImgType(format)
         val roiFmt = cam.getROIFormat()
@@ -560,11 +604,13 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
         if (wasCapturing && cb != null) startCapture(cb)
     }
 
-    override fun setRoi(roi: Roi) {
+    @Synchronized override fun setRoi(roi: Roi) {
+        captureGeneration.invalidateScience()
         val cam = zwoCamera ?: return
         val wasCapturing = _isCapturing.value
         val cb = frameCallback
         if (wasCapturing) stopCapture()
+        if (captureThread?.isAlive == true || captureStopFailed) return
 
         val reqW = roi.width.coerceIn(roiMinWidth, sensorW / currentBin)
         val reqH = roi.height.coerceIn(roiMinHeight, sensorH / currentBin)
@@ -589,19 +635,22 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
         if (wasCapturing && cb != null) startCapture(cb)
     }
 
-    override fun resetRoi() {
+    @Synchronized override fun resetRoi() {
+        captureGeneration.invalidateScience()
         val maxW = sensorW / currentBin
         val maxH = sensorH / currentBin
         setRoi(Roi(0, 0, maxW, maxH))
     }
 
-    override fun setHardwareBin(bin: Int): Boolean {
+    @Synchronized override fun setHardwareBin(bin: Int): Boolean {
+        captureGeneration.invalidateScience()
         val cam = zwoCamera ?: return false
         val b = if (bin in supportedHardwareBins) bin else return false
         if (b == currentBin) return true
         val wasCapturing = _isCapturing.value
         val cb = frameCallback
         if (wasCapturing) stopCapture()
+        if (captureThread?.isAlive == true || captureStopFailed) return false
         val previous = currentBin
         val applied = try {
             enableHardwareBinControl(cam, b > 1)
@@ -752,17 +801,18 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
         return if (pooled != null && pooled.size == size) pooled else ByteArray(size)
     }
 
-    private fun captureLoop() {
+    private fun captureLoop(generation: Long, callback: FrameCallback, startupBuffer: ASIImageBuffer,
+                            startup: CaptureStartupBarrier) {
         val cam = zwoCamera ?: return
         var frameSeq = 0L
-        var bufCapacity = 0
-        var imgBuf: ASIImageBuffer? = null
+        var bufCapacity = startupBuffer.getmByteBuffer().capacity()
+        var imgBuf: ASIImageBuffer? = startupBuffer
         var timeouts = 0
         var emptyReturns = 0
         var lastTimeoutLogMs = 0L
         var lastEmptyLogMs = 0L
 
-        while (running.get()) {
+        while (running.get() && captureGeneration.isActive(generation)) {
             try {
                 val w = currentRoi.width
                 val h = currentRoi.height
@@ -780,6 +830,7 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
 
                 val timeoutMs = ZwoSdk.grabTimeoutMs(currentExposureUs, imageBytes)
                 val ret = cam.getVideoData(grabBuf, imageBytes, timeoutMs)
+                if (!captureGeneration.isActive(generation)) break
                 if (ret == null) {
                     emptyReturns++
                     val now = System.currentTimeMillis()
@@ -814,6 +865,7 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
                     continue
                 }
 
+                if (!startup.acceptCompleteFrame()) continue
                 bb.position(0)
                 val outData = getBuffer(imageBytes)
                 bb.get(outData, 0, imageBytes.coerceAtMost(outData.size).coerceAtMost(bb.remaining()))
@@ -831,9 +883,10 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
                     height = h,
                     pixelFormat = pixFmt,
                     frameId = frameSeq,
-                    timestamp = System.currentTimeMillis()
+                    timestamp = System.currentTimeMillis(),
+                    captureGeneration = generation
                 )
-                frameCallback?.onFrame(frame)
+                if (captureGeneration.isActive(generation)) callback.onFrame(frame) else recycleBuffer(outData)
 
             } catch (e: OutOfMemoryError) {
                 FileLogger.e(TAG, "Capture OOM roi=${currentRoi.width}x${currentRoi.height}", e)

@@ -179,15 +179,16 @@ class PlanetaryStacker {
                     val image = if (frame == analysis.referenceFrame) reference else source.readFrame(frame)
                     validateFrame(image, source)
                     control.progress(PlanetaryProgress(PlanetaryPhase.REGISTER, processed, selected))
+                    val prepared = if (frame == analysis.referenceFrame) null else registration.prepareFrame(image)
                     val alignment = if (frame == analysis.referenceFrame) PlanetaryAlignment(
                         PlanetaryShift(0.0, 0.0, 1.0), emptyList(), registration.points.size,
                         if (!options.localAlignment) PlanetaryRegistrationMode.GLOBAL else if (registration.points.size < 3) PlanetaryRegistrationMode.GLOBAL_LOW_TEXTURE else PlanetaryRegistrationMode.MULTIPOINT
-                    ) else registration.align(image)
+                    ) else registration.align(checkNotNull(prepared))
                     var reason = alignment.rejection
                     if (reason == PlanetaryRejection.NONE) {
                         val warp = PlanetaryWarp(source.width, source.height, alignment, control.checkCancelled)
                         if (warp.folded) reason = PlanetaryRejection.FOLDED_WARP
-                        else if (frame != analysis.referenceFrame && registration.edgeResidual(image, warp) > options.maximumEdgeResidual) reason = PlanetaryRejection.EDGE_MISMATCH
+                        else if (prepared != null && registration.edgeResidual(prepared, warp) > options.maximumEdgeResidual) reason = PlanetaryRejection.EDGE_MISMATCH
                         else {
                             control.progress(PlanetaryProgress(PlanetaryPhase.STACK, processed, selected))
                             accumulate(image, sums, weights, warp, control.checkCancelled)

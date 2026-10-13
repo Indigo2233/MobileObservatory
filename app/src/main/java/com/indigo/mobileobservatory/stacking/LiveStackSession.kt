@@ -53,7 +53,8 @@ data class LiveStackState(
     val nativePeakBytes: Long = 0,
     val reason: String = "",
     val key: StackSessionKey? = null,
-    val generation: Long = 0
+    val generation: Long = 0,
+    val imageVersion: Long = 0
 )
 
 /** Immutable owned snapshot: consumers must never mutate image/weight arrays. */
@@ -92,7 +93,8 @@ class LiveStackSession(
     private val nativeHeapBytes: () -> Long = { 0L },
     private val nowNanos: () -> Long = System::nanoTime,
     private val queueCapacity: Int = 2,
-    private val maxInputBytes: Long = 32L * 1024 * 1024
+    private val maxInputBytes: Long = 32L * 1024 * 1024,
+    private val onWorkerReset: () -> Unit = {}
 ) : Closeable {
     private data class Packet(val frame: FrameData, val key: StackSessionKey, val generation: Long)
     private val lock = Any()
@@ -118,6 +120,7 @@ class LiveStackSession(
                     val packet = synchronized(lock) {
                         if (workerEpoch != epoch) {
                             engine = null
+                            onWorkerReset()
                             workerEpoch = epoch
                         }
                         queue.pollFirst()
@@ -130,12 +133,12 @@ class LiveStackSession(
                     // Free the invalidated engine before yielding to an offline job on the
                     // same dispatcher. Otherwise that job could retain both accumulators.
                     synchronized(lock) {
-                        if (workerEpoch != epoch) { engine = null; workerEpoch = epoch }
+                        if (workerEpoch != epoch) { engine = null; onWorkerReset(); workerEpoch = epoch }
                     }
                     // Give snapshot exports and lifecycle work a turn even at a saturated input FPS.
                     yield()
                 }
-            } } finally { engine = null }
+            } } finally { engine = null; onWorkerReset() }
         }
     }
 
@@ -261,6 +264,7 @@ class LiveStackSession(
                 val javaBytes = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()
                 _state.value = old.copy(
                     accepted = old.accepted + if (outcome.accepted) 1 else 0,
+                    imageVersion = old.imageVersion + if (outcome.accepted) 1 else 0,
                     rejected = old.rejected + if (outcome.accepted) 0 else 1,
                     exposureSeconds = old.exposureSeconds + if (outcome.accepted) packet.key.exposureUs / 1_000_000.0 else 0.0,
                     stars = outcome.stars,
@@ -291,7 +295,12 @@ class LiveStackSession(
     private fun publish(generation: Long) {
         val snapshotState = _state.value
         if (generation != epoch || snapshotState.phase == LiveStackPhase.RESET_REQUIRED) return
-        val snapshot = engine?.snapshot(snapshotState) ?: return
+        val previous = latestSnapshot
+        // Rejections change statistics, not accumulated pixels. Keep the immutable arrays
+        // shared and let consumers distinguish statistics from a new image version.
+        val snapshot = if (previous != null && previous.state.generation == generation &&
+            previous.state.imageVersion == snapshotState.imageVersion) previous.copy(state = snapshotState)
+        else engine?.snapshot(snapshotState) ?: return
         synchronized(lock) {
             if (generation != epoch || closed || _state.value.phase == LiveStackPhase.RESET_REQUIRED) return
             latestSnapshot = snapshot
