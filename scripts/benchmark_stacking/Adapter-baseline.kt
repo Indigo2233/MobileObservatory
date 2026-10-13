@@ -5,6 +5,7 @@ import com.indigo.mobileobservatory.recording.RawRecordingNormalizer
 fun normalizeOperation(frame:FrameData,traits:PixelTraits)=RawRecordingNormalizer.normalize(frame,traits)
 fun demosaicOperation(source:FloatArray,width:Int,height:Int):()->LinearImage = { DdfapdDemosaicer.demosaic(source,width,height,0,0) }
 fun decoderOperation():(FrameData)->LinearImage = { LinearPixelDecoder.decode(it,PixelTraits(alignment=SampleAlignment.RIGHT),algorithm=DemosaicAlgorithm.DDFAPD) }
+fun starDetectionOperation(image:LinearImage):()->StarField = { StarRegistration.detect(image) }
 fun registrationOperation(registration:PlanetaryRegistration,image:LinearImage):Double {
     val alignment=registration.align(image)
     val warp=PlanetaryWarp(image.width,image.height,alignment)

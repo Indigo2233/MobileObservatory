@@ -24,6 +24,41 @@ data class PixelTraits(
 )
 
 object LinearPixelDecoder {
+    /** Worker-owned normalized sensor output. Borrowed pixels remain valid until the next
+     * borrowed decode or [release]. Public decode methods retain independent ownership.
+     */
+    class SensorWorkspace {
+        private var buffer: SensorBuffer? = null
+        private var inUse = false
+        private var allocations = 0L
+
+        val retainedBytes: Long @Synchronized get() = buffer?.pixels?.size?.toLong()?.times(4L) ?: 0L
+        val arrayAllocations: Long @Synchronized get() = allocations
+
+        @Synchronized internal fun acquire(width: Int, height: Int, channels: Int): FloatArray {
+            check(!inUse) { "Sensor workspace is already in use" }
+            val current = buffer
+            if (current == null || current.width != width || current.height != height || current.channels != channels) {
+                buffer = null
+                buffer = SensorBuffer(width, height, channels,
+                    FloatArray(Math.multiplyExact(width * height, channels)))
+                allocations++
+            }
+            inUse = true
+            return checkNotNull(buffer).pixels
+        }
+
+        @Synchronized internal fun finish() { inUse = false }
+
+        @Synchronized fun release() {
+            check(!inUse) { "Cannot release sensor workspace while decoding" }
+            buffer = null
+        }
+    }
+
+    private data class SensorBuffer(val width: Int, val height: Int, val channels: Int,
+                                    val pixels: FloatArray)
+
     fun decode(frame: FrameData, traits: PixelTraits = PixelTraits(),
                maxPixels: Long = LinearImage.DEFAULT_STACK_PIXELS,
                algorithm: DemosaicAlgorithm = DemosaicAlgorithm.BILINEAR,
@@ -42,7 +77,19 @@ object LinearPixelDecoder {
     /** Owned sensor samples before demosaic/resampling: CFA is one channel, RGB is interleaved. */
     fun decodeSensor(frame: FrameData, traits: PixelTraits = PixelTraits(),
                      maxPixels: Long = LinearImage.DEFAULT_STACK_PIXELS,
-                     cancelCheck: () -> Unit = {}): LinearImage {
+                     cancelCheck: () -> Unit = {}): LinearImage =
+        decodeSensorImpl(frame, traits, maxPixels, null, cancelCheck)
+
+    /** Returns worker-owned normalized sensor pixels for immediate calibration/demosaic. */
+    internal fun decodeSensorBorrowed(frame: FrameData, traits: PixelTraits = PixelTraits(),
+                                      maxPixels: Long = LinearImage.DEFAULT_STACK_PIXELS,
+                                      workspace: SensorWorkspace,
+                                      cancelCheck: () -> Unit = {}): LinearImage =
+        decodeSensorImpl(frame, traits, maxPixels, workspace, cancelCheck)
+
+    private fun decodeSensorImpl(frame: FrameData, traits: PixelTraits, maxPixels: Long,
+                                 workspace: SensorWorkspace?,
+                                 cancelCheck: () -> Unit): LinearImage {
         cancelCheck()
         require(frame.width > 0 && frame.height > 0)
         val count = frame.width.toLong() * frame.height
@@ -57,6 +104,9 @@ object LinearPixelDecoder {
         require(frame.data.size.toLong() >= count * channels * sampleBytes) { "Truncated raw image" }
         val bits = traits.validBits ?: format.nativeBits
         require(bits in 1..(sampleBytes * 8)) { "Invalid sample depth" }
+        if (format.isBayer && !traits.bayerPatternAtOutput) require(traits.binning % 2 == 1) {
+            "Even Bayer hardware binning needs an explicit output CFA or monochrome format"
+        }
         val max = (1 shl bits) - 1
         fun read(i: Int): Int {
             val a = frame.data[i * sampleBytes].toInt() and 255
@@ -75,20 +125,21 @@ object LinearPixelDecoder {
             }
         }
         val shift = if (alignment == SampleAlignment.LEFT) sampleBytes * 8 - bits else 0
-        val samples = FloatArray(sampleCount)
-        for (i in 0 until sampleCount) {
-            if (i % 16384 == 0) cancelCheck()
-            val value = read(i) ushr shift
-            require(value <= max) { "Sample exceeds declared bit depth; check alignment" }
-            val dest = if (channels == 3 && traits.channelOrder == ChannelOrder.BGR) {
-                (i / 3) * 3 + (2 - i % 3)
-            } else i
-            samples[dest] = value.toFloat() / max
+        val samples = workspace?.acquire(frame.width, frame.height, channels) ?: FloatArray(sampleCount)
+        try {
+            for (i in 0 until sampleCount) {
+                if (i % 16384 == 0) cancelCheck()
+                val value = read(i) ushr shift
+                require(value <= max) { "Sample exceeds declared bit depth; check alignment" }
+                val dest = if (channels == 3 && traits.channelOrder == ChannelOrder.BGR) {
+                    (i / 3) * 3 + (2 - i % 3)
+                } else i
+                samples[dest] = value.toFloat() / max
+            }
+            return LinearImage(frame.width, frame.height, channels, samples)
+        } finally {
+            workspace?.finish()
         }
-        if (format.isBayer && !traits.bayerPatternAtOutput) require(traits.binning % 2 == 1) {
-            "Even Bayer hardware binning needs an explicit output CFA or monochrome format"
-        }
-        return LinearImage(frame.width, frame.height, channels, samples)
     }
 
     /** Call after sensor-space calibration. Negative calibrated samples are deliberately retained. */

@@ -15,12 +15,18 @@ data class DeepSkySnapshot(val image: LinearImage, val weights: FloatArray, val 
  * while reset/close cancels and discards the engine. Previously returned snapshots stay valid.
  */
 class DeepSkyStacker(private val config: DeepSkyConfig = DeepSkyConfig()) {
+    private val starDetectionWorkspace = StarRegistration.Workspace()
     private var reference: StarField? = null
     private var width = 0; private var height = 0; private var channels = 0
     private var mean = FloatArray(0); private var m2 = FloatArray(0); private var weights = FloatArray(0)
     var stats = DeepSkyStats(); private set
 
-    fun reset() { reference = null; width = 0; height = 0; channels = 0; mean = FloatArray(0); m2 = FloatArray(0); weights = FloatArray(0); stats = DeepSkyStats() }
+    fun reset() {
+        reference = null; width = 0; height = 0; channels = 0
+        mean = FloatArray(0); m2 = FloatArray(0); weights = FloatArray(0)
+        starDetectionWorkspace.release()
+        stats = DeepSkyStats()
+    }
 
     fun add(image: LinearImage, exposureSeconds: Double, cancelled: () -> Boolean = { false }): DeepSkyFrameResult {
         val start = System.nanoTime()
@@ -35,7 +41,7 @@ class DeepSkyStacker(private val config: DeepSkyConfig = DeepSkyConfig()) {
         // preview, plus mono detail filters/weights/masks. Fail before allocating accumulation.
         val workingBytes = estimateWorkingBytes(image.width, image.height, image.channels)
         if (workingBytes > config.memoryBudgetBytes) return reject(DeepSkyRejection.MEMORY_BUDGET)
-        val field = StarRegistration.detect(image, cancelled = cancelled)
+        val field = StarRegistration.detect(image, workspace = starDetectionWorkspace, cancelled = cancelled)
         stats = stats.copy(stars = field.stars.size, estimatedWorkingBytes = workingBytes)
         if (field.stars.size < config.minimumStars) return reject(DeepSkyRejection.TOO_FEW_STARS)
         if (field.medianElongation > config.maxElongation) return reject(DeepSkyRejection.TRAILING)

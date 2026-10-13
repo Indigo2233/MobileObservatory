@@ -2,6 +2,7 @@ package com.indigo.mobileobservatory.stacking
 
 import kotlin.math.*
 import java.util.concurrent.CancellationException
+import java.util.Arrays
 
 data class DetectedStar(val x: Double, val y: Double, val flux: Double, val radius: Double, val elongation: Double)
 data class StarField(val stars: List<DetectedStar>, val background: Double, val noise: Double, val medianElongation: Double)
@@ -17,27 +18,80 @@ data class StarMatch(val transform: RigidTransform, val inliers: Int, val rmsPix
 
 /** Pure Kotlin, bounded-star deterministic consensus registration. Operates on linear input. */
 object StarRegistration {
-    fun detect(image: LinearImage, maximumStars: Int = 100, cancelled: () -> Boolean = { false }): StarField {
+    /** Worker-owned primitive median scratch. Detection results never retain these buffers. */
+    internal class Workspace {
+        private val samples = DoubleSamples()
+        private val differences = DoubleSamples()
+        private var inUse = false
+        val retainedBytes: Long @Synchronized get() = samples.bytes+differences.bytes
+        @Synchronized internal fun acquire(): DetectionScratch {
+            check(!inUse) { "Star detection workspace is already in use" }
+            samples.clear(); differences.clear(); inUse = true
+            return DetectionScratch(samples,differences)
+        }
+        @Synchronized internal fun finish() { inUse = false }
+        @Synchronized fun release() {
+            check(!inUse) { "Cannot release star detection workspace while processing" }
+            samples.release(); differences.release()
+        }
+    }
+
+    internal data class DetectionScratch(val samples: DoubleSamples,val differences: DoubleSamples)
+
+    internal class DoubleSamples(initialCapacity: Int = 256) {
+        private var values = DoubleArray(initialCapacity)
+        var size = 0
+            private set
+        val bytes: Long get() = values.size*8L
+        fun clear() { size = 0 }
+        fun add(value: Double) {
+            if (size == values.size) values = values.copyOf(max(256,values.size*2))
+            values[size++] = value
+        }
+        fun median(): Double {
+            if (size == 0) return 0.0
+            Arrays.sort(values,0,size)
+            return if (size%2 == 1) values[size/2] else (values[size/2-1]+values[size/2])/2
+        }
+        fun release() { values = DoubleArray(0); size = 0 }
+    }
+
+    fun detect(image: LinearImage, maximumStars: Int = 100,
+               cancelled: () -> Boolean = { false }): StarField =
+        detect(image,maximumStars,Workspace(),cancelled)
+
+    internal fun detect(image: LinearImage, maximumStars: Int = 100, workspace: Workspace,
+                        cancelled: () -> Boolean = { false }): StarField {
+        val scratch = workspace.acquire()
+        try {
+            return detectImpl(image,maximumStars,scratch,cancelled)
+        } finally {
+            workspace.finish()
+        }
+    }
+
+    private fun detectImpl(image: LinearImage, maximumStars: Int, scratch: DetectionScratch,
+                           cancelled: () -> Boolean): StarField {
         val w = image.width; val h = image.height
         if (w < 16 || h < 16) return StarField(emptyList(), 0.0, 0.0, 1.0)
-        val samples = ArrayList<Double>()
-        val differences = ArrayList<Double>()
+        val samples = scratch.samples
+        val differences = scratch.differences
         val stride = max(1, sqrt(w.toDouble() * h / 12000).toInt())
         for (y in 1 until h - 1 step stride) for (x in 1 until w - 1 step stride) {
             val value = luminance(image, y * w + x)
-            samples += value
-            differences += abs(value - luminance(image, y * w + x + 1))
+            samples.add(value)
+            differences.add(abs(value - luminance(image, y * w + x + 1)))
         }
-        val background = median(samples)
+        val background = samples.median()
         // Median absolute adjacent difference: Gaussian sigma = MAD / (0.67449 sqrt(2)).
-        val noise = max(1.0 / 65535.0, median(differences) / 0.9538726)
+        val noise = max(1.0 / 65535.0, differences.median() / 0.9538726)
         val cell = 48; val gw = (w + cell - 1) / cell; val gh = (h + cell - 1) / cell
         val localBackground = DoubleArray(gw * gh)
         for (gy in 0 until gh) for (gx in 0 until gw) {
             samples.clear()
             for (y in gy * cell until min(h, (gy + 1) * cell) step 3)
-                for (x in gx * cell until min(w, (gx + 1) * cell) step 3) samples += luminance(image, y * w + x)
-            localBackground[gy * gw + gx] = median(samples)
+                for (x in gx * cell until min(w, (gx + 1) * cell) step 3) samples.add(luminance(image, y * w + x))
+            localBackground[gy * gw + gx] = samples.median()
         }
         val candidates = ArrayList<DetectedStar>()
         for (y in 6 until h - 6) for (x in 6 until w - 6) {
@@ -48,8 +102,9 @@ object StarRegistration {
             for (oy in -1..1) for (ox in -1..1) if ((ox != 0 || oy != 0) && luminance(image, (y + oy) * w + x + ox) >= peak) maximum = false
             if (!maximum) continue
             samples.clear()
-            for (oy in -6..6) for (ox in -6..6) if (abs(ox) == 6 || abs(oy) == 6) samples += luminance(image, (y + oy) * w + x + ox)
-            val base = median(samples)
+            for (oy in -6..6) for (ox in -6..6) if (abs(ox) == 6 || abs(oy) == 6)
+                samples.add(luminance(image, (y + oy) * w + x + ox))
+            val base = samples.median()
             var flux = 0.0; var mx = 0.0; var my = 0.0; var neighborMaximum = 0.0
             for (oy in -3..3) for (ox in -3..3) {
                 val signal = max(0.0, luminance(image, (y + oy) * w + x + ox) - base - noise)

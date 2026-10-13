@@ -10,6 +10,7 @@ import org.junit.Test
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.file.Files
+import java.util.concurrent.CancellationException
 
 class CalibrationSensorInputTest {
     private fun frame(values: IntArray, format: PixelFormat, width: Int, height: Int,
@@ -93,5 +94,48 @@ class CalibrationSensorInputTest {
             PixelTraits(ByteOrder.BIG_ENDIAN, SampleAlignment.RIGHT, 16, ChannelOrder.BGR))
         assertArrayEquals(floatArrayOf(100f, 200f, 300f, 400f, 500f, 600f).map { it / 65535f }.toFloatArray(), sensor.pixels, 0f)
         assertSame(sensor, LinearPixelDecoder.demosaicSensor(sensor, PixelFormat.RGB48))
+    }
+
+    @Test fun borrowedSensorDecodeReusesGeometryAndOwnedDecodeRemainsIndependent() {
+        val workspace = LinearPixelDecoder.SensorWorkspace()
+        val traits = PixelTraits(alignment=SampleAlignment.RIGHT,validBits=12)
+        val firstFrame = frame(IntArray(8) { 100+it*17 },PixelFormat.BAYER_RG12,4,2)
+        val secondFrame = frame(IntArray(8) { 3000-it*23 },PixelFormat.BAYER_RG12,4,2)
+        val expectedFirst = LinearPixelDecoder.decodeSensor(firstFrame,traits)
+        val first = LinearPixelDecoder.decodeSensorBorrowed(firstFrame,traits,workspace=workspace)
+        assertArrayEquals(expectedFirst.pixels,first.pixels,0f)
+        val retained = expectedFirst.pixels.copyOf()
+        val second = LinearPixelDecoder.decodeSensorBorrowed(secondFrame,traits,workspace=workspace)
+        assertSame(first.pixels,second.pixels)
+        assertEquals(1L,workspace.arrayAllocations)
+        assertEquals(8*4L,workspace.retainedBytes)
+        assertArrayEquals(retained,expectedFirst.pixels,0f)
+
+        val changed = LinearPixelDecoder.decodeSensorBorrowed(
+            frame(IntArray(8) { it },PixelFormat.BAYER_RG12,2,4),traits,workspace=workspace)
+        assertNotSame(first.pixels,changed.pixels)
+        assertEquals(2L,workspace.arrayAllocations)
+        workspace.release()
+        assertEquals(0L,workspace.retainedBytes)
+    }
+
+    @Test fun cancelledAndInvalidBorrowedSensorDecodeRemainReusable() {
+        val workspace = LinearPixelDecoder.SensorWorkspace()
+        val traits = PixelTraits(alignment=SampleAlignment.RIGHT,validBits=12)
+        val valid = frame(IntArray(8) { 100+it },PixelFormat.BAYER_RG12,4,2)
+        var checks = 0
+        assertThrows(CancellationException::class.java) {
+            LinearPixelDecoder.decodeSensorBorrowed(valid,traits,workspace=workspace) {
+                if (++checks == 2) throw CancellationException("decode")
+            }
+        }
+        val invalid = frame(IntArray(8) { if (it == 4) 4096 else 100 },PixelFormat.BAYER_RG12,4,2)
+        assertThrows(IllegalArgumentException::class.java) {
+            LinearPixelDecoder.decodeSensorBorrowed(invalid,traits,workspace=workspace)
+        }
+        val expected = LinearPixelDecoder.decodeSensor(valid,traits)
+        val actual = LinearPixelDecoder.decodeSensorBorrowed(valid,traits,workspace=workspace)
+        assertArrayEquals(expected.pixels,actual.pixels,0f)
+        workspace.release()
     }
 }

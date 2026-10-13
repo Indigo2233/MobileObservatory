@@ -135,4 +135,30 @@ class CalibrationTest {
         }
         rejects("unknown_cfa") { CalibrationGeometry.from(4, 4, patterns[0], PixelTraits(binning = 2, bayerPatternAtOutput = false)) }
     }
+
+    @Test fun borrowedCalibrationReusesOutputAndRecoversAfterCancellation() {
+        val bias = master(CalibrationType.BIAS,FloatArray(8) { .1f })
+        val selected = CalibrationSelection(bias=bias)
+        val workspace = CalibrationSelection.Workspace()
+        val firstInput = image(FloatArray(8) { .2f+it*.01f })
+        val expected = selected.apply(firstInput,geometry,capture)
+        val first = selected.applyBorrowed(firstInput,geometry,capture,workspace)
+        assertArrayEquals(expected.pixels,first.pixels,0f)
+        val second = selected.applyBorrowed(image(FloatArray(8) { .5f-it*.01f }),geometry,capture,workspace)
+        assertSame(first.pixels,second.pixels)
+        assertEquals(1L,workspace.arrayAllocations)
+        assertEquals(32L,workspace.retainedBytes)
+        assertArrayEquals(FloatArray(8) { .2f+it*.01f },firstInput.pixels,0f)
+        var checks = 0
+        assertThrows(CancellationException::class.java) {
+            selected.applyBorrowed(firstInput,geometry,capture,workspace) {
+                if (++checks == 2) throw CancellationException("calibration")
+            }
+        }
+        assertArrayEquals(expected.pixels,selected.applyBorrowed(firstInput,geometry,capture,workspace).pixels,0f)
+        val disabled = CalibrationSelection()
+        assertSame(firstInput,disabled.applyBorrowed(firstInput,geometry,capture,CalibrationSelection.Workspace()))
+        workspace.release()
+        assertEquals(0L,workspace.retainedBytes)
+    }
 }

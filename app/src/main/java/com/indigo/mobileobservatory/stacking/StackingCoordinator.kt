@@ -116,6 +116,8 @@ class StackingCoordinator(
     @Volatile private var liveCalibration = CalibrationSelection()
     @Volatile private var liveCalibrationWarnings: List<String> = emptyList()
     @Volatile private var liveDemosaicScratchBytes = 0L
+    private val liveSensorWorkspace = LinearPixelDecoder.SensorWorkspace()
+    private val liveCalibrationWorkspace = CalibrationSelection.Workspace()
     private val liveDemosaicWorkspace = DdfapdDemosaicer.Workspace()
     private val backgroundModelCache = BackgroundModelCache()
     val live: LiveStackSession = LiveStackSession(
@@ -130,9 +132,11 @@ class StackingCoordinator(
             val traits = key.pixelTraits.copy(
                 roiX = key.roi.x, roiY = key.roi.y, binning = key.hardwareBin
             )
-            val sensor = LinearPixelDecoder.decodeSensor(frame, traits, cancelCheck = cancelCheck)
+            val sensor = LinearPixelDecoder.decodeSensorBorrowed(frame, traits,
+                workspace = liveSensorWorkspace, cancelCheck = cancelCheck)
             val geometry = CalibrationGeometry.from(frame.width, frame.height, frame.pixelFormat, traits)
-            val calibrated = fixedCalibration.apply(sensor, geometry, liveCapture(key), cancelCheck)
+            val calibrated = fixedCalibration.applyBorrowed(sensor, geometry, liveCapture(key),
+                liveCalibrationWorkspace, cancelCheck)
             val decoded = if (key.demosaicAlgorithm == DemosaicAlgorithm.DDFAPD)
                 LinearPixelDecoder.demosaicSensorBorrowed(calibrated, frame.pixelFormat, traits,
                     liveDemosaicWorkspace, cancelCheck)
@@ -154,7 +158,11 @@ class StackingCoordinator(
             }
         } },
         nativeHeapBytes = { Debug.getNativeHeapAllocatedSize() },
-        onWorkerReset = liveDemosaicWorkspace::release
+        onWorkerReset = {
+            liveSensorWorkspace.release()
+            liveCalibrationWorkspace.release()
+            liveDemosaicWorkspace.release()
+        }
     )
 
     val calibration = CalibrationCoordinator(app, scienceScope, stateLock, memoryBudgetBytes,

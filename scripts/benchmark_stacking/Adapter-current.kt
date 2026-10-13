@@ -8,12 +8,17 @@ fun demosaicOperation(source:FloatArray,width:Int,height:Int):()->LinearImage {
     return { DdfapdDemosaicer.demosaicBorrowed(source,width,height,0,0,workspace) }
 }
 fun decoderOperation():(FrameData)->LinearImage {
+    val sensorWorkspace=LinearPixelDecoder.SensorWorkspace()
     val workspace=DdfapdDemosaicer.Workspace()
     return {
         val traits=PixelTraits(alignment=SampleAlignment.RIGHT)
-        val sensor=LinearPixelDecoder.decodeSensor(it,traits)
+        val sensor=LinearPixelDecoder.decodeSensorBorrowed(it,traits,workspace=sensorWorkspace)
         LinearPixelDecoder.demosaicSensorBorrowed(sensor,it.pixelFormat,traits,workspace)
     }
+}
+fun starDetectionOperation(image:LinearImage):()->StarField {
+    val workspace=StarRegistration.Workspace()
+    return { StarRegistration.detect(image,workspace=workspace) }
 }
 fun registrationOperation(registration:PlanetaryRegistration,image:LinearImage):Double {
     val prepared=registration.prepareFrame(image)

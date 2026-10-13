@@ -194,6 +194,14 @@ fun main(args:Array<String>) {
             val operation=demosaicOperation(src,W,H)
             micro(20,40) { val out=operation();out.pixels[101].toDouble()+out.pixels[out.pixels.size-100] }
         }
+        "decoder" -> {
+            val raw=mosaic(stars());val operation=decoderOperation()
+            micro(20,40) { val out=operation(raw);out.pixels[101].toDouble()+out.pixels[out.pixels.size-100] }
+        }
+        "star_detect" -> {
+            val operation=starDetectionOperation(stars())
+            micro(12,40) { val field=operation();field.stars.size+field.background+field.noise }
+        }
         "planetary" -> {
             val image=target();val shifted=image.copy(pixels=image.pixels.copyOf())
             val options=PlanetaryOptions(maxAlignmentPoints=24,maxGlobalShift=8,maxLocalShift=3)

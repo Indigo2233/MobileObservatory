@@ -100,4 +100,23 @@ class DeepSkyAlgorithmsTest {
         try { cancellable.add(field(),1.0){true}; fail("Expected cancellation") } catch(_:CancellationException) { }
         assertNull(cancellable.snapshot())
     }
+
+    @Test fun detectionWorkspacePreservesResultsAndRecoversAfterCancellation() {
+        val image=field()
+        val expected=StarRegistration.detect(image)
+        val workspace=StarRegistration.Workspace()
+        val first=StarRegistration.detect(image,workspace=workspace)
+        val retained=workspace.retainedBytes
+        val second=StarRegistration.detect(image,workspace=workspace)
+        assertEquals(expected,first)
+        assertEquals(expected,second)
+        assertEquals(retained,workspace.retainedBytes)
+        assertTrue(retained>0)
+        assertThrows(CancellationException::class.java) {
+            StarRegistration.detect(image,workspace=workspace) { true }
+        }
+        assertEquals(expected,StarRegistration.detect(image,workspace=workspace))
+        workspace.release()
+        assertEquals(0L,workspace.retainedBytes)
+    }
 }

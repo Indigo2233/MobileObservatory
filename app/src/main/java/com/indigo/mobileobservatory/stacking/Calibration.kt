@@ -120,6 +120,26 @@ class CalibrationSelection(
     val bias: CalibrationMaster? = null, val dark: CalibrationMaster? = null, val flat: CalibrationMaster? = null,
     val allowUnknownCapture: Boolean = false
 ) {
+    /** Worker-owned calibrated sensor output for the live synchronous pipeline. */
+    class Workspace {
+        private var pixels = FloatArray(0)
+        private var inUse = false
+        private var allocations = 0L
+        val retainedBytes: Long @Synchronized get() = pixels.size * 4L
+        val arrayAllocations: Long @Synchronized get() = allocations
+        @Synchronized internal fun acquire(size: Int): FloatArray {
+            check(!inUse) { "Calibration workspace is already in use" }
+            if (pixels.size != size) { pixels = FloatArray(size); allocations++ }
+            inUse = true
+            return pixels
+        }
+        @Synchronized internal fun finish() { inUse = false }
+        @Synchronized fun release() {
+            check(!inUse) { "Cannot release calibration workspace while processing" }
+            pixels = FloatArray(0)
+        }
+    }
+
     init {
         require(bias == null || bias.descriptor.type == CalibrationType.BIAS)
         require(dark == null || dark.descriptor.type == CalibrationType.DARK)
@@ -143,23 +163,38 @@ class CalibrationSelection(
     }
 
     fun apply(sensor: LinearImage, geometry: CalibrationGeometry, capture: CalibrationCapture,
-              cancelCheck: () -> Unit = {}): LinearImage {
+              cancelCheck: () -> Unit = {}): LinearImage =
+        applyImpl(sensor, geometry, capture, null, cancelCheck)
+
+    /** Returns workspace-owned calibrated pixels. Disabled calibration passes [sensor] through. */
+    internal fun applyBorrowed(sensor: LinearImage, geometry: CalibrationGeometry,
+                               capture: CalibrationCapture, workspace: Workspace,
+                               cancelCheck: () -> Unit = {}): LinearImage =
+        applyImpl(sensor, geometry, capture, workspace, cancelCheck)
+
+    private fun applyImpl(sensor: LinearImage, geometry: CalibrationGeometry,
+                          capture: CalibrationCapture, workspace: Workspace?,
+                          cancelCheck: () -> Unit): LinearImage {
         geometry.check(sensor)
         validate(geometry, capture)
         cancelCheck()
         if (!enabled) return sensor
         val subtraction = dark ?: bias
-        val output = FloatArray(sensor.pixels.size)
-        for (i in output.indices) {
-            if (i % 16384 == 0) cancelCheck()
-            val input = sensor.pixels[i]
-            require(input.isFinite()) { "calibration_nonfinite_light" }
-            val response = flat?.sample(i) ?: 1f
-            val value = (input.toDouble() - (subtraction?.sample(i)?.toDouble() ?: 0.0)) / response
-            output[i] = value.toFloat()
-            require(output[i].isFinite()) { "calibration_nonfinite_output" }
+        val output = workspace?.acquire(sensor.pixels.size) ?: FloatArray(sensor.pixels.size)
+        try {
+            for (i in output.indices) {
+                if (i % 16384 == 0) cancelCheck()
+                val input = sensor.pixels[i]
+                require(input.isFinite()) { "calibration_nonfinite_light" }
+                val response = flat?.sample(i) ?: 1f
+                val value = (input.toDouble() - (subtraction?.sample(i)?.toDouble() ?: 0.0)) / response
+                output[i] = value.toFloat()
+                require(output[i].isFinite()) { "calibration_nonfinite_output" }
+            }
+            return sensor.copy(pixels = output)
+        } finally {
+            workspace?.finish()
         }
-        return sensor.copy(pixels = output)
     }
 
     fun metadata(): Map<String, String> = mapOf(
