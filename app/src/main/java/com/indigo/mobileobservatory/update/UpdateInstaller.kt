@@ -26,6 +26,7 @@ object UpdateInstaller {
     fun unknownSourcesSettingsIntent(context: Context): Intent =
         Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
             data = Uri.parse("package:${context.packageName}")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
 
     fun installIntent(context: Context, apk: File): Intent {

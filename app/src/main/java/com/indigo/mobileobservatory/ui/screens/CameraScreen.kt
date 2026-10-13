@@ -106,6 +106,7 @@ fun CameraScreen(
     UpdateAvailableDialog(
         state = updateState,
         onDownload = updateViewModel::downloadAndInstall,
+        onInstall = updateViewModel::installOrRequestPermission,
         onDismiss = updateViewModel::dismissPrompt,
         onOpenInstallSettings = updateViewModel::openInstallPermissionSettings
     )

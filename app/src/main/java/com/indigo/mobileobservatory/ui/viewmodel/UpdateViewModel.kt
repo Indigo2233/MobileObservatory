@@ -215,6 +215,21 @@ class UpdateViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    /** Continue a downloaded update, opening the Android permission page when required. */
+    fun installOrRequestPermission() {
+        val manifest = _state.value.manifest ?: return
+        val apk = pendingApk
+        if (apk != null && apk.exists() && pendingVersionCode == manifest.versionCode) {
+            if (UpdateInstaller.canInstall(context)) {
+                installVerifiedPackage(apk, manifest)
+            } else {
+                openInstallPermissionSettings()
+            }
+        } else {
+            downloadAndInstall()
+        }
+    }
+
     fun openInstallPermissionSettings() {
         try {
             context.startActivity(UpdateInstaller.unknownSourcesSettingsIntent(context))

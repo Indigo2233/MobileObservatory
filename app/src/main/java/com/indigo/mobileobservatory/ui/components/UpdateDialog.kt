@@ -24,6 +24,7 @@ import com.indigo.mobileobservatory.ui.viewmodel.UpdateUiState
 fun UpdateAvailableDialog(
     state: UpdateUiState,
     onDownload: () -> Unit,
+    onInstall: () -> Unit,
     onDismiss: () -> Unit,
     onOpenInstallSettings: () -> Unit
 ) {
@@ -92,7 +93,7 @@ fun UpdateAvailableDialog(
                 downloading -> TextButton(onClick = {}, enabled = false) {
                     Text(state.statusText ?: stringResource(R.string.update_downloading, 0))
                 }
-                else -> TextButton(onClick = onDownload) {
+                else -> TextButton(onClick = if (needsPermission) onInstall else onDownload) {
                     Text(
                         stringResource(
                             if (needsPermission) R.string.update_install_button
