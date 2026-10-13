@@ -88,7 +88,7 @@ GitHub Release. Publication remains a separate go/no-go decision after validatio
 ## Publish a release
 
 After the go/no-go gates pass, run the `Android Release Publish` workflow by
-pushing the release tag (`v1.0.7`) or dispatching it manually. It builds the
+pushing the release tag (`v1.0.8`) or dispatching it manually. It builds the
 signed APK, generates `update.json`, and creates the GitHub Release with the APK,
 checksum, build information, and manifest attached.
 

@@ -19,9 +19,9 @@ the case where the release asset is unavailable. Both must use the same format:
 ```json
 {
   "schema": 1,
-  "versionCode": 43,
-  "versionName": "1.0.7",
-  "apkUrl": "https://github.com/Indigo2233/MobileObservatory/releases/download/v1.0.7/IndigoObservatory_android_v1.0.7-build43.apk",
+  "versionCode": 44,
+  "versionName": "1.0.8",
+  "apkUrl": "https://github.com/Indigo2233/MobileObservatory/releases/download/v1.0.8/IndigoObservatory_android_v1.0.8-build44.apk",
   "sha256": "…64 hex characters…",
   "notes": "Release notes shown in the update prompt.",
   "mandatory": false,
@@ -40,7 +40,7 @@ missing or malformed.
 ## Publishing a release
 
 Run the `Android Release Publish` workflow, either by pushing a `v*` tag or by
-dispatching it manually with a tag such as `v1.0.7`. The workflow:
+dispatching it manually with a tag such as `v1.0.8`. The workflow:
 
 1. builds and signs the release APK through `Build.ps1 -Release -NonCommercial`;
 2. keeps the unfinished sequence feature hidden (`-ShowSequence` opts in for
@@ -54,7 +54,7 @@ dispatching it manually with a tag such as `v1.0.7`. The workflow:
 
 ```powershell
 .\Build.ps1 -Release -NonCommercial
-.\scripts\Write-UpdateManifest.ps1 -Tag v1.0.7 -NotesFile release-notes.md
+.\scripts\Write-UpdateManifest.ps1 -Tag v1.0.8 -NotesFile release-notes.md
 ```
 
 The tag must contain the version name recorded in the APK build information.
