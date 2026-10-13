@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="stack_eaa_title">EAA · Live observing</string>
+    <string name="stack_eaa_tool_hint">Watch the view improve as exposures accumulate; no video recording needed</string>
+    <string name="stack_eaa_intro">Connect the main camera, focus and center the target, then start. No recording is required. Pause and switch to a single frame while focusing or moving; reset for a new target.</string>
+    <string name="stack_eaa_ready">Ready to start with the current camera settings.</string>
+    <string name="stack_eaa_summary">%1$d frames · %2$.1f s accumulated</string>
+    <string name="stack_eaa_single_hint">Live single frame · the stack appears after the first accepted exposure</string>
+    <string name="stack_camera_settings">Camera / focus / capture settings</string>
+    <string name="stack_disable_ae">Turn off auto exposure</string>
+    <string name="stack_resume_capture">Resume camera capture</string>
+    <string name="stack_capture_paused">Camera capture is stopped. Resume capture, then continue stacking.</string>
+    <string name="stack_recording_parallel">Recording continues · %1$d frames saved. Stacking is independent.</string>
+    <string name="stack_quality_details">Quality and dropped-frame details</string>
+    <string name="stack_observe_large">Large observing view</string>
+    <string name="stack_show_controls">Show controls</string>
+    <string name="stack_switch_single">View single frame</string>
+    <string name="stack_switch_accumulated">View stack</string>
+    <string name="stack_saved_easy">Result saved</string>
+    <string name="stack_saved_library">Find it in Files → Stack results. PNG is ready to view; FITS preserves the linear data.</string>
+    <string name="stack_view_saved">View saved image</string>
+    <string name="stack_all_results">All stack results</string>
+    <string name="stack_planetary_steps">1 Choose a recording → 2 Analyze quality → 3 Stack the best frames → 4 Adjust and save. Start with the full frame if unsure about ROI.</string>
+    <string name="stack_import_other">Import from another location</string>
+    <string name="stack_library_hint">Your SER/PSER recordings appear here automatically, newest first. You do not need to find an Android folder.</string>
+    <string name="stack_no_recordings">No completed SER/PSER recordings yet. Record a video in SER or PSER on the camera page, then return here. MP4 and still photos cannot be stacked in this workflow.</string>
+    <string name="stack_recording_excluded">The current recording is still being written. Stop recording before selecting it for analysis.</string>
+    <string name="stack_prepare_ser">Set SER and go to camera</string>
+    <string name="stack_refresh_library">Refresh</string>
+    <string name="stack_auto_stretch">Auto display stretch</string>
+    <string name="stack_auto_stretch_hint">Only the display changes. EAA adjusts the first accepted stack once; use this button again if needed.</string>
+    <string name="stack_auto_stretch_unavailable">Not enough varying signal for an automatic stretch. Keep accumulating or adjust brightness manually.</string>
+    <string name="stack_show_details">Storage and technical details</string>
+    <string name="stack_hide_details">Hide technical details</string>
+    <string name="stack_show_advanced">Advanced image adjustments</string>
+    <string name="stack_hide_advanced">Hide advanced adjustments</string>
+</resources>

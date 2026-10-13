@@ -1,5 +1,22 @@
 # Mobile Observatory TODO
 
+## 深空与行星叠加
+
+- [x] 新手素材库、保存后直接查看、EAA 一次自动拉伸/大图观测、采集暂停与工作区返回衔接；见 `docs/STACKING_USABILITY.md`。
+- [ ] 邀请实际新手完成连接、对焦、EAA、保存及找回结果的完整操作验证。
+
+- [x] 深空实时叠加与行星后处理完整实现及 APK 验收：599 项 JVM、6 项 Android 测试通过，标准 ARM64 APK 已生成；真机与实拍验收另列。见 `docs/STACKING_IMPLEMENTATION.md`。
+- [x] 原始线性高位深读取、Bayer/ROI 相位、SER/PSER/RGB 与大文件偏移、浮点 FITS 独立读回。
+- [x] 星点平移/旋转、逐像素权重、在线异常抑制；行星质量分析、全局/多点配准及接缝/双边缘测试。
+- [x] 可逆三种处理状态、背景屏蔽与渐变模型、可重现参数、真实文件端到端合成测试。
+- [ ] 真机长时验收：记录设备型号、实际分辨率/FPS、Java/native 峰值内存、录像并行队列丢帧、USB 拔插与温升。
+- [ ] 实拍验收：经纬仪视场旋转、云层/拖线、暗弱星云/星系外延、木星/土星环/月面视宁度序列。
+- [x] 可选 BIAS/DARK/FLAT 校准库、传感器域校准与三步拍摄引导；支持 SER/PSER 建主帧，参数兼容性校验、取消清理、持久化和导出溯源。见 `docs/STACKING_CALIBRATION.md`。
+- [x] 默认自动 GC、手动打点 DBE、选点放大微调、保护框和可重现配方；维持现有暗色/红光主题与分层入口。
+- [ ] 校准主帧 FITS 导入/导出、暗平场、坏点掩膜及稳健主帧合成；当前为受限内存的算术平均主帧。
+- [ ] 支持有完整曝光来源元数据的工业软件长曝光合成；当前超硬件曝光合成明确拒绝进入实时叠加。
+- [ ] Drizzle、行星自转校正、复杂反卷积、批量调度和更多视频格式。
+
 ## WandererAstro / Oasis accessories
 
 - [~] WandererRotator Mini / Lite V1 / Lite V2: USB-serial **code** landed; hardware acceptance open. See `docs/wanderer-support-plan.md`.

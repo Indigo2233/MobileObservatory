@@ -3,7 +3,16 @@ package com.indigo.mobileobservatory.recording
 import android.graphics.Bitmap
 import android.util.Log
 import com.indigo.mobileobservatory.util.ImageUtils
+import com.indigo.mobileobservatory.camera.FrameData
+import com.indigo.mobileobservatory.camera.PixelFormat
+import com.indigo.mobileobservatory.stacking.ChannelOrder
+import com.indigo.mobileobservatory.stacking.LinearImage
+import com.indigo.mobileobservatory.stacking.LinearPixelDecoder
+import com.indigo.mobileobservatory.stacking.PixelTraits
+import com.indigo.mobileobservatory.stacking.SampleAlignment
+import com.indigo.mobileobservatory.stacking.DemosaicAlgorithm
 import java.io.File
+import java.io.IOException
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -18,10 +27,22 @@ data class SERHeader(
     val observer: String,
     val instrument: String,
     val telescope: String,
-    val dateTimeUtc: Long
+    val dateTimeUtc: Long,
+    val littleEndianFlag: Int = 0
 )
 
-class SERReader(private val file: File) {
+/** Existing SER software uses the opposite flag to the original written specification.
+ * COMPATIBILITY follows Siril, SER Player and FFmpeg: 0 = LE, 1 = BE.
+ * https://siril.readthedocs.io/en/latest/file-formats/SER.html
+ */
+enum class SerEndianConvention { COMPATIBILITY, SPECIFICATION }
+
+class SERReader(private val file: File,
+                val endianConvention: SerEndianConvention = SerEndianConvention.COMPATIBILITY) : AutoCloseable {
+
+    var sampleAlignment: SampleAlignment = SampleAlignment.AUTO
+    var lastError: String? = null
+        private set
 
     /** LP750 conversion with per-frame white balance for Bayer playback. */
     var lp750Enabled: Boolean = true
@@ -34,25 +55,40 @@ class SERReader(private val file: File) {
     var header: SERHeader? = null
         private set
     private var raf: RandomAccessFile? = null
-    private var bytesPerFrame = 0
+    private var bytesPerFrame = 0L
+    val frameByteSize: Long get() = bytesPerFrame
     private var timestamps: LongArray? = null
+    private var timestampOffset: Long? = null
 
-    /** Frame timestamps in 100ns ticks (Windows FILETIME epoch). Null if no timestamp trailer. */
-    val frameTimestamps: LongArray? get() = timestamps
+    /** Compatibility API for the player; materialized only on request and bounded to 8 MB.
+     * Stacking and large-file playback use [readTimestamp] instead. SER ticks start at year 1.
+     */
+    val frameTimestamps: LongArray? get() {
+        val h = header ?: return null
+        if (timestampOffset == null || h.frameCount > 1_000_000) return null
+        return timestamps ?: LongArray(h.frameCount) { readTimestamp(it) ?: 0L }.also { timestamps = it }
+    }
 
     /** Average FPS derived from timestamps, or 0 if unavailable. */
     val recordedFps: Double get() {
-        val ts = timestamps ?: return 0.0
-        if (ts.size < 2) return 0.0
-        val totalTicks = ts.last() - ts.first()
+        val count = header?.frameCount ?: return 0.0
+        if (count < 2) return 0.0
+        val first = readTimestamp(0) ?: return 0.0
+        val last = readTimestamp(count - 1) ?: return 0.0
+        val totalTicks = last - first
         if (totalTicks <= 0) return 0.0
         val totalSeconds = totalTicks / 10_000_000.0
-        return (ts.size - 1) / totalSeconds
+        return (count - 1) / totalSeconds
     }
 
     fun open(): Boolean {
+        close()
+        lastError = null
+        var opened: RandomAccessFile? = null
         try {
             val r = RandomAccessFile(file, "r")
+            opened = r
+            require(r.length() >= HEADER_SIZE) { "Truncated SER header" }
             val hdrBuf = ByteArray(HEADER_SIZE)
             r.readFully(hdrBuf)
             val bb = ByteBuffer.wrap(hdrBuf).order(ByteOrder.LITTLE_ENDIAN)
@@ -60,16 +96,27 @@ class SERReader(private val file: File) {
             val idBytes = ByteArray(14)
             bb.get(idBytes)
             val fileId = String(idBytes, Charsets.US_ASCII).trimEnd('\u0000')
-            val isPSER = fileId.startsWith("PSER")
+            require(fileId == "LUCAM-RECORDER" || fileId == "PSER-RECORDER") { "Invalid SER signature" }
+            val isPSER = fileId == "PSER-RECORDER"
 
             bb.position(14)
             bb.getInt() // LuID
             val colorId = bb.getInt()
-            bb.getInt() // LittleEndian
+            val endianFlag = bb.getInt()
             val width = bb.getInt()
             val height = bb.getInt()
             val pixelDepth = bb.getInt()
             val frameCount = bb.getInt()
+            require(endianFlag == 0 || endianFlag == 1) { "Invalid SER byte-order flag" }
+            require(colorId == 0 || colorId in 8..11 || colorId == 100 || colorId == 101) {
+                "Unsupported SER color ID: $colorId"
+            }
+            require(width > 0 && height > 0) { "Invalid SER dimensions" }
+            require(pixelDepth in 1..16) { "Invalid SER sample depth" }
+            require(frameCount > 0) { "SER contains no readable frames" }
+            if (isPSER) require(colorId < 100 && pixelDepth in listOf(8, 10, 12, 14, 16)) {
+                "Unsupported packed SER format"
+            }
 
             bb.position(42)
             val obsBytes = ByteArray(40); bb.get(obsBytes)
@@ -85,21 +132,32 @@ class SERReader(private val file: File) {
             val dateTimeUtc = bb.getLong()
 
             bytesPerFrame = if (isPSER) {
-                PSERWriter.packedBytesPerFrame(width, height, pixelDepth)
+                Math.addExact(Math.multiplyExact(width.toLong() * height, pixelDepth.toLong()), 7L) / 8L
             } else {
                 val bpp = if (pixelDepth > 8) 2 else 1
-                width * height * bpp
+                Math.multiplyExact(width.toLong() * height, (bpp * if (colorId >= 100) 3 else 1).toLong())
             }
+            require(bytesPerFrame in 1..Int.MAX_VALUE.toLong()) { "Frame allocation exceeds addressable memory" }
+            val dataEnd = Math.addExact(HEADER_SIZE.toLong(), Math.multiplyExact(bytesPerFrame, frameCount.toLong()))
+            require(r.length() >= dataEnd) { "Truncated SER frames: need $dataEnd bytes, found ${r.length()}" }
+            val trailerSize = Math.multiplyExact(frameCount.toLong(), 8L)
+            val trailing = r.length() - dataEnd
+            require(trailing == 0L || trailing >= trailerSize) { "Truncated SER timestamp trailer" }
+            timestampOffset = if (trailing >= trailerSize) dataEnd else null
 
             header = SERHeader(isPSER, colorId, width, height, pixelDepth, frameCount,
-                observer, instrument, telescope, dateTimeUtc)
+                observer, instrument, telescope, dateTimeUtc, endianFlag)
             raf = r
 
-            readTimestamps(r, frameCount)
             val fps = recordedFps
             Log.i(TAG, "Opened: ${file.name} ${width}x${height} ${pixelDepth}bit ${frameCount}frames pser=$isPSER bpf=$bytesPerFrame fps=%.1f".format(fps))
             return true
         } catch (e: Exception) {
+            opened?.close()
+            header = null
+            raf = null
+            timestampOffset = null
+            lastError = e.message ?: "Could not read SER"
             Log.e(TAG, "Failed to open ${file.name}: ${e.message}")
             return false
         }
@@ -109,12 +167,17 @@ class SERReader(private val file: File) {
         val r = raf ?: return null
         val h = header ?: return null
         if (index < 0 || index >= h.frameCount) return null
+        // Header inspection and streaming playback support larger sensors. A caller asking
+        // for a complete byte array still has the previous full-frame allocation ceiling.
+        require(h.width.toLong() * h.height <= LinearImage.MAX_PIXELS) {
+            "Full frame exceeds 16 MP raw buffer limit; use readPreviewFrame for playback"
+        }
 
         return try {
-            val offset = HEADER_SIZE.toLong() + bytesPerFrame.toLong() * index
+            val offset = frameOffset(index)
             synchronized(r) {
                 r.seek(offset)
-                val data = ByteArray(bytesPerFrame)
+                val data = ByteArray(bytesPerFrame.toInt())
                 r.readFully(data)
                 data
             }
@@ -124,73 +187,182 @@ class SERReader(private val file: File) {
         }
     }
 
-    private var detectedBits = 0
+    fun frameOffset(index: Int): Long {
+        val h = checkNotNull(header) { "Reader is closed" }
+        require(index in 0 until h.frameCount)
+        return Math.addExact(HEADER_SIZE.toLong(), Math.multiplyExact(bytesPerFrame, index.toLong()))
+    }
 
-    /**
-     * Decode a frame to 8-bit grayscale for display.
-     * Handles both SER (16-bit LE) and PSER (packed) formats.
-     */
+    /** Bounded display sampling, independent of the full-resolution scientific input budget. */
+    fun readPreviewFrame(index: Int, maxPixels: Int = SERPreviewDecoder.DEFAULT_PIXELS,
+                         cancelCheck: () -> Unit = {}): LinearImage? {
+        val r = raf ?: return null
+        val h = header ?: return null
+        if (index !in 0 until h.frameCount) return null
+        return synchronized(r) {
+            cancelCheck()
+            if (raf !== r || header !== h) return@synchronized null
+            val size = if (h.isPSER) (h.width.toLong()*h.height*h.pixelDepth+7L)/8L
+                else h.width.toLong()*h.height*(if (h.pixelDepth > 8) 2 else 1)*(if (h.colorId >= 100) 3 else 1)
+            try {
+                SERPreviewDecoder.read(r,h,Math.addExact(HEADER_SIZE.toLong(),Math.multiplyExact(size,index.toLong())),size,
+                    pixelByteOrder(h) == ByteOrder.LITTLE_ENDIAN,sampleAlignment,maxPixels,cancelCheck)
+            } catch (e: IOException) {
+                lastError = e.message ?: "Could not read SER preview"
+                Log.w(TAG,"Failed to read preview frame $index: ${e.message}")
+                null
+            }
+        }
+    }
+
+    /** The player's only file-to-bitmap path; large source frames are never materialized. */
+    fun readPreviewBitmap(index: Int, maxPixels: Int = SERPreviewDecoder.DEFAULT_PIXELS,
+                          cancelCheck: () -> Unit = {}): Bitmap? {
+        val h = header ?: return null
+        val image = readPreviewFrame(index,maxPixels,cancelCheck) ?: return null
+        val pixels = IntArray(image.pixelCount)
+        var low = 0f; var high = 1f
+        if (h.colorId < 100) {
+            low = Float.POSITIVE_INFINITY; high = Float.NEGATIVE_INFINITY
+            for (i in image.pixels.indices) {
+                if (i % 16384 == 0) cancelCheck()
+                low = minOf(low,image.pixels[i]); high = maxOf(high,image.pixels[i])
+            }
+        }
+        val range = (high-low).coerceAtLeast(1f/65535f)
+        fun display(value: Float) = ((value-low)*255f/range).toInt().coerceIn(0,255)
+        for (i in pixels.indices) {
+            if (i % 16384 == 0) cancelCheck()
+            val p = i*image.channels
+            val red = display(image.pixels[p])
+            val green = if (image.channels == 3) display(image.pixels[p+1]) else red
+            val blue = if (image.channels == 3) display(image.pixels[p+2]) else red
+            pixels[i] = -0x1000000 or (red shl 16) or (green shl 8) or blue
+        }
+        if (lp750Enabled && h.colorId in 8..11) applyLp750ToPixels(pixels,cancelCheck)
+        cancelCheck()
+        return Bitmap.createBitmap(pixels,image.width,image.height,Bitmap.Config.ARGB_8888)
+    }
+
+    fun readTimestamp(index: Int): Long? {
+        val r = raf ?: return null
+        val h = header ?: return null
+        val base = timestampOffset ?: return null
+        if (index !in 0 until h.frameCount) return null
+        return synchronized(r) {
+            try {
+                r.seek(Math.addExact(base, index.toLong() * 8L))
+                java.lang.Long.reverseBytes(r.readLong())
+            } catch (_: Exception) { null }
+        }
+    }
+
+    /** One owned frame only; no display stretch, LP750, white balance or 8-bit conversion. */
+    fun readLinearFrame(index: Int, maxPixels: Long = LinearImage.DEFAULT_STACK_PIXELS,
+        algorithm: DemosaicAlgorithm = DemosaicAlgorithm.BILINEAR, cancelCheck: () -> Unit = {}): LinearImage? {
+        val h = header ?: return null
+        require(h.width.toLong() * h.height <= maxPixels) { "Image exceeds stacking budget; use a smaller source ROI" }
+        cancelCheck()
+        return readFrame(index)?.let { decodeFrameLinear(it, maxPixels, algorithm, cancelCheck) }
+    }
+
+    fun decodeFrameLinear(data: ByteArray, maxPixels: Long = LinearImage.DEFAULT_STACK_PIXELS,
+        algorithm: DemosaicAlgorithm = DemosaicAlgorithm.BILINEAR, cancelCheck: () -> Unit = {}): LinearImage {
+        cancelCheck()
+        return LinearPixelDecoder.demosaicSensor(decodeFrameSensor(data, maxPixels, cancelCheck), sensorFormat, sensorTraits, algorithm, cancelCheck)
+    }
+
+    /** Raw linear samples for masters and light calibration, before CFA interpolation. */
+    fun readSensorFrame(index: Int, maxPixels: Long = LinearImage.DEFAULT_STACK_PIXELS,
+        cancelCheck: () -> Unit = {}): LinearImage? {
+        val h = header ?: return null
+        require(h.width.toLong() * h.height <= maxPixels) { "Image exceeds calibration budget; use a smaller source ROI" }
+        cancelCheck()
+        return readFrame(index)?.let { decodeFrameSensor(it, maxPixels, cancelCheck) }
+    }
+
+    fun decodeFrameSensor(data: ByteArray, maxPixels: Long = LinearImage.DEFAULT_STACK_PIXELS,
+        cancelCheck: () -> Unit = {}): LinearImage {
+        cancelCheck()
+        val h = checkNotNull(header) { "Reader is closed" }
+        require(h.width.toLong() * h.height <= maxPixels) { "Image exceeds stacking budget; use a smaller source ROI" }
+        val raw = unpackSamples(data, cancelCheck)
+        return LinearPixelDecoder.decodeSensor(FrameData(raw, h.width, h.height, sensorFormat, 0, 0), sensorTraits, maxPixels, cancelCheck)
+    }
+
+    val sensorFormat: PixelFormat get() {
+        val h = checkNotNull(header) { "Reader is closed" }
+        return when (h.colorId) {
+            100, 101 -> if (h.pixelDepth <= 8) PixelFormat.RGB24 else PixelFormat.RGB48
+            else -> {
+                val prefix = when (h.colorId) { 8 -> "BAYER_RG"; 9 -> "BAYER_GR"; 10 -> "BAYER_GB"; 11 -> "BAYER_BG"; else -> "MONO" }
+                val bits = if (h.pixelDepth <= 8) 8 else 16
+                PixelFormat.valueOf("$prefix$bits")
+            }
+        }
+    }
+
+    val sensorTraits: PixelTraits get() {
+        val h = checkNotNull(header) { "Reader is closed" }
+        return PixelTraits(byteOrder = pixelByteOrder(), alignment = if (h.isPSER) SampleAlignment.RIGHT else sampleAlignment,
+            validBits = h.pixelDepth, channelOrder = if (h.colorId == 101) ChannelOrder.BGR else ChannelOrder.RGB)
+    }
+
+    private fun pixelByteOrder(h: SERHeader = checkNotNull(header)): ByteOrder {
+        val little = h.isPSER || if (endianConvention == SerEndianConvention.COMPATIBILITY) {
+            h.littleEndianFlag == 0
+        } else h.littleEndianFlag == 1
+        return if (little) ByteOrder.LITTLE_ENDIAN else ByteOrder.BIG_ENDIAN
+    }
+
+    /** PSERWriter stores a contiguous least-significant-bit-first bitstream, including tail pixels. */
+    private fun unpackSamples(data: ByteArray, cancelCheck: () -> Unit = {}): ByteArray {
+        val h = checkNotNull(header)
+        require(data.size.toLong() >= bytesPerFrame) { "Truncated frame buffer" }
+        if (!h.isPSER || h.pixelDepth == 8 || h.pixelDepth == 16) return data
+        val count = h.width * h.height
+        val out = ByteArray(count * 2)
+        var accumulator = 0L; var available = 0; var source = 0
+        val mask = (1L shl h.pixelDepth) - 1L
+        for (i in 0 until count) {
+            if (i % 16384 == 0) cancelCheck()
+            while (available < h.pixelDepth) {
+                accumulator = accumulator or ((data[source++].toLong() and 255L) shl available)
+                available += 8
+            }
+            val v = (accumulator and mask).toInt()
+            out[2 * i] = v.toByte(); out[2 * i + 1] = (v ushr 8).toByte()
+            accumulator = accumulator ushr h.pixelDepth; available -= h.pixelDepth
+        }
+        return out
+    }
+
+    /** Display compatibility path. Raw stacking must use decodeFrameLinear instead. */
     fun decodeFrameTo8bit(frameData: ByteArray): ByteArray {
         val h = header ?: return frameData
-        val totalPixels = h.width * h.height
-
-        if (h.pixelDepth <= 8) return frameData
-
-        if (h.isPSER && h.pixelDepth in 10..14) {
-            return unpackTo8bit(frameData, totalPixels, h.pixelDepth)
+        val raw = unpackSamples(frameData)
+        val count = h.width * h.height * if (h.colorId >= 100) 3 else 1
+        val sampleBytes = if (h.pixelDepth > 8) 2 else 1
+        val little = pixelByteOrder() == ByteOrder.LITTLE_ENDIAN
+        fun sample(i: Int): Int {
+            val a = raw[i * sampleBytes].toInt() and 255
+            if (sampleBytes == 1) return a
+            val b = raw[i * sampleBytes + 1].toInt() and 255
+            return if (little) a or (b shl 8) else (a shl 8) or b
         }
-
-        if (frameData.size >= totalPixels * 2) {
-            if (detectedBits == 0) {
-                val effective = detectEffectiveBits(frameData, totalPixels)
-                val headerBits = h.pixelDepth
-                detectedBits = if (headerBits in 10..14 && effective > headerBits) {
-                    effective
-                } else {
-                    headerBits.coerceAtLeast(effective)
-                }
-                Log.i(TAG, "Bit depth: effective=$effective, header=$headerBits, using=$detectedBits")
-            }
-
-            val out = ByteArray(totalPixels)
-            val headerBits = h.pixelDepth
-            val isLeftJustified = detectedBits > headerBits
-            val shift = if (isLeftJustified) {
-                detectedBits - 8
-            } else {
-                (headerBits - 8).coerceAtLeast(0)
-            }
-
-            for (i in 0 until totalPixels) {
-                val lo = frameData[i * 2].toInt() and 0xFF
-                val hi = frameData[i * 2 + 1].toInt() and 0xFF
-                val raw = lo or (hi shl 8)
-                out[i] = (raw shr shift).coerceIn(0, 255).toByte()
-            }
-            return out
+        var alignment = if (h.isPSER) SampleAlignment.RIGHT else sampleAlignment
+        if (alignment == SampleAlignment.AUTO) {
+            alignment = SampleAlignment.RIGHT
+            val max = (1 shl h.pixelDepth) - 1
+            for (i in 0 until count) if (sample(i) > max) { alignment = SampleAlignment.LEFT; break }
         }
-
-        return frameData
-    }
-
-    private fun detectEffectiveBits(data: ByteArray, totalPixels: Int): Int {
-        var maxVal = 0
-        val count = totalPixels.coerceAtMost(data.size / 2)
-        for (i in 0 until count) {
-            val lo = data[i * 2].toInt() and 0xFF
-            val hi = data[i * 2 + 1].toInt() and 0xFF
-            val v = lo or (hi shl 8)
-            if (v > maxVal) maxVal = v
-        }
-        return when {
-            maxVal <= 0xFF -> 8
-            maxVal <= 0x3FF -> 10
-            maxVal <= 0xFFF -> 12
-            maxVal <= 0x3FFF -> 14
-            else -> 16
+        val offset = if (alignment == SampleAlignment.LEFT) sampleBytes * 8 - h.pixelDepth else 0
+        val max = (1 shl h.pixelDepth) - 1
+        return ByteArray(count) { i ->
+            val source = if (h.colorId == 101) (i / 3) * 3 + 2 - i % 3 else i
+            (((sample(source) ushr offset) * 255L / max).coerceIn(0, 255)).toByte()
         }
     }
-
     fun frameToBitmap(frameData: ByteArray): Bitmap? {
         val h = header ?: return null
         val gray8 = decodeFrameTo8bit(frameData)
@@ -200,7 +372,14 @@ class SERReader(private val file: File) {
 
         return try {
             val pixels = IntArray(w * ht)
-            if (h.colorId in 8..11) {
+            if (h.colorId >= 100) {
+                for (i in pixels.indices) {
+                    val r = gray8[i * 3].toInt() and 255
+                    val g = gray8[i * 3 + 1].toInt() and 255
+                    val b = gray8[i * 3 + 2].toInt() and 255
+                    pixels[i] = -0x1000000 or (r shl 16) or (g shl 8) or b
+                }
+            } else if (h.colorId in 8..11 && w >= 3 && ht >= 3) {
                 debayer8ToPixels(gray8, pixels, w, ht, h.colorId)
             } else {
                 var minV = 255; var maxV = 0
@@ -229,7 +408,7 @@ class SERReader(private val file: File) {
         }
     }
 
-    private fun applyLp750ToPixels(pixels: IntArray) {
+    private fun applyLp750ToPixels(pixels: IntArray, cancelCheck: () -> Unit = {}) {
         if (pixels.isEmpty()) return
         val step = (pixels.size / 10000).coerceAtLeast(1)
         var sumR = 0f; var sumG = 0f; var sumB = 0f; var count = 0
@@ -243,6 +422,7 @@ class SERReader(private val file: File) {
         if (count == 0) return
         val gains = ImageUtils.lp750WhiteBalanceGains(sumR / count, sumG / count, sumB / count)
         for (i in pixels.indices) {
+            if (i % 16384 == 0) cancelCheck()
             val p = pixels[i]
             val converted = ImageUtils.lp750Matrix(
                 ((p ushr 16) and 0xFF) / 255f,
@@ -325,105 +505,12 @@ class SERReader(private val file: File) {
     }
 
 
-    fun close() {
+    override fun close() {
         raf?.close()
         raf = null
         header = null
         timestamps = null
-        detectedBits = 0
-    }
-
-    private fun readTimestamps(r: RandomAccessFile, frameCount: Int) {
-        try {
-            val tsOffset = HEADER_SIZE.toLong() + bytesPerFrame.toLong() * frameCount
-            if (tsOffset + frameCount * 8L > r.length()) {
-                timestamps = null
-                return
-            }
-            r.seek(tsOffset)
-            val ts = LongArray(frameCount)
-            val buf = ByteArray(8)
-            val bb = ByteBuffer.wrap(buf).order(ByteOrder.LITTLE_ENDIAN)
-            for (i in 0 until frameCount) {
-                r.readFully(buf)
-                bb.position(0)
-                ts[i] = bb.getLong()
-            }
-            timestamps = ts
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to read timestamps: ${e.message}")
-            timestamps = null
-        }
-    }
-
-    private fun unpackTo8bit(packed: ByteArray, pixelCount: Int, bits: Int): ByteArray {
-        val out = ByteArray(pixelCount)
-        val shift = bits - 8
-        when (bits) {
-            10 -> unpack10to8(packed, out, pixelCount, shift)
-            12 -> unpack12to8(packed, out, pixelCount, shift)
-            14 -> unpack14to8(packed, out, pixelCount, shift)
-            else -> {
-                for (i in 0 until pixelCount.coerceAtMost(packed.size)) {
-                    out[i] = packed[i]
-                }
-            }
-        }
-        return out
-    }
-
-    private fun unpack10to8(src: ByteArray, dst: ByteArray, pixelCount: Int, shift: Int) {
-        var si = 0
-        var pi = 0
-        val groups = pixelCount / 4
-        for (g in 0 until groups) {
-            if (si + 4 >= src.size) break
-            val b0 = src[si++].toInt() and 0xFF
-            val b1 = src[si++].toInt() and 0xFF
-            val b2 = src[si++].toInt() and 0xFF
-            val b3 = src[si++].toInt() and 0xFF
-            val b4 = src[si++].toInt() and 0xFF
-            val p0 = b0 or ((b1 and 0x03) shl 8)
-            val p1 = (b1 shr 2) or ((b2 and 0x0F) shl 6)
-            val p2 = (b2 shr 4) or ((b3 and 0x3F) shl 4)
-            val p3 = (b3 shr 6) or (b4 shl 2)
-            dst[pi++] = (p0 shr shift).coerceIn(0, 255).toByte()
-            dst[pi++] = (p1 shr shift).coerceIn(0, 255).toByte()
-            dst[pi++] = (p2 shr shift).coerceIn(0, 255).toByte()
-            dst[pi++] = (p3 shr shift).coerceIn(0, 255).toByte()
-        }
-    }
-
-    private fun unpack12to8(src: ByteArray, dst: ByteArray, pixelCount: Int, shift: Int) {
-        var si = 0
-        var pi = 0
-        val pairs = pixelCount / 2
-        for (p in 0 until pairs) {
-            if (si + 2 >= src.size) break
-            val b0 = src[si++].toInt() and 0xFF
-            val b1 = src[si++].toInt() and 0xFF
-            val b2 = src[si++].toInt() and 0xFF
-            val p0 = b0 or ((b1 and 0x0F) shl 8)
-            val p1 = (b1 shr 4) or (b2 shl 4)
-            dst[pi++] = (p0 shr shift).coerceIn(0, 255).toByte()
-            dst[pi++] = (p1 shr shift).coerceIn(0, 255).toByte()
-        }
-    }
-
-    private fun unpack14to8(src: ByteArray, dst: ByteArray, pixelCount: Int, shift: Int) {
-        var si = 0
-        var pi = 0
-        val groups = pixelCount / 4
-        for (g in 0 until groups) {
-            if (si + 6 >= src.size) break
-            var accum = 0L
-            for (b in 0 until 7) {
-                accum = accum or ((src[si++].toLong() and 0xFF) shl (b * 8))
-            }
-            dst[pi++] = ((accum and 0x3FFF) shr shift).toInt().coerceIn(0, 255).toByte()
-            dst[pi++] = (((accum shr 14) and 0x3FFF) shr shift).toInt().coerceIn(0, 255).toByte()
-            dst[pi++] = (((accum shr 28) and 0x3FFF) shr shift).toInt().coerceIn(0, 255).toByte()
-            dst[pi++] = (((accum shr 42) and 0x3FFF) shr shift).toInt().coerceIn(0, 255).toByte()
-        }
+        timestampOffset = null
+        bytesPerFrame = 0
     }
 }

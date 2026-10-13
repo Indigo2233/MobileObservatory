@@ -114,8 +114,8 @@ JNIEXPORT jboolean JNICALL JNI_FN(nStartPull)(JNIEnv* env, jobject, jobject call
     return JNI_FALSE;
 }
 
-JNIEXPORT void JNICALL JNI_FN(nStop)(JNIEnv*, jobject) {
-    if (g_hcam) Toupcam_Stop(g_hcam);
+JNIEXPORT jboolean JNICALL JNI_FN(nStop)(JNIEnv*, jobject) {
+    return g_hcam && SUCCEEDED(Toupcam_Stop(g_hcam)) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jint JNICALL JNI_FN(nPullImageRaw)(JNIEnv* env, jobject, jbyteArray buf, jint bits) {

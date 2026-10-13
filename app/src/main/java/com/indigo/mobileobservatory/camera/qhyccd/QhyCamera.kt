@@ -17,6 +17,13 @@ import kotlin.math.roundToInt
 class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
     CameraUsbBandwidthCapable, CameraBinningCapable {
 
+    override val sciencePixelTraits get() = CameraScienceLayouts.fullContainer(currentPixelFormat)
+    private val captureGeneration = CaptureGeneration()
+    override val scienceCaptureGeneration get() = captureGeneration.scienceGeneration
+    override val requiresHighBitScienceCapture get() = !useSingleFrameMode
+    private var captureStopFailed = false
+    private val singleExposureStartLock = Any()
+
     companion object {
         private const val TAG = "QhyCamera"
 
@@ -185,6 +192,7 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
             setExposureTime(20_000f)
             setGain(20f)
 
+            captureStopFailed = false
             _isOpen.value = true
             Log.i(TAG, "Opened: $modelName ${sensorWidth}x${sensorHeight} ${maxBpp}bit bayer=$bayerType pixSize=${pixelSizeUm}um singleFrame=$singleFrame")
             return true
@@ -381,12 +389,13 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
      * next plug-in). It only stops the capture thread and drops the handle.
      */
     fun markDisconnected() {
+        captureGeneration.stop()
         FileLogger.i(TAG, "markDisconnected: USB device gone, skipping SDK teardown I/O")
         _isCapturing.value = false
         val thread = captureThread
-        captureThread = null
         thread?.interrupt()
         try { thread?.join(2000) } catch (_: InterruptedException) {}
+        if (thread?.isAlive != true) captureThread = null
         frameCallback = null
 
         try { QhyccdJni.markDisconnected() } catch (_: Throwable) {}
@@ -398,14 +407,25 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
         usbConnection = null
     }
 
-    override fun startCapture(callback: FrameCallback) {
+    @Synchronized override fun startCapture(callback: FrameCallback) {
         if (!_isOpen.value || _isCapturing.value) return
+        if (captureThread?.isAlive == true || captureStopFailed) {
+            Log.w(TAG, "Cannot start while the previous capture has not stopped")
+            return
+        }
+        val verified = runCatching {
+            val exposure = QhyccdJni.getParam(QhyccdJni.CONTROL_EXPOSURE).toFloat()
+            val gain = QhyccdJni.getParam(QhyccdJni.CONTROL_GAIN).toFloat()
+            if (exposure !in exposureRange.min..exposureRange.max || gain !in gainRange.min..gainRange.max) false
+            else { currentExposureUs = exposure; currentGain = gain; true }
+        }.getOrDefault(false)
         frameCallback = callback
 
         if (useSingleFrameMode) {
+            val generation = captureGeneration.begin(verified)
             _isCapturing.value = true
             captureThread = Thread({
-                singleFrameLoop()
+                singleFrameLoop(generation, callback)
             }, "QHY-SingleFrame").apply { isDaemon = true; start() }
         } else {
             val ret = QhyccdJni.beginLive()
@@ -414,14 +434,18 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
                 return
             }
 
+            // The SDK does not distinguish an empty live queue from ordinary read failure.
+            // Keep preview/recording available, but never certify live frames' exposure.
+            val generation = captureGeneration.begin(false)
             _isCapturing.value = true
             captureThread = Thread({
-                liveFrameLoop()
+                liveFrameLoop(generation, callback)
             }, "QHY-CaptureThread").apply { isDaemon = true; start() }
         }
     }
 
-    private fun liveFrameLoop() {
+    private fun liveFrameLoop(generation: Long, callback: FrameCallback) {
+        val startup = CaptureStartupBarrier()
         val roi = currentRoi
         val bpp = currentPixelFormat.bytesPerPixel
         val frameSize = roi.width.toLong() * roi.height * bpp
@@ -448,11 +472,13 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
         }
         var useA = true
 
-        while (_isCapturing.value && !Thread.currentThread().isInterrupted) {
+        while (_isCapturing.value && captureGeneration.isActive(generation) && !Thread.currentThread().isInterrupted) {
             try {
                 val ret = QhyccdJni.getLiveFrame(sdkBuf, outInfo)
+                if (!captureGeneration.isActive(generation)) break
 
                 if (ret == QhyccdJni.QHYCCD_SUCCESS) {
+                    if (!startup.acceptCompleteFrame()) continue
                     val w = outInfo[0]
                     val h = outInfo[1]
                     val bits = outInfo[2]
@@ -485,10 +511,11 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
                         height = h,
                         pixelFormat = fmt,
                         frameId = frameCounter.incrementAndGet(),
-                        timestamp = System.nanoTime()
+                        timestamp = System.nanoTime(),
+                        captureGeneration = generation
                     )
                     try {
-                        frameCallback?.onFrame(frame)
+                        if (captureGeneration.isActive(generation)) callback.onFrame(frame)
                     } catch (e: Throwable) {
                         Log.e(TAG, "Frame callback error", e)
                     }
@@ -508,7 +535,7 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
         Log.i(TAG, "Capture loop ended")
     }
 
-    private fun singleFrameLoop() {
+    private fun singleFrameLoop(generation: Long, callback: FrameCallback) {
         val roi = currentRoi
         val bpp = currentPixelFormat.bytesPerPixel
         val frameSize = roi.width.toLong() * roi.height * bpp
@@ -534,9 +561,13 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
 
         FileLogger.i(TAG, "SingleFrame loop: ${roi.width}x${roi.height} bpp=$bpp fmt=${currentPixelFormat.name}")
 
-        while (_isCapturing.value && !Thread.currentThread().isInterrupted) {
+        while (_isCapturing.value && captureGeneration.isActive(generation) && !Thread.currentThread().isInterrupted) {
             try {
-                val expRet = QhyccdJni.expSingleFrame()
+                // Serialize the start against cancellation: a loop that passed its while
+                // condition just before stop must not begin a new SDK exposure after cancel.
+                val expRet = synchronized(singleExposureStartLock) {
+                    if (!captureGeneration.isActive(generation)) null else QhyccdJni.expSingleFrame()
+                } ?: break
                 if (expRet != QhyccdJni.QHYCCD_SUCCESS) {
                     Log.e(TAG, "ExpSingleFrame failed: $expRet")
                     Thread.sleep(100)
@@ -544,6 +575,7 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
                 }
 
                 val getRet = QhyccdJni.getSingleFrame(sdkBuf, outInfo)
+                if (!captureGeneration.isActive(generation)) break
                 if (getRet != QhyccdJni.QHYCCD_SUCCESS) {
                     Log.e(TAG, "GetSingleFrame failed: $getRet")
                     Thread.sleep(100)
@@ -584,10 +616,11 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
                     height = h,
                     pixelFormat = fmt,
                     frameId = frameCounter.incrementAndGet(),
-                    timestamp = System.nanoTime()
+                    timestamp = System.nanoTime(),
+                    captureGeneration = generation
                 )
                 try {
-                    frameCallback?.onFrame(frame)
+                    if (captureGeneration.isActive(generation)) callback.onFrame(frame)
                 } catch (e: Throwable) {
                     Log.e(TAG, "Frame callback error", e)
                 }
@@ -602,7 +635,7 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
     }
 
     private fun resolvePixelFormat(bits: Int, channels: Int): PixelFormat {
-        if (channels >= 3) return PixelFormat.RGB48
+        if (channels >= 3) return if (bits <= 8) PixelFormat.RGB24 else PixelFormat.RGB48
         if (bayerType > 0) return pixelFormatForBits(bits)
         return when (bits) {
             8 -> PixelFormat.MONO8
@@ -613,37 +646,35 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
         }
     }
 
-    override fun stopCapture() {
-        if (!_isCapturing.value) return
+    @Synchronized override fun stopCapture() {
+        captureGeneration.stop()
+        if (!_isCapturing.value && captureThread?.isAlive != true && !captureStopFailed) return
         _isCapturing.value = false
-
-        if (useSingleFrameMode) {
-            try { QhyccdJni.cancelExposing() } catch (_: Throwable) {}
-        }
-
+        frameCallback = null
+        captureStopFailed = runCatching {
+            (if (useSingleFrameMode) synchronized(singleExposureStartLock) { QhyccdJni.cancelExposing() }
+             else QhyccdJni.stopLive()) != QhyccdJni.QHYCCD_SUCCESS
+        }.getOrDefault(true)
         val thread = captureThread
-        captureThread = null
         thread?.interrupt()
         try {
-            thread?.join(5000)
+            if (thread !== Thread.currentThread()) thread?.join(5000)
         } catch (_: InterruptedException) {}
-
-        if (!useSingleFrameMode) {
-            try { QhyccdJni.stopLive() } catch (e: Throwable) {
-                Log.e(TAG, "StopLive error", e)
-            }
-        }
-        frameCallback = null
+        if (thread?.isAlive != true) captureThread = null
     }
 
-    override fun setExposureTime(us: Float) {
-        currentExposureUs = us.coerceIn(exposureRange.min, exposureRange.max)
-        QhyccdJni.setParam(QhyccdJni.CONTROL_EXPOSURE, currentExposureUs.toDouble())
+    @Synchronized override fun setExposureTime(us: Float) {
+        captureGeneration.invalidateScience()
+        val requested = us.coerceIn(exposureRange.min, exposureRange.max)
+        if (QhyccdJni.setParam(QhyccdJni.CONTROL_EXPOSURE, requested.toDouble()) != QhyccdJni.QHYCCD_SUCCESS) return
+        currentExposureUs = QhyccdJni.getParam(QhyccdJni.CONTROL_EXPOSURE).toFloat()
+            .takeIf { it in exposureRange.min..exposureRange.max } ?: requested
     }
 
-    override fun setGain(value: Float) {
+    @Synchronized override fun setGain(value: Float) {
+        captureGeneration.invalidateScience()
         val gain = GainValueNormalizer.normalize(gainCapability, value)
-        QhyccdJni.setParam(QhyccdJni.CONTROL_GAIN, gain.toDouble())
+        if (QhyccdJni.setParam(QhyccdJni.CONTROL_GAIN, gain.toDouble()) != QhyccdJni.QHYCCD_SUCCESS) return
         currentGain = GainValueNormalizer.normalize(
             gainCapability,
             QhyccdJni.getParam(QhyccdJni.CONTROL_GAIN).toFloat()
@@ -652,19 +683,23 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
 
     override fun adjustGainForExposure(stops: Float): Float = currentGain
 
-    override fun setOffset(value: Float) {
+    @Synchronized override fun setOffset(value: Float) {
+        captureGeneration.invalidateScience()
         if (!offsetSupported || offsetRange.max < offsetRange.min) return
         val clamped = value.coerceIn(offsetRange.min, offsetRange.max)
-        currentOffset = if (offsetStep > 0f) {
+        val requested = if (offsetStep > 0f) {
             (offsetRange.min + round((clamped - offsetRange.min) / offsetStep) * offsetStep)
                 .coerceIn(offsetRange.min, offsetRange.max)
         } else {
             clamped
         }
-        QhyccdJni.setParam(QhyccdJni.CONTROL_OFFSET, currentOffset.toDouble())
+        if (QhyccdJni.setParam(QhyccdJni.CONTROL_OFFSET, requested.toDouble()) != QhyccdJni.QHYCCD_SUCCESS) return
+        currentOffset = QhyccdJni.getParam(QhyccdJni.CONTROL_OFFSET).toFloat()
+            .takeIf { it in offsetRange.min..offsetRange.max } ?: requested
     }
 
-    override fun setNativeReadoutMode(id: String): Boolean {
+    @Synchronized override fun setNativeReadoutMode(id: String): Boolean {
+        captureGeneration.invalidateScience()
         val mode = id.toIntOrNull() ?: return false
         if (supportedNativeReadoutModes.none { it.id == id }) return false
         if (id == currentNativeReadoutModeId) return true
@@ -672,6 +707,7 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
         val wasCapturing = _isCapturing.value
         val callback = frameCallback
         if (wasCapturing) stopCapture()
+        if (captureThread?.isAlive == true || captureStopFailed) return false
 
         val previousExposure = currentExposureUs
         val previousGain = currentGain
@@ -707,7 +743,8 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
 
     private val formatLock = Any()
 
-    override fun setPixelFormat(format: PixelFormat) {
+    @Synchronized override fun setPixelFormat(format: PixelFormat) {
+        captureGeneration.invalidateScience()
         synchronized(formatLock) {
             if (format !in supportedPixelFormats) return
             if (format == currentPixelFormat) return
@@ -718,6 +755,7 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
             val cb = frameCallback
             try {
                 if (wasCapturing) stopCapture()
+                if (captureThread?.isAlive == true || captureStopFailed) return
 
                 val bits = format.nativeBits
                 val needSingleFrame = bits > 8
@@ -864,7 +902,8 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
         return openInternal(cameraId, singleFrame, desiredBits)
     }
 
-    override fun setRoi(roi: Roi) {
+    @Synchronized override fun setRoi(roi: Roi) {
+        captureGeneration.invalidateScience()
         try {
             val maxW = sensorWidth / currentBin
             val maxH = sensorHeight / currentBin
@@ -876,9 +915,10 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
             val wasCapturing = _isCapturing.value
             val cb = frameCallback
             if (wasCapturing) stopCapture()
+            if (captureThread?.isAlive == true || captureStopFailed) return
 
             Log.i(TAG, "setRoi: ${x},${y} ${w}x${h} bin=$currentBin")
-            QhyccdJni.setResolution(x, y, w, h)
+            if (QhyccdJni.setResolution(x, y, w, h) != QhyccdJni.QHYCCD_SUCCESS) return
             currentRoi = Roi(x, y, w, h)
             cropInfo = CropInfo(x, y, w, h)
 
@@ -888,18 +928,21 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
         }
     }
 
-    override fun resetRoi() {
+    @Synchronized override fun resetRoi() {
+        captureGeneration.invalidateScience()
         val maxW = sensorWidth / currentBin
         val maxH = sensorHeight / currentBin
         setRoi(Roi(0, 0, maxW, maxH))
     }
 
-    override fun setHardwareBin(bin: Int): Boolean {
+    @Synchronized override fun setHardwareBin(bin: Int): Boolean {
+        captureGeneration.invalidateScience()
         val b = if (bin in supportedHardwareBins) bin else return false
         if (b == currentBin) return true
         val wasCapturing = _isCapturing.value
         val cb = frameCallback
         if (wasCapturing) stopCapture()
+        if (captureThread?.isAlive == true || captureStopFailed) return false
         val previous = currentBin
         val applied = try {
             if (QhyccdJni.setBinMode(b, b) != QhyccdJni.QHYCCD_SUCCESS) {

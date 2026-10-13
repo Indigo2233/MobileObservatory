@@ -1,0 +1,2 @@
+# Raw interleaved image fixtures must retain their bytes on every platform.
+app/src/test/resources/stacking/*.rgb8 binary

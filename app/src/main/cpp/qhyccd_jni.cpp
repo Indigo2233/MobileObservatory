@@ -322,7 +322,9 @@ extern "C"
 JNIEXPORT jint JNICALL
 Java_com_indigo_mobileobservatory_camera_qhyccd_QhyccdJni_nCancelExposing(JNIEnv *, jobject) {
     if (!g_camhandle) return QHYCCD_ERROR;
-    return (jint) CancelQHYCCDExposing(g_camhandle);
+    // Discard the pending exposure/readout; the weaker CancelExposing still requires
+    // reading the old frame and is not supported by every camera (qhyccd.h).
+    return (jint) CancelQHYCCDExposingAndReadout(g_camhandle);
 }
 
 extern "C"

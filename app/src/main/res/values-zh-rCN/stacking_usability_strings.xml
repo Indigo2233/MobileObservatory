@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="stack_eaa_title">EAA · 实时辅助观测</string>
+    <string name="stack_eaa_tool_hint">边拍边叠加，直接观察逐渐显现的天体，无需先录像</string>
+    <string name="stack_eaa_intro">连接主相机，对焦并将目标居中后开始，无需先录像。调焦或移动目标时先暂停叠加并切回单帧；更换目标后重置会话。</string>
+    <string name="stack_eaa_ready">已就绪，将使用当前相机参数开始叠加。</string>
+    <string name="stack_eaa_summary">已叠加 %1$d 帧 · 累计 %2$.1f 秒</string>
+    <string name="stack_eaa_single_hint">当前为相机单帧，首个有效曝光通过筛选后显示叠加结果</string>
+    <string name="stack_camera_settings">前往相机 / 对焦与拍摄设置</string>
+    <string name="stack_disable_ae">关闭自动曝光</string>
+    <string name="stack_resume_capture">恢复相机采集</string>
+    <string name="stack_capture_paused">相机采集已停止，请先恢复采集，再继续叠加。</string>
+    <string name="stack_recording_parallel">正在并行录像 · 已录制 %1$d 帧，叠加独立进行。</string>
+    <string name="stack_quality_details">质量与丢帧详情</string>
+    <string name="stack_observe_large">大图观测</string>
+    <string name="stack_show_controls">显示控制</string>
+    <string name="stack_switch_single">切回单帧</string>
+    <string name="stack_switch_accumulated">查看叠加</string>
+    <string name="stack_saved_easy">结果已保存</string>
+    <string name="stack_saved_library">在“文件浏览 → 叠加结果”中随时找回。PNG 可直接查看，FITS 保留线性原始数据。</string>
+    <string name="stack_view_saved">查看保存的图片</string>
+    <string name="stack_all_results">全部叠加结果</string>
+    <string name="stack_planetary_steps">① 选择录像 → ② 分析质量 → ③ 叠加最佳帧 → ④ 调整并保存。不熟悉 ROI 时可先保留完整画面。</string>
+    <string name="stack_import_other">从其他位置导入</string>
+    <string name="stack_library_hint">本软件拍摄的 SER/PSER 自动显示在这里，最新录像排在前面，无需寻找手机目录。</string>
+    <string name="stack_no_recordings">还没有已完成的 SER/PSER 录像。请在相机页选择 SER 或 PSER 录制，停止录像后回到这里。MP4 和单张照片暂不用于此流程。</string>
+    <string name="stack_recording_excluded">当前录像尚未写完，请先停止录像，再选择它进行分析。</string>
+    <string name="stack_prepare_ser">设置为 SER 并前往相机</string>
+    <string name="stack_refresh_library">刷新列表</string>
+    <string name="stack_auto_stretch">自动显示拉伸</string>
+    <string name="stack_auto_stretch_hint">只调节显示，不改变原始数据。EAA 首个有效结果自动调整一次，之后可点此重新适应亮度。</string>
+    <string name="stack_auto_stretch_unavailable">当前有效信号变化不足，暂时无法自动拉伸。可继续累积或手动调整亮度。</string>
+    <string name="stack_show_details">保存位置与技术详情</string>
+    <string name="stack_hide_details">收起技术详情</string>
+    <string name="stack_show_advanced">展开高级图像调节</string>
+    <string name="stack_hide_advanced">收起高级图像调节</string>
+</resources>

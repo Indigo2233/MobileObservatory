@@ -15,6 +15,7 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.FilterCenterFocus
 import androidx.compose.material.icons.filled.FitScreen
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Nightlight
 import androidx.compose.material.icons.filled.NightlightRound
 import androidx.compose.material.icons.filled.Search
@@ -63,6 +64,7 @@ fun CameraPreviewTools(
     onToggleCenterMarker: () -> Unit,
     onPlateSolve: () -> Unit,
     onOpenLibrary: () -> Unit,
+    onOpenLiveStack: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var menuOpen by rememberSaveable { mutableStateOf(false) }
@@ -176,6 +178,11 @@ fun CameraPreviewTools(
                             onOpenLibrary()
                         },
                         leadingIcon = { Icon(Icons.Default.VideoLibrary, contentDescription = null) }
+                    )
+                    if (connected) DropdownMenuItem(
+                        text = { Text(stringResource(R.string.stack_live)) },
+                        onClick = { menuOpen = false; onOpenLiveStack() },
+                        leadingIcon = { Icon(Icons.Default.Layers, contentDescription = null) }
                     )
                 }
             }

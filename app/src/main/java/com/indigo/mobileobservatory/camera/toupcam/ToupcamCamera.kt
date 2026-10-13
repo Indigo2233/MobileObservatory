@@ -14,6 +14,12 @@ import kotlin.math.roundToInt
 class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingCapable,
     CameraUsbBandwidthCapable, CameraBinningCapable {
 
+    override val sciencePixelTraits get() = if (!rawLayoutConfirmed || currentPixelFormat.isRgb) null else
+        CameraScienceLayouts.toupcam(rawFourCC, currentPixelFormat.nativeBits, zeroPadding = rawZeroPadding)
+    private val captureGeneration = CaptureGeneration()
+    override val scienceCaptureGeneration get() = captureGeneration.scienceGeneration
+    private var captureStopFailed = false
+
     companion object {
         private const val TAG = "ToupcamCamera"
     }
@@ -95,6 +101,9 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
     override val currentHardwareBin: Int get() = currentBin
     override var supportedHardwareBins: List<Int> = listOf(1); private set
     private var rawBits = 8
+    private var rawFourCC = 0
+    private var rawZeroPadding = 0
+    private var rawLayoutConfirmed = false
     private var baseBitDepth = 12
     private var modelFlag = 0L
 
@@ -170,6 +179,7 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
             baseBitDepth = rawBits
 
             ToupcamJni.putOption(ToupcamJni.OPTION_RAW, 1)
+            refreshRawDescription(updateFormat = false)
 
             supportedPixelFormats = buildSupportedFormats()
             Log.i(TAG, "Supported formats: ${supportedPixelFormats.joinToString { it.name }} rawBits=$rawBits flag=0x${modelFlag.toString(16)}")
@@ -183,6 +193,7 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
                 }
                 else -> when {
                     rawBits >= 16 -> PixelFormat.BAYER_RG16
+                    rawBits >= 14 -> PixelFormat.BAYER_RG14
                     rawBits >= 12 -> PixelFormat.BAYER_RG12
                     else -> PixelFormat.BAYER_RG10
                 }
@@ -195,6 +206,8 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
                 ToupcamJni.putOption(ToupcamJni.OPTION_BITDEPTH, 0)
                 currentPixelFormat = if (isMono) PixelFormat.MONO8 else PixelFormat.BAYER_RG8
             }
+            refreshRawDescription()
+            supportedPixelFormats = buildSupportedFormats()
 
             initReadoutModes()
 
@@ -227,6 +240,7 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
             cropInfo = CropInfo(0, 0, sensorW, sensorH)
             outputW = sensorW
             outputH = sensorH
+            captureStopFailed = false
             _isOpen.value = true
             initUsbBandwidth()
             FileLogger.i(TAG, "Opened: $modelName ${sensorW}x${sensorH} ${rawBits}bit mono=$isMono px=${pixelSize}um")
@@ -260,13 +274,39 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
             formats.add(PixelFormat.BAYER_RG8)
             val highBitFormat = when {
                 rawBits >= 16 -> PixelFormat.BAYER_RG16
+                rawBits >= 14 -> PixelFormat.BAYER_RG14
                 rawBits >= 12 -> PixelFormat.BAYER_RG12
                 rawBits >= 10 -> PixelFormat.BAYER_RG10
                 else -> null
             }
             if (highBitFormat != null) formats.add(highBitFormat)
         }
-        return formats
+        return formats.map { old -> CameraScienceLayouts.toupcamFormat(rawFourCC, old.nativeBits) ?: old }
+    }
+
+    /** Ask the SDK for the raw FourCC and current output depth after every mode change.
+     * Unknown formats retain preview compatibility but cannot enter the linear science path.
+     * Raw buffer layout and FourCC values are documented in app/src/main/cpp/toupcam.h.
+     */
+    private fun refreshRawDescription(updateFormat: Boolean = true) {
+        rawLayoutConfirmed = false
+        if (currentPixelFormat.isRgb && updateFormat) return
+        try {
+            if (ToupcamJni.getOption(ToupcamJni.OPTION_RAW) != 1) return
+            val raw = ToupcamJni.getRawFormat()
+            if (raw.size < 2) return
+            rawFourCC = raw[0]
+            // toupcam.h: TOUPCAM_OPTION_ZERO_PADDING, high zeros (RIGHT) by default.
+            rawZeroPadding = ToupcamJni.getOption(0x78)
+            if (rawZeroPadding !in 0..1) return
+            val deliveredBits = if (ToupcamJni.getOption(ToupcamJni.OPTION_BITDEPTH) == 0) 8 else raw[1]
+            val actual = CameraScienceLayouts.toupcamFormat(rawFourCC, deliveredBits) ?: return
+            rawLayoutConfirmed = true
+            if (updateFormat) currentPixelFormat = actual
+            FileLogger.i(TAG, "Verified raw FourCC=${rawFourCC.toUInt().toString(16)} depth=$deliveredBits format=$actual")
+        } catch (error: Exception) {
+            FileLogger.w(TAG, "Raw format not verified: ${error.message}")
+        }
     }
 
     override fun close() {
@@ -279,6 +319,7 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
             }
         } catch (_: Exception) {}
         ToupcamJni.close()
+        rawLayoutConfirmed = false
         _isOpen.value = false
         _coolingInfo.value = null
         _coolerOn.value = false
@@ -287,8 +328,21 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
         Log.i(TAG, "Camera closed")
     }
 
-    override fun startCapture(callback: FrameCallback) {
+    @Synchronized override fun startCapture(callback: FrameCallback) {
         if (!_isOpen.value) return
+        if (running.get() || captureThread?.isAlive == true || captureStopFailed) {
+            Log.w(TAG, "Cannot start while the previous capture has not stopped")
+            return
+        }
+        val verified = runCatching {
+            val manualExposure = ToupcamJni.putAutoExpoEnable(0)
+            val exposure = ToupcamJni.getExpoTime().toFloat()
+            val gain = ToupcamJni.getExpoAGain().toFloat()
+            if (!manualExposure || exposure !in exposureRange.min..exposureRange.max || gain !in gainRange.min..gainRange.max) false
+            else { currentExposureUs = exposure; currentGain = gain; true }
+        }.getOrDefault(false)
+        val flushed = runCatching { ToupcamJni.putOption(ToupcamJni.OPTION_FLUSH, 3) }.getOrDefault(false)
+        hasNewFrame.set(false)
         frameCallback = callback
 
         if (!ToupcamJni.startPull(this)) {
@@ -296,10 +350,11 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
             return
         }
 
+        val generation = captureGeneration.begin(verified && flushed)
         running.set(true)
         captureThread = Thread({
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY)
-            captureLoop()
+            captureLoop(generation, callback)
         }, "ToupcamCapture").apply {
             priority = Thread.MAX_PRIORITY
             start()
@@ -309,25 +364,30 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
         Log.i(TAG, "Capture started (${currentRoi.width}x${currentRoi.height})")
     }
 
-    override fun stopCapture() {
-        if (!_isCapturing.value) return
+    @Synchronized override fun stopCapture() {
+        captureGeneration.stop()
+        if (!_isCapturing.value && captureThread?.isAlive != true && !captureStopFailed) return
         running.set(false)
-        captureThread?.join(2000)
-        captureThread = null
-        ToupcamJni.stop()
         _isCapturing.value = false
         frameCallback = null
+        captureStopFailed = !runCatching { ToupcamJni.stop() }.getOrDefault(false)
+        val thread = captureThread
+        if (thread !== Thread.currentThread()) thread?.join(2000)
+        if (thread?.isAlive != true) captureThread = null
+        hasNewFrame.set(false)
         Log.i(TAG, "Capture stopped")
     }
 
-    override fun setExposureTime(us: Float) {
+    @Synchronized override fun setExposureTime(us: Float) {
+        captureGeneration.invalidateScience()
         val clamped = us.coerceIn(exposureRange.min, exposureRange.max)
         if (ToupcamJni.putExpoTime(clamped.toInt())) {
             currentExposureUs = clamped
         }
     }
 
-    override fun setGain(value: Float) {
+    @Synchronized override fun setGain(value: Float) {
+        captureGeneration.invalidateScience()
         val gain = GainValueNormalizer.normalize(gainCapability, value).roundToInt()
         if (ToupcamJni.putExpoAGain(gain)) {
             currentGain = GainValueNormalizer.normalize(gainCapability, ToupcamJni.getExpoAGain().toFloat())
@@ -369,7 +429,8 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
     override fun adjustGainForExposure(stops: Float): Float =
         GainValueNormalizer.normalize(gainCapability, (currentGain * 2.0.pow(stops.toDouble())).toFloat())
 
-    override fun setOffset(value: Float) {
+    @Synchronized override fun setOffset(value: Float) {
+        captureGeneration.invalidateScience()
         if (!offsetSupported) return
         val clamped = value.roundToInt().coerceIn(offsetRange.min.toInt(), offsetRange.max.toInt())
         if (ToupcamJni.putOption(ToupcamJni.OPTION_BLACKLEVEL, clamped)) {
@@ -377,12 +438,14 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
         }
     }
 
-    override fun setPixelFormat(format: PixelFormat) {
+    @Synchronized override fun setPixelFormat(format: PixelFormat) {
+        captureGeneration.invalidateScience()
         if (format == currentPixelFormat) return
 
         val wasCapturing = _isCapturing.value
         val cb = frameCallback
         if (wasCapturing) stopCapture()
+        if (captureThread?.isAlive == true || captureStopFailed) return
 
         try { Thread.sleep(50) } catch (_: InterruptedException) {}
 
@@ -401,6 +464,7 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
         Log.i(TAG, "PixelFormat set to ${format.name} (BITDEPTH=$bitDepth, PIXEL_FORMAT=$pixFmtVal, ok=$ok)")
 
         currentPixelFormat = format
+        refreshRawDescription()
         readOffsetRange()
         readGainRange()
 
@@ -444,13 +508,15 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
             " (CG=$hasCg CGHDR=$hasCgHdr LowNoise=$hasLowNoise)")
     }
 
-    override fun setReadoutMode(mode: ReadoutMode) {
+    @Synchronized override fun setReadoutMode(mode: ReadoutMode) {
+        captureGeneration.invalidateScience()
         if (mode == currentReadoutMode) return
         if (mode !in supportedReadoutModes) return
 
         val wasCapturing = _isCapturing.value
         val cb = frameCallback
         if (wasCapturing) stopCapture()
+        if (captureThread?.isAlive == true || captureStopFailed) return
 
         try { Thread.sleep(50) } catch (_: InterruptedException) {}
 
@@ -509,6 +575,7 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
         if (isHdr) {
             rawBits = 16
             currentPixelFormat = PixelFormat.RGB48
+            rawLayoutConfirmed = false
             supportedPixelFormats = listOf(PixelFormat.RGB48)
             Log.i(TAG, "HDR mode: RGB48 16-bit")
         } else {
@@ -524,6 +591,7 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
                 }
                 else -> when {
                     rawBits >= 16 -> PixelFormat.BAYER_RG16
+                    rawBits >= 14 -> PixelFormat.BAYER_RG14
                     rawBits >= 12 -> PixelFormat.BAYER_RG12
                     else -> PixelFormat.BAYER_RG10
                 }
@@ -534,12 +602,15 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
             } else {
                 currentPixelFormat = if (isMono) PixelFormat.MONO8 else PixelFormat.BAYER_RG8
             }
+            refreshRawDescription()
+            supportedPixelFormats = buildSupportedFormats()
         }
         readOffsetRange()
         Log.i(TAG, "Format updated: ${currentPixelFormat.name} rawBits=$rawBits supported=${supportedPixelFormats.joinToString { it.name }}")
     }
 
-    override fun setRoi(roi: Roi) {
+    @Synchronized override fun setRoi(roi: Roi) {
+        captureGeneration.invalidateScience()
         val maxW = outputW.coerceAtLeast(1)
         val maxH = outputH.coerceAtLeast(1)
         val x = roi.x.coerceIn(0, maxW - 1)
@@ -560,16 +631,19 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
         }
     }
 
-    override fun resetRoi() {
+    @Synchronized override fun resetRoi() {
+        captureGeneration.invalidateScience()
         setRoi(Roi(0, 0, outputW, outputH))
     }
 
-    override fun setHardwareBin(bin: Int): Boolean {
+    @Synchronized override fun setHardwareBin(bin: Int): Boolean {
+        captureGeneration.invalidateScience()
         val b = if (bin in supportedHardwareBins) bin else return false
         if (b == currentBin) return true
         val wasCapturing = _isCapturing.value
         val cb = frameCallback
         if (wasCapturing) stopCapture()
+        if (captureThread?.isAlive == true || captureStopFailed) return false
         val previous = currentBin
         val applied = try {
             val option = if (b == 1) 1 else b
@@ -584,6 +658,7 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
                 ToupcamJni.putRoi(0, 0, outputW, outputH)
                 currentRoi = Roi(0, 0, outputW, outputH)
                 cropInfo = CropInfo(0, 0, outputW, outputH)
+                refreshRawDescription()
                 Log.i(TAG, "Bin -> $b, imageSize=${outputW}x${outputH}")
                 true
             }
@@ -611,14 +686,14 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
         }
     }
 
-    private fun captureLoop() {
+    private fun captureLoop(generation: Long, callback: FrameCallback) {
         var frameSeq = 0L
         var lastLoggedW = 0
         var lastLoggedH = 0
         var lastFrameTimeNs = System.nanoTime()
         val stallTimeoutNs = 2_000_000_000L
 
-        while (running.get()) {
+        while (running.get() && captureGeneration.isActive(generation)) {
             val hasFrame = hasNewFrame.getAndSet(false)
             if (!hasFrame) {
                 val elapsed = System.nanoTime() - lastFrameTimeNs
@@ -658,6 +733,7 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
                 val pullBufSize = sdkW * sdkH * bpp
                 val buf = getBuffer(pullBufSize)
                 val hr = ToupcamJni.pullImageRaw(buf, bits)
+                if (!captureGeneration.isActive(generation)) { recycleBuffer(buf); break }
                 if (hr != 0) {
                     recycleBuffer(buf)
                     continue
@@ -671,9 +747,10 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
                     height = frameH,
                     pixelFormat = fmt,
                     frameId = frameSeq,
-                    timestamp = System.currentTimeMillis()
+                    timestamp = System.currentTimeMillis(),
+                    captureGeneration = generation
                 )
-                frameCallback?.onFrame(frame)
+                if (captureGeneration.isActive(generation)) callback.onFrame(frame) else recycleBuffer(buf)
             } catch (e: Exception) {
                 Log.e(TAG, "Capture error: ${e.message}")
                 if (!running.get()) break

@@ -30,14 +30,11 @@ class PSERWriter(private val file: File) {
         private const val LITTLE_ENDIAN_FLAG = 0
 
         fun packedBytesPerFrame(w: Int, h: Int, nativeBits: Int): Int {
-            val totalPixels = w * h
-            return when (nativeBits) {
-                10 -> (totalPixels * 10 + 7) / 8
-                12 -> (totalPixels * 12 + 7) / 8
-                14 -> (totalPixels * 14 + 7) / 8
-                in 15..16 -> totalPixels * 2
-                else -> totalPixels
-            }
+            require(w > 0 && h > 0 && nativeBits in listOf(8, 10, 12, 14, 16))
+            val bits = Math.multiplyExact(w.toLong() * h, nativeBits.toLong())
+            val size = Math.addExact(bits, 7L) / 8L
+            require(size <= Int.MAX_VALUE) { "PSER frame exceeds buffer limit" }
+            return size.toInt()
         }
     }
 
@@ -55,7 +52,7 @@ class PSERWriter(private val file: File) {
         private set
 
     fun open(w: Int, h: Int, format: PixelFormat, cameraName: String? = null, filterName: String? = null) {
-        require(format != PixelFormat.RGB24) { "RGB24 Live View frames cannot be written as PSER" }
+        require(!format.isRgb) { "RGB frames cannot be written as packed SER; choose standard SER" }
         width = w
         height = h
         nativeBits = format.nativeBits
@@ -73,6 +70,7 @@ class PSERWriter(private val file: File) {
         packBuffer = ByteArray(packedFrameSize)
 
         raf = RandomAccessFile(file, "rw")
+        raf!!.setLength(0)
         writeHeader(cameraName, filterName)
     }
 
@@ -81,6 +79,8 @@ class PSERWriter(private val file: File) {
     fun writeFrame(frame: FrameData) {
         val r = raf ?: return
         val buf = packBuffer ?: return
+        require(frame.width == width && frame.height == height && !frame.pixelFormat.isRgb) { "PSER frame layout changed while recording" }
+        require(frame.data.size.toLong() >= width.toLong() * height * frame.pixelFormat.bytesPerPixel) { "Truncated PSER input frame" }
 
         if (nativeBits <= 8) {
             val writeLen = packedFrameSize.coerceAtMost(frame.data.size)
@@ -122,11 +122,12 @@ class PSERWriter(private val file: File) {
 
     fun close() {
         val r = raf ?: return
-        writeTimestampTrailer(r)
-        updateFrameCount(r)
-        r.close()
         raf = null
         packBuffer = null
+        r.use {
+            writeTimestampTrailer(it)
+            updateFrameCount(it)
+        }
     }
 
     val isOpen: Boolean get() = raf != null
@@ -279,10 +280,12 @@ class PSERWriter(private val file: File) {
     }
 
     private fun updateFrameCount(r: RandomAccessFile) {
+        val position = r.filePointer
         r.seek(38)
         val buf = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN)
         buf.putInt(frameCount)
         r.write(buf.array())
+        r.seek(position)
     }
 
     private fun instantToFileTime(instant: Instant): Long {

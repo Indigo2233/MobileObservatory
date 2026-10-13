@@ -162,6 +162,7 @@ fun ControlPanel(
     onMountTracking: (Boolean) -> Unit = {},
     onMountHome: () -> Unit = {},
     onMountSetHome: () -> Unit = {},
+    onOpenLiveStack: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val exposureMin by exposureMinFlow.collectAsState()
@@ -931,6 +932,11 @@ fun ControlPanel(
         // ── Capture Settings ───────
         if (activeSection == ControlPanelSection.CAPTURE) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = onOpenLiveStack, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                    Icon(Icons.Default.Layers, null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.stack_live))
+                }
                 ExposureSlider(
                     exposureUs = exposureUs,
                     minUs = exposureMin,

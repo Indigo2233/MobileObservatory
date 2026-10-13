@@ -40,12 +40,14 @@ class SERWriter(private val file: File) {
 
     fun open(w: Int, h: Int, format: PixelFormat, cameraName: String? = null, filterName: String? = null) {
         require(format != PixelFormat.RGB24) { "RGB24 Live View frames cannot be written as SER" }
+        require(w > 0 && h > 0 && w.toLong() * h <= Int.MAX_VALUE / format.bytesPerPixel)
         this.cameraName = cameraName
         this.filterName = filterName
         width = w
         height = h
         pixelDepth = format.nativeBits.let { if (it <= 8) 8 else it }
         colorId = when {
+            format == PixelFormat.RGB48 -> 100
             format.name.startsWith("BAYER_RG") -> COLOR_BAYER_RGGB
             format.name.startsWith("BAYER_GR") -> COLOR_BAYER_GRBG
             format.name.startsWith("BAYER_GB") -> COLOR_BAYER_GBRG
@@ -53,12 +55,13 @@ class SERWriter(private val file: File) {
             else -> COLOR_MONO
         }
         val bpp = if (pixelDepth > 8) 2 else 1
-        bytesPerFrame = w * h * bpp
+        bytesPerFrame = w * h * bpp * if (colorId == 100) 3 else 1
         frameCount = 0
         totalBytesWritten = 0
         timestamps.clear()
 
         raf = RandomAccessFile(file, "rw")
+        raf!!.setLength(0)
         writeHeader()
     }
 
@@ -70,6 +73,8 @@ class SERWriter(private val file: File) {
         if (frame.width != width || frame.height != height) {
             return
         }
+        require(frame.data.size.toLong() >= width.toLong() * height * frame.pixelFormat.bytesPerPixel) { "Truncated SER input frame" }
+        require((colorId == 100) == frame.pixelFormat.isRgb) { "SER channel layout changed while recording" }
 
         val frameBpp = frame.pixelFormat.bytesPerPixel
         val expectedBpp = if (pixelDepth > 8) 2 else 1
@@ -111,10 +116,11 @@ class SERWriter(private val file: File) {
 
     fun close() {
         val r = raf ?: return
-        writeTimestampTrailer(r)
-        updateFrameCount(r)
-        r.close()
         raf = null
+        r.use {
+            writeTimestampTrailer(it)
+            updateFrameCount(it)
+        }
     }
 
     val isOpen: Boolean get() = raf != null
@@ -168,10 +174,12 @@ class SERWriter(private val file: File) {
     }
 
     private fun updateFrameCount(r: RandomAccessFile) {
+        val position = r.filePointer
         r.seek(38)
         val buf = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN)
         buf.putInt(frameCount)
         r.write(buf.array())
+        r.seek(position)
     }
 
     private fun instantToFileTime(instant: Instant): Long {

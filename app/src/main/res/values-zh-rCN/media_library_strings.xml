@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="media_library_title">我的拍摄</string>
+    <string name="media_library_hint">本 App 拍摄的录像和照片会自动归集到这里，无需手动寻找文件夹。</string>
+    <string name="media_category_ser">天文录像 · SER/PSER</string>
+    <string name="media_category_mp4">视频 · MP4</string>
+    <string name="media_category_fits">科学图像 · FITS</string>
+    <string name="media_category_photos">照片 / PNG</string>
+    <string name="media_category_results">叠加结果</string>
+    <string name="media_empty_ser">还没有 SER/PSER 录像。请在相机的录像设置中选择 SER 或 PSER，再录制目标。MP4 视频不能用于行星后处理叠加。</string>
+    <string name="media_empty_results">保存后的叠加结果会出现在这里：PNG 用于查看，线性 FITS 用于继续处理。请先在实时叠加或行星叠加中保存结果。</string>
+    <string name="media_empty_photos">本 App 拍摄的照片，以及保存的叠加 PNG 图像会出现在这里。</string>
+    <string name="media_empty_fits">FITS 拍摄、录像序列及线性叠加结果会出现在这里。</string>
+    <string name="media_empty_mp4">使用 MP4 格式录制的视频会出现在这里。</string>
+    <string name="media_stack_action">叠加</string>
+    <string name="media_file_unavailable">这个文件已不在原位置，请从下方选择其他文件。</string>
+    <string name="media_loading">正在读取拍摄文件…</string>
+    <string name="media_no_video_player">尚未安装可播放 MP4 的应用，请安装视频播放器后重试。行星叠加需要 SER 或 PSER 录像。</string>
+    <string name="media_video_open_failed">无法打开视频，请确认文件仍然存在。</string>
+</resources>

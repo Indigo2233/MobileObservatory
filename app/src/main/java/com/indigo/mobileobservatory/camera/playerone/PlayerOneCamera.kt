@@ -1,6 +1,9 @@
 package com.indigo.mobileobservatory.camera.playerone
 
 import com.indigo.mobileobservatory.camera.Camera
+import com.indigo.mobileobservatory.camera.CaptureGeneration
+import com.indigo.mobileobservatory.camera.CaptureStartupBarrier
+import com.indigo.mobileobservatory.camera.CameraScienceLayouts
 import com.indigo.mobileobservatory.camera.CameraBinningCapable
 import com.indigo.mobileobservatory.camera.CameraEnvironmentControlCapable
 import com.indigo.mobileobservatory.camera.CameraInfo
@@ -42,6 +45,11 @@ import kotlin.math.roundToInt
 class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBandwidthCapable,
     CameraEnvironmentControlCapable, CameraBinningCapable {
 
+    override val sciencePixelTraits get() = CameraScienceLayouts.fullContainer(currentPixelFormat)
+    private val captureGeneration = CaptureGeneration()
+    override val scienceCaptureGeneration get() = captureGeneration.scienceGeneration
+    private var captureStopFailed = false
+
     companion object {
         private const val TAG = "PlayerOneCam"
         private const val GRAB_TIMEOUT_MS = 5000
@@ -70,6 +78,7 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
         var pixelFormat: PixelFormat = PixelFormat.MONO8
         var frameId: Long = 0
         var timestamp: Long = 0
+        var captureGeneration: Long = 0
     }
 
     private val _isOpen = MutableStateFlow(false)
@@ -209,6 +218,7 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
                 initCooling(cam)
             }
 
+            captureStopFailed = false
             _isOpen.value = true
             acceptRecycledBuffers.set(true)
             FileLogger.i(
@@ -244,16 +254,17 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
      * threads and never joins them.
      */
     fun markDisconnected() {
+        captureGeneration.stop()
         disconnected = true
         running.set(false)
         tempPollRunning.set(false)
         rampRunning.set(false)
         val capture = captureThread
-        captureThread = null
         capture?.interrupt()
         val delivery = deliveryThread
-        deliveryThread = null
         delivery?.interrupt()
+        if (capture?.isAlive != true) captureThread = null
+        if (delivery?.isAlive != true) deliveryThread = null
         tempPollThread?.interrupt()
         tempPollThread = null
         rampThread?.interrupt()
@@ -301,10 +312,24 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
         FileLogger.i(TAG, "Camera closed")
     }
 
-    override fun startCapture(callback: FrameCallback) {
+    @Synchronized override fun startCapture(callback: FrameCallback) {
         val cam = poa ?: return
         if (!_isOpen.value || disconnected) return
+        if (running.get() || captureThread?.isAlive == true || deliveryThread?.isAlive == true || captureStopFailed) {
+            FileLogger.w(TAG, "Cannot start while the previous capture has not stopped")
+            return
+        }
+        val verified = runCatching {
+            val exposureConfig = cam.getConfig(PoaConfig.EXPOSURE_MICROSECONDS)
+            val gainConfig = cam.getConfig(PoaConfig.GAIN)
+            val exposure = exposureConfig.value.asInteger().toFloat()
+            val gain = gainConfig.value.asInteger().toFloat()
+            if (exposureConfig.isAuto || gainConfig.isAuto || exposure !in exposureRange.min..hwExposureMaxUs ||
+                gain !in gainRange.min..gainRange.max) false
+            else { currentExposureUs = exposure; currentGain = gain; true }
+        }.getOrDefault(false)
         frameCallback = callback
+        ensureDirectBuffers()
 
         try {
             cam.startExposure(false)
@@ -314,11 +339,22 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
             return
         }
 
-        ensureDirectBuffers()
+        val startup = CaptureStartupBarrier()
+        val startupBuffer = checkNotNull(directBuffers).first()
+        val drained = startup.drain {
+            if (!cam.isImageReady) CaptureStartupBarrier.Read.EMPTY
+            else {
+                startupBuffer.clear()
+                cam.getImageData(startupBuffer, 0)
+                CaptureStartupBarrier.Read.BUFFERED_FRAME
+            }
+        }
+        if (!drained) FileLogger.w(TAG, "Startup queue freshness unverified; preview only")
+        val generation = captureGeneration.begin(verified && drained)
         running.set(true)
         captureThread = Thread({
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY)
-            captureLoop()
+            captureLoop(generation, callback, startup)
         }, "PlayerOneCapture").apply {
             priority = Thread.MAX_PRIORITY
             start()
@@ -327,41 +363,42 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
         FileLogger.i(TAG, "Capture started")
     }
 
-    override fun stopCapture() {
-        if (!_isCapturing.value && !running.get()) return
+    @Synchronized override fun stopCapture() {
+        captureGeneration.stop()
+        if (!_isCapturing.value && !running.get() && captureThread?.isAlive != true &&
+            deliveryThread?.isAlive != true && !captureStopFailed) return
         running.set(false)
-        captureThread?.interrupt()
-        captureThread?.join(3000)
-        captureThread = null
-        deliveryThread?.interrupt()
-        deliveryThread?.join(3000)
-        deliveryThread = null
-
-        if (!disconnected) {
-            try {
-                poa?.stopExposure()
-            } catch (e: PoaException) {
-                FileLogger.w(TAG, "stopExposure: ${e.error}")
-            } catch (_: Throwable) {}
-        }
         _isCapturing.value = false
         frameCallback = null
+        captureStopFailed = if (disconnected) true else runCatching {
+            checkNotNull(poa).stopExposure(); false
+        }.getOrDefault(true)
+        val reader = captureThread
+        val delivery = deliveryThread
+        reader?.interrupt(); delivery?.interrupt()
+        if (reader !== Thread.currentThread()) reader?.join(3000)
+        if (delivery !== Thread.currentThread()) delivery?.join(3000)
+        if (reader?.isAlive != true) captureThread = null
+        if (delivery?.isAlive != true) deliveryThread = null
         FileLogger.i(TAG, "Capture stopped")
     }
 
-    override fun setExposureTime(us: Float) {
+    @Synchronized override fun setExposureTime(us: Float) {
+        captureGeneration.invalidateScience()
         val cam = poa ?: return
         if (disconnected) return
         val clamped = us.coerceIn(exposureRange.min, hwExposureMaxUs)
-        currentExposureUs = clamped
         try {
             cam.setConfig(PoaConfig.EXPOSURE_MICROSECONDS, ConfigValue.ofInteger(clamped.toLong()), false)
+            currentExposureUs = cam.getConfig(PoaConfig.EXPOSURE_MICROSECONDS).value.asInteger().toFloat()
+                .takeIf { it in exposureRange.min..hwExposureMaxUs } ?: clamped
         } catch (e: PoaException) {
             FileLogger.w(TAG, "setExposure ${e.error}: ${e.message}")
         }
     }
 
-    override fun setGain(value: Float) {
+    @Synchronized override fun setGain(value: Float) {
+        captureGeneration.invalidateScience()
         val cam = poa ?: return
         if (disconnected) return
         val gain = GainValueNormalizer.normalize(gainCapability, value).roundToInt()
@@ -388,7 +425,8 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
             currentGain + GainConversions.playerOneStopsToNative(stops)
         )
 
-    override fun setOffset(value: Float) {
+    @Synchronized override fun setOffset(value: Float) {
+        captureGeneration.invalidateScience()
         val cam = poa ?: return
         if (disconnected || !offsetSupported) return
         val clamped = value.roundToInt().coerceIn(offsetRange.min.toInt(), offsetRange.max.toInt())
@@ -400,7 +438,8 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
         }
     }
 
-    override fun setPixelFormat(format: PixelFormat) {
+    @Synchronized override fun setPixelFormat(format: PixelFormat) {
+        captureGeneration.invalidateScience()
         if (format == currentPixelFormat) return
         val cam = poa ?: return
         if (disconnected) return
@@ -411,6 +450,7 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
         val wasCapturing = _isCapturing.value
         val cb = frameCallback
         if (wasCapturing) stopCapture()
+        if (captureThread?.isAlive == true || deliveryThread?.isAlive == true || captureStopFailed) return
 
         val poaFmt = when {
             format == PixelFormat.MONO8 && PoaImageFormat.MONO8 in (poa?.properties?.imageFormats ?: emptyList()) ->
@@ -433,7 +473,8 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
         if (wasCapturing && cb != null) startCapture(cb)
     }
 
-    override fun setReadoutMode(mode: ReadoutMode) {
+    @Synchronized override fun setReadoutMode(mode: ReadoutMode) {
+        captureGeneration.invalidateScience()
         val cam = poa ?: return
         if (disconnected) return
         if (mode == currentReadoutMode) return
@@ -445,6 +486,7 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
         val wasCapturing = _isCapturing.value
         val cb = frameCallback
         if (wasCapturing) stopCapture()
+        if (captureThread?.isAlive == true || deliveryThread?.isAlive == true || captureStopFailed) return
         val previousExposure = currentExposureUs
         val previousGain = currentGain
         val previousOffset = currentOffset
@@ -479,7 +521,8 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
         setHardwareBin(bin)
     }
 
-    override fun setHardwareBin(bin: Int): Boolean {
+    @Synchronized override fun setHardwareBin(bin: Int): Boolean {
+        captureGeneration.invalidateScience()
         val cam = poa ?: return false
         if (disconnected) return false
         val b = if (bin in supportedBins) bin else return false
@@ -487,6 +530,7 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
         val wasCapturing = _isCapturing.value
         val cb = frameCallback
         if (wasCapturing) stopCapture()
+        if (captureThread?.isAlive == true || deliveryThread?.isAlive == true || captureStopFailed) return false
         val applied = try {
             cam.setImageBin(b)
             currentBin = b
@@ -508,7 +552,8 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
     fun getBin(): Int = currentBin
     fun getSupportedBins(): List<Int> = supportedBins
 
-    override fun setRoi(roi: Roi) {
+    @Synchronized override fun setRoi(roi: Roi) {
+        captureGeneration.invalidateScience()
         val cam = poa ?: return
         if (disconnected) return
         val maxW = sensorW / currentBin
@@ -518,6 +563,7 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
         val wasCapturing = _isCapturing.value
         val cb = frameCallback
         if (wasCapturing) stopCapture()
+        if (captureThread?.isAlive == true || deliveryThread?.isAlive == true || captureStopFailed) return
 
         try {
             cam.setImageStartPosition(aligned.x, aligned.y)
@@ -532,7 +578,8 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
         if (wasCapturing && cb != null) startCapture(cb)
     }
 
-    override fun resetRoi() {
+    @Synchronized override fun resetRoi() {
+        captureGeneration.invalidateScience()
         val maxW = sensorW / currentBin
         val maxH = sensorH / currentBin
         setRoi(Roi(0, 0, maxW, maxH))
@@ -654,7 +701,7 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
 
     // --- internals ---
 
-    private fun captureLoop() {
+    private fun captureLoop(generation: Long, callback: FrameCallback, startup: CaptureStartupBarrier) {
         val cam = poa ?: return
         val buffers = directBuffers ?: return
         val freeSlots = ArrayBlockingQueue<FrameSlot>(buffers.size)
@@ -666,7 +713,7 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
 
         val delivery = Thread({
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY)
-            deliveryLoop(pendingFrames, freeSlots)
+            deliveryLoop(pendingFrames, freeSlots, generation, callback)
         }, "PlayerOneDelivery").apply {
             priority = Thread.MAX_PRIORITY
             start()
@@ -676,7 +723,7 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
         var frameSeq = 0L
         var statsFrameCount = 0L
         var statsStartedNs = System.nanoTime()
-        while (running.get() && !disconnected) {
+        while (running.get() && !disconnected && captureGeneration.isActive(generation)) {
             var slot: FrameSlot? = null
             try {
                 val w = currentRoi.width
@@ -686,6 +733,8 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
                 slot = freeSlots.take()
                 slot.buffer.clear()
                 cam.getImageData(slot.buffer, GRAB_TIMEOUT_MS)
+                if (!captureGeneration.isActive(generation)) { freeSlots.offer(slot); slot = null; break }
+                if (!startup.acceptCompleteFrame()) { freeSlots.offer(slot); slot = null; continue }
 
                 frameSeq++
                 if (frameSeq == 1L) {
@@ -698,6 +747,7 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
                 completedSlot.pixelFormat = currentPixelFormat
                 completedSlot.frameId = frameSeq
                 completedSlot.timestamp = System.currentTimeMillis()
+                completedSlot.captureGeneration = generation
                 pendingFrames.put(completedSlot)
                 slot = null
                 statsFrameCount++
@@ -749,15 +799,17 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
                 Thread.currentThread().interrupt()
             }
         }
-        if (deliveryThread === delivery) deliveryThread = null
+        if (deliveryThread === delivery && !delivery.isAlive) deliveryThread = null
         FileLogger.i(TAG, "Capture loop ended, $frameSeq frames")
     }
 
     private fun deliveryLoop(
         pendingFrames: ArrayBlockingQueue<FrameSlot>,
-        freeSlots: ArrayBlockingQueue<FrameSlot>
+        freeSlots: ArrayBlockingQueue<FrameSlot>,
+        generation: Long,
+        callback: FrameCallback
     ) {
-        while (running.get() || pendingFrames.isNotEmpty()) {
+        while (captureGeneration.isActive(generation) && (running.get() || pendingFrames.isNotEmpty())) {
             val pending = try {
                 pendingFrames.poll(50, TimeUnit.MILLISECONDS)
             } catch (_: InterruptedException) {
@@ -775,8 +827,7 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
                     pending.expectedSize.coerceAtMost(outData.size)
                 )
 
-                val callback = frameCallback
-                if (callback != null) {
+                if (captureGeneration.isActive(generation)) {
                     callback.onFrame(
                         FrameData(
                             data = outData,
@@ -784,7 +835,8 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
                             height = pending.height,
                             pixelFormat = pending.pixelFormat,
                             frameId = pending.frameId,
-                            timestamp = pending.timestamp
+                            timestamp = pending.timestamp,
+                            captureGeneration = pending.captureGeneration
                         )
                     )
                     handedOff = true

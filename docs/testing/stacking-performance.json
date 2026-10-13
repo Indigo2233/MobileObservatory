@@ -1,0 +1,309 @@
+{
+  "schemaVersion": 1,
+  "measuredDate": "2026-10-13",
+  "baselineCommit": "b081540d484fdcec4edb5e2dda548489b665e497",
+  "currentRevision": "Uncommitted working tree, exact source SHA256 below",
+  "environment": {
+    "os": "Windows 11",
+    "cpu": "Intel Core Ultra 9 285H",
+    "logicalProcessors": 16,
+    "physicalMemoryBytes": 33747632128,
+    "java": "OpenJDK 17.0.20.1 HotSpot",
+    "kotlinCompiler": "1.9.20",
+    "coroutines": "1.7.3",
+    "json": "20240303",
+    "jvmFlags": [
+      "-Xms512m",
+      "-Xmx512m",
+      "-XX:+UseG1GC",
+      "-XX:ActiveProcessorCount=2"
+    ]
+  },
+  "method": {
+    "width": 1024,
+    "height": 768,
+    "finalRuns": 2,
+    "order": "current/baseline then baseline/current, separate JVM per case",
+    "warmupCalls": {
+      "post_default": 12,
+      "post_preview_cached": 12,
+      "ddfapd": 20,
+      "rejected_snapshot": 10,
+      "planetary": 12,
+      "normalizer": 30
+    },
+    "timedCallsPerRun": {
+      "post_default": 40,
+      "post_preview_cached": 40,
+      "ddfapd": 40,
+      "rejected_snapshot": 40,
+      "planetary": 40,
+      "normalizer": 300
+    },
+    "queue": {
+      "waitingCapacity": 2,
+      "seconds": 5,
+      "offeredPerRun": 150,
+      "scienceWorkers": 1,
+      "producerFps": 30
+    },
+    "allocation": "HotSpot ThreadMXBean producer/main and science worker allocation; bytes/op is per offered frame for queue",
+    "gc": "GarbageCollectorMXBean cumulative collection ms, integer resolution; not an exact stop-the-world pause trace",
+    "heap": "Maximum sampled used JVM heap every 2ms; includes retained inputs/workspace and uncollected garbage",
+    "p95": "Range of two per-run P95s; queue uses observed StateFlow processingMs events",
+    "reference": "Real production Kotlin source. Baseline extracted by git show. Android Bitmap upload replaced by common row checksum in preview case."
+  },
+  "limitations": [
+    "Synthetic desktop JVM only; does not represent Android ART, phone thermals or USB throughput.",
+    "Host Gradle/emulator/native build work may overlap, especially postprocessing reruns; timing is descriptive, not a controlled significance claim.",
+    "Less allocation does not imply a smaller sampled heap peak or higher queue throughput.",
+    "One-shot process remains slower in mean despite lower allocation; repeated cached preview is faster.",
+    "Both queue versions process 38/150 frames per run and drop 112/150 (74.67%); no throughput improvement is claimed."
+  ],
+  "cases": {
+    "normalizer": {
+      "baseline": {
+        "allocatedBytesPerOperation": 1573768.747,
+        "allocatedBytesPerSecond": 1518844299.122,
+        "meanFrameMs": 1.0329,
+        "p95FrameMsRange": [
+          1.326,
+          1.4904
+        ],
+        "gcCollectionCount": 4.0,
+        "gcCollectionTimeMs": 2.0,
+        "sampledHeapPeakBytes": 240184528.0,
+        "timingSamples": 600.0,
+        "queueDropRate": null
+      },
+      "current": {
+        "allocatedBytesPerOperation": 888.507,
+        "allocatedBytesPerSecond": 1190610.085,
+        "meanFrameMs": 0.7432,
+        "p95FrameMsRange": [
+          0.8848,
+          1.0037
+        ],
+        "gcCollectionCount": 0.0,
+        "gcCollectionTimeMs": 0.0,
+        "sampledHeapPeakBytes": 5303792.0,
+        "timingSamples": 600.0,
+        "queueDropRate": null
+      },
+      "allocationReductionPercent": 99.944
+    },
+    "ddfapd": {
+      "baseline": {
+        "allocatedBytesPerOperation": 35394685.8,
+        "allocatedBytesPerSecond": 1156559674.144,
+        "meanFrameMs": 30.5779,
+        "p95FrameMsRange": [
+          33.6271,
+          34.1896
+        ],
+        "gcCollectionCount": 14.0,
+        "gcCollectionTimeMs": 8.0,
+        "sampledHeapPeakBytes": 229664840.0,
+        "timingSamples": 80.0,
+        "queueDropRate": null
+      },
+      "current": {
+        "allocatedBytesPerOperation": 9442335.4,
+        "allocatedBytesPerSecond": 328323622.684,
+        "meanFrameMs": 28.7318,
+        "p95FrameMsRange": [
+          29.8306,
+          30.6276
+        ],
+        "gcCollectionCount": 4.0,
+        "gcCollectionTimeMs": 2.0,
+        "sampledHeapPeakBytes": 236994760.0,
+        "timingSamples": 80.0,
+        "queueDropRate": null
+      },
+      "allocationReductionPercent": 73.323
+    },
+    "planetary": {
+      "baseline": {
+        "allocatedBytesPerOperation": 6366055.1,
+        "allocatedBytesPerSecond": 236616905.594,
+        "meanFrameMs": 26.8873,
+        "p95FrameMsRange": [
+          28.4714,
+          30.951
+        ],
+        "gcCollectionCount": 2.0,
+        "gcCollectionTimeMs": 0.0,
+        "sampledHeapPeakBytes": 244357392.0,
+        "timingSamples": 80.0,
+        "queueDropRate": null
+      },
+      "current": {
+        "allocatedBytesPerOperation": 3283691.0,
+        "allocatedBytesPerSecond": 128422377.3,
+        "meanFrameMs": 25.552,
+        "p95FrameMsRange": [
+          26.9695,
+          27.6005
+        ],
+        "gcCollectionCount": 0.0,
+        "gcCollectionTimeMs": 0.0,
+        "sampledHeapPeakBytes": 200318128.0,
+        "timingSamples": 80.0,
+        "queueDropRate": null
+      },
+      "allocationReductionPercent": 48.419
+    },
+    "post_default": {
+      "baseline": {
+        "allocatedBytesPerOperation": 35815414.1,
+        "allocatedBytesPerSecond": 297214430.928,
+        "meanFrameMs": 120.4834,
+        "p95FrameMsRange": [
+          120.5863,
+          198.117
+        ],
+        "gcCollectionCount": 8.0,
+        "gcCollectionTimeMs": 13.0,
+        "sampledHeapPeakBytes": 379639992.0,
+        "timingSamples": 80.0,
+        "queueDropRate": null
+      },
+      "current": {
+        "allocatedBytesPerOperation": 22604371.9,
+        "allocatedBytesPerSecond": 172637945.981,
+        "meanFrameMs": 130.9076,
+        "p95FrameMsRange": [
+          130.9087,
+          163.2091
+        ],
+        "gcCollectionCount": 2.0,
+        "gcCollectionTimeMs": 2.0,
+        "sampledHeapPeakBytes": 522253552.0,
+        "timingSamples": 80.0,
+        "queueDropRate": null
+      },
+      "allocationReductionPercent": 36.886
+    },
+    "post_preview_cached": {
+      "baseline": {
+        "allocatedBytesPerOperation": 35770462.2,
+        "allocatedBytesPerSecond": 272864073.454,
+        "meanFrameMs": 131.0734,
+        "p95FrameMsRange": [
+          134.8254,
+          235.4133
+        ],
+        "gcCollectionCount": 8.0,
+        "gcCollectionTimeMs": 12.0,
+        "sampledHeapPeakBytes": 376495024.0,
+        "timingSamples": 80.0,
+        "queueDropRate": null
+      },
+      "current": {
+        "allocatedBytesPerOperation": 1933.2,
+        "allocatedBytesPerSecond": 24671.785,
+        "meanFrameMs": 78.3362,
+        "p95FrameMsRange": [
+          84.7853,
+          93.8752
+        ],
+        "gcCollectionCount": 0.0,
+        "gcCollectionTimeMs": 0.0,
+        "sampledHeapPeakBytes": 12651240.0,
+        "timingSamples": 80.0,
+        "queueDropRate": null
+      },
+      "allocationReductionPercent": 99.995
+    },
+    "rejected_snapshot": {
+      "baseline": {
+        "allocatedBytesPerOperation": 21096292.6,
+        "allocatedBytesPerSecond": 2338837692.725,
+        "meanFrameMs": 9.0014,
+        "p95FrameMsRange": [
+          10.5663,
+          10.8232
+        ],
+        "gcCollectionCount": 8.0,
+        "gcCollectionTimeMs": 4.0,
+        "sampledHeapPeakBytes": 271983648.0,
+        "timingSamples": 80.0,
+        "queueDropRate": null
+      },
+      "current": {
+        "allocatedBytesPerOperation": 8677003.2,
+        "allocatedBytesPerSecond": 1119600314.319,
+        "meanFrameMs": 7.7313,
+        "p95FrameMsRange": [
+          9.3094,
+          9.5179
+        ],
+        "gcCollectionCount": 2.0,
+        "gcCollectionTimeMs": 1.0,
+        "sampledHeapPeakBytes": 360300768.0,
+        "timingSamples": 80.0,
+        "queueDropRate": null
+      },
+      "allocationReductionPercent": 58.87
+    },
+    "queue_30fps": {
+      "baseline": {
+        "allocatedBytesPerOperation": 11596765.253,
+        "allocatedBytesPerSecond": 329419412.264,
+        "meanFrameMs": 138.1901,
+        "p95FrameMsRange": [
+          253.6175,
+          293.3815
+        ],
+        "gcCollectionCount": 24.0,
+        "gcCollectionTimeMs": 11.0,
+        "sampledHeapPeakBytes": 258305728.0,
+        "timingSamples": 76.0,
+        "queueDropRate": 0.7466666666666667,
+        "offered": 300,
+        "accepted": 76.0,
+        "rejected": 0.0,
+        "dropped": 224.0
+      },
+      "current": {
+        "allocatedBytesPerOperation": 5074678.16,
+        "allocatedBytesPerSecond": 144268038.188,
+        "meanFrameMs": 137.9761,
+        "p95FrameMsRange": [
+          205.8264,
+          222.0705
+        ],
+        "gcCollectionCount": 10.0,
+        "gcCollectionTimeMs": 5.0,
+        "sampledHeapPeakBytes": 274053752.0,
+        "timingSamples": 76.0,
+        "queueDropRate": 0.7466666666666667,
+        "offered": 300,
+        "accepted": 76.0,
+        "rejected": 0.0,
+        "dropped": 224.0
+      },
+      "allocationReductionPercent": 56.241
+    }
+  },
+  "currentSourceSha256": {
+    "app/src/main/java/com/indigo/mobileobservatory/camera/CameraModels.kt": "F0151ED626A87D58D8DDCDDFCA897D9F25F7AA13C07EAF25E7856402B0EBD7A1",
+    "app/src/main/java/com/indigo/mobileobservatory/recording/RawRecordingNormalizer.kt": "DE211BC2D64222E551A8F2E00B91A3AD808BA59ACB74926ACB4D0F8776207DA0",
+    "app/src/main/java/com/indigo/mobileobservatory/stacking/LinearImage.kt": "2A4B7539CFAC87FD5CF6F479F2098E7C1AB9D7F593E8BCB246FAE3B29CE872E8",
+    "app/src/main/java/com/indigo/mobileobservatory/stacking/LinearPixelDecoder.kt": "27FD0F394B628980D5009C2D1284BB72BF21ECB9A3C1AD39CF8516D3C87A10E1",
+    "app/src/main/java/com/indigo/mobileobservatory/stacking/DemosaicAlgorithm.kt": "E8CD1F7854A068103BE7375D6B2C3261C84EB83F4A16FE1B16B988E6AE9E6611",
+    "app/src/main/java/com/indigo/mobileobservatory/stacking/DdfapdDemosaicer.kt": "AB7944A2EF8BCCDC508F7B6415D2BFB43DFC59AF8EEBB65B02C7C90C777FF6D4",
+    "app/src/main/java/com/indigo/mobileobservatory/stacking/VngDemosaicer.kt": "658C35804A95E5DE37FC96617672C5132F764B2202D82538186785493F0FD1C0",
+    "app/src/main/java/com/indigo/mobileobservatory/stacking/PlanetaryStacker.kt": "C676998CE27C171BA9B5D30FB1D3DB06AA09B660E69241DDF30BA26D9A85BCA4",
+    "app/src/main/java/com/indigo/mobileobservatory/stacking/PlanetaryQuality.kt": "68903CED0AD2DD3E7E60F531E5B2FE6B5C3024C07A38CB7F2EA41E42184A5E10",
+    "app/src/main/java/com/indigo/mobileobservatory/stacking/PlanetaryRegistration.kt": "DD520A658B18A5B5095E08D9EC7F67D8B258CD309EEE3A55C4362A437972A10A",
+    "app/src/main/java/com/indigo/mobileobservatory/stacking/StarRegistration.kt": "C660E27332B7C357E23AF7D588C6A9E656236711FB4D124563DB877D3043FA0E",
+    "app/src/main/java/com/indigo/mobileobservatory/stacking/DeepSkyStacker.kt": "83188912DB5048F07BE0BF6A4B99D200C1419CA21145EE628001491314F16DCF",
+    "app/src/main/java/com/indigo/mobileobservatory/stacking/LiveStackSession.kt": "77AE14E3C9FDC8368F8F6C30D253214167975A2698855827272F4630DEA7A2CE",
+    "app/src/main/java/com/indigo/mobileobservatory/stacking/LiveDeepSkyEngine.kt": "8BACAB76BADBB3FF8A1B94A12E5D60259E37A120F3783AAB68CFD1D0E5C21696",
+    "app/src/main/java/com/indigo/mobileobservatory/stacking/BackgroundGradient.kt": "E192E91B469D632066AEC2179E48485DA4C88DAD270DA7AC71E443BD7941CE6A",
+    "app/src/main/java/com/indigo/mobileobservatory/stacking/StackPostProcessor.kt": "E474AD10377E8E670D7AD502504CD018CD6D9A94B232DAE8024DA273F1BAC2F7"
+  },
+  "reproduce": "scripts/benchmark_stacking/Run-Benchmark.ps1 -Variant baseline|current -Repeat N; toolchain overrides: -JAVA_HOME, -GradleLib, -CoroutinesJar, -JsonJar. Output: build/performance."
+}

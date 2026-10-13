@@ -1,6 +1,7 @@
 package com.indigo.mobileobservatory.camera
 
 import kotlinx.coroutines.flow.StateFlow
+import com.indigo.mobileobservatory.stacking.PixelTraits
 
 enum class ReadoutMode(val displayName: String) {
     NORMAL("Normal"),
@@ -64,6 +65,19 @@ interface Camera {
     val supportsHostRoi: Boolean get() = true
     /** False when startCapture frames are preview-only and must not be saved as SER/FITS. */
     val recordsLiveViewAsScience: Boolean get() = true
+    /** Explicit SDK science layout. Null means processed pixels or an unverified raw layout.
+     * Values describe delivered bytes, never inferred from frame brightness. ROI/bin metadata
+     * is supplied by the session; a sensor CFA uses bayerPatternAtOutput=false.
+     */
+    val sciencePixelTraits: PixelTraits? get() = null
+    /** Verified acquisition run, not a per-frame exposure measurement. Null after any
+     * science-setting write or failed read-back; restart capture before scientific use.
+     * FrameData.captureGeneration must match this token and a run-bound settings snapshot.
+     */
+    val scienceCaptureGeneration: Long? get() = null
+
+    /** This adapter currently needs a high-bit single-frame path to verify capture provenance. */
+    val requiresHighBitScienceCapture: Boolean get() = false
 }
 
 enum class DslrStillFormat { JPEG, RAW, JPEG_PLUS_RAW }
