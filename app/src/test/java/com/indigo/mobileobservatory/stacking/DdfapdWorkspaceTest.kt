@@ -102,6 +102,60 @@ class DdfapdWorkspaceTest {
         assertEquals(33L * 35, workspace.scratchBytes)
     }
 
+    @Test fun borrowedOutputReusesOneArrayWhilePublicResultsRemainOwned() {
+        val cases = referenceCases()
+        val firstCase = cases.first { it.width == 12 && it.height == 10 }
+        val sameGeometry = firstCase.sensor.copy(pixels = FloatArray(firstCase.sensor.pixelCount) { p ->
+            firstCase.sensor.pixels[p] * .37f + .11f
+        })
+        val workspace = DdfapdDemosaicer.Workspace()
+        val owned = process(firstCase, workspace)
+        val ownedCopy = owned.pixels.copyOf()
+        val first = LinearPixelDecoder.demosaicSensorBorrowed(firstCase.sensor, firstCase.format,
+            workspace = workspace)
+        assertArrayEquals(owned.pixels, first.pixels, 0f)
+        assertEquals(first.pixels.size * 4L, workspace.borrowedOutputBytes)
+        assertEquals(1L, workspace.borrowedOutputAllocations)
+        val second = LinearPixelDecoder.demosaicSensorBorrowed(sameGeometry, firstCase.format,
+            workspace = workspace)
+        assertSame(first.pixels, second.pixels)
+        assertEquals(1L, workspace.borrowedOutputAllocations)
+        assertArrayEquals(ownedCopy, owned.pixels, 0f)
+        val anotherOwned = process(firstCase, workspace)
+        assertNotSame(owned.pixels, anotherOwned.pixels)
+        assertNotSame(second.pixels, anotherOwned.pixels)
+        assertArrayEquals(ownedCopy, anotherOwned.pixels, 0f)
+
+        val changedSensor = LinearImage(10,12,1,FloatArray(120) { (it%17)/16f })
+        val changedResult = LinearPixelDecoder.demosaicSensorBorrowed(changedSensor,
+            PixelFormat.BAYER_RG16, workspace = workspace)
+        assertNotSame(first.pixels, changedResult.pixels)
+        assertEquals(2L, workspace.borrowedOutputAllocations)
+        assertEquals(changedResult.pixels.size * 4L, workspace.borrowedOutputBytes)
+        workspace.release()
+        assertEquals(0L, workspace.scratchBytes)
+        assertEquals(0L, workspace.borrowedOutputBytes)
+    }
+
+    @Test fun cancelledAndInvalidBorrowedCallsLeaveWorkspaceReusable() {
+        val case = referenceCases().first { it.width == 12 && it.height == 10 }
+        val workspace = DdfapdDemosaicer.Workspace()
+        var checks = 0
+        assertThrows(CancellationException::class.java) {
+            DdfapdDemosaicer.demosaicBorrowed(case.sensor.pixels, case.width, case.height, 1, 1, workspace) {
+                if (++checks == case.height + 2) throw CancellationException("borrowed")
+            }
+        }
+        val invalid = case.sensor.pixels.copyOf().apply { this[size / 3] = Float.NaN }
+        assertThrows(IllegalArgumentException::class.java) {
+            DdfapdDemosaicer.demosaicBorrowed(invalid, case.width, case.height, 1, 1, workspace)
+        }
+        assertGolden(case, LinearPixelDecoder.demosaicSensorBorrowed(case.sensor, case.format,
+            workspace = workspace))
+        assertEquals(1L, workspace.borrowedOutputAllocations)
+        workspace.release()
+    }
+
     @Test fun decoderOverloadKeepsAlignmentRoiPhaseAndNonDdfapdAllocationBehavior() {
         val workspace = DdfapdDemosaicer.Workspace()
         val width = 7; val height = 5

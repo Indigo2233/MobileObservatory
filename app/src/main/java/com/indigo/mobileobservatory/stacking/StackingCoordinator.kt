@@ -133,7 +133,11 @@ class StackingCoordinator(
             val sensor = LinearPixelDecoder.decodeSensor(frame, traits, cancelCheck = cancelCheck)
             val geometry = CalibrationGeometry.from(frame.width, frame.height, frame.pixelFormat, traits)
             val calibrated = fixedCalibration.apply(sensor, geometry, liveCapture(key), cancelCheck)
-            val decoded = LinearPixelDecoder.demosaicSensor(calibrated, frame.pixelFormat, traits, key.demosaicAlgorithm, liveDemosaicWorkspace, cancelCheck)
+            val decoded = if (key.demosaicAlgorithm == DemosaicAlgorithm.DDFAPD)
+                LinearPixelDecoder.demosaicSensorBorrowed(calibrated, frame.pixelFormat, traits,
+                    liveDemosaicWorkspace, cancelCheck)
+            else LinearPixelDecoder.demosaicSensor(calibrated, frame.pixelFormat, traits,
+                key.demosaicAlgorithm, liveDemosaicWorkspace, cancelCheck)
             LinearPixelDecoder.bin(decoded, key.softwareBin)
         },
         onSnapshot = { snapshot -> synchronized(stateLock) {

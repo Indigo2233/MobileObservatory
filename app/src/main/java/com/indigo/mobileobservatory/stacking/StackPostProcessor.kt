@@ -23,8 +23,9 @@ data class StackProcessingParameters(
     }
 }
 
-/** Immutable source + small model + optional full-resolution filter planes. The same pixel
- * mapper feeds Float export and bounded-row Bitmap rendering, including original filter halos. */
+/** Immutable source + small model + optional full-resolution filter planes. Float export and
+ * bounded-row Bitmap rendering share spatial and color processing, including original filter
+ * halos; display rows may interpolate the nonlinear tone curve through a bounded LUT. */
 class PreparedStack internal constructor(
     private val source: BackgroundPixels,
     override val parameters: StackProcessingParameters,
@@ -47,6 +48,8 @@ class PreparedStack internal constructor(
     private val range = parameters.whitePoint-parameters.blackPoint
     private val curveNorm = if (parameters.curve > 0) asinh(parameters.curve) else 1.0
     private val saturation = if (parameters.saturationEnabled) parameters.saturation else 1.0
+    @Volatile private var previewToneLut: FloatArray? = null
+    internal val previewToneLutAllocated: Boolean get() = previewToneLut != null
 
     /** Write one native-coordinate row, optionally sampling every [xStep] pixels. */
     fun writeRow(y: Int,output: FloatArray,xStep: Int = 1) {
@@ -56,9 +59,20 @@ class PreparedStack internal constructor(
         for (x in 0 until count) writePixel(y*width+x*xStep,output,x*channels)
     }
 
+    /** Display-oriented row with interpolated nonlinear tone mapping. Export and [writeRow]
+     * retain the exact scalar path. RAW and disabled stretch avoid creating the LUT.
+     */
+    fun writePreviewRow(y: Int,output: FloatArray,xStep: Int = 1) {
+        require(y in 0 until height && xStep > 0)
+        val count = ((width.toLong()+xStep-1)/xStep).toInt()
+        require(output.size.toLong() >= count.toLong()*channels)
+        val toneLut = previewToneLut()
+        for (x in 0 until count) writePixel(y*width+x*xStep,output,x*channels,toneLut)
+    }
+
     internal fun finishRender() { elapsedMs = (System.nanoTime()-started)/1_000_000 }
 
-    internal fun writePixel(p: Int,output: FloatArray,out: Int) {
+    internal fun writePixel(p: Int,output: FloatArray,out: Int,toneLut: FloatArray? = null) {
         // The quadratic background shares coordinates across channels. Keep the exact
         // division/order from BackgroundPixels.sample; reciprocal multiplication can round differently.
         val backgroundX = if (source.hasCorrection) 2.0*(p%width+.5)/width-1 else 0.0
@@ -90,17 +104,7 @@ class PreparedStack internal constructor(
             val detail = value-contrastBlur[p]
             value += sign(detail)*max(0.0,abs(detail)-noise*1.5)*parameters.localContrast/(1+8*max(value,0.0))
         }
-        var mapped = value.coerceIn(0.0,1.0)
-        if (parameters.stretchEnabled) {
-            mapped = ((value-parameters.blackPoint)/range).coerceIn(0.0,1.0)
-            mapped = if (parameters.curve > 0) asinh(parameters.curve*mapped)/curveNorm else mapped
-            val m = parameters.midtone
-            mapped = if (mapped <= 0 || mapped >= 1) mapped else ((m-1)*mapped)/((2*m-1)*mapped-m)
-            mapped = 1.0-(1.0-mapped).pow(parameters.brightness)
-            val shoulder = parameters.highlightCompression
-            mapped = (1-shoulder)*mapped+shoulder*(1-exp(-2*mapped))/(1-exp(-2.0))
-        }
-        mapped = mapped.coerceIn(0.0,1.0)
+        val mapped = if (toneLut == null) mapToneExact(value) else mapTonePreview(value,toneLut)
         if (channels == 1) output[out] = mapped.toFloat()
         else {
             val colorScale = if (original > 1e-10) mapped/original else 0.0
@@ -117,6 +121,48 @@ class PreparedStack internal constructor(
             }
         }
     }
+
+    private fun mapToneExact(value: Double): Double {
+        var mapped = value.coerceIn(0.0,1.0)
+        if (parameters.stretchEnabled) {
+            mapped = ((value-parameters.blackPoint)/range).coerceIn(0.0,1.0)
+            mapped = mapNormalizedToneExact(mapped)
+        }
+        return mapped.coerceIn(0.0,1.0)
+    }
+
+    private fun mapNormalizedToneExact(normalized: Double): Double {
+        var mapped = if (parameters.curve > 0) asinh(parameters.curve*normalized)/curveNorm else normalized
+        val m = parameters.midtone
+        mapped = if (mapped <= 0 || mapped >= 1) mapped else ((m-1)*mapped)/((2*m-1)*mapped-m)
+        mapped = 1.0-(1.0-mapped).pow(parameters.brightness)
+        val shoulder = parameters.highlightCompression
+        return (1-shoulder)*mapped+shoulder*(1-exp(-2*mapped))/(1-exp(-2.0))
+    }
+
+    private fun mapTonePreview(value: Double,toneLut: FloatArray): Double {
+        val normalized = ((value-parameters.blackPoint)/range).coerceIn(0.0,1.0)
+        if (normalized <= 0.0) return toneLut[0].toDouble()
+        if (normalized >= 1.0) return toneLut[PREVIEW_TONE_LUT_INTERVALS].toDouble()
+        val position = normalized*PREVIEW_TONE_LUT_INTERVALS
+        val index = position.toInt()
+        val fraction = position-index
+        return toneLut[index]+(toneLut[index+1]-toneLut[index])*fraction
+    }
+
+    private fun previewToneLut(): FloatArray? {
+        if (parameters.preset == ProcessingPreset.RAW || !parameters.stretchEnabled) return null
+        previewToneLut?.let { return it }
+        return synchronized(this) {
+            previewToneLut ?: FloatArray(PREVIEW_TONE_LUT_INTERVALS+1) { index ->
+                mapNormalizedToneExact(index.toDouble()/PREVIEW_TONE_LUT_INTERVALS).coerceIn(0.0,1.0).toFloat()
+            }.also { previewToneLut = it }
+        }
+    }
+
+    private companion object {
+        const val PREVIEW_TONE_LUT_INTERVALS = 8192
+    }
 }
 interface StackProcessingResult {
     val parameters: StackProcessingParameters
@@ -127,7 +173,7 @@ interface StackProcessingResult {
 data class ProcessedStack(val image: LinearImage, override val parameters: StackProcessingParameters,
     override val background: BackgroundModel?, override val whiteBalanceGains: List<Double>, override val elapsedMs: Long): StackProcessingResult
 
-/** Recomputed from the original every time. Same image and parameters give bit-identical preview/export. */
+/** Recomputed from the original every time. Full-image processing retains exact scalar tone mapping. */
 object StackPostProcessor {
     fun process(linear: LinearImage, parameters: StackProcessingParameters, cancelled: () -> Boolean = { false }): ProcessedStack {
         val start = System.nanoTime()

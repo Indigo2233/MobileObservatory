@@ -19,7 +19,7 @@ object StackBitmap {
             val row = IntArray(width)
             for (y in 0 until height) {
                 checkCancelled()
-                image.writeRow((y*step).coerceAtMost(image.height-1),values,step)
+                image.writePreviewRow((y*step).coerceAtMost(image.height-1),values,step)
                 for (x in 0 until width) {
                     val offset = x*image.channels
                     fun byte(channel: Int): Int = (values[offset+channel].let {

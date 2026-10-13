@@ -104,6 +104,44 @@ class LiveStackSessionTest {
         } finally { session.close(); runCurrent() }
     }
 
+    @Test fun liveEngineConsumesBorrowedDdfapdPixelsBeforeTheNextDecodeReusesThem() = runTest {
+        val width = 4; val height = 4
+        val bayerKey = StackSessionKey("bayer", width, height, PixelFormat.BAYER_RG8,
+            Roi(0, 0, width, height), 1, 1, 100_000.0, 0f, "L", "raw")
+        val workspace = DdfapdDemosaicer.Workspace()
+        val identities = mutableListOf<FloatArray>()
+        val consumed = mutableListOf<FloatArray>()
+        val engine = object : LiveStackEngine {
+            override fun add(image: LinearImage, exposureSeconds: Double,
+                             cancelled: () -> Boolean): LiveFrameOutcome {
+                identities += image.pixels
+                consumed += image.pixels.copyOf()
+                return LiveFrameOutcome(true, 8, 0.0, 0.0)
+            }
+            override fun snapshot(state: LiveStackState): LiveStackSnapshot? = null
+        }
+        val session = LiveStackSession(this, { engine }, { packet, settings ->
+            val traits = settings.pixelTraits
+            val sensor = LinearPixelDecoder.decodeSensor(packet, traits)
+            LinearPixelDecoder.demosaicSensorBorrowed(sensor, packet.pixelFormat, traits, workspace)
+        }, {}, onWorkerReset = workspace::release)
+        try {
+            session.start(bayerKey)
+            session.offer(FrameData(ByteArray(width*height) { it.toByte() }, width, height,
+                PixelFormat.BAYER_RG8, 1, 0), bayerKey)
+            runCurrent()
+            session.offer(FrameData(ByteArray(width*height) { (255-it).toByte() }, width, height,
+                PixelFormat.BAYER_RG8, 2, 0), bayerKey)
+            runCurrent()
+            assertEquals(2, consumed.size)
+            assertSame(identities[0], identities[1])
+            assertFalse(consumed[0].contentEquals(consumed[1]))
+            assertArrayEquals(consumed[1], identities[1], 0f)
+            assertEquals(1L, workspace.borrowedOutputAllocations)
+        } finally { session.close(); runCurrent() }
+        assertEquals(0L, workspace.borrowedOutputBytes)
+    }
+
     @Test fun pauseDropsWaitingInputsAndResumePreservesAcceptedData() = runTest {
         var engines = 0
         val engine = Engine()

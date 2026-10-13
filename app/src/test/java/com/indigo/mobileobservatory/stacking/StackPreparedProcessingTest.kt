@@ -80,6 +80,57 @@ class StackPreparedProcessingTest {
         }
     }
 
+    @Test fun previewToneLutStaysWithinOneEightBitValueAcrossSupportedExtremes() {
+        val width = 4097
+        for (channels in listOf(1,3)) {
+            val pixels = FloatArray(width*channels) { index ->
+                val x = index/channels
+                val channel = index%channels
+                ((x.toDouble()/(width-1))*(.72+.14*channel)).coerceAtMost(1.0).toFloat()
+            }
+            val source = LinearImage(width,1,channels,pixels)
+            val parameters = listOf(
+                StackProcessingParameters.preset(ProcessingPreset.NATURAL),
+                StackProcessingParameters.preset(ProcessingPreset.INTENSE),
+                StackProcessingParameters(background=BackgroundParameters(enabled=false),curve=0.0,
+                    brightness=.05,midtone=.01,highlightCompression=0.0),
+                StackProcessingParameters(background=BackgroundParameters(enabled=false),curve=200.0,
+                    brightness=8.0,midtone=.99,highlightCompression=1.0),
+                StackProcessingParameters(background=BackgroundParameters(enabled=false),
+                    stretchEnabled=false),
+                StackProcessingParameters.preset(ProcessingPreset.RAW)
+            )
+            for (settings in parameters) {
+                val prepared = StackPostProcessor.prepare(source,settings)
+                val exact = FloatArray(width*channels)
+                val preview = FloatArray(width*channels)
+                prepared.writeRow(0,exact)
+                prepared.writePreviewRow(0,preview)
+                for (index in exact.indices) {
+                    val exactByte = (exact[index].coerceIn(0f,1f)*255f+.5f).toInt()
+                    val previewByte = (preview[index].coerceIn(0f,1f)*255f+.5f).toInt()
+                    assertTrue("$settings channel sample $index: $exactByte vs $previewByte",
+                        abs(exactByte-previewByte) <= 1)
+                }
+                assertEquals(settings.preset != ProcessingPreset.RAW && settings.stretchEnabled,
+                    prepared.previewToneLutAllocated)
+            }
+        }
+    }
+
+    @Test fun previewToneLutHandlesExactEndpointsAndNativeRowSampling() {
+        val source = LinearImage(5,1,1,floatArrayOf(-1f,0f,.25f,1f,2f))
+        val settings = StackProcessingParameters(background=BackgroundParameters(enabled=false),
+            curve=200.0,brightness=.05,midtone=.01,highlightCompression=1.0)
+        val prepared = StackPostProcessor.prepare(source,settings)
+        val exact = FloatArray(3); val preview = FloatArray(3)
+        prepared.writeRow(0,exact,2)
+        prepared.writePreviewRow(0,preview,2)
+        assertEquals(exact[0].toRawBits(),preview[0].toRawBits())
+        assertEquals(exact[2].toRawBits(),preview[2].toRawBits())
+        for (index in exact.indices) assertTrue(abs(exact[index]-preview[index]) <= 1f/255f)
+    }
+
     @Test fun cacheFitsOnceAcrossToneChangesButInvalidatesOnIdentityAndBackgroundParameters() {
         val source = image(3); val cache = BackgroundModelCache()
         val p = StackProcessingParameters()

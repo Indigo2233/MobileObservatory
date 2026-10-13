@@ -208,7 +208,7 @@ fun main(args:Array<String>) {
         }
         "post_preview_cached" -> {
             val image=stars();val operation=previewOperation(image)
-            micro(12,40,operation).put("note","Baseline process materializes RGB; current prepare+reused background model+writeRow; row checksum substitutes identical Bitmap upload. Native Bitmap allocation/upload excluded")
+            micro(12,40,operation).put("note","Baseline process materializes RGB; current prepare+reused background model+writePreviewRow LUT; row checksum substitutes 8-bit Bitmap upload. Native Bitmap allocation/upload excluded")
         }
         "rejected_snapshot" -> rejectedSnapshots()
         "queue_30fps" -> queue30()

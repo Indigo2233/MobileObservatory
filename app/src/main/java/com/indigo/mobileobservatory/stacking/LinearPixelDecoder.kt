@@ -104,9 +104,18 @@ object LinearPixelDecoder {
                        cancelCheck: () -> Unit = {}): LinearImage =
         demosaicSensorImpl(sensor, format, traits, algorithm, workspace, cancelCheck)
 
+    /** DDFAPD output owned by [workspace]. Consume it before another borrowed invocation. */
+    internal fun demosaicSensorBorrowed(sensor: LinearImage, format: PixelFormat,
+                                        traits: PixelTraits = PixelTraits(),
+                                        workspace: DdfapdDemosaicer.Workspace,
+                                        cancelCheck: () -> Unit = {}): LinearImage =
+        demosaicSensorImpl(sensor, format, traits, DemosaicAlgorithm.DDFAPD, workspace,
+            cancelCheck, borrowDdfapdOutput = true)
+
     private fun demosaicSensorImpl(sensor: LinearImage, format: PixelFormat, traits: PixelTraits,
                                   algorithm: DemosaicAlgorithm, workspace: DdfapdDemosaicer.Workspace?,
-                                  cancelCheck: () -> Unit): LinearImage {
+                                  cancelCheck: () -> Unit,
+                                  borrowDdfapdOutput: Boolean = false): LinearImage {
         cancelCheck()
         require(sensor.channels == if (format.isRgb) 3 else 1) { "Sensor channel layout does not match its format" }
         require(traits.binning > 0 && traits.roiX >= 0 && traits.roiY >= 0)
@@ -121,9 +130,12 @@ object LinearPixelDecoder {
         return when (algorithm) {
             DemosaicAlgorithm.BILINEAR -> debayer(sensor.pixels, sensor.width, sensor.height, redX, redY, cancelCheck)
             DemosaicAlgorithm.VNG -> VngDemosaicer.demosaic(sensor.pixels, sensor.width, sensor.height, redX, redY, cancelCheck)
-            DemosaicAlgorithm.DDFAPD -> if (workspace == null)
-                DdfapdDemosaicer.demosaic(sensor.pixels, sensor.width, sensor.height, redX, redY, cancelCheck)
-            else DdfapdDemosaicer.demosaic(sensor.pixels, sensor.width, sensor.height, redX, redY, workspace, cancelCheck)
+            DemosaicAlgorithm.DDFAPD -> when {
+                workspace == null -> DdfapdDemosaicer.demosaic(sensor.pixels, sensor.width, sensor.height, redX, redY, cancelCheck)
+                borrowDdfapdOutput -> DdfapdDemosaicer.demosaicBorrowed(sensor.pixels, sensor.width, sensor.height,
+                    redX, redY, workspace, cancelCheck)
+                else -> DdfapdDemosaicer.demosaic(sensor.pixels, sensor.width, sensor.height, redX, redY, workspace, cancelCheck)
+            }
         }
     }
 
