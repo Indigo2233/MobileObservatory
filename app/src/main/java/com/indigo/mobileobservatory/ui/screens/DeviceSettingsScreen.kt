@@ -232,7 +232,7 @@ private fun deviceSettingsPresentation(vm: CameraViewModel, destination: DeviceC
             "native" to (defaults?.nativeReadoutModeId ?: nativeCurrent).orEmpty(),
             "format" to (defaults?.pixelFormat ?: currentFormat).name,
             "gain" to (defaults?.gain ?: gain).toString(), "offset" to (defaults?.offset ?: offset)?.toString().orEmpty())
-        DeviceSettingsPresentation("camera:${info?.serialNumber}:${vm.cameraManager.claimedUsbDevice?.deviceName}", info?.name ?: stringResource(R.string.camera), info != null, values, fields)
+        DeviceSettingsPresentation(cameraSettingsDeviceKey(vm), info?.name ?: stringResource(R.string.camera), info != null, values, fields)
     }
     DeviceControlDestination.FOCUSER -> {
         val info by vm.eafInfo.collectAsState()
@@ -304,10 +304,13 @@ private fun focuserFields(d: FocuserDefaults) = mapOf("fine" to d.fineStep.toStr
     "max" to d.maxStep?.toString().orEmpty(), "direction" to d.direction.toString(), "backlash" to d.backlashSteps.toString(), "backlashDirection" to d.backlashDirection.toString())
 private fun coverFields(d: CoverDefaults) = mapOf("open" to d.openAngle.toString(), "closed" to d.closedAngle.toString(), "working" to d.workingAngle.toString(), "brightness" to d.brightness?.toString().orEmpty())
 
+/** An anonymous replacement must not inherit the draft of a camera at the same USB address. */
+private fun cameraSettingsDeviceKey(vm: CameraViewModel) = "camera:${vm.primaryReferenceCameraId() ?: "disconnected"}"
+
 private fun saveDeviceDraft(vm: CameraViewModel, destination: DeviceControlDestination, draft: SettingsDraft,
     success: (Map<String, String>) -> Unit, failure: (String) -> Unit) {
     val currentKey = when (destination) {
-        DeviceControlDestination.CAMERA, DeviceControlDestination.COOLER -> "camera:${(vm.connectionState.value as? ConnectionState.Connected)?.info?.serialNumber}:${vm.cameraManager.claimedUsbDevice?.deviceName}"
+        DeviceControlDestination.CAMERA, DeviceControlDestination.COOLER -> cameraSettingsDeviceKey(vm)
         DeviceControlDestination.FOCUSER -> "focuser:${vm.activeFocuserDeviceId.value}:${vm.eafInfo.value?.name}"
         DeviceControlDestination.COVER -> "cover:${vm.activeCoverDeviceId.value}:${vm.coverDeviceInfo.value}"
         DeviceControlDestination.FILTER -> "filter:${vm.activeFilterWheelDeviceId.value}:${vm.filterWheelInfo.value?.name}"

@@ -17,11 +17,13 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.astro.*
+import com.indigo.mobileobservatory.astrometry.D50Manager
 import com.indigo.mobileobservatory.camera.ConnectionState
 import com.indigo.mobileobservatory.pointing.*
 import com.indigo.mobileobservatory.ui.viewmodel.CameraViewModel
@@ -31,7 +33,8 @@ import java.time.Instant
 /** The guide-role camera is a secondary optical sensor. No phone/IMU is required by this flow. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AuxiliaryCalibrationScreen(viewModel: CameraViewModel, onBack: () -> Unit) {
+fun AuxiliaryCalibrationScreen(viewModel: CameraViewModel, onBack: () -> Unit,
+    onPlateSolve: () -> Unit = {}, onDeviceControl: (String) -> Unit = {}, onGuide: () -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val task: AuxiliaryCalibrationTask = androidx.lifecycle.viewmodel.compose.viewModel(key = "auxiliary-optical-calibration")
@@ -61,8 +64,13 @@ fun AuxiliaryCalibrationScreen(viewModel: CameraViewModel, onBack: () -> Unit) {
     var starId by rememberSaveable { mutableStateOf<Int?>(null) }
     var showStars by rememberSaveable { mutableStateOf(false) }
     var showDevices by rememberSaveable { mutableStateOf(false) }
-    val star = stars.firstOrNull { it.hip == starId }
+    val firstReference = draft.first?.reference?.direction
+    val selectableStars = remember(stars, firstReference) { stars.filter { auxiliaryValidationStarAllowed(it, firstReference) } }
+    // The first star is never silently reused for the independent validation direction.
+    val star = selectableStars.firstOrNull { it.hip == starId }
     val foreground = rememberPageForeground()
+    val database = remember(context) { D50Manager(context.applicationContext) }
+    var databaseReady by remember { mutableStateOf(false) }
     fun loadSite() { scope.launch {
         try {
             site = PhoneSiteProvider.currentSite(context)
@@ -77,6 +85,9 @@ fun AuxiliaryCalibrationScreen(viewModel: CameraViewModel, onBack: () -> Unit) {
     } }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { loadSite() }
     LaunchedEffect(Unit) { loadSite() }
+    LaunchedEffect(foreground) {
+        if (foreground) databaseReady = withContext(Dispatchers.IO) { database.status().installed }
+    }
     LaunchedEffect(connected, referenceReady, exposureUs) {
         if (connected is ConnectionState.Connected && (!referenceReady || exposureUs !in 500_000f..5_000_000f)) options = true
     }
@@ -97,6 +108,15 @@ fun AuxiliaryCalibrationScreen(viewModel: CameraViewModel, onBack: () -> Unit) {
     }) }) { padding ->
         Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            AuxiliaryCalibrationRecovery(databaseReady,
+                auxiliaryMissing = setupComplete && connected !is ConnectionState.Connected,
+                mainMissing = mainCamera && mainConnection !is ConnectionState.Connected,
+                guiding = guiding || guideCalibration,
+                onPlateSolve = onPlateSolve,
+                onAuxiliaryConnect = { viewModel.requestGuideConnect(); showDevices = true },
+                onMainConnect = { onDeviceControl("camera") }, onGuide = onGuide)
+            if (site == null) OutlinedButton(onClick = { permission.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION)) }) { Text(stringResource(R.string.wfa_site_permission)) }
             if (!setupComplete) {
                 Text(stringResource(R.string.wfa_setup), style = MaterialTheme.typography.titleMedium)
                 Text((connected as? ConnectionState.Connected)?.info?.name ?: stringResource(R.string.wfa_no_camera))
@@ -110,7 +130,6 @@ fun AuxiliaryCalibrationScreen(viewModel: CameraViewModel, onBack: () -> Unit) {
                     FilterChip(!mainCamera, { mainCamera = false }, label = { Text(stringResource(R.string.wfp_eyepiece)) })
                     FilterChip(mainCamera, { mainCamera = true }, label = { Text(stringResource(R.string.wfp_main_camera)) })
                 }
-                if (mainCamera && mainConnection !is ConnectionState.Connected) Text(stringResource(R.string.wfa_connect_main))
                 TextButton(onClick = { options = !options }) { Text(stringResource(R.string.wfp_other_options)) }
                 if (options) {
                     Text(stringResource(R.string.wfa_exposure))
@@ -130,10 +149,7 @@ fun AuxiliaryCalibrationScreen(viewModel: CameraViewModel, onBack: () -> Unit) {
                     if (!mainCamera) OutlinedTextField(centeringArcmin, { centeringArcmin = it },
                         label = { Text(stringResource(R.string.wfp_centering_error)) }, singleLine = true)
                 }
-                if (site == null) OutlinedButton(onClick = { permission.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION,
-                    Manifest.permission.ACCESS_COARSE_LOCATION)) }) { Text(stringResource(R.string.wfa_site_permission)) }
-                if (guiding || guideCalibration) Text(stringResource(R.string.wfa_stop_guiding), color = MaterialTheme.colorScheme.error)
-                Button(onClick = { setupComplete = true }, enabled = fixed && site != null &&
+                Button(onClick = { setupComplete = true }, enabled = fixed && site != null && databaseReady &&
                     connected is ConnectionState.Connected && (!mainCamera || mainConnection is ConnectionState.Connected) &&
                     referenceReady && !guiding && !guideCalibration && !settingBusy && exposureUs in 500_000f..5_000_000f) {
                     Text(stringResource(R.string.wfa_continue))
@@ -149,7 +165,13 @@ fun AuxiliaryCalibrationScreen(viewModel: CameraViewModel, onBack: () -> Unit) {
                 Text(stringResource(if (draft.first == null) R.string.wfa_first else R.string.wfa_second),
                     style = MaterialTheme.typography.titleMedium)
                 if (!mainCamera) OutlinedButton(onClick = { showStars = true }, enabled = !draft.busy) {
-                    Text(star?.name ?: star?.hip?.let { "HIP $it" } ?: stringResource(R.string.wfp_choose_star))
+                    Text(star?.name ?: star?.hip?.let { "HIP $it" } ?: stringResource(
+                        if (firstReference == null) R.string.wfp_choose_star else R.string.wfa_choose_validation_star))
+                }
+                if (!draft.busy && (!referenceReady || settingBusy || exposureUs !in 500_000f..5_000_000f)) {
+                    Text(stringResource(if (settingBusy) R.string.wfa_wait_settings else if (!referenceReady)
+                        R.string.wfa_choose_raw else R.string.wfa_exposure_range))
+                    TextButton(onClick = { setupComplete = false }) { Text(stringResource(R.string.wfa_adjust_capture)) }
                 }
                 if (!mainCamera && !draft.busy) Text(stringResource(R.string.wfa_precenter))
                 preview?.let { Image(it.asImageBitmap(), stringResource(R.string.wfa_preview),
@@ -164,7 +186,9 @@ fun AuxiliaryCalibrationScreen(viewModel: CameraViewModel, onBack: () -> Unit) {
                 } else {
                     Button(onClick = { task.sample(viewModel, requireNotNull(site), tracking, star,
                         (centeringArcmin.toDoubleOrNull() ?: 0.0) / 60, mainCamera) },
-                        enabled = connected is ConnectionState.Connected && (mainCamera || star != null) &&
+                        enabled = site != null && databaseReady && !guiding && !guideCalibration && !settingBusy && referenceReady &&
+                            exposureUs in 500_000f..5_000_000f && connected is ConnectionState.Connected &&
+                            (!mainCamera || mainConnection is ConnectionState.Connected) && (mainCamera || star != null) &&
                             (mainCamera || centeringArcmin.toDoubleOrNull()?.let { it > 0 && it <= 20 } == true)) {
                         Text(stringResource(R.string.wfa_sample))
                     }
@@ -179,18 +203,16 @@ fun AuxiliaryCalibrationScreen(viewModel: CameraViewModel, onBack: () -> Unit) {
     if (showStars) AlertDialog(onDismissRequest = { showStars = false }, title = { Text(stringResource(R.string.wfp_choose_star)) },
         text = { Column {
             MountMotionStopBanner(motion, viewModel::stopMountMotion)
-            Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
-                if (stars.isEmpty()) Text(stringResource(R.string.wfp_no_stars))
-                stars.forEach { candidate -> TextButton(onClick = { starId = candidate.hip; showStars = false }) {
-                    Text(candidate.name ?: "HIP ${candidate.hip}")
-                } }
+            AuxiliaryReferenceStarChoices(selectableStars, validation = firstReference != null) { candidate ->
+                starId = candidate.hip; showStars = false
             }
         } }, confirmButton = { TextButton(onClick = { showStars = false }) { Text(stringResource(R.string.back)) } })
     if (showDevices) AlertDialog(onDismissRequest = { showDevices = false; viewModel.hideGuideDevicePicker() },
         title = { Text(stringResource(R.string.select_guide_camera)) }, text = { Column {
             MountMotionStopBanner(motion, viewModel::stopMountMotion)
             val available = viewModel.camerasAvailableToGuide(devices)
-            if (available.isEmpty()) Text(stringResource(R.string.wfa_sdk_single_camera))
+            if (available.isEmpty()) Text(stringResource(if (devices.isEmpty()) R.string.no_camera_found
+                else R.string.select_different_guide_camera))
             Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
                 available.forEach { device -> TextButton(onClick = {
                     viewModel.connectGuideCameraBySn(device.serialNumber); viewModel.hideGuideDevicePicker(); showDevices = false
@@ -199,4 +221,44 @@ fun AuxiliaryCalibrationScreen(viewModel: CameraViewModel, onBack: () -> Unit) {
         } }, confirmButton = { TextButton(onClick = { showDevices = false; viewModel.hideGuideDevicePicker() }) {
             Text(stringResource(R.string.back))
         } })
+}
+
+@Composable
+internal fun AuxiliaryReferenceStarChoices(stars: List<PhoneCatalogStar>, validation: Boolean,
+    onChoose: (PhoneCatalogStar) -> Unit) {
+    Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
+        if (stars.isEmpty()) Text(stringResource(if (validation) R.string.wfa_no_validation_stars else R.string.wfp_no_stars))
+        stars.forEach { candidate -> TextButton(onClick = { onChoose(candidate) }) {
+            Text(candidate.name ?: "HIP ${candidate.hip}")
+        } }
+    }
+}
+
+/** Conditions are recoverable from both setup and sampling, without erasing the first sample. */
+@Composable
+internal fun AuxiliaryCalibrationRecovery(databaseReady: Boolean, auxiliaryMissing: Boolean,
+    mainMissing: Boolean, guiding: Boolean, onPlateSolve: () -> Unit, onAuxiliaryConnect: () -> Unit,
+    onMainConnect: () -> Unit, onGuide: () -> Unit) {
+    if (!databaseReady) {
+        Text(stringResource(R.string.wfa_database_required))
+        OutlinedButton(onClick = onPlateSolve, modifier = Modifier.testTag("auxiliary-install-database")) {
+            Text(stringResource(R.string.wfa_install_database))
+        }
+    }
+    if (auxiliaryMissing) {
+        Text(stringResource(R.string.wfa_no_camera))
+        OutlinedButton(onClick = onAuxiliaryConnect, modifier = Modifier.testTag("auxiliary-reconnect")) {
+            Text(stringResource(R.string.select_guide_camera))
+        }
+    }
+    if (mainMissing) {
+        Text(stringResource(R.string.wfa_connect_main))
+        OutlinedButton(onClick = onMainConnect, modifier = Modifier.testTag("auxiliary-connect-main")) {
+            Text(stringResource(R.string.camera))
+        }
+    }
+    if (guiding) {
+        Text(stringResource(R.string.wfa_stop_guiding))
+        OutlinedButton(onClick = onGuide) { Text(stringResource(R.string.wfa_open_guiding)) }
+    }
 }

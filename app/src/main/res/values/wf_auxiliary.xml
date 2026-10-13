@@ -40,4 +40,10 @@
     <string name="wfa_push_sample">Stopped · sample pointing</string>
     <string name="wfa_push_policy">Optical arrival requires three independent solves, continuous star stability and a final fix under 10 seconds old.</string>
     <string name="wfa_memory_budget">Insufficient sampling memory. Use a smaller auxiliary image size or free app memory, then retry.</string>
+    <string name="wfa_choose_validation_star">Choose another star at least 5° away</string>
+    <string name="wfa_no_validation_stars">No suitable second star is currently visible. Try later or use a main-camera reference.</string>
+    <string name="wfa_database_required">A plate-solve star database is required.</string>
+    <string name="wfa_install_database">Install star database</string>
+    <string name="wfa_adjust_capture">Adjust capture settings</string>
+    <string name="wfa_open_guiding">Open guiding controls</string>
 </resources>

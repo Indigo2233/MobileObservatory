@@ -1,0 +1,11 @@
+<resources>
+    <string name="wfp_reference_settings">Wait for camera settings to finish, then retry.</string>
+    <string name="wfp_reference_science">Choose a verified RAW or mono capture mode before sampling.</string>
+    <string name="wfp_reference_ae">Turn off automatic exposure before sampling.</string>
+    <string name="wfp_reference_preview">Resume camera preview before sampling.</string>
+    <string name="wfp_reference_filter">Wait for the filter wheel to stop before sampling.</string>
+    <string name="wfp_reference_rotator">Wait for the rotator to stop before sampling.</string>
+    <string name="wfp_reference_axis">Use an ROI containing the sensor centre before sampling.</string>
+    <string name="wfp_reference_exposure">Use a single exposure of 30 seconds or less before sampling.</string>
+    <string name="wfp_rotator_changed">Main camera rotation or connection changed. Recalibrate the main optical path.</string>
+</resources>

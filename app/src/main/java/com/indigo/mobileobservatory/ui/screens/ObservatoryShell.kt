@@ -235,7 +235,8 @@ fun CameraScreen(viewModel: CameraViewModel, redNightMode: Boolean = false,
                                         if (page?.destination == ObservatoryDestination.PLAYER) page.category?.let(MediaCategory::valueOf) ?: MediaCategory.RECENT else MediaCategory.RECENT,
                                         redNightMode, onRedNightModeChange, open, back, select, chooseTarget, pushTo, openStack,
                                         onPlayer = { file, category -> playerFile = file?.absolutePath; playerCategory = category; open(ObservatoryDestination.PLAYER) },
-                                        onDeviceSettings = { key -> quickSettings = true; quickDevice = key })
+                                        onDeviceSettings = { key -> quickSettings = true; quickDevice = key },
+                                        onDeviceControl = { key -> quickSettings = false; quickDevice = key })
                                 }
                             }
                         }
@@ -266,7 +267,8 @@ private fun ObservatoryContent(
     open: (ObservatoryDestination) -> Unit, back: () -> Unit, select: (ObservatoryWorkspace) -> Unit,
     chooseTarget: (StarMapTarget) -> Unit, pushTo: (StarMapTarget) -> Unit, openStack: (StackMode) -> Unit,
     onPlayer: (File?, MediaCategory) -> Unit,
-    onDeviceSettings: (String) -> Unit
+    onDeviceSettings: (String) -> Unit,
+    onDeviceControl: (String) -> Unit
 ) {
     val coordinates by vm.mountCoordinates.collectAsState()
     val mountCapabilities by vm.mountPointingCapabilities.collectAsState()
@@ -319,7 +321,9 @@ private fun ObservatoryContent(
                 com.indigo.mobileobservatory.pointing.SkyDirection(p.raDeg, p.decDeg)
             },
             onAuxiliaryCalibration = { open(ObservatoryDestination.AUXILIARY_CALIBRATION) })
-        ObservatoryDestination.AUXILIARY_CALIBRATION -> AuxiliaryCalibrationScreen(vm, back)
+        ObservatoryDestination.AUXILIARY_CALIBRATION -> AuxiliaryCalibrationScreen(vm, back,
+            onPlateSolve = { open(ObservatoryDestination.PLATE_SOLVE) }, onDeviceControl = onDeviceControl,
+            onGuide = { open(ObservatoryDestination.GUIDE) })
         ObservatoryDestination.PLATE_SOLVE -> PlateSolveScreen(mountCoordinates = coordinates,
             cameraPixelSizeUm = cameraPixelSize, onSolved = vm::recordPlateSolveResult, onBack = back)
         ObservatoryDestination.POLAR_ALIGNMENT -> {

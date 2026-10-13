@@ -69,6 +69,18 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
     private val appContext = context.applicationContext
     private val sensorManager = appContext.getSystemService(Context.SENSOR_SERVICE) as SensorManager
     private val rotationSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
+    private val samplingPolicy = PhoneImuSamplingPolicy()
+    private val sampleOrdering = PhoneImuSampleOrdering()
+    private val samplingLock = Any()
+    @Volatile private var sensorRunning = false
+    @Volatile private var activeSensorRegistered = false
+    private var nextActiveRegistrationAttemptMs = 0L
+    // This registration remains alive across rate changes, so the rotation-vector fusion is
+    // never deliberately stopped. A second, faster queue exists only while it is needed.
+    private val idleSensorListener = object : SensorEventListener {
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+        override fun onSensorChanged(event: SensorEvent) = onRotationEvent(event, PhoneImuSamplingMode.IDLE)
+    }
     private val alignment = PhonePoseAlignment()
     private var observerSite: ObserverSite? = null
     private var activeLensKey: String? = null
@@ -117,6 +129,7 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
         if (activeLensKey != cameraId || lastSensorOrientationDeg != sensorOrientationDeg) {
             clearOpticalAnchor()
             lastRawDirection = null; lastSensorTimestampNs = 0
+            sampleOrdering.clear()
             rawDirection = null; lastRotationMatrix = null
             activeLensKey = cameraId; lastSensorOrientationDeg = sensorOrientationDeg
         }
@@ -125,13 +138,29 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
     fun start(): Boolean {
         val sensor = rotationSensor ?: return false
         clearOpticalAnchor()
+        sampleOrdering.clear()
         motionGate.invalidateForDiscontinuity(SystemClock.elapsedRealtime())
         onMotion?.invoke(motionGate.phase)
-        return sensorManager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_GAME)
+        synchronized(samplingLock) {
+            if (sensorRunning) return true
+            if (!sensorManager.registerListener(idleSensorListener, sensor, PhoneImuSamplingMode.IDLE.periodUs)) return false
+            sensorRunning = true
+            samplingPolicy.start()
+            nextActiveRegistrationAttemptMs = 0
+            updateSensorSampling(SystemClock.elapsedRealtime())
+            return true
+        }
     }
 
     fun stop() {
-        sensorManager.unregisterListener(this)
+        synchronized(samplingLock) {
+            sensorRunning = false
+            activeSensorRegistered = false
+            samplingPolicy.stop()
+            sensorManager.unregisterListener(this)
+            sensorManager.unregisterListener(idleSensorListener)
+            sampleOrdering.clear()
+        }
         clearOpticalAnchor()
         lastRawDirection = null
         lastSensorTimestampNs = 0
@@ -141,15 +170,44 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
 
     override fun latestFix(): SkyAttitudeFix? = fix
 
+    /** A requested optical check wakes sampling before camera startup or exposure begins. */
+    fun requestVerification() {
+        motionGate.requestVerification()
+        samplingPolicy.requestVerification(SystemClock.elapsedRealtime())
+        updateSensorSampling(SystemClock.elapsedRealtime())
+    }
+
+    private fun updateSensorSampling(elapsedNowMs: Long) = synchronized(samplingLock) {
+        if (!sensorRunning) return@synchronized
+        when (samplingPolicy.desiredMode(elapsedNowMs)) {
+            PhoneImuSamplingMode.ACTIVE -> if (!activeSensorRegistered && elapsedNowMs >= nextActiveRegistrationAttemptMs) {
+                val registered = sensorManager.registerListener(this, rotationSensor, PhoneImuSamplingMode.ACTIVE.periodUs)
+                if (registered) {
+                    sampleOrdering.activeQueueStarted()
+                    activeSensorRegistered = true
+                } else nextActiveRegistrationAttemptMs = elapsedNowMs + 1_000
+            }
+            PhoneImuSamplingMode.IDLE -> if (activeSensorRegistered) {
+                activeSensorRegistered = false
+                sensorManager.unregisterListener(this, rotationSensor)
+            }
+            null -> Unit
+        }
+        // Rate changes do not clear the alignment, timeline, clock, or sensor-session revision.
+    }
+
     fun refreshCurrentPose(utcNowMs: Long = System.currentTimeMillis()) {
         if (lastSensorTimestampNs > 0 && SystemClock.elapsedRealtimeNanos() - lastSensorTimestampNs > 500_000_000L && !sensorGapInvalidated) {
             sensorGapInvalidated = true
             clearOpticalAnchor()
             lastRawDirection = null; lastSensorTimestampNs = 0
+            sampleOrdering.clear()
             rawDirection = null; lastRotationMatrix = null
             motionGate.invalidateForDiscontinuity(SystemClock.elapsedRealtime())
             onMotion?.invoke(motionGate.phase)
         }
+        samplingPolicy.observeMotion(motionGate.phase, SystemClock.elapsedRealtime())
+        updateSensorSampling(SystemClock.elapsedRealtime())
         rawDirection?.let { publish(it, utcNowMs) }
     }
 
@@ -158,13 +216,18 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
 
-    override fun onSensorChanged(event: SensorEvent) {
-        if (event.sensor.type != Sensor.TYPE_ROTATION_VECTOR) return
+    override fun onSensorChanged(event: SensorEvent) = onRotationEvent(event, PhoneImuSamplingMode.ACTIVE)
+
+    private fun onRotationEvent(event: SensorEvent, mode: PhoneImuSamplingMode) {
+        if (!sensorRunning || event.sensor.type != Sensor.TYPE_ROTATION_VECTOR) return
+        val disposition = sampleOrdering.classify(mode, event.timestamp,
+            if (activeSensorRegistered) PhoneImuSamplingMode.ACTIVE else PhoneImuSamplingMode.IDLE)
+        if (disposition == PhoneImuSampleDisposition.IGNORE) return
         sensorGapInvalidated = false
         val previous = lastRawDirection
         val previousNs = lastSensorTimestampNs
         val dtSec = if (previousNs > 0) (event.timestamp - previousNs) / 1_000_000_000.0 else null
-        if (dtSec != null && (dtSec > .5 || dtSec <= 0)) {
+        if (disposition == PhoneImuSampleDisposition.DISCONTINUITY || (dtSec != null && (dtSec > .5 || dtSec <= 0))) {
             clearOpticalAnchor()
             motionGate.invalidateForDiscontinuity(SystemClock.elapsedRealtime())
             onMotion?.invoke(motionGate.phase)
@@ -206,6 +269,8 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
                 }
             }
         }
+        samplingPolicy.observeMotion(motionGate.phase, SystemClock.elapsedRealtime())
+        updateSensorSampling(SystemClock.elapsedRealtime())
         publish(raw, System.currentTimeMillis())
     }
 
@@ -226,9 +291,11 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
     ): PhoneSkySolveResult {
         // Plate solving remains available without a rotation-vector sensor. In that case it
         // returns the photographic solution while live push-to orientation awaits an IMU sample.
+        val samplingLease = samplingPolicy.beginVerification(SystemClock.elapsedRealtime())
         val captureStartedAt = System.currentTimeMillis()
 
         return try {
+            updateSensorSampling(SystemClock.elapsedRealtime())
             observerSite = site
             val requestedLens = cameraId ?: "default"
             cameraId?.let { lens ->
@@ -463,6 +530,9 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
                 inputFrameCount = 0)
         } catch (t: Throwable) {
             PhoneSkySolveResult(false, t.message ?: t.javaClass.simpleName)
+        } finally {
+            samplingPolicy.endVerification(samplingLease, SystemClock.elapsedRealtime())
+            updateSensorSampling(SystemClock.elapsedRealtime())
         }
     }
 

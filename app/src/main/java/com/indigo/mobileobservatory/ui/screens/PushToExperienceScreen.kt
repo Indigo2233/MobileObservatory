@@ -255,7 +255,7 @@ fun PushToScreen(
         calibrationMismatch = false
         verification.setTask(taskSignature(), calibrationKey)
         verificationState = verification.tick(SystemClock.elapsedRealtime())
-        source.motionGate.requestVerification()
+        source.requestVerification()
         captureDue = true
     }
 
@@ -500,7 +500,7 @@ fun PushToScreen(
         val elapsed = SystemClock.elapsedRealtime()
         verification.setTask(taskSignature(), calibrationKey)
         verification.observeMotion(source.motionGate.motionEpoch, source.motionGate.phase, elapsed)
-        if (!auto) { verification.retry(elapsed); source.motionGate.requestVerification() }
+        if (!auto) { verification.retry(elapsed); source.requestVerification() }
         val ticket = verification.beginCapture(elapsed, allowMovingDebug = !auto && !source.available) ?: return
         val requestedSignature = taskSignature()
         val captureCalibration = matchingCalibration

@@ -104,4 +104,44 @@ class PointingRepositoryInstrumentedTest {
         assertFalse(restored.valid)
         assertEquals("missing_reference_camera_identity", restored.invalidReason)
     }
+
+    @Test fun physicalRotationRevokesFullPoseAndLatePrimaryCapturesButPreservesOtherOpticalPath() {
+        val context = context(); val store = PointingRepository(context)
+        val primaryPairs = listOf(pair("1", 10.0), pair("2", 70.0)).map {
+            it.copy(reference = it.reference.copy(kind = OpticalObservationKind.MAIN_PLATE,
+                pose = it.camera.pose, geometry = it.camera.geometry, acquisitionDeviceId = "main-camera"))
+        }
+        val secondaryPairs = listOf(pair("3", 10.0), pair("4", 70.0)).map {
+            it.copy(reference = it.reference.copy(identity = it.reference.identity.copy(opticalPathId = "secondary")))
+        }
+        val guard = RotatorPointingGuard { store.invalidateOpticalPath("primary", "rotator_changed") }
+        val idle = RotatorPointingGuard.State(true, false, 0.0, false, 100)
+        guard.observe(idle)
+        val primary = OpticalCalibrationFitter.fit(primaryPairs[0], primaryPairs[1])
+        val secondary = OpticalCalibrationFitter.fit(secondaryPairs[0], secondaryPairs[1])
+        assertEquals(RelationshipModel.FULL_POSE, primary.model)
+        store.saveValidated(primary, primaryPairs); store.saveValidated(secondary, secondaryPairs)
+        assertNotNull(store.publish(primaryPairs[1].camera, primary.target))
+        val originalRevision = store.captureRevision("primary")
+        val secondaryRevision = store.captureRevision("secondary")
+        store.recordDirectObservation(primaryPairs[1].reference, originalRevision)
+        guard.beforeCommand(true)
+        assertNull(store.estimate.value)
+        assertNull(store.publish(primaryPairs[1].camera, primary.target))
+        assertTrue(store.directObservations.value.isEmpty())
+        assertNotNull(store.publish(secondaryPairs[1].camera, secondary.target))
+        assertFalse(store.isCurrent(originalRevision)); assertTrue(store.isCurrent(secondaryRevision))
+        guard.observe(idle.copy(moving = true))
+        val duringMotion = store.captureRevision("primary")
+        guard.observe(idle.copy(angleDeg = 90.0))
+        assertThrows(IllegalStateException::class.java) {
+            store.recordDirectObservation(primaryPairs[1].reference, duringMotion)
+        }
+        assertThrows(IllegalStateException::class.java) {
+            store.saveValidated(primary.copy(version = 2), primaryPairs, expectedRevisions = listOf(duringMotion))
+        }
+        val restored = PointingRepository(context)
+        assertFalse(restored.relationships.value.first { it.id == primary.id }.valid)
+        assertEquals(secondary, restored.relationships.value.first { it.id == secondary.id })
+    }
 }

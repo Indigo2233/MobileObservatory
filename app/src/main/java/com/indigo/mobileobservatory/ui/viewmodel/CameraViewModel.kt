@@ -9,6 +9,10 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.indigo.mobileobservatory.BuildConfig
 import com.indigo.mobileobservatory.R
+import com.indigo.mobileobservatory.pointing.PointingReferenceCameraState
+import com.indigo.mobileobservatory.pointing.PointingReferenceIssue
+import com.indigo.mobileobservatory.pointing.PointingReferencePreflight
+import com.indigo.mobileobservatory.pointing.PointingReferenceState
 import com.indigo.mobileobservatory.accessories.AccessoryDeviceManager
 import com.indigo.mobileobservatory.accessories.power.DewHeaterMode
 import com.indigo.mobileobservatory.accessories.power.PowerInterfaceNames
@@ -647,6 +651,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _lastPlateSolvePositionAngleDeg.asStateFlow()
 
     val pointingRepository = com.indigo.mobileobservatory.pointing.PointingRepository(app)
+    private val rotatorPointingGuard = com.indigo.mobileobservatory.pointing.RotatorPointingGuard {
+        // The primary camera's eccentricity is not measured; do not assume rotation preserves
+        // either its optical axis or roll. Other optical paths and their hand-eye fits remain valid.
+        val hadPrimaryCalibration = pointingRepository.relationships.value.any {
+            it.valid && (it.source.opticalPathId == "primary" || it.target.opticalPathId == "primary")
+        }
+        pointingRepository.invalidateOpticalPath("primary", "rotator_changed")
+        _lastPlateSolvePositionAngleDeg.value = null
+        prefs.edit().remove("last_plate_solve_position_angle_deg").apply()
+        if (hadPrimaryCalibration) _statusMessage.value = app.getString(R.string.wfp_rotator_changed)
+    }
     private val _pointingOpticsRevision = MutableStateFlow(0L)
     val pointingOpticsRevision = _pointingOpticsRevision.asStateFlow()
     private val pointingOpticsPreferenceListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
@@ -818,6 +833,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         guideCameraManager.register()
         accessoryManager.register()
         mountModule.register()
+
+        viewModelScope.launch {
+            combine(rotatorConnected, rotatorMoving, rotatorAngle, rotatorReversed, rotatorStepsPerDegree) {
+                    connected, moving, angle, reversed, steps ->
+                com.indigo.mobileobservatory.pointing.RotatorPointingGuard.State(connected, moving, angle, reversed, steps)
+            }.distinctUntilChanged().collect(rotatorPointingGuard::observe)
+        }
 
         viewModelScope.launch {
             mountModule.activeUsbMountDeviceId.collect { deviceId ->
@@ -1122,14 +1144,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (connectionState.value !is ConnectionState.Connected) {
             return mountModule.rejectPrecisionGoto(name, app.getString(R.string.precision_goto_need_camera))
         }
-        if (!d50Manager.status().installed) {
-            return mountModule.rejectPrecisionGoto(name, app.getString(R.string.precision_goto_need_d50))
-        }
-        if (_isRecording.value || recordingWriteSession != null || pointingCaptureOwned.get() ||
-            stacking.live.state.value.phase == LiveStackPhase.RUNNING || stacking.calibration.state.value.busy ||
-            pendingCaptureChanges.get() != 0) {
-            return mountModule.rejectPrecisionGoto(name, app.getString(R.string.wfp_reference_busy))
-        }
+        val preflightFailure = runCatching { synchronized(recordingLifecycleLock) { requirePointingReferenceReady() } }.exceptionOrNull()
+        if (preflightFailure != null) return mountModule.rejectPrecisionGoto(name,
+            preflightFailure.message ?: app.getString(R.string.wfp_reference_busy))
         val (jnowRa, jnowDec) = EquatorialEpoch.toJnowHours(raHours, decDeg, frame)
         return mountModule.startPrecisionGoto(
             name = name,
@@ -1149,10 +1166,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     suspend fun runPointingCalibrationMoves(targets: List<com.indigo.mobileobservatory.pointing.PhoneCatalogStar>,
         sample: suspend () -> Unit) {
         require(targets.size in 2..4)
-        check(!_isRecording.value && recordingWriteSession == null && !pointingCaptureOwned.get() &&
-            stacking.live.state.value.phase != LiveStackPhase.RUNNING && !stacking.calibration.state.value.busy)
-            { app.getString(R.string.wfp_reference_busy) }
-        val camera = cameraManager.activeCamera ?: error(app.getString(R.string.precision_goto_need_camera))
+        val camera = synchronized(recordingLifecycleLock) { requirePointingReferenceReady() }
         val acquisitionIdentity = CameraReferenceIdentity.of(camera)
         val site = com.indigo.mobileobservatory.pointing.PhoneSiteProvider.currentSite(app)
         mountModule.verifyCalibrationEnvironment(site)
@@ -1167,6 +1181,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     EquatorialCoordinates(target.raDeg, target.decDeg), Instant.now(), site, null)
                 check(horizontal.altitudeDeg in 20.0..80.0) { app.getString(R.string.wfp_target_not_visible) }
                 val (ra, dec) = EquatorialEpoch.j2000DegToJnowHours(target.raDeg, target.decDeg)
+                // A later point can become unavailable after the preceding sample/settings edit.
+                // Never begin that move on the assumption that a connected camera can sample.
+                synchronized(recordingLifecycleLock) { requirePointingReferenceReady(expectedCamera = camera) }
                 slew(target.name ?: "HIP ${target.hip}", MountCoordinates(ra, dec))
                 sample()
             }
@@ -2770,17 +2787,36 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setCalibratorBrightness(value: Int) =
         accessoryManager.coverController.setBrightness(value)
     fun calibratorOff() = accessoryManager.coverController.calibratorOff()
-    fun moveRotatorTo(angle: Double) = accessoryManager.rotatorController.moveTo(angle)
-    fun moveRotatorRelative(delta: Double) =
+    fun moveRotatorTo(angle: Double) {
+        if (!angle.isFinite()) return
+        rotatorPointingGuard.beforeCommand(rotatorConnected.value)
+        accessoryManager.rotatorController.moveTo(angle)
+    }
+    fun moveRotatorRelative(delta: Double) {
+        if (!delta.isFinite() || delta == 0.0) return
+        rotatorPointingGuard.beforeCommand(rotatorConnected.value)
         accessoryManager.rotatorController.moveRelative(delta)
+    }
     fun haltRotator() = accessoryManager.rotatorController.halt()
-    fun homeRotator() = accessoryManager.rotatorController.home()
-    fun zeroRotator() = accessoryManager.rotatorController.setZero()
-    fun setRotatorReversed(reversed: Boolean) =
+    fun homeRotator() {
+        rotatorPointingGuard.beforeCommand(rotatorConnected.value)
+        accessoryManager.rotatorController.home()
+    }
+    fun zeroRotator() {
+        rotatorPointingGuard.beforeCommand(rotatorConnected.value)
+        accessoryManager.rotatorController.setZero()
+    }
+    fun setRotatorReversed(reversed: Boolean) {
+        if (reversed == rotatorReversed.value) return
+        rotatorPointingGuard.beforeCommand(rotatorConnected.value)
         accessoryManager.rotatorController.setReversed(reversed)
+    }
     fun setRotatorHold(enabled: Boolean) = accessoryManager.rotatorController.setHold(enabled)
-    fun setRotatorStepsPerDegree(value: Int) =
+    fun setRotatorStepsPerDegree(value: Int) {
+        if (value == rotatorStepsPerDegree.value) return
+        rotatorPointingGuard.beforeCommand(rotatorConnected.value)
         accessoryManager.rotatorController.setStepsPerDegree(value)
+    }
 
     private fun currentFilterName(): String? {
         if (!fwController.isConnected.value) return null
@@ -3391,28 +3427,50 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             com.indigo.mobileobservatory.pointing.ReferencePairing.pair(camera, reference, site, trackingSky, bound, stability)
         } }
 
+    private fun requirePointingReferenceReady(ownedByThisCapture: Boolean = false, expectedCamera: Camera? = null): Camera {
+        val camera = cameraManager.activeCamera
+        check(expectedCamera == null || camera === expectedCamera) { app.getString(R.string.wfp_configuration_changed) }
+        val state = PointingReferenceState(camera?.let { PointingReferenceCameraState.of(it) }, d50Manager.status().installed,
+            recordingBusy = _isRecording.value || recordingWriteSession != null || currentRecordingFile != null,
+            liveStackBusy = stacking.live.state.value.phase == LiveStackPhase.RUNNING,
+            calibrationBusy = stacking.calibration.state.value.busy,
+            referenceBusy = pointingCaptureOwned.get() && !ownedByThisCapture,
+            snapshotBusy = pendingFrameSnapshot.get() != null || frameSnapshotMutex.isLocked,
+            settingsBusy = pendingCaptureChanges.get() != 0 || _gainWriteInProgress.value || binningSwitching,
+            autoExposureOff = autoExposureController.mode == AutoExposureMode.OFF,
+            previewPaused = _previewPaused.value, filterMoving = filterWheelMoving.value,
+            rotatorMoving = rotatorConnected.value && rotatorMoving.value)
+        val issue = PointingReferencePreflight.issue(state)
+        check(issue == null) { app.getString(when (issue) {
+            PointingReferenceIssue.CAMERA -> R.string.precision_goto_need_camera
+            PointingReferenceIssue.DATABASE -> R.string.precision_goto_need_d50
+            PointingReferenceIssue.BUSY -> R.string.wfp_reference_busy
+            PointingReferenceIssue.SETTINGS -> R.string.wfp_reference_settings
+            PointingReferenceIssue.SCIENCE_MODE -> R.string.wfp_reference_science
+            PointingReferenceIssue.AUTO_EXPOSURE -> R.string.wfp_reference_ae
+            PointingReferenceIssue.PREVIEW -> R.string.wfp_reference_preview
+            PointingReferenceIssue.FILTER -> R.string.wfp_reference_filter
+            PointingReferenceIssue.ROTATOR -> R.string.wfp_reference_rotator
+            PointingReferenceIssue.OPTICAL_AXIS -> R.string.wfp_reference_axis
+            PointingReferenceIssue.EXPOSURE -> R.string.wfp_reference_exposure
+            null -> R.string.wfp_reference_busy
+        }) }
+        return requireNotNull(camera)
+    }
+
     /** Explicit calibration capture: briefly owns an idle camera and brackets a fresh acquisition run.
      * A USB delivery timestamp is not called an exact exposure time; the whole bracket is retained.
      */
     suspend fun capturePointingReference(hintCoordinates: MountCoordinates? = null,
         onCaptured: (com.indigo.mobileobservatory.pointing.ObservationStamp) -> Unit = {}): com.indigo.mobileobservatory.pointing.OpticalObservation {
-        synchronized(recordingLifecycleLock) {
-            check(!pointingCaptureOwned.get() && !_isRecording.value && recordingWriteSession == null && currentRecordingFile == null)
-                { "Stop recording before a reference capture" }
-            check(stacking.live.state.value.phase != LiveStackPhase.RUNNING && !stacking.calibration.state.value.busy)
-                { "Pause the current capture task before calibration" }
-            check(pendingCaptureChanges.get() == 0) { "Wait for camera settings to finish" }
+        val cam = synchronized(recordingLifecycleLock) {
+            val ready = requirePointingReferenceReady()
             check(pointingCaptureOwned.compareAndSet(false, true))
+            ready
         }
         try {
             return withContext(Dispatchers.IO) {
-                check(d50Manager.status().installed) { app.getString(R.string.precision_goto_need_d50) }
-                val cam = cameraManager.activeCamera ?: error(app.getString(R.string.precision_goto_need_camera))
-                check(cam.recordsLiveViewAsScience && cam.scienceCaptureGeneration != null && !cam.requiresHighBitScienceCapture)
-                    { "This camera mode cannot provide a verified fresh exposure" }
-                check(autoExposureController.mode == AutoExposureMode.OFF && !filterWheelMoving.value)
-                    { "Turn off auto exposure and wait for the filter to stop" }
-                check(!_previewPaused.value && cam.isCapturing.value) { "Resume camera preview before sampling" }
+                synchronized(recordingLifecycleLock) { requirePointingReferenceReady(ownedByThisCapture = true, expectedCamera = cam) }
                 val info = requireNotNull(cam.cameraInfo)
                 val referenceGain = cam.currentGain
                 val referenceBinning = _binning.value
@@ -3422,8 +3480,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 val opticalRevision = pointingRepository.captureRevision("primary")
                 val referenceFocalLength = pointingOpticsConfiguration().primaryReferenceFocalLengthMm()
                 val capture = captureSettingsMutex.withLock {
-                    check(cameraManager.activeCamera === cam)
-                    check(stacking.live.state.value.phase != LiveStackPhase.RUNNING && !_isRecording.value)
+                    synchronized(recordingLifecycleLock) { requirePointingReferenceReady(ownedByThisCapture = true, expectedCamera = cam) }
                     cam.stopCapture()
                     val startedUtc = System.currentTimeMillis()
                     val started = android.os.SystemClock.elapsedRealtime()
@@ -3432,7 +3489,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         throw t
                     }
                     val generation = requireNotNull(cam.scienceCaptureGeneration)
-                    val frame = awaitFrameSnapshot(30_000) ?: error(app.getString(R.string.precision_goto_no_frame))
+                    val frame = awaitFrameSnapshot(PointingReferencePreflight.FRAME_TIMEOUT_MS) ?: error(app.getString(R.string.precision_goto_no_frame))
                     val ended = android.os.SystemClock.elapsedRealtime()
                     check(frame.captureGeneration == generation && cam.scienceCaptureGeneration == generation && cameraManager.activeCamera === cam)
                         { "Camera settings changed during reference capture" }

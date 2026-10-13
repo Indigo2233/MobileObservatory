@@ -40,4 +40,10 @@
     <string name="wfa_push_sample">已停稳 · 采样指向</string>
     <string name="wfa_push_policy">到位需三次独立解析、连续星像稳定，且最后定位不超过10秒。</string>
     <string name="wfa_memory_budget">采样内存不足。请减小辅助图像尺寸或释放应用内存，再重试。</string>
+    <string name="wfa_choose_validation_star">选择相距至少5°的另一颗亮星</string>
+    <string name="wfa_no_validation_stars">当前没有适合的第二颗亮星。请稍后重试，或改用主相机参考。</string>
+    <string name="wfa_database_required">需先安装解析星库。</string>
+    <string name="wfa_install_database">安装解析星库</string>
+    <string name="wfa_adjust_capture">调整采集设置</string>
+    <string name="wfa_open_guiding">打开导星控制</string>
 </resources>
