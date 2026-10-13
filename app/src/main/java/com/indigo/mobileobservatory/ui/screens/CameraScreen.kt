@@ -11,8 +11,13 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
@@ -41,6 +46,7 @@ import com.indigo.mobileobservatory.sequence.SequenceFeature
 import com.indigo.mobileobservatory.sequence.plannedFrames
 import com.indigo.mobileobservatory.ui.AppOrientationMode
 import com.indigo.mobileobservatory.ui.RememberAppOrientation
+import com.indigo.mobileobservatory.stacking.StackMode
 
 private enum class MainControlTab {
     CAMERA,
@@ -57,7 +63,26 @@ fun CameraScreen(
     redNightMode: Boolean = false,
     onRedNightModeChange: (Boolean) -> Unit = {}
 ) {
+    val stackDestination by viewModel.stacking.destination.collectAsState()
+    val stackScreenState = rememberSaveableStateHolder()
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val hostContext = LocalContext.current
+    DisposableEffect(lifecycleOwner, viewModel) {
+        val observer = LifecycleEventObserver { _, event ->
+            var context = hostContext
+            while (context is android.content.ContextWrapper && context !is android.app.Activity) context = context.baseContext
+            if (event == Lifecycle.Event.ON_STOP && (context as? android.app.Activity)?.isChangingConfigurations != true) {
+                viewModel.stacking.onBackground()
+            }
+            if (event == Lifecycle.Event.ON_START) viewModel.stacking.onForeground()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     val showPlayer by viewModel.showPlayer.collectAsState()
+    var playerInitialFile by remember { mutableStateOf<java.io.File?>(null) }
+    var playerReturnMode by rememberSaveable { mutableStateOf<StackMode?>(null) }
+    var stackReturnToPlayer by rememberSaveable { mutableStateOf(false) }
     var showPlateSolve by remember { mutableStateOf(false) }
     var showPolarAlign by remember { mutableStateOf(false) }
     var showGuide by remember { mutableStateOf(false) }
@@ -71,7 +96,8 @@ fun CameraScreen(
     val sequenceEnabled = SequenceFeature.ENABLED
 
     val orientationMode = when {
-        showGuide || showPlayer -> AppOrientationMode.LANDSCAPE
+        stackDestination != null || showPlayer -> AppOrientationMode.SENSOR
+        showGuide -> AppOrientationMode.LANDSCAPE
         selectedTab == MainControlTab.CAMERA -> AppOrientationMode.LANDSCAPE
         else -> AppOrientationMode.PORTRAIT
     }
@@ -150,13 +176,50 @@ fun CameraScreen(
         return
     }
 
+    if (stackDestination != null) {
+        stackScreenState.SaveableStateProvider(stackDestination!!.name) {
+            StackingScreen(viewModel, stackDestination!!, onBack = {
+                viewModel.stacking.leave()
+                if (stackReturnToPlayer) { stackReturnToPlayer = false; viewModel.openPlayer() }
+            },
+                onCamera = {
+                    stackReturnToPlayer = false
+                    viewModel.stacking.leave()
+                    viewModel.closePlayer()
+                    selectedTab = MainControlTab.CAMERA
+                },
+                onOpenResult = { file ->
+                    playerReturnMode = stackDestination
+                    playerInitialFile = file
+                    viewModel.stacking.leave()
+                    viewModel.openPlayer()
+                })
+        }
+        return
+    }
+
     if (showPlayer) {
         val mountCoordinates by viewModel.mountCoordinates.collectAsState()
         PlayerScreen(
             recordingsDir = viewModel.getRecordingsDir(),
             capturesDir = viewModel.getCapturesDir(),
             mountCoordinates = mountCoordinates,
-            onBack = { viewModel.closePlayer() }
+            initialFile = playerInitialFile,
+            initialCategory = if (playerReturnMode != null) MediaCategory.STACK_RESULTS else MediaCategory.SER_PSER,
+            excludeFile = viewModel.getActiveRecordingFile(),
+            onStackFile = { file ->
+                playerInitialFile = null
+                playerReturnMode = null
+                stackReturnToPlayer = true
+                viewModel.openPlanetaryStack(file)
+            },
+            onBack = {
+                viewModel.closePlayer()
+                val returnMode = playerReturnMode
+                playerInitialFile = null
+                playerReturnMode = null
+                returnMode?.let { viewModel.stacking.open(it) }
+            }
         )
         return
     }
@@ -636,6 +699,8 @@ fun CameraScreen(
                     onOpenPlayer = { viewModel.openPlayer() },
                     showSequenceEntry = sequenceEnabled,
                     onOpenSequence = { selectedTab = MainControlTab.SEQUENCE },
+                    onOpenStacking = { viewModel.stacking.open(StackMode.PLANETARY) },
+                    onOpenLiveStacking = { viewModel.stacking.open(StackMode.LIVE) },
                     modifier = Modifier.weight(1f),
                     wideLayout = toolsWideLayout
                 )
@@ -645,6 +710,7 @@ fun CameraScreen(
                     .weight(1f)
                     .fillMaxWidth()
             ) {
+        EaaSessionBar(viewModel)
         // Main content area
         Row(modifier = Modifier.weight(1f)) {
             // Preview area
@@ -844,6 +910,7 @@ fun CameraScreen(
                     onToggleCenterMarker = { showCenterMarker = !showCenterMarker },
                     onPlateSolve = { showPlateSolve = true },
                     onOpenLibrary = { viewModel.openPlayer() },
+                    onOpenLiveStack = { viewModel.stacking.open(StackMode.LIVE) },
                     modifier = Modifier.align(Alignment.TopEnd)
                 )
 
@@ -861,6 +928,7 @@ fun CameraScreen(
                     }
                     val camName = camInfo?.name ?: "—"
                     ControlPanel(
+                        onOpenLiveStack = { viewModel.stacking.open(StackMode.LIVE) },
                         exposureUs = exposureUs,
                         gain = gain,
                         gainWriteInProgress = gainWriteInProgress,
@@ -1222,8 +1290,10 @@ private fun MainPreviewImage(
     showCenterMarker: Boolean
 ) {
     val bitmap by viewModel.previewBitmap.collectAsState()
+    val stackBitmap by viewModel.stacking.livePreview.collectAsState()
+    val showStack by viewModel.stacking.showLiveStack.collectAsState()
     LivePreview(
-        bitmap = bitmap,
+        bitmap = if (showStack && stackBitmap != null) stackBitmap else bitmap,
         flipH = flipH,
         flipV = flipV,
         rotationDeg = rotation,

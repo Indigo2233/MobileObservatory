@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
@@ -49,6 +50,8 @@ fun ToolsScreen(
     onOpenPlayer: () -> Unit,
     showSequenceEntry: Boolean,
     onOpenSequence: () -> Unit,
+    onOpenStacking: () -> Unit = {},
+    onOpenLiveStacking: () -> Unit = {},
     modifier: Modifier = Modifier,
     wideLayout: Boolean = false,
     plateSolveStatus: String? = null,
@@ -71,6 +74,10 @@ fun ToolsScreen(
         )
 
         val entries = buildList {
+            add(ToolEntry("eaa_stack", stringResource(R.string.stack_eaa_title),
+                stringResource(R.string.stack_eaa_tool_hint), null, Icons.Default.Layers, onOpenLiveStacking))
+            add(ToolEntry("planetary_stack", stringResource(R.string.stack_planetary),
+                stringResource(R.string.stack_hint), null, Icons.Default.Layers, onOpenStacking))
             add(
                 ToolEntry(
                     key = "plate_solve",

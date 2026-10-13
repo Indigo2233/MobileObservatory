@@ -3,11 +3,16 @@ package com.indigo.mobileobservatory.ui.screens
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
-import android.content.pm.ActivityInfo
+import android.content.Intent
+import android.content.ActivityNotFoundException
 import android.graphics.Bitmap
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -16,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -24,6 +30,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -31,11 +39,18 @@ import android.graphics.BitmapFactory
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.mount.MountCoordinates
 import com.indigo.mobileobservatory.recording.SERReader
+import com.indigo.mobileobservatory.recording.MediaLibrary
+import androidx.core.content.FileProvider
+import android.widget.Toast
+import com.indigo.mobileobservatory.stacking.StackBitmap
+import com.indigo.mobileobservatory.stacking.StackFitsReader
+import com.indigo.mobileobservatory.stacking.StackFitsPreview
 import com.indigo.mobileobservatory.util.ImageUtils
 import kotlinx.coroutines.*
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import org.json.JSONObject
 import kotlin.math.asinh
 
 @Composable
@@ -76,71 +91,41 @@ private fun RepeatableIconButton(
     }
 }
 
-data class VideoFileInfo(
-    val file: File,
-    val name: String,
-    val size: Long,
-    val format: String
-)
+// Preserve source compatibility for screens that previously imported these UI types.
+typealias VideoFileInfo = com.indigo.mobileobservatory.recording.VideoFileInfo
+typealias MediaCategory = com.indigo.mobileobservatory.recording.MediaCategory
 
-enum class MediaCategory(val displayName: String, val extensions: List<String>) {
-    SER_PSER("SER/PSER", listOf("ser", "pser")),
-    MP4("MP4", listOf("mp4")),
-    FITS("FITS", listOf("fit", "fits")),
-    JPG("JPG", listOf("jpg", "jpeg", "png"))
+private fun mediaCategoryLabel(category: MediaCategory) = when (category) {
+    MediaCategory.SER_PSER -> R.string.media_category_ser
+    MediaCategory.MP4 -> R.string.media_category_mp4
+    MediaCategory.FITS -> R.string.media_category_fits
+    MediaCategory.JPG -> R.string.media_category_photos
+    MediaCategory.STACK_RESULTS -> R.string.media_category_results
 }
 
-private fun listMediaForCategory(
-    recordingsDir: File?,
-    capturesDir: File?,
-    category: MediaCategory
-): List<VideoFileInfo> {
-    val allFiles = mutableListOf<VideoFileInfo>()
-    if (category == MediaCategory.FITS) {
-        val dirs = listOfNotNull(
-            capturesDir?.let { File(it, "FITS") },
-            recordingsDir?.let { File(it, "FITS") }
-        )
-        dirs.forEach { dir ->
-            dir.listFiles()?.forEach { f ->
-                when {
-                    f.isFile && category.extensions.any { ext -> f.extension.equals(ext, true) } -> {
-                        allFiles.add(VideoFileInfo(f, f.name, f.length(), f.extension.uppercase()))
-                    }
-                    f.isDirectory -> {
-                        val frames = f.listFiles()?.filter {
-                            it.isFile && category.extensions.any { ext -> it.extension.equals(ext, true) }
-                        }.orEmpty()
-                        if (frames.isNotEmpty()) {
-                            allFiles.add(VideoFileInfo(f, f.name, frames.sumOf { it.length() }, "FITS"))
-                        }
-                    }
-                }
-            }
-        }
-        return allFiles.sortedByDescending { it.file.lastModified() }
+private fun mediaEmptyHint(category: MediaCategory) = when (category) {
+    MediaCategory.SER_PSER -> R.string.media_empty_ser
+    MediaCategory.MP4 -> R.string.media_empty_mp4
+    MediaCategory.FITS -> R.string.media_empty_fits
+    MediaCategory.JPG -> R.string.media_empty_photos
+    MediaCategory.STACK_RESULTS -> R.string.media_empty_results
+}
+
+/** Read-only content URI; the recorder's app-owned file is never exposed as a file:// URI. */
+internal fun mediaVideoViewIntent(context: Context, file: File): Intent = Intent(Intent.ACTION_VIEW).apply {
+    setDataAndType(FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file), "video/mp4")
+    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    if (context.findActivity() == null) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+}
+
+private fun openMp4(context: Context, file: File) {
+    try {
+        context.startActivity(mediaVideoViewIntent(context, file))
+    } catch (_: ActivityNotFoundException) {
+        Toast.makeText(context, R.string.media_no_video_player, Toast.LENGTH_LONG).show()
+    } catch (_: Exception) {
+        Toast.makeText(context, R.string.media_video_open_failed, Toast.LENGTH_LONG).show()
     }
-    val searchDirs = when (category) {
-        MediaCategory.SER_PSER -> listOfNotNull(
-            recordingsDir?.let { File(it, "SER") },
-            recordingsDir?.let { File(it, "PSER") }
-        )
-        MediaCategory.MP4 -> listOfNotNull(
-            recordingsDir?.let { File(it, "MP4") }
-        )
-        MediaCategory.JPG -> listOfNotNull(
-            capturesDir?.let { File(it, "JPG") }
-        )
-        MediaCategory.FITS -> emptyList()
-    }
-    searchDirs.forEach { dir ->
-        dir.listFiles()?.filter { f ->
-            f.isFile && category.extensions.any { ext -> f.extension.equals(ext, true) }
-        }?.forEach { f ->
-            allFiles.add(VideoFileInfo(f, f.name, f.length(), f.extension.uppercase()))
-        }
-    }
-    return allFiles.sortedByDescending { it.file.lastModified() }
 }
 
 private fun firstFitsIn(file: File): File? {
@@ -156,24 +141,30 @@ fun PlayerScreen(
     recordingsDir: File?,
     capturesDir: File? = null,
     mountCoordinates: MountCoordinates? = null,
+    onStackFile: ((File) -> Unit)? = null,
+    initialFile: File? = null,
+    initialCategory: MediaCategory = MediaCategory.SER_PSER,
+    excludeFile: File? = null,
     onBack: () -> Unit
 ) {
-    val activity = LocalContext.current.findActivity()
-    DisposableEffect(activity) {
-        val previousOrientation = activity?.requestedOrientation
-        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
-        onDispose {
-            if (previousOrientation != null) {
-                activity.requestedOrientation = previousOrientation
-            }
-        }
-    }
-
+    // Orientation belongs to CameraScreen's navigation owner. Mutating it again here,
+    // especially during disposal, can request a second Activity configuration change.
     var selectedFile by remember { mutableStateOf<VideoFileInfo?>(null) }
     var plateSolveFile by remember { mutableStateOf<File?>(null) }
-    var selectedCategory by remember { mutableStateOf(MediaCategory.SER_PSER) }
+    var selectedCategory by rememberSaveable(initialCategory) { mutableStateOf(initialCategory) }
     var showFilePicker by remember { mutableStateOf(true) }
     var refreshTrigger by remember { mutableIntStateOf(0) }
+    var directFileUnavailable by remember { mutableStateOf(false) }
+    LaunchedEffect(initialFile) {
+        initialFile?.let { file ->
+            val info = withContext(Dispatchers.IO) {
+                if (file.absolutePath == excludeFile?.absolutePath) null else MediaLibrary.describe(file)
+            }
+            selectedFile = info
+            showFilePicker = info == null
+            directFileUnavailable = info == null
+        }
+    }
 
     plateSolveFile?.let { file ->
         PlateSolveScreen(
@@ -188,8 +179,8 @@ fun PlayerScreen(
         recordingsDir?.let { File(it, ".trash").also { d -> d.mkdirs() } }
     }
     
-    val currentFiles = remember(recordingsDir, capturesDir, selectedCategory, refreshTrigger) {
-        listMediaForCategory(recordingsDir, capturesDir, selectedCategory)
+    val currentFiles by produceState<List<VideoFileInfo>>(emptyList(), recordingsDir, capturesDir, selectedCategory, refreshTrigger, excludeFile) {
+        value = withContext(Dispatchers.IO) { MediaLibrary.list(recordingsDir, capturesDir, selectedCategory, excludeFile) }
     }
 
     if (showFilePicker && selectedFile == null) {
@@ -201,11 +192,16 @@ fun PlayerScreen(
                 showFilePicker = false
             },
             onBack = onBack,
+            onStackFile = onStackFile,
+            selectedCategory = selectedCategory,
+            excludeFile = excludeFile,
+            fileUnavailable = directFileUnavailable,
             onCategoryChange = { cat -> selectedCategory = cat }
         )
     } else {
         val info = selectedFile
         if (info != null) {
+            key(info.file.absolutePath) {
             PlaybackView(
                 fileInfo = info,
                 onBack = {
@@ -213,6 +209,11 @@ fun PlayerScreen(
                     showFilePicker = true
                 },
                 onSolve = { plateSolveFile = firstFitsIn(info.file) ?: info.file },
+                onStackFile = onStackFile?.let { launch -> { file: File ->
+                    selectedFile = null
+                    showFilePicker = true
+                    launch(file)
+                } },
                 onDelete = {
                     val currentIndex = currentFiles.indexOfFirst { it.file.absolutePath == info.file.absolutePath }
                     if (trashDir != null && info.file.exists()) {
@@ -234,6 +235,7 @@ fun PlayerScreen(
                     }
                 }
             )
+            }
         }
     }
 }
@@ -251,9 +253,13 @@ private fun FilePickerView(
     capturesDir: File? = null,
     onSelect: (VideoFileInfo) -> Unit,
     onBack: () -> Unit,
+    onStackFile: ((File) -> Unit)? = null,
+    selectedCategory: MediaCategory,
+    excludeFile: File? = null,
+    fileUnavailable: Boolean = false,
     onCategoryChange: (MediaCategory) -> Unit = {}
 ) {
-    var selectedCategory by remember { mutableStateOf(MediaCategory.SER_PSER) }
+    val context = LocalContext.current
     var showTrash by remember { mutableStateOf(false) }
     var fileToDelete by remember { mutableStateOf<VideoFileInfo?>(null) }
     var refreshTrigger by remember { mutableIntStateOf(0) }
@@ -262,16 +268,22 @@ private fun FilePickerView(
         recordingsDir?.let { File(it, ".trash").also { d -> d.mkdirs() } }
     }
 
-    val files = remember(recordingsDir, capturesDir, selectedCategory, refreshTrigger) {
-        listMediaForCategory(recordingsDir, capturesDir, selectedCategory)
+    var loading by remember { mutableStateOf(true) }
+    val files by produceState<List<VideoFileInfo>>(emptyList(), recordingsDir, capturesDir, selectedCategory, refreshTrigger, excludeFile) {
+        loading = true
+        value = emptyList()
+        value = withContext(Dispatchers.IO) { MediaLibrary.list(recordingsDir, capturesDir, selectedCategory, excludeFile) }
+        loading = false
     }
     
-    val trashFiles = remember(trashDir, showTrash, refreshTrigger) {
-        if (showTrash && trashDir != null && trashDir.exists()) {
-            trashDir.listFiles()?.map { f ->
-                VideoFileInfo(f, f.name, f.length(), f.extension.uppercase())
-            }?.sortedByDescending { it.file.lastModified() } ?: emptyList()
-        } else emptyList()
+    val trashFiles by produceState<List<VideoFileInfo>>(emptyList(), trashDir, showTrash, refreshTrigger) {
+        value = withContext(Dispatchers.IO) {
+            if (showTrash && trashDir != null && trashDir.exists()) {
+                trashDir.listFiles()?.map { f ->
+                    VideoFileInfo(f, f.name, f.length(), f.extension.uppercase())
+                }?.sortedByDescending { it.file.lastModified() } ?: emptyList()
+            } else emptyList()
+        }
     }
     
     if (fileToDelete != null) {
@@ -312,7 +324,7 @@ private fun FilePickerView(
                 Icon(Icons.Default.ArrowBack, stringResource(R.string.back))
             }
             Text(
-                if (showTrash) stringResource(R.string.trash) else stringResource(R.string.files),
+                if (showTrash) stringResource(R.string.trash) else stringResource(R.string.media_library_title),
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier
                     .padding(start = 8.dp)
@@ -327,9 +339,13 @@ private fun FilePickerView(
         }
         
         if (!showTrash) {
+            Text(stringResource(if (fileUnavailable) R.string.media_file_unavailable else R.string.media_library_hint),
+                Modifier.padding(horizontal = 16.dp, vertical = 6.dp), style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
                     .padding(horizontal = 8.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
@@ -337,10 +353,9 @@ private fun FilePickerView(
                     FilterChip(
                         selected = selectedCategory == cat,
                         onClick = { 
-                            selectedCategory = cat
                             onCategoryChange(cat)
                         },
-                        label = { Text(cat.displayName, fontSize = 11.sp) },
+                        label = { Text(stringResource(mediaCategoryLabel(cat)), fontSize = 11.sp) },
                         modifier = Modifier.height(32.dp)
                     )
                 }
@@ -363,7 +378,9 @@ private fun FilePickerView(
                     )
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        if (showTrash) stringResource(R.string.trash_empty) else stringResource(R.string.no_files_found),
+                        if (showTrash) stringResource(R.string.trash_empty) else if (loading) stringResource(R.string.media_loading)
+                        else stringResource(mediaEmptyHint(selectedCategory)),
+                        modifier = Modifier.padding(horizontal = 24.dp),
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
@@ -384,8 +401,8 @@ private fun FilePickerView(
                                         File(recordingsDir, info.format.uppercase())
                                     info.format.equals("MP4", true) -> File(recordingsDir, "MP4")
                                     info.format.equals("FIT", true) || info.format.equals("FITS", true) -> 
-                                        File(recordingsDir, "FITS")
-                                    else -> File(recordingsDir, "JPG")
+                                        File(if (info.name.startsWith("stack-", true)) capturesDir else recordingsDir, "FITS")
+                                    else -> File(capturesDir, "JPG")
                                 }
                                 originalDir.mkdirs()
                                 info.file.renameTo(File(originalDir, info.name))
@@ -426,6 +443,10 @@ private fun FilePickerView(
                             .fillMaxWidth()
                             .clickable { 
                                 if (!showTrash) {
+                                    if (info.format.equals("MP4", true)) {
+                                        openMp4(context, info.file)
+                                        return@clickable
+                                    }
                                     val canOpen = info.format.equals("SER", true) || 
                                                   info.format.equals("PSER", true) ||
                                                   info.format.equals("JPG", true) ||
@@ -476,8 +497,8 @@ private fun FilePickerView(
                                             File(recordingsDir, info.format.uppercase())
                                         info.format.equals("MP4", true) -> File(recordingsDir, "MP4")
                                         info.format.equals("FIT", true) || info.format.equals("FITS", true) -> 
-                                            File(recordingsDir, "FITS")
-                                        else -> File(recordingsDir, "JPG")
+                                            File(if (info.name.startsWith("stack-", true)) capturesDir else recordingsDir, "FITS")
+                                        else -> File(capturesDir, "JPG")
                                     }
                                     originalDir.mkdirs()
                                     info.file.renameTo(File(originalDir, info.name))
@@ -486,6 +507,16 @@ private fun FilePickerView(
                                     Icon(Icons.Default.Restore, stringResource(R.string.restore), modifier = Modifier.size(20.dp))
                                 }
                             } else {
+                                if (onStackFile != null && (info.format.equals("SER", true) || info.format.equals("PSER", true))) {
+                                    val description = stringResource(R.string.stack_process_file)
+                                    TextButton(onClick = { onStackFile(info.file) },
+                                        modifier = Modifier.semantics { contentDescription = description }) {
+                                        Icon(Icons.Default.Layers, null,
+                                            tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
+                                        Spacer(Modifier.width(4.dp))
+                                        Text(stringResource(R.string.media_stack_action))
+                                    }
+                                }
                                 IconButton(onClick = { fileToDelete = info }) {
                                     Icon(
                                         Icons.Default.Delete, 
@@ -508,6 +539,7 @@ private fun PlaybackView(
     fileInfo: VideoFileInfo,
     onBack: () -> Unit,
     onSolve: () -> Unit = {},
+    onStackFile: ((File) -> Unit)? = null,
     onDelete: () -> Unit = {}
 ) {
     val isImage = fileInfo.format.equals("JPG", true) ||
@@ -528,6 +560,8 @@ private fun PlaybackView(
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
     val scope = rememberCoroutineScope()
     var playJob by remember { mutableStateOf<Job?>(null) }
+    var seekJob by remember { mutableStateOf<Job?>(null) }
+    var openJob by remember { mutableStateOf<Job?>(null) }
     var readerClosed by remember { mutableStateOf(false) }
 
     var totalFrames by remember { mutableIntStateOf(0) }
@@ -535,9 +569,11 @@ private fun PlaybackView(
     var pendingAutoPlay by remember { mutableStateOf(true) }
 
     LaunchedEffect(Unit) {
-        withContext(Dispatchers.IO) {
-            isOpened = reader.open()
-            if (isOpened) {
+        openJob = scope.launch(Dispatchers.IO) {
+            try {
+            val opened = reader.open()
+            withContext(Dispatchers.Main) { if (!readerClosed) isOpened = opened }
+            if (opened && isActive && !readerClosed) {
                 withContext(Dispatchers.Main) {
                     totalFrames = reader.header?.frameCount ?: 0
                 }
@@ -551,6 +587,9 @@ private fun PlaybackView(
                     }
                 }
             }
+            } finally {
+                if (!isActive || readerClosed) reader.close()
+            }
         }
     }
 
@@ -558,11 +597,26 @@ private fun PlaybackView(
         onDispose {
             readerClosed = true
             playJob?.cancel()
+            seekJob?.cancel()
+            openJob?.cancel()
             reader.close()
         }
     }
 
-    var seekJob: kotlinx.coroutines.Job? = null
+    fun closeThen(action: () -> Unit) {
+        if (readerClosed) return
+        readerClosed = true
+        isPlaying = false
+        pendingAutoPlay = false
+        val pending = listOfNotNull(openJob, playJob, seekJob)
+        pending.forEach { it.cancel() }
+        scope.launch {
+            pending.joinAll()
+            withContext(Dispatchers.IO) { reader.close() }
+            action()
+        }
+    }
+
     fun seekTo(frame: Int) {
         if (readerClosed || totalFrames <= 0) return
         val f = frame.coerceIn(0, (totalFrames - 1).coerceAtLeast(0))
@@ -672,9 +726,7 @@ private fun PlaybackView(
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = {
-                playJob?.cancel()
-                reader.close()
-                onBack()
+                closeThen(onBack)
             }) {
                 Icon(Icons.Default.ArrowBack, stringResource(R.string.back), tint = Color.White)
             }
@@ -685,25 +737,27 @@ private fun PlaybackView(
                 maxLines = 1,
                 modifier = Modifier.weight(1f)
             )
+            if (onStackFile != null && (fileInfo.format.equals("SER", true) || fileInfo.format.equals("PSER", true))) {
+                IconButton(onClick = { closeThen { onStackFile(fileInfo.file) } }, enabled = !readerClosed) {
+                    Icon(Icons.Default.Layers, stringResource(R.string.stack_planetary), tint = Color.White)
+                }
+            }
             IconButton(onClick = {
-                playJob?.cancel()
-                reader.close()
-                onDelete()
+                closeThen(onDelete)
             }) {
                 Icon(Icons.Default.Delete, stringResource(R.string.delete), tint = Color(0xFFFF6B6B))
             }
-            if (isOpened) {
-                val h = reader.header
-                val recFps = reader.recordedFps
-                val fpsStr = if (recFps > 0) " %.0ffps".format(recFps) else ""
-                Text(
-                    "${h?.width}x${h?.height} ${h?.pixelDepth}bit ${h?.frameCount}f$fpsStr" +
-                            if (h?.isPSER == true) " PSER" else " SER",
-                    color = Color.White.copy(alpha = 0.7f),
-                    fontSize = 11.sp,
-                    fontFamily = FontFamily.Monospace
-                )
-            }
+        }
+        if (isOpened && !readerClosed) {
+            val h = reader.header
+            val recFps = reader.recordedFps
+            val fpsStr = if (recFps > 0) " %.0ffps".format(recFps) else ""
+            Text(
+                "${h?.width}x${h?.height} ${h?.pixelDepth}bit ${h?.frameCount}f$fpsStr" +
+                    if (h?.isPSER == true) " PSER" else " SER",
+                color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace, modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp)
+            )
         }
 
         Box(
@@ -824,17 +878,34 @@ private fun ImageViewScreen(
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var fitsInfo by remember { mutableStateOf("") }
+    var resultMetadata by remember(fileInfo) { mutableStateOf("") }
+    var showMetadata by remember(fileInfo) { mutableStateOf(false) }
     var lp750Enabled by remember(fileInfo) { mutableStateOf(false) }
     val failedToDecodeImage = stringResource(R.string.failed_to_decode_image)
     val unknownError = stringResource(R.string.unknown_error)
 
+    if (showMetadata) {
+        AlertDialog(
+            onDismissRequest = { showMetadata = false },
+            title = { Text(stringResource(R.string.section_info)) },
+            text = {
+                Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+                    SelectionContainer { Text(resultMetadata, style = MaterialTheme.typography.bodySmall) }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showMetadata = false }) { Text(stringResource(R.string.close)) } }
+        )
+    }
+
     LaunchedEffect(fileInfo, lp750Enabled) {
         withContext(Dispatchers.IO) {
             try {
+                val taskContext = currentCoroutineContext()
                 val isFits = fileInfo.format.equals("FIT", true) || fileInfo.format.equals("FITS", true)
                 if (isFits) {
                     val source = firstFitsIn(fileInfo.file) ?: throw IllegalArgumentException("Empty FITS session")
-                    val result = decodeFits(source, applyLp750 = lp750Enabled)
+                    val result = decodeFits(source, applyLp750 = lp750Enabled, cancelled = { !taskContext.isActive })
+                    val metadata = if (StackFitsReader.isFloatingPoint(source)) StackFitsReader.readMetadata(source) else emptyMap()
                     val extra = if (fileInfo.file.isDirectory) {
                         val n = fileInfo.file.listFiles()?.count {
                             it.isFile && (it.extension.equals("fit", true) || it.extension.equals("fits", true))
@@ -844,14 +915,23 @@ private fun ImageViewScreen(
                     withContext(Dispatchers.Main) {
                         bitmap = result.first
                         fitsInfo = result.second + extra
+                        resultMetadata = if (metadata.isEmpty()) "" else JSONObject(metadata).toString(2).take(20000)
+                        error = null
                     }
                 } else {
                     val bmp = BitmapFactory.decodeFile(fileInfo.file.absolutePath)
+                    val sidecar = File(fileInfo.file.parentFile, "${fileInfo.file.nameWithoutExtension}.json")
+                    val metadata = if (sidecar.isFile && sidecar.length() <= 16 * 1024 * 1024) {
+                        runCatching { JSONObject(sidecar.readText()).toString(2).take(20000) }.getOrDefault("")
+                    } else ""
                     withContext(Dispatchers.Main) {
                         bitmap = bmp
+                        resultMetadata = metadata
                         if (bmp == null) error = failedToDecodeImage
                     }
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     error = e.message ?: unknownError
@@ -882,8 +962,10 @@ private fun ImageViewScreen(
                 maxLines = 1,
                 modifier = Modifier.weight(1f)
             )
-            if (fitsInfo.isNotEmpty()) {
-                Text(fitsInfo, color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+            if (resultMetadata.isNotEmpty()) {
+                IconButton(onClick = { showMetadata = true }) {
+                    Icon(Icons.Default.Info, stringResource(R.string.section_info), tint = Color.White)
+                }
             }
             if (fileInfo.format.equals("FIT", true) || fileInfo.format.equals("FITS", true)) {
                 FilterChip(
@@ -899,6 +981,10 @@ private fun ImageViewScreen(
             IconButton(onClick = onDelete) {
                 Icon(Icons.Default.Delete, stringResource(R.string.delete), tint = Color(0xFFFF6B6B))
             }
+        }
+        if (fitsInfo.isNotEmpty()) {
+            Text(fitsInfo, color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace, modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp))
         }
 
         Box(
@@ -925,7 +1011,15 @@ private fun ImageViewScreen(
     }
 }
 
-private fun decodeFits(file: File, applyLp750: Boolean = false): Pair<Bitmap, String> {
+private fun decodeFits(file: File, applyLp750: Boolean = false, cancelled: () -> Boolean = { false }): Pair<Bitmap, String> {
+    if (StackFitsReader.isNormalizedStack(file)) {
+        val result = StackFitsPreview.read(file, applyLp750, cancelled)
+        val image = result.image
+        val bitmap = StackBitmap.create(image, 2048) {
+            if (cancelled()) throw CancellationException("FITS preview cancelled")
+        }
+        return bitmap to "${image.width}×${image.height} Float32 ${if (image.channels == 3) "RGB" else "Mono"}"
+    }
     val bytes = file.readBytes()
     var offset = 0
     var width = 0; var height = 0; var bitpix = 16; var naxis = 2; var naxis3 = 1

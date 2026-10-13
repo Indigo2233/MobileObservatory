@@ -17,6 +17,8 @@ import kotlin.math.roundToInt
 class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
     CameraUsbBandwidthCapable, CameraBinningCapable {
 
+    override val sciencePixelTraits get() = CameraScienceLayouts.fullContainer(currentPixelFormat)
+
     companion object {
         private const val TAG = "QhyCamera"
 
@@ -602,7 +604,7 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
     }
 
     private fun resolvePixelFormat(bits: Int, channels: Int): PixelFormat {
-        if (channels >= 3) return PixelFormat.RGB48
+        if (channels >= 3) return if (bits <= 8) PixelFormat.RGB24 else PixelFormat.RGB48
         if (bayerType > 0) return pixelFormatForBits(bits)
         return when (bits) {
             8 -> PixelFormat.MONO8

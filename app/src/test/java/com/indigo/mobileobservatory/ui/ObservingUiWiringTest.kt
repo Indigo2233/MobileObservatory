@@ -514,8 +514,8 @@ class ObservingUiWiringTest {
         assertTrue(bar.contains("""listOf("SER", "PSER", "MP4", "FITS")"""))
         assertTrue(viewModel.contains("enum class RecordFormat { SER, PSER, MP4, FITS }"))
         assertTrue(viewModel.contains("FitsSequenceWriter"))
-        assertTrue(player.contains("listMediaForCategory"))
-        assertTrue(player.contains("recordingsDir?.let { File(it, \"FITS\") }"))
+        // Concrete FITS/session discovery is exercised by MediaLibraryTest.
+        assertTrue(player.contains("MediaLibrary.list"))
     }
 
     private fun read(relative: String): String {

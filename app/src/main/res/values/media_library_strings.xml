@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="media_library_title">My captures</string>
+    <string name="media_library_hint">Videos and photos taken in this app appear here automatically. You do not need to find their folders.</string>
+    <string name="media_category_ser">Astronomy videos · SER/PSER</string>
+    <string name="media_category_mp4">Videos · MP4</string>
+    <string name="media_category_fits">Science images · FITS</string>
+    <string name="media_category_photos">Photos / PNG</string>
+    <string name="media_category_results">Stacking results</string>
+    <string name="media_empty_ser">No SER/PSER videos yet. Choose SER or PSER in the camera recording settings, then record your target. MP4 videos cannot be used for planetary stacking.</string>
+    <string name="media_empty_results">Saved stacking results appear here: PNG for viewing and linear FITS for further processing. Save a result from live or planetary stacking to get started.</string>
+    <string name="media_empty_photos">Photos taken in this app and saved stacking PNG images appear here.</string>
+    <string name="media_empty_fits">FITS captures, recording sequences and linear stacking results appear here.</string>
+    <string name="media_empty_mp4">Videos recorded with the MP4 format appear here.</string>
+    <string name="media_stack_action">Stack</string>
+    <string name="media_file_unavailable">This file is no longer available. Choose another file below.</string>
+    <string name="media_loading">Loading captures…</string>
+    <string name="media_no_video_player">No app can play this MP4 video. Install a video player, then try again. Planetary stacking requires SER or PSER.</string>
+    <string name="media_video_open_failed">The video could not be opened. Check that the file is still available.</string>
+</resources>

@@ -1,6 +1,7 @@
 package com.indigo.mobileobservatory.camera.playerone
 
 import com.indigo.mobileobservatory.camera.Camera
+import com.indigo.mobileobservatory.camera.CameraScienceLayouts
 import com.indigo.mobileobservatory.camera.CameraBinningCapable
 import com.indigo.mobileobservatory.camera.CameraEnvironmentControlCapable
 import com.indigo.mobileobservatory.camera.CameraInfo
@@ -41,6 +42,8 @@ import kotlin.math.roundToInt
 
 class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBandwidthCapable,
     CameraEnvironmentControlCapable, CameraBinningCapable {
+
+    override val sciencePixelTraits get() = CameraScienceLayouts.fullContainer(currentPixelFormat)
 
     companion object {
         private const val TAG = "PlayerOneCam"

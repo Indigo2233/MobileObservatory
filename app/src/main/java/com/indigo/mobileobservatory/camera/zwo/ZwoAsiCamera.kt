@@ -17,6 +17,8 @@ import kotlin.math.roundToLong
 class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
     CameraEnvironmentControlCapable, CameraBinningCapable, CoolingCapable {
 
+    override val sciencePixelTraits get() = if (scienceRoiVerified) CameraScienceLayouts.zwo(currentPixelFormat) else null
+
     companion object {
         private const val TAG = "ZwoAsiCam"
 
@@ -140,6 +142,7 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
     override var supportedHardwareBins: List<Int> = listOf(1); private set
     private var hardwareBinControlAvailable = false
     private var currentImgType = ASI_IMG_RAW8
+    private var scienceRoiVerified = false
 
     private val _coolingInfo = MutableStateFlow<CoolingInfo?>(null)
     override val coolingInfo: StateFlow<CoolingInfo?> = _coolingInfo.asStateFlow()
@@ -572,11 +575,13 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
         if (ret?.intVal == ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
             val startX = roi.x.coerceIn(0, (sensorW / currentBin) - w)
             val startY = roi.y.coerceIn(0, (sensorH / currentBin) - h)
-            cam.setStartPos(startX, startY)
-
             currentRoi = Roi(startX, startY, w, h)
-            cropInfo = CropInfo(0, 0, w, h)
-            FileLogger.i(TAG, "ROI set: ${w}x${h}@($startX,$startY) bin=$currentBin")
+            val startResult = cam.setStartPos(startX, startY)
+            if (startResult?.intVal != ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS)
+                FileLogger.w(TAG, "setStartPos failed: ${startResult?.intVal}; reading actual ROI")
+            syncRoiFromCamera(cam)
+            cropInfo = CropInfo(0, 0, currentRoi.width, currentRoi.height)
+            FileLogger.i(TAG, "ROI set: $currentRoi bin=$currentBin verified=$scienceRoiVerified")
         } else {
             FileLogger.w(TAG, "setRoiFormat failed: ${ret?.intVal}")
         }
@@ -612,6 +617,7 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
             } else {
                 cam.setStartPos(0, 0)
                 currentRoi = Roi(0, 0, maxW.coerceAtLeast(roiMinWidth), maxH.coerceAtLeast(roiMinHeight))
+                syncRoiFromCamera(cam)
                 cropInfo = CropInfo(0, 0, currentRoi.width, currentRoi.height)
                 FileLogger.i(TAG, "Bin -> $b, imageSize=${currentRoi.width}x${currentRoi.height}")
                 true
@@ -1041,6 +1047,7 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
     }
 
     private fun syncRoiFromCamera(cam: ZwoCamera) {
+        scienceRoiVerified = false
         val roiFmt = try {
             cam.getROIFormat()
         } catch (_: Throwable) {
@@ -1053,8 +1060,16 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
         val bin = roi.getiBin().coerceAtLeast(1)
         if (width < roiMinWidth || height < roiMinHeight) return
         currentBin = bin
-        currentRoi = Roi(0, 0, width, height)
-        FileLogger.i(TAG, "Camera ROI readout: ${width}x${height} bin=$bin imgType=${roi.imgType}")
+        val start = try { cam.getStartPos() } catch (_: Throwable) { null }
+        val position = if (asiOk(start)) start?.obj as? com.zwo.ASIPosition else null
+        if (position == null || position.x < 0 || position.y < 0) {
+            currentRoi = currentRoi.copy(width = width, height = height)
+            FileLogger.w(TAG, "ROI origin readback unavailable; scientific stacking/recording disabled")
+            return
+        }
+        currentRoi = Roi(position.x, position.y, width, height)
+        scienceRoiVerified = true
+        FileLogger.i(TAG, "Camera ROI readout: $currentRoi bin=$bin imgType=${roi.imgType}")
     }
 
     private fun configureInitialFormat(cam: ZwoCamera) {

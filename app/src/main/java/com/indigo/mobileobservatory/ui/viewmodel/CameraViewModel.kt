@@ -63,6 +63,13 @@ import com.indigo.mobileobservatory.recording.FitsSequenceWriter
 import com.indigo.mobileobservatory.recording.Mp4Writer
 import com.indigo.mobileobservatory.recording.PSERWriter
 import com.indigo.mobileobservatory.recording.SERWriter
+import com.indigo.mobileobservatory.recording.RawRecordingNormalizer
+import com.indigo.mobileobservatory.stacking.LiveStackPhase
+import com.indigo.mobileobservatory.stacking.PixelTraits
+import com.indigo.mobileobservatory.stacking.StackSessionKey
+import com.indigo.mobileobservatory.stacking.StackMode
+import com.indigo.mobileobservatory.stacking.StackingCoordinator
+import com.indigo.mobileobservatory.stacking.CalibrationRecordingContext
 import com.indigo.mobileobservatory.settings.CameraDefaults
 import com.indigo.mobileobservatory.settings.CoverDefaults
 import com.indigo.mobileobservatory.settings.DeviceSettingsRepository
@@ -128,6 +135,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val guideFrameProcessor = FrameProcessor()
     private val captureFrameProcessor = FrameProcessor()
     private val softwareBinning = SoftwareBinning()
+    val stacking = StackingCoordinator(application, viewModelScope,
+        captureTemperature = { calibrationTemperature() },
+        isSourceBusy = { file ->
+        currentRecordingFile?.let { active ->
+            runCatching { file.canonicalFile == active.canonicalFile }.getOrDefault(file.absoluteFile == active.absoluteFile)
+        } == true
+    })
+    @Volatile private var stackFrameGeometry: Triple<Int, Int, PixelFormat>? = null
     private val guideModule = com.indigo.mobileobservatory.guide.GuideModule()
     private val previewPipeline = PreviewPipeline(viewModelScope, frameProcessor, targetFps = 30)
     private val guidePreviewPipeline = PreviewPipeline(viewModelScope, guideFrameProcessor, targetFps = 12)
@@ -482,6 +497,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     @Volatile private var mp4Writer: Mp4Writer? = null
     @Volatile private var fitsSequenceWriter: FitsSequenceWriter? = null
     @Volatile private var currentRecordingFile: File? = null
+    @Volatile private var recordingCaptureKey: StackSessionKey? = null
+    @Volatile private var recordingCaptureChanged = false
+    @Volatile private var recordingCaptureTemperature: Double? = null
+    private data class RawRecordingLayout(val width: Int, val height: Int, val format: PixelFormat, val traits: PixelTraits)
+    @Volatile private var rawRecordingLayout: RawRecordingLayout? = null
+    private val recordingEnqueueLock = Any()
     private var recordingStartTime: Long = 0
     private val recordWriteQueue = LinkedBlockingQueue<FrameData>(RECORD_QUEUE_CAPACITY)
     private val recordBufferPool = ReusableByteArrayPool(RECORD_QUEUE_CAPACITY)
@@ -676,13 +697,24 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val showPlayer: StateFlow<Boolean> = _showPlayer.asStateFlow()
 
     fun openPlayer() {
-        _previewPaused.value = true
         _showPlayer.value = true
     }
 
     fun closePlayer() {
         _showPlayer.value = false
-        _previewPaused.value = false
+    }
+
+    /** A file remains unavailable until the recording queue and writer have closed. */
+    fun getActiveRecordingFile(): File? = currentRecordingFile
+
+    fun openPlanetaryStack(file: File) {
+        if (file.absoluteFile == currentRecordingFile?.absoluteFile) {
+            stacking.open(StackMode.PLANETARY)
+            stacking.report("recording_active")
+            return
+        }
+        closePlayer()
+        stacking.open(StackMode.PLANETARY, file)
     }
 
     fun getRecordingsDir(): File? {
@@ -783,12 +815,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         _statusMessage.value = app.getString(R.string.camera_connected_status, cam.cameraInfo?.name.orEmpty(), cam.cameraInfo?.serialNumber.orEmpty())
                         bindCoolingFlows(cam)
                         bindEnvironmentFlows(cam)
+                        _previewPaused.value = false
                         startPreview()
                     }
                     is ConnectionState.Error -> {
                         _statusMessage.value = state.message
                     }
                     is ConnectionState.Disconnected -> {
+                        stacking.live.invalidate("camera_disconnected")
+                        stackFrameGeometry = null
                         previewPipeline.stop()
                         _previewBitmap.value = null
                         unbindCoolingFlows()
@@ -898,6 +933,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun cancelOwnedJobs() {
+        stacking.close()
         viewModelScope.coroutineContext.cancelChildren()
         previewPipeline.close()
         guidePreviewPipeline.close()
@@ -1572,6 +1608,24 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 onFrameArrived()
                 updateFps()
 
+                // Science receives private raw bytes before display/capture binning and before
+                // PreviewPipeline takes ownership. Recording keeps its separate bounded copy.
+                stackFrameGeometry = Triple(frame.width, frame.height, frame.pixelFormat)
+                if (stacking.live.state.value.phase == LiveStackPhase.RUNNING) {
+                    if (filterWheelMoving.value) stacking.live.invalidate("filter_moving")
+                    else currentStackKey(frame)?.let { stacking.acceptFrame(frame, it) }
+                }
+
+                // SER/PSER retain sensor samples and geometry. Copy before display binning
+                // can combine CFA colors or recycle the SDK-owned input buffer.
+                if (_isRecording.value && rawRecordingLayout != null) {
+                    if (currentStackKey(frame) != recordingCaptureKey) recordingCaptureChanged = true
+                    val initialTemperature = recordingCaptureTemperature
+                    val temperature = calibrationTemperature()
+                    if (initialTemperature != null && (temperature == null || kotlin.math.abs(temperature - initialTemperature) > 2.0)) recordingCaptureChanged = true
+                    enqueueRecordingFrame(frame)
+                }
+
                 val processed = softwareBinning.apply(frame)
                 if (processed !== frame) cam.recycleBuffer(frame.data)
 
@@ -1592,22 +1646,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
                 updateSoftwareStackingProgress(cam)
 
-                if (_isRecording.value) {
-                    if (recordWriteQueue.remainingCapacity() == 0) {
-                        reportRecordingDrop()
-                    } else {
-                        val bpp = processed.pixelFormat.bytesPerPixel
-                        val size = processed.width * processed.height * bpp
-                        val copySize = size.coerceAtMost(processed.data.size)
-                        val copy = recordBufferPool.acquire(copySize)
-                        System.arraycopy(processed.data, 0, copy, 0, copySize)
-                        val recFrame = processed.copy(data = copy)
-                        if (!recordWriteQueue.offer(recFrame)) {
-                            recordBufferPool.release(copy)
-                            reportRecordingDrop()
-                        }
-                    }
-                }
+                if (_isRecording.value && rawRecordingLayout == null) enqueueRecordingFrame(processed)
 
                 // Ownership transfers to the preview pipeline after all synchronous readers finish.
                 previewPipeline.submit(processed)
@@ -1615,11 +1654,107 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         })
     }
 
+    private fun currentStackKey(frame: FrameData? = null): StackSessionKey? {
+        val cam = cameraManager.activeCamera ?: return null
+        val traits = cam.sciencePixelTraits ?: return null
+        val geometry = frame?.let { Triple(it.width, it.height, it.pixelFormat) } ?: stackFrameGeometry ?: return null
+        return StackSessionKey(
+            camera = "${cam.cameraInfo?.name}/${cam.cameraInfo?.serialNumber}",
+            width = geometry.first, height = geometry.second, format = geometry.third,
+            roi = cam.currentRoi,
+            hardwareBin = (cam as? CameraBinningCapable)?.currentHardwareBin ?: 1,
+            softwareBin = softwareBinning.factor,
+            exposureUs = cam.currentExposureUs.toDouble(), gain = cam.currentGain,
+            filter = if (filterWheelConnected.value) "${filterWheelPosition.value}:${currentFilterName()}" else "none",
+            readout = "${cam.currentReadoutMode}/${_nativeReadoutModeId.value}", offset = _offset.value,
+            pixelTraits = traits
+        )
+    }
+
+    private fun calibrationTemperature(): Double? {
+        // Legacy adapters initialise temperature to zero without a validity flag. Treat this
+        // ambiguous value as unknown, including an actual 0 °C reading, instead of guessing.
+        return (cameraManager.activeCamera as? CoolingCapable)?.sensorTempTenths?.value
+            ?.takeIf { it != 0 }?.div(10.0)
+    }
+
+    /** Same readiness checks power the inline guide and the actual start action. */
+    fun liveStackStartIssue(): String? {
+        val cam = cameraManager.activeCamera ?: return "connect_camera"
+        if (!cam.recordsLiveViewAsScience) return "preview_only_camera"
+        if (cam.sciencePixelTraits == null) return "unknown_science_layout"
+        if (filterWheelMoving.value || _gainWriteInProgress.value || binningSwitching) {
+            return "settings_busy"
+        }
+        // Industrial overlays may synthesize long exposures. Until an adapter supplies explicit
+        // completed-exposure provenance, never count partial averages as independent exposures.
+        if (cam.supportsSoftwareStacking && cam.currentExposureUs > cam.hwExposureMaxUs) {
+            return "software_exposure_unknown"
+        }
+        if (autoExposureController.mode != AutoExposureMode.OFF) {
+            return "disable_auto_exposure"
+        }
+        if (_previewPaused.value || !cam.isCapturing.value) return "capture_paused"
+        if (currentStackKey() == null) return "wait_frame"
+        return null
+    }
+
+    fun startLiveStack() {
+        liveStackStartIssue()?.let { stacking.report(it); return }
+        val key = currentStackKey() ?: run { stacking.report("wait_frame"); return }
+        if (stacking.live.state.value.phase == LiveStackPhase.PAUSED) stacking.live.resume(key)
+        else stacking.startLive(key)
+        if (stacking.live.state.value.phase == LiveStackPhase.RUNNING) {
+            if (_focusAssistEnabled.value) toggleFocusAssist()
+            if (!stacking.showLiveStack.value) stacking.toggleLiveDisplay()
+        }
+    }
+
+    fun resumeCaptureForStacking() {
+        val cam = cameraManager.activeCamera ?: return
+        _previewPaused.value = false
+        if (!cam.isCapturing.value) {
+            stacking.live.onCaptureRestarted()
+            startPreview()
+        }
+    }
+
+    private fun invalidateStackSettings(layoutChanged: Boolean = false) {
+        stacking.live.invalidate("settings_changed")
+        if (layoutChanged) {
+            // Finish queued bytes using their original CFA/alignment before a camera mode or
+            // ROI can change the interpretation of subsequently delivered samples.
+            if (rawRecordingLayout != null) stopRecording()
+            stackFrameGeometry = null
+        }
+    }
+
     private fun reportRecordingDrop() {
         val dropped = recordDroppedFrames.incrementAndGet()
         if (dropped == 1L || dropped % 100L == 0L) {
             Log.w(TAG, "Recording queue full, dropped=$dropped")
         }
+    }
+
+    private fun enqueueRecordingFrame(frame: FrameData) = synchronized(recordingEnqueueLock) {
+        if (!_isRecording.value) return
+        if (recordWriteQueue.remainingCapacity() == 0) { reportRecordingDrop(); return }
+        val size = frame.width.toLong() * frame.height * frame.pixelFormat.bytesPerPixel
+        if (size > frame.data.size || size > Int.MAX_VALUE) { reportRecordingDrop(); return }
+        val copy = recordBufferPool.acquire(size.toInt())
+        System.arraycopy(frame.data, 0, copy, 0, size.toInt())
+        if (!recordWriteQueue.offer(frame.copy(data = copy))) {
+            recordBufferPool.release(copy)
+            reportRecordingDrop()
+        }
+    }
+
+    private fun canonicalRecordingFrame(frame: FrameData): FrameData {
+        val layout = rawRecordingLayout ?: return frame
+        check(frame.width == layout.width && frame.height == layout.height && frame.pixelFormat == layout.format) {
+            "Recording pixel layout changed; start a new recording"
+        }
+        return RawRecordingNormalizer.normalize(frame, layout.traits)
     }
 
     private fun startRecordWriteThread() {
@@ -1636,12 +1771,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             val fits = fitsSequenceWriter
                             when {
                                 ser != null && ser.isOpen -> {
-                                    ser.writeFrame(frame)
+                                    ser.writeFrame(canonicalRecordingFrame(frame))
                                     _recordingFrameCount.value = ser.currentFrameCount
                                     _recordingBytes.value = ser.totalBytesWritten
                                 }
                                 pser != null && pser.isOpen -> {
-                                    pser.writeFrame(frame)
+                                    pser.writeFrame(canonicalRecordingFrame(frame))
                                     _recordingFrameCount.value = pser.currentFrameCount
                                     _recordingBytes.value = pser.totalBytesWritten
                                 }
@@ -1687,6 +1822,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 } catch (e: Throwable) {
                     Log.e(TAG, "RecordWriter error", e)
                     _statusMessage.value = app.getString(R.string.recording_error_detail, e.message.orEmpty())
+                    viewModelScope.launch(Dispatchers.Main) { closeRecordingResources(saveToGallery = false) }
                     break
                 }
             }
@@ -1707,8 +1843,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 val mp4 = mp4Writer
                 val fits = fitsSequenceWriter
                 when {
-                    ser != null && ser.isOpen -> ser.writeFrame(frame)
-                    pser != null && pser.isOpen -> pser.writeFrame(frame)
+                    ser != null && ser.isOpen -> ser.writeFrame(canonicalRecordingFrame(frame))
+                    pser != null && pser.isOpen -> pser.writeFrame(canonicalRecordingFrame(frame))
                     mp4 != null && mp4.isOpen -> mp4.writeFrame(frame)
                     fits != null && fits.isOpen -> {
                         applyFitsRecordingMeta(fits)
@@ -1730,6 +1866,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setExposure(us: Float) {
+        invalidateStackSettings()
         val cam = cameraManager.activeCamera ?: return
         val uiMax = ExposureLimits.uiMaxUs(cam, _longExposureEnabled.value)
         val uiMin = cam.exposureRange.min
@@ -1752,6 +1889,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun toggleLongExposure() {
+        invalidateStackSettings()
         val cam = cameraManager.activeCamera ?: return
         val newState = !_longExposureEnabled.value
         _longExposureEnabled.value = newState
@@ -1804,6 +1942,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setGain(value: Float) {
+        invalidateStackSettings()
         val cam = cameraManager.activeCamera ?: return
         viewModelScope.launch(Dispatchers.IO) {
             gainWriteMutex.withLock {
@@ -1821,6 +1960,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setOffset(value: Float) {
+        invalidateStackSettings()
         val camera = (cameraManager.activeCamera as? CameraOffsetCapable)
             ?.takeIf { it.offsetSupported } ?: return
         camera.setOffset(value)
@@ -1852,6 +1992,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      * ignore taps while one switch is still in flight.
      */
     fun setPixelFormat(format: PixelFormat) {
+        invalidateStackSettings(layoutChanged = true)
         val cam = cameraManager.activeCamera ?: return
         if (pixelFormatSwitching) return
         pixelFormatSwitching = true
@@ -1881,6 +2022,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setReadoutMode(mode: ReadoutMode) {
+        invalidateStackSettings(layoutChanged = true)
         val cam = cameraManager.activeCamera ?: return
         cam.setReadoutMode(mode)
         _readoutMode.value = cam.currentReadoutMode
@@ -1895,6 +2037,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setNativeReadoutMode(id: String) {
+        invalidateStackSettings(layoutChanged = true)
         val camera = cameraManager.activeCamera as? CameraNativeReadoutModeCapable ?: return
         viewModelScope.launch(Dispatchers.IO) {
             if (camera.setNativeReadoutMode(id)) {
@@ -2041,12 +2184,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         listOf(info.name, info.serialNumber.ifBlank { "unknown" }).joinToString("_")
 
     fun setRoi(roi: Roi) {
+        invalidateStackSettings(layoutChanged = true)
         val cam = cameraManager.activeCamera ?: return
         cam.setRoi(roi)
         _roi.value = cam.currentRoi
     }
 
     fun resetRoi() {
+        invalidateStackSettings(layoutChanged = true)
         val cam = cameraManager.activeCamera ?: return
         cam.resetRoi()
         _roi.value = cam.currentRoi
@@ -2055,6 +2200,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     @Volatile private var binningSwitching = false
 
     fun setBinning(bin: Int) {
+        invalidateStackSettings(layoutChanged = true)
         val cam = cameraManager.activeCamera ?: return
         if (binningSwitching) return
         val requested = bin.coerceAtLeast(1)
@@ -2157,9 +2303,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val newPaused = !_previewPaused.value
         _previewPaused.value = newPaused
         if (newPaused) {
+            stacking.live.pause("capture_paused")
             cam.stopCapture()
             stopExposureTimer()
-        } else {
+        } else if (!cam.isCapturing.value) {
+            stacking.live.onCaptureRestarted()
             startPreview()
         }
     }
@@ -2172,6 +2320,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _focusAssistEnabled.value = newState
         frameProcessor.focusAssistEnabled = newState
         if (newState) {
+            if (stacking.showLiveStack.value) stacking.toggleLiveDisplay()
             frameProcessor.resetFocusRange()
             _focusHistory.value = emptyList()
         }
@@ -2186,10 +2335,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setFilterWheelPosition(pos: Int) {
+        invalidateStackSettings()
         fwController.setPosition(pos)
     }
 
     fun resetFilterWheel() {
+        invalidateStackSettings()
         fwController.resetWheel()
     }
 
@@ -2360,6 +2511,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setAutoExposureMode(mode: AutoExposureMode) {
+        if (mode != AutoExposureMode.OFF) invalidateStackSettings()
         autoExposureController.mode = mode
         if (mode != AutoExposureMode.OFF) autoExposureController.reset()
         _autoExposureMode.value = mode
@@ -2391,7 +2543,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val filterPart = if (filterName != null) "-$filterName" else ""
 
             val fmt = _recordFormat.value
-            val pixFmt = cam.currentPixelFormat
+            val rawFormat = cam.currentPixelFormat
+            val rawRecording = fmt == RecordFormat.SER || fmt == RecordFormat.PSER
+            val geometry = stackFrameGeometry
+            val rawTraits = if (rawRecording) (cam.sciencePixelTraits
+                ?: error(app.getString(R.string.stack_reason_layout))).copy(
+                    roiX = roi.x, roiY = roi.y,
+                    binning = (cam as? CameraBinningCapable)?.currentHardwareBin ?: 1) else null
+            if (rawRecording) check(geometry != null && geometry.third == rawFormat) { app.getString(R.string.stack_reason_wait) }
+            val pixFmt = if (rawTraits != null) RawRecordingNormalizer.canonicalFormat(rawFormat, rawTraits) else rawFormat
+            val rawWidth = geometry?.first ?: roi.width
+            val rawHeight = geometry?.second ?: roi.height
+            rawRecordingLayout = if (rawTraits != null) RawRecordingLayout(rawWidth, rawHeight, rawFormat, rawTraits) else null
             val useSERForPser8bit = fmt == RecordFormat.PSER && pixFmt.nativeBits <= 8
             val effectiveExt = when {
                 useSERForPser8bit -> "ser"
@@ -2406,21 +2569,27 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             )
             dir.mkdirs()
             val sessionName = "$ts-$target$filterPart-$cameraShort"
-            val file = if (fmt == RecordFormat.FITS) {
+            var file = if (fmt == RecordFormat.FITS) {
                 File(dir, sessionName)
             } else {
                 File(dir, "$sessionName.$effectiveExt")
+            }
+            // Short calibration recordings can finish within the same six-second name slot.
+            // Never overwrite an earlier sequence or leave its provenance attached to new data.
+            var suffix = 1
+            while (file.exists()) {
+                file = File(dir, if (fmt == RecordFormat.FITS) "$sessionName-${suffix++}" else "$sessionName-${suffix++}.$effectiveExt")
             }
 
             when {
                 fmt == RecordFormat.SER || useSERForPser8bit -> {
                     val ser = SERWriter(file)
-                    ser.open(roi.width, roi.height, pixFmt, cam.cameraInfo?.name, filterName)
+                    ser.open(rawWidth, rawHeight, pixFmt, cam.cameraInfo?.name, filterName)
                     serWriter = ser
                 }
                 fmt == RecordFormat.PSER -> {
                     val pser = PSERWriter(file)
-                    pser.open(roi.width, roi.height, pixFmt, cam.cameraInfo?.name, filterName)
+                    pser.open(rawWidth, rawHeight, pixFmt, cam.cameraInfo?.name, filterName)
                     pserWriter = pser
                 }
                 fmt == RecordFormat.MP4 -> {
@@ -2429,7 +2598,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     mp4.wbGreenGain = frameProcessor.wbGreenGain
                     mp4.wbBlueGain = frameProcessor.wbBlueGain
                     val recordFps = _fps.value.toInt().coerceIn(1, 60)
-                    mp4.open(roi.width, roi.height, recordFps)
+                    mp4.open(rawWidth / softwareBinning.factor, rawHeight / softwareBinning.factor, recordFps)
                     mp4Writer = mp4
                 }
                 fmt == RecordFormat.FITS -> {
@@ -2442,6 +2611,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
 
             currentRecordingFile = file
+            recordingCaptureKey = if (rawRecording) currentStackKey() else null
+            recordingCaptureChanged = rawRecording && (recordingCaptureKey == null || autoExposureController.mode != AutoExposureMode.OFF)
+            recordingCaptureTemperature = if (rawRecording) calibrationTemperature() else null
+            // An interrupted recording must never look like a verified, fixed-settings sequence.
+            if (rawRecording) CalibrationRecordingContext.invalidate(file, "recording_in_progress")
             recordingStartTime = System.currentTimeMillis()
             _isRecording.value = true
             _recordingFrameCount.value = 0
@@ -2474,8 +2648,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun closeRecordingResources(saveToGallery: Boolean) {
-        _isRecording.value = false
+        synchronized(recordingEnqueueLock) { _isRecording.value = false }
         stopRecordWriteThread()
+        rawRecordingLayout = null
         try { serWriter?.close() } catch (e: Throwable) { Log.e(TAG, "SER close error", e) }
         serWriter = null
         try { pserWriter?.close() } catch (e: Throwable) { Log.e(TAG, "PSER close error", e) }
@@ -2486,7 +2661,19 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         fitsSequenceWriter = null
 
         val recordedFile = currentRecordingFile
+        val captureKey = recordingCaptureKey
+        if (recordedFile != null && (captureKey != null || recordingCaptureChanged)) {
+            runCatching {
+                if (recordingCaptureChanged || captureKey == null)
+                    CalibrationRecordingContext.invalidate(recordedFile, "capture_settings_changed")
+                else CalibrationRecordingContext.writeForRecording(recordedFile, captureKey, recordingCaptureTemperature)
+            }.onFailure { Log.w(TAG, "Recording capture context could not be finalized", it) }
+        }
+        // Release the library's busy gate only after the sidecar is final (or explicitly invalid).
         currentRecordingFile = null
+        recordingCaptureKey = null
+        recordingCaptureChanged = false
+        recordingCaptureTemperature = null
         if (saveToGallery && recordedFile != null &&
             recordedFile.extension.equals("mp4", ignoreCase = true) && recordedFile.exists()) {
             viewModelScope.launch(Dispatchers.IO) {

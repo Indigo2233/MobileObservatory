@@ -14,6 +14,9 @@ import kotlin.math.roundToInt
 class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingCapable,
     CameraUsbBandwidthCapable, CameraBinningCapable {
 
+    override val sciencePixelTraits get() = if (!rawLayoutConfirmed || currentPixelFormat.isRgb) null else
+        CameraScienceLayouts.toupcam(rawFourCC, currentPixelFormat.nativeBits, zeroPadding = rawZeroPadding)
+
     companion object {
         private const val TAG = "ToupcamCamera"
     }
@@ -95,6 +98,9 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
     override val currentHardwareBin: Int get() = currentBin
     override var supportedHardwareBins: List<Int> = listOf(1); private set
     private var rawBits = 8
+    private var rawFourCC = 0
+    private var rawZeroPadding = 0
+    private var rawLayoutConfirmed = false
     private var baseBitDepth = 12
     private var modelFlag = 0L
 
@@ -170,6 +176,7 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
             baseBitDepth = rawBits
 
             ToupcamJni.putOption(ToupcamJni.OPTION_RAW, 1)
+            refreshRawDescription(updateFormat = false)
 
             supportedPixelFormats = buildSupportedFormats()
             Log.i(TAG, "Supported formats: ${supportedPixelFormats.joinToString { it.name }} rawBits=$rawBits flag=0x${modelFlag.toString(16)}")
@@ -183,6 +190,7 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
                 }
                 else -> when {
                     rawBits >= 16 -> PixelFormat.BAYER_RG16
+                    rawBits >= 14 -> PixelFormat.BAYER_RG14
                     rawBits >= 12 -> PixelFormat.BAYER_RG12
                     else -> PixelFormat.BAYER_RG10
                 }
@@ -195,6 +203,8 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
                 ToupcamJni.putOption(ToupcamJni.OPTION_BITDEPTH, 0)
                 currentPixelFormat = if (isMono) PixelFormat.MONO8 else PixelFormat.BAYER_RG8
             }
+            refreshRawDescription()
+            supportedPixelFormats = buildSupportedFormats()
 
             initReadoutModes()
 
@@ -260,13 +270,39 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
             formats.add(PixelFormat.BAYER_RG8)
             val highBitFormat = when {
                 rawBits >= 16 -> PixelFormat.BAYER_RG16
+                rawBits >= 14 -> PixelFormat.BAYER_RG14
                 rawBits >= 12 -> PixelFormat.BAYER_RG12
                 rawBits >= 10 -> PixelFormat.BAYER_RG10
                 else -> null
             }
             if (highBitFormat != null) formats.add(highBitFormat)
         }
-        return formats
+        return formats.map { old -> CameraScienceLayouts.toupcamFormat(rawFourCC, old.nativeBits) ?: old }
+    }
+
+    /** Ask the SDK for the raw FourCC and current output depth after every mode change.
+     * Unknown formats retain preview compatibility but cannot enter the linear science path.
+     * Raw buffer layout and FourCC values are documented in app/src/main/cpp/toupcam.h.
+     */
+    private fun refreshRawDescription(updateFormat: Boolean = true) {
+        rawLayoutConfirmed = false
+        if (currentPixelFormat.isRgb && updateFormat) return
+        try {
+            if (ToupcamJni.getOption(ToupcamJni.OPTION_RAW) != 1) return
+            val raw = ToupcamJni.getRawFormat()
+            if (raw.size < 2) return
+            rawFourCC = raw[0]
+            // toupcam.h: TOUPCAM_OPTION_ZERO_PADDING, high zeros (RIGHT) by default.
+            rawZeroPadding = ToupcamJni.getOption(0x78)
+            if (rawZeroPadding !in 0..1) return
+            val deliveredBits = if (ToupcamJni.getOption(ToupcamJni.OPTION_BITDEPTH) == 0) 8 else raw[1]
+            val actual = CameraScienceLayouts.toupcamFormat(rawFourCC, deliveredBits) ?: return
+            rawLayoutConfirmed = true
+            if (updateFormat) currentPixelFormat = actual
+            FileLogger.i(TAG, "Verified raw FourCC=${rawFourCC.toUInt().toString(16)} depth=$deliveredBits format=$actual")
+        } catch (error: Exception) {
+            FileLogger.w(TAG, "Raw format not verified: ${error.message}")
+        }
     }
 
     override fun close() {
@@ -279,6 +315,7 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
             }
         } catch (_: Exception) {}
         ToupcamJni.close()
+        rawLayoutConfirmed = false
         _isOpen.value = false
         _coolingInfo.value = null
         _coolerOn.value = false
@@ -401,6 +438,7 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
         Log.i(TAG, "PixelFormat set to ${format.name} (BITDEPTH=$bitDepth, PIXEL_FORMAT=$pixFmtVal, ok=$ok)")
 
         currentPixelFormat = format
+        refreshRawDescription()
         readOffsetRange()
         readGainRange()
 
@@ -509,6 +547,7 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
         if (isHdr) {
             rawBits = 16
             currentPixelFormat = PixelFormat.RGB48
+            rawLayoutConfirmed = false
             supportedPixelFormats = listOf(PixelFormat.RGB48)
             Log.i(TAG, "HDR mode: RGB48 16-bit")
         } else {
@@ -524,6 +563,7 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
                 }
                 else -> when {
                     rawBits >= 16 -> PixelFormat.BAYER_RG16
+                    rawBits >= 14 -> PixelFormat.BAYER_RG14
                     rawBits >= 12 -> PixelFormat.BAYER_RG12
                     else -> PixelFormat.BAYER_RG10
                 }
@@ -534,6 +574,8 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
             } else {
                 currentPixelFormat = if (isMono) PixelFormat.MONO8 else PixelFormat.BAYER_RG8
             }
+            refreshRawDescription()
+            supportedPixelFormats = buildSupportedFormats()
         }
         readOffsetRange()
         Log.i(TAG, "Format updated: ${currentPixelFormat.name} rawBits=$rawBits supported=${supportedPixelFormats.joinToString { it.name }}")
@@ -584,6 +626,7 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
                 ToupcamJni.putRoi(0, 0, outputW, outputH)
                 currentRoi = Roi(0, 0, outputW, outputH)
                 cropInfo = CropInfo(0, 0, outputW, outputH)
+                refreshRawDescription()
                 Log.i(TAG, "Bin -> $b, imageSize=${outputW}x${outputH}")
                 true
             }
