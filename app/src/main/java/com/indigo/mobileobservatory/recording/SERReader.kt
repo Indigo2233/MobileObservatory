@@ -11,6 +11,7 @@ import com.indigo.mobileobservatory.stacking.LinearPixelDecoder
 import com.indigo.mobileobservatory.stacking.PixelTraits
 import com.indigo.mobileobservatory.stacking.SampleAlignment
 import com.indigo.mobileobservatory.stacking.DemosaicAlgorithm
+import com.indigo.mobileobservatory.util.BayerDemosaic
 import java.io.File
 import java.io.IOException
 import java.io.RandomAccessFile
@@ -424,27 +425,17 @@ class SERReader(private val file: File,
         for (i in pixels.indices) {
             if (i % 16384 == 0) cancelCheck()
             val p = pixels[i]
-            val converted = ImageUtils.lp750Matrix(
+            pixels[i] = ImageUtils.lp750Argb(
                 ((p ushr 16) and 0xFF) / 255f,
                 ((p ushr 8) and 0xFF) / 255f,
-                (p and 0xFF) / 255f
+                (p and 0xFF) / 255f,
+                gains[0], gains[1], gains[2]
             )
-            val r = (converted[0] * gains[0] * 255f).coerceIn(0f, 255f).toInt()
-            val g = (converted[1] * gains[1] * 255f).coerceIn(0f, 255f).toInt()
-            val b = (converted[2] * gains[2] * 255f).coerceIn(0f, 255f).toInt()
-            pixels[i] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
         }
+        ImageUtils.applyLp750BackgroundWhiteBalance(pixels)
     }
 
     private fun debayer8ToPixels(gray: ByteArray, pixels: IntArray, w: Int, h: Int, colorId: Int) {
-        val rX: Int; val rY: Int
-        when (colorId) {
-            8  -> { rX = 0; rY = 0 } // RGGB
-            9  -> { rX = 1; rY = 0 } // GRBG
-            10 -> { rX = 0; rY = 1 } // GBRG
-            else -> { rX = 1; rY = 1 } // BGGR
-        }
-
         var minVal = 255; var maxVal = 0
         val total = w * h
         val sampleStep = (total / 10000).coerceAtLeast(1)
@@ -457,51 +448,19 @@ class SERReader(private val file: File,
         }
         val sRange = (maxVal - minVal).coerceAtLeast(1)
 
-        fun g(x: Int, y: Int): Int {
-            val i = y * w + x
-            return if (i in gray.indices) gray[i].toInt() and 0xFF else 0
+        val raw8 = IntArray(w * h) { i ->
+            val v = if (i < gray.size) gray[i].toInt() and 0xFF else 0
+            ((v - minVal) * 255 / sRange).coerceIn(0, 255)
         }
-        fun stretch(v: Int) = ((v - minVal) * 255 / sRange).coerceIn(0, 255)
-
-        for (y in 1 until h - 1) {
-            for (x in 1 until w - 1) {
-                val bx = x and 1; val by = y and 1
-                val c = g(x, y)
-                val r: Int; val gr: Int; val b: Int
-                when {
-                    bx == rX && by == rY -> {
-                        r = c
-                        gr = (g(x-1,y) + g(x+1,y) + g(x,y-1) + g(x,y+1)) / 4
-                        b = (g(x-1,y-1) + g(x+1,y-1) + g(x-1,y+1) + g(x+1,y+1)) / 4
-                    }
-                    bx != rX && by != rY -> {
-                        b = c
-                        gr = (g(x-1,y) + g(x+1,y) + g(x,y-1) + g(x,y+1)) / 4
-                        r = (g(x-1,y-1) + g(x+1,y-1) + g(x-1,y+1) + g(x+1,y+1)) / 4
-                    }
-                    else -> {
-                        gr = c
-                        if (by == rY) {
-                            r = (g(x-1,y) + g(x+1,y)) / 2
-                            b = (g(x,y-1) + g(x,y+1)) / 2
-                        } else {
-                            b = (g(x-1,y) + g(x+1,y)) / 2
-                            r = (g(x,y-1) + g(x,y+1)) / 2
-                        }
-                    }
-                }
-                pixels[y * w + x] = -0x1000000 or (stretch(r) shl 16) or (stretch(gr) shl 8) or stretch(b)
-            }
+        val pattern = when (colorId) {
+            8 -> "RGGB"
+            9 -> "GRBG"
+            10 -> "GBRG"
+            else -> "BGGR"
         }
-        // Copy border pixels from nearest interior pixel
-        for (x in 0 until w) {
-            pixels[x] = pixels[w + x.coerceIn(1, w - 2)]
-            pixels[(h-1)*w + x] = pixels[(h-2)*w + x.coerceIn(1, w - 2)]
-        }
-        for (y in 0 until h) {
-            pixels[y * w] = pixels[y * w + 1]
-            pixels[y * w + w - 1] = pixels[y * w + w - 2]
-        }
+        BayerDemosaic.demosaic8(
+            raw8, w, h, pattern, BayerDemosaic.Mode.DIRECTIONAL, pixels
+        )
     }
 
 

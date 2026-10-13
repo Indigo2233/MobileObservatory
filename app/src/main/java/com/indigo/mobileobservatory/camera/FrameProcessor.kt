@@ -2,6 +2,7 @@ package com.indigo.mobileobservatory.camera
 
 import android.graphics.Bitmap
 import com.indigo.mobileobservatory.util.FileLogger
+import com.indigo.mobileobservatory.util.BayerDemosaic
 import com.indigo.mobileobservatory.util.ImageUtils
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -133,6 +134,7 @@ class FrameProcessor {
 
     private var cachedBitmaps: Array<Bitmap>? = null
     private var cachedPixels: IntArray? = null
+    private var cachedBayerRaw8: IntArray? = null
     private var cachedW = 0
     private var cachedH = 0
     private var nextBitmapIndex = 0
@@ -227,16 +229,14 @@ class FrameProcessor {
         )
         for (i in pixels.indices) {
             val p = pixels[i]
-            val converted = ImageUtils.lp750Matrix(
+            pixels[i] = ImageUtils.lp750Argb(
                 ((p ushr 16) and 0xFF) / 255f,
                 ((p ushr 8) and 0xFF) / 255f,
-                (p and 0xFF) / 255f
+                (p and 0xFF) / 255f,
+                gains[0], gains[1], gains[2]
             )
-            val r = (converted[0] * gains[0] * 255f).coerceIn(0f, 255f).toInt()
-            val g = (converted[1] * gains[1] * 255f).coerceIn(0f, 255f).toInt()
-            val b = (converted[2] * gains[2] * 255f).coerceIn(0f, 255f).toInt()
-            pixels[i] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
         }
+        ImageUtils.applyLp750BackgroundWhiteBalance(pixels)
     }
 
     private fun downsampleForPreview(frame: FrameData): FrameData {
@@ -262,6 +262,7 @@ class FrameProcessor {
         }
         cachedBitmaps = null
         cachedPixels = null
+        cachedBayerRaw8 = null
         cachedW = 0
         cachedH = 0
         nextBitmapIndex = 0
@@ -514,61 +515,32 @@ class FrameProcessor {
         }
         val range = (wp - bp).coerceAtLeast(1)
 
-        val pfName = frame.pixelFormat.name
-        val isRG = pfName.startsWith("BAYER_RG")
-        val isGR = pfName.startsWith("BAYER_GR")
-        val isGB = pfName.startsWith("BAYER_GB")
-
-        val rX: Int; val rY: Int
-        when {
-            isRG -> { rX = 0; rY = 0 }
-            isGR -> { rX = 1; rY = 0 }
-            isGB -> { rX = 0; rY = 1 }
-            else -> { rX = 1; rY = 1 }
-        }
-
         val is10 = frame.pixelFormat.is10bit
         val data = frame.data
-
-        val wrGain = (wbRedGain * 256).toInt()
-        val wgGain = (wbGreenGain * 256).toInt()
-        val wbGain = (wbBlueGain * 256).toInt()
-        val scale = (255 * 256) / range
-
-        // Fast 2x2 block debayer: each 2x2 Bayer block maps directly to one R,G,G,B set
-        val w2 = w and 1.inv()
-        val h2 = h and 1.inv()
-
-        for (y in 0 until h2 step 2) {
-            val row0 = y * w
-            val row1 = (y + 1) * w
-            for (x in 0 until w2 step 2) {
-                val v00 = getRawPixelFast(data, row0 + x, is10)
-                val v10 = getRawPixelFast(data, row0 + x + 1, is10)
-                val v01 = getRawPixelFast(data, row1 + x, is10)
-                val v11 = getRawPixelFast(data, row1 + x + 1, is10)
-
-                val r: Int; val g: Int; val b: Int
-                when {
-                    rX == 0 && rY == 0 -> { r = v00; g = (v10 + v01) shr 1; b = v11 }
-                    rX == 1 && rY == 0 -> { g = (v00 + v11) shr 1; r = v10; b = v01 }
-                    rX == 0 && rY == 1 -> { g = (v00 + v11) shr 1; b = v10; r = v01 }
-                    else -> { b = v00; g = (v10 + v01) shr 1; r = v11 }
-                }
-
-                val rw = (r * wrGain) shr 8
-                val gw = (g * wgGain) shr 8
-                val bw = (b * wbGain) shr 8
-                val rs = (((rw - bp) * scale) shr 8).coerceIn(0, 255)
-                val gs = (((gw - bp) * scale) shr 8).coerceIn(0, 255)
-                val bs = (((bw - bp) * scale) shr 8).coerceIn(0, 255)
-                val pixel = (0xFF shl 24) or (rs shl 16) or (gs shl 8) or bs
-
-                pixels[row0 + x] = pixel
-                pixels[row0 + x + 1] = pixel
-                pixels[row1 + x] = pixel
-                pixels[row1 + x + 1] = pixel
-            }
+        val pattern = when {
+            frame.pixelFormat.name.startsWith("BAYER_RG") -> "RGGB"
+            frame.pixelFormat.name.startsWith("BAYER_GR") -> "GRBG"
+            frame.pixelFormat.name.startsWith("BAYER_GB") -> "GBRG"
+            else -> "BGGR"
+        }
+        val pixelCount = w * h
+        val raw8 = cachedBayerRaw8?.takeIf { it.size >= pixelCount }
+            ?: IntArray(pixelCount).also { cachedBayerRaw8 = it }
+        for (i in 0 until pixelCount) {
+            val raw = getRawPixelFast(data, i, is10)
+            raw8[i] = ((raw - bp) * 255 / range).coerceIn(0, 255)
+        }
+        BayerDemosaic.demosaic8(
+            raw8, w, h, pattern,
+            if (focusAssistEnabled) BayerDemosaic.Mode.DIRECTIONAL else BayerDemosaic.Mode.BILINEAR,
+            pixels
+        )
+        for (i in 0 until pixelCount) {
+            val p = pixels[i]
+            val r = (((p ushr 16) and 0xFF) * wbRedGain).toInt().coerceIn(0, 255)
+            val g = (((p ushr 8) and 0xFF) * wbGreenGain).toInt().coerceIn(0, 255)
+            val b = ((p and 0xFF) * wbBlueGain).toInt().coerceIn(0, 255)
+            pixels[i] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
         }
 
         if (awbPending || awbMode == AwbMode.CONTINUOUS) {

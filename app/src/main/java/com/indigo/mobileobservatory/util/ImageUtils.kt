@@ -18,6 +18,24 @@ object ImageUtils {
         )
     }
 
+    /** Converts normalized RGB to a packed display pixel without per-pixel allocations. */
+    fun lp750Argb(
+        r: Float,
+        g: Float,
+        b: Float,
+        redGain: Float = 1f,
+        greenGain: Float = 1f,
+        blueGain: Float = 1f
+    ): Int {
+        val convertedR = (-0.3649013871f * r - 0.7934794639f * g + 2.7793761244f * b)
+        val convertedG = (0.0713524433f * r + 1.0864368006f * g - 0.2364007716f * b)
+        val convertedB = (3.1869189013f * r - 1.5490042912f * g - 1.6877848393f * b)
+        val outR = (convertedR * redGain * 255f).coerceIn(0f, 255f).toInt()
+        val outG = (convertedG * greenGain * 255f).coerceIn(0f, 255f).toInt()
+        val outB = (convertedB * blueGain * 255f).coerceIn(0f, 255f).toInt()
+        return (0xFF shl 24) or (outR shl 16) or (outG shl 8) or outB
+    }
+
     /**
      * Computes per-image gray-world gains after LP750 conversion.
      * The image average is the source of the white-balance decision.
@@ -30,6 +48,85 @@ object ImageUtils {
             1.0f,
             (target / converted[2].coerceAtLeast(0.001f)).coerceIn(0.25f, 4.0f)
         )
+    }
+
+    /**
+     * Computes a restrained gray-world correction from already converted pixels.
+     * The selected pixels should represent the image background rather than bright stars.
+     */
+    fun lp750BackgroundWhiteBalanceGains(r: Float, g: Float, b: Float): FloatArray {
+        val target = ((r + g + b) / 3f).coerceAtLeast(0.001f)
+        fun gain(channel: Float): Float =
+            (target / channel.coerceAtLeast(0.001f)).coerceIn(0.75f, 1.35f)
+        return floatArrayOf(gain(r), gain(g), gain(b))
+    }
+
+    /** Applies image-derived background white balance to an LP750-converted ARGB buffer. */
+    fun applyLp750BackgroundWhiteBalance(pixels: IntArray) {
+        if (pixels.isEmpty()) return
+        val histogram = IntArray(256)
+        for (pixel in pixels) {
+            val r = (pixel ushr 16) and 0xFF
+            val g = (pixel ushr 8) and 0xFF
+            val b = pixel and 0xFF
+            histogram[(r * 299 + g * 587 + b * 114) / 1000]++
+        }
+
+        fun percentile(fraction: Double): Int {
+            val target = (pixels.size * fraction).toInt().coerceIn(0, pixels.size - 1)
+            var cumulative = 0
+            for (i in histogram.indices) {
+                cumulative += histogram[i]
+                if (cumulative > target) return i
+            }
+            return histogram.lastIndex
+        }
+
+        val low = percentile(0.10)
+        val high = percentile(0.60).coerceAtLeast(low)
+        val fadeEnd = (high + 32).coerceAtMost(255)
+        var sumR = 0.0
+        var sumG = 0.0
+        var sumB = 0.0
+        var count = 0
+        for (pixel in pixels) {
+            val r = (pixel ushr 16) and 0xFF
+            val g = (pixel ushr 8) and 0xFF
+            val b = pixel and 0xFF
+            val luma = (r * 299 + g * 587 + b * 114) / 1000
+            if (luma in low..high) {
+                sumR += r / 255.0
+                sumG += g / 255.0
+                sumB += b / 255.0
+                count++
+            }
+        }
+        if (count == 0) return
+
+        val gains = lp750BackgroundWhiteBalanceGains(
+            (sumR / count).toFloat(),
+            (sumG / count).toFloat(),
+            (sumB / count).toFloat()
+        )
+        for (i in pixels.indices) {
+            val pixel = pixels[i]
+            val sourceR = (pixel ushr 16) and 0xFF
+            val sourceG = (pixel ushr 8) and 0xFF
+            val sourceB = pixel and 0xFF
+            val luma = (sourceR * 299 + sourceG * 587 + sourceB * 114) / 1000
+            val weight = when {
+                luma <= high -> 1f
+                luma >= fadeEnd -> 0f
+                else -> (fadeEnd - luma).toFloat() / (fadeEnd - high).coerceAtLeast(1)
+            }
+            val rGain = 1f + (gains[0] - 1f) * weight
+            val gGain = 1f + (gains[1] - 1f) * weight
+            val bGain = 1f + (gains[2] - 1f) * weight
+            val r = (sourceR * rGain).toInt().coerceIn(0, 255)
+            val g = (sourceG * gGain).toInt().coerceIn(0, 255)
+            val b = (sourceB * bGain).toInt().coerceIn(0, 255)
+            pixels[i] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+        }
     }
 
     /**

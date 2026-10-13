@@ -46,12 +46,14 @@ import com.indigo.mobileobservatory.stacking.StackBitmap
 import com.indigo.mobileobservatory.stacking.StackFitsReader
 import com.indigo.mobileobservatory.stacking.StackFitsPreview
 import com.indigo.mobileobservatory.util.ImageUtils
+import com.indigo.mobileobservatory.util.BayerDemosaic
+import com.indigo.mobileobservatory.util.FitsDisplayStretch
 import kotlinx.coroutines.*
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import org.json.JSONObject
-import kotlin.math.asinh
+import kotlin.math.roundToInt
 
 @Composable
 private fun RepeatableIconButton(
@@ -1017,6 +1019,7 @@ private fun decodeFits(file: File, applyLp750: Boolean = false, cancelled: () ->
     val bytes = file.readBytes()
     var offset = 0
     var width = 0; var height = 0; var bitpix = 16; var naxis = 2; var naxis3 = 1
+    var bscale = 1.0; var bzero = 0.0
     var bayerPat: String? = null
     var end = false
 
@@ -1032,7 +1035,14 @@ private fun decodeFits(file: File, applyLp750: Boolean = false, cancelled: () ->
                 card.startsWith("NAXIS3") -> naxis3 = card.substringAfter("=").substringBefore("/").trim().toIntOrNull() ?: 1
                 card.startsWith("BITPIX") -> bitpix = card.substringAfter("=").substringBefore("/").trim().toIntOrNull() ?: 16
                 card.startsWith("NAXIS ") -> naxis = card.substringAfter("=").substringBefore("/").trim().toIntOrNull() ?: 2
-                card.startsWith("BAYERPAT") -> bayerPat = card.substringAfter("'").substringBefore("'").trim()
+                card.startsWith("BSCALE") -> bscale = card.substringAfter("=").substringBefore("/").trim().toDoubleOrNull() ?: 1.0
+                card.startsWith("BZERO") -> bzero = card.substringAfter("=").substringBefore("/").trim().toDoubleOrNull() ?: 0.0
+                card.startsWith("BAYERPAT") -> {
+                    val parsed = card.substringAfter("'").substringBefore("'").trim().uppercase()
+                    bayerPat = parsed.takeIf {
+                        it == "RGGB" || it == "GRBG" || it == "GBRG" || it == "BGGR"
+                    }
+                }
                 card.startsWith("END ") || card.trimEnd() == "END" -> end = true
             }
             if (end) break
@@ -1044,82 +1054,86 @@ private fun decodeFits(file: File, applyLp750: Boolean = false, cancelled: () ->
     if (width <= 0 || height <= 0) throw IllegalArgumentException("Invalid FITS: ${width}x${height}")
 
     val channels = if (naxis >= 3) naxis3 else 1
+    val sourceWidth = width
+    val sourceHeight = height
+    // Keep Bayer phase stable while bounding the intermediate arrays on older devices.
+    val bayerScale = if (bayerPat != null) {
+        val initial = kotlin.math.ceil(maxOf(sourceWidth, sourceHeight) / 1600.0).toInt().coerceAtLeast(1)
+        if (initial > 1 && initial % 2 != 0) initial + 1 else initial
+    } else 1
+    if (bayerScale > 1) {
+        width = (sourceWidth / bayerScale).coerceAtLeast(2)
+        height = (sourceHeight / bayerScale).coerceAtLeast(2)
+    }
     val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
     val pixels = IntArray(width * height)
     val buf = ByteBuffer.wrap(bytes, dataOffset, bytes.size - dataOffset).order(ByteOrder.BIG_ENDIAN)
+    val lp750Display = applyLp750 && (bayerPat != null || channels > 1)
+    fun readSample(): Int {
+        val raw = when (bitpix) {
+            8 -> buf.get().toInt() and 0xFF
+            16 -> buf.short.toInt()
+            32 -> buf.int
+            -32 -> buf.float.toInt()
+            else -> buf.short.toInt()
+        }
+        return (raw.toDouble() * bscale + bzero).roundToInt()
+    }
 
     if (channels == 1) {
         val rawVals = IntArray(width * height)
-        var minVal = Int.MAX_VALUE; var maxVal = Int.MIN_VALUE
-        for (i in rawVals.indices) {
-            val v = when (bitpix) {
-                8 -> buf.get().toInt() and 0xFF
-                16 -> buf.short.toInt()
-                32 -> buf.int
-                -32 -> buf.float.toInt()
-                else -> buf.short.toInt()
+        val bayerSums = if (bayerScale > 1) LongArray(rawVals.size) else null
+        val bayerCounts = if (bayerScale > 1) IntArray(rawVals.size) else null
+        for (sourceY in 0 until sourceHeight) {
+            for (sourceX in 0 until sourceWidth) {
+                val v = readSample()
+                val x = sourceX / bayerScale
+                val y = sourceY / bayerScale
+                if (x < width && y < height &&
+                    sourceX % 2 == x % 2 && sourceY % 2 == y % 2
+                ) {
+                    val i = y * width + x
+                    if (bayerSums != null) {
+                        bayerSums[i] += v.toLong()
+                    } else {
+                        rawVals[i] = v
+                    }
+                    bayerCounts?.let { it[i]++ }
+                }
             }
-            rawVals[i] = v
-            if (v < minVal) minVal = v
-            if (v > maxVal) maxVal = v
         }
-        val range = (maxVal - minVal).coerceAtLeast(1)
+        if (bayerCounts != null) {
+            for (i in rawVals.indices) {
+                rawVals[i] = (bayerSums!![i] / bayerCounts[i].coerceAtLeast(1)).toInt()
+            }
+        }
+        val displayWindow = FitsDisplayStretch.window(rawVals)
 
         if (bayerPat != null) {
             val lp750Gains = if (applyLp750) {
-                fitsLp750WhiteBalance(rawVals, width, height, bayerPat, minVal, range)
+                fitsLp750WhiteBalance(rawVals, width, height, bayerPat, displayWindow.black, displayWindow.range)
             } else null
-            val rX: Int; val rY: Int
-            when (bayerPat) {
-                "RGGB" -> { rX = 0; rY = 0 }
-                "GRBG" -> { rX = 1; rY = 0 }
-                "GBRG" -> { rX = 0; rY = 1 }
-                else   -> { rX = 1; rY = 1 } // BGGR
+            val raw8 = IntArray(rawVals.size) { i ->
+                displayWindow.to8(rawVals[i])
             }
+            BayerDemosaic.demosaic8(
+                raw8, width, height, bayerPat, BayerDemosaic.Mode.DIRECTIONAL, pixels
+            )
             for (y in 0 until height) {
                 for (x in 0 until width) {
-                    val bx = x % 2; val by = y % 2
-                    val raw = rawVals[y * width + x]
-                    val r: Int; val g: Int; val b: Int
-                    when {
-                        bx == rX && by == rY -> {
-                            r = raw
-                            g = fitsBayerAvgN(rawVals, x, y, width, height)
-                            b = fitsBayerAvgD(rawVals, x, y, width, height)
-                        }
-                        bx != rX && by != rY -> {
-                            b = raw
-                            g = fitsBayerAvgN(rawVals, x, y, width, height)
-                            r = fitsBayerAvgD(rawVals, x, y, width, height)
-                        }
-                        else -> {
-                            g = raw
-                            if (by == rY) {
-                                r = fitsBayerAvgH(rawVals, x, y, width)
-                                b = fitsBayerAvgV(rawVals, x, y, width, height)
-                            } else {
-                                b = fitsBayerAvgH(rawVals, x, y, width)
-                                r = fitsBayerAvgV(rawVals, x, y, width, height)
-                            }
-                        }
-                    }
-                    val rn = (r - minVal).toFloat() / range
-                    val gn = (g - minVal).toFloat() / range
-                    val bn = (b - minVal).toFloat() / range
-                    val converted = if (lp750Gains != null) ImageUtils.lp750Matrix(rn, gn, bn) else null
-                    val gains = lp750Gains
-                    val rs = converted?.let { gains?.let { g -> (it[0] * g[0] * 255f).toInt().coerceIn(0, 255) } }
-                        ?: (rn * 255f).toInt().coerceIn(0, 255)
-                    val gs = converted?.let { gains?.let { g -> (it[1] * g[1] * 255f).toInt().coerceIn(0, 255) } }
-                        ?: (gn * 255f).toInt().coerceIn(0, 255)
-                    val bs = converted?.let { gains?.let { g -> (it[2] * g[2] * 255f).toInt().coerceIn(0, 255) } }
-                        ?: (bn * 255f).toInt().coerceIn(0, 255)
-                    pixels[y * width + x] = (0xFF shl 24) or (rs shl 16) or (gs shl 8) or bs
+                    val index = y * width + x
+                    val p = pixels[index]
+                    val rn = ((p ushr 16) and 0xFF) / 255f
+                    val gn = ((p ushr 8) and 0xFF) / 255f
+                    val bn = (p and 0xFF) / 255f
+                    pixels[index] = lp750Gains?.let { gains ->
+                        ImageUtils.lp750Argb(rn, gn, bn, gains[0], gains[1], gains[2])
+                    } ?: p
                 }
             }
         } else {
             for (i in rawVals.indices) {
-                val g = ((rawVals[i] - minVal) * 255 / range).coerceIn(0, 255)
+                val g = displayWindow.to8(rawVals[i])
                 pixels[i] = (0xFF shl 24) or (g shl 16) or (g shl 8) or g
             }
         }
@@ -1130,46 +1144,35 @@ private fun decodeFits(file: File, applyLp750: Boolean = false, cancelled: () ->
         val bPlane = IntArray(planeSize)
         val planes = arrayOf(rPlane, gPlane, bPlane)
 
-        var globalMin = Int.MAX_VALUE; var globalMax = Int.MIN_VALUE
         for (ch in 0 until channels.coerceAtMost(3)) {
             for (i in 0 until planeSize) {
-                val v = when (bitpix) {
-                    8 -> buf.get().toInt() and 0xFF
-                    16 -> buf.short.toInt()
-                    32 -> buf.int
-                    -32 -> buf.float.toInt()
-                    else -> buf.short.toInt()
-                }
+                val v = readSample()
                 planes[ch][i] = v
-                if (v < globalMin) globalMin = v
-                if (v > globalMax) globalMax = v
             }
         }
-        val range = (globalMax - globalMin).coerceAtLeast(1)
+        val displayWindow = FitsDisplayStretch.window(planes.take(channels.coerceAtMost(3)))
         val lp750Gains = if (applyLp750) {
             ImageUtils.lp750WhiteBalanceGains(
-                rPlane.averageNormalized(globalMin, range),
-                gPlane.averageNormalized(globalMin, range),
-                bPlane.averageNormalized(globalMin, range)
+                rPlane.averageNormalized(displayWindow),
+                gPlane.averageNormalized(displayWindow),
+                bPlane.averageNormalized(displayWindow)
             )
         } else null
         for (i in 0 until planeSize) {
-            val rn = (rPlane[i] - globalMin).toFloat() / range
-            val gn = (gPlane[i] - globalMin).toFloat() / range
-            val bn = (bPlane[i] - globalMin).toFloat() / range
-            val converted = if (lp750Gains != null) ImageUtils.lp750Matrix(rn, gn, bn) else null
-            val gains = lp750Gains
-            val r = converted?.let { gains?.let { g -> (it[0] * g[0] * 255f).toInt().coerceIn(0, 255) } }
-                ?: (rn * 255f).toInt().coerceIn(0, 255)
-            val g = converted?.let { gains?.let { g -> (it[1] * g[1] * 255f).toInt().coerceIn(0, 255) } }
-                ?: (gn * 255f).toInt().coerceIn(0, 255)
-            val b = converted?.let { gains?.let { g -> (it[2] * g[2] * 255f).toInt().coerceIn(0, 255) } }
-                ?: (bn * 255f).toInt().coerceIn(0, 255)
-            pixels[i] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+            val rn = displayWindow.normalize(rPlane[i])
+            val gn = displayWindow.normalize(gPlane[i])
+            val bn = displayWindow.normalize(bPlane[i])
+            pixels[i] = lp750Gains?.let { gains ->
+                ImageUtils.lp750Argb(rn, gn, bn, gains[0], gains[1], gains[2])
+            } ?: ((0xFF shl 24) or
+                ((rn * 255f).toInt().coerceIn(0, 255) shl 16) or
+                ((gn * 255f).toInt().coerceIn(0, 255) shl 8) or
+                (bn * 255f).toInt().coerceIn(0, 255))
         }
     }
 
-    applyFitsAutoStretch(pixels)
+    if (lp750Display) ImageUtils.applyLp750BackgroundWhiteBalance(pixels)
+    FitsDisplayStretch.applyDisplayToneCurve(pixels)
     bmp.setPixels(pixels, 0, width, 0, 0, width, height)
     val typeStr = when {
         channels > 1 -> " RGB"
@@ -1180,49 +1183,13 @@ private fun decodeFits(file: File, applyLp750: Boolean = false, cancelled: () ->
     return Pair(bmp, info)
 }
 
-private fun applyFitsAutoStretch(pixels: IntArray) {
-    if (pixels.isEmpty()) return
-    val bins = IntArray(256)
-    for (p in pixels) {
-        val r = (p ushr 16) and 0xFF
-        val g = (p ushr 8) and 0xFF
-        val b = p and 0xFF
-        bins[((r * 299 + g * 587 + b * 114) / 1000).coerceIn(0, 255)]++
-    }
-    fun percentileBin(fraction: Double): Int {
-        val target = (pixels.size * fraction).toInt().coerceIn(0, pixels.size - 1)
-        var cumulative = 0
-        for (i in bins.indices) {
-            cumulative += bins[i]
-            if (cumulative > target) return i
-        }
-        return bins.lastIndex
-    }
-    val black = percentileBin(0.002)
-    val white = percentileBin(0.998)
-    val range = (white - black).coerceAtLeast(1)
-    val stretchDenominator = asinh(12.0).toFloat()
-    fun stretch(channel: Int): Int {
-        val normalized = ((channel - black).toFloat() / range).coerceIn(0f, 1f)
-        return (asinh((normalized * 12f).toDouble()).toFloat() / stretchDenominator * 255f)
-            .toInt().coerceIn(0, 255)
-    }
-    for (i in pixels.indices) {
-        val p = pixels[i]
-        val r = stretch((p ushr 16) and 0xFF)
-        val g = stretch((p ushr 8) and 0xFF)
-        val b = stretch(p and 0xFF)
-        pixels[i] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
-    }
-}
-
-private fun IntArray.averageNormalized(minValue: Int, range: Int): Float {
+private fun IntArray.averageNormalized(window: FitsDisplayStretch.Window): Float {
     if (isEmpty()) return 0f
     var sum = 0.0
     val step = (size / 10000).coerceAtLeast(1)
     var count = 0
     for (i in indices step step) {
-        sum += (this[i] - minValue).toDouble() / range
+        sum += window.normalize(this[i]).toDouble()
         count++
     }
     return if (count == 0) 0f else (sum / count).toFloat()
