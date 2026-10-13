@@ -28,8 +28,12 @@ data class StackSessionKey(
     val filter: String,
     val readout: String,
     val offset: Float? = null,
-    val pixelTraits: PixelTraits = PixelTraits(alignment = SampleAlignment.RIGHT)
-)
+    val pixelTraits: PixelTraits = PixelTraits(alignment = SampleAlignment.RIGHT),
+    val demosaicAlgorithm: DemosaicAlgorithm = DemosaicAlgorithm.DDFAPD
+) {
+    /** Raw SER capture is independent of the subsequent CFA interpolation choice. */
+    fun rawRecordingKey(): StackSessionKey = copy(demosaicAlgorithm = DemosaicAlgorithm.BILINEAR)
+}
 
 enum class LiveStackPhase { EMPTY, RUNNING, PAUSING, PAUSED, RESET_REQUIRED, FAILED, CLOSED }
 

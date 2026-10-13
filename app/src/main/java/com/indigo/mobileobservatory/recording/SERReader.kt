@@ -10,6 +10,7 @@ import com.indigo.mobileobservatory.stacking.LinearImage
 import com.indigo.mobileobservatory.stacking.LinearPixelDecoder
 import com.indigo.mobileobservatory.stacking.PixelTraits
 import com.indigo.mobileobservatory.stacking.SampleAlignment
+import com.indigo.mobileobservatory.stacking.DemosaicAlgorithm
 import java.io.File
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
@@ -202,28 +203,36 @@ class SERReader(private val file: File,
     }
 
     /** One owned frame only; no display stretch, LP750, white balance or 8-bit conversion. */
-    fun readLinearFrame(index: Int, maxPixels: Long = LinearImage.DEFAULT_STACK_PIXELS): LinearImage? {
+    fun readLinearFrame(index: Int, maxPixels: Long = LinearImage.DEFAULT_STACK_PIXELS,
+        algorithm: DemosaicAlgorithm = DemosaicAlgorithm.BILINEAR, cancelCheck: () -> Unit = {}): LinearImage? {
         val h = header ?: return null
         require(h.width.toLong() * h.height <= maxPixels) { "Image exceeds stacking budget; use a smaller source ROI" }
-        return readFrame(index)?.let { decodeFrameLinear(it, maxPixels) }
+        cancelCheck()
+        return readFrame(index)?.let { decodeFrameLinear(it, maxPixels, algorithm, cancelCheck) }
     }
 
-    fun decodeFrameLinear(data: ByteArray, maxPixels: Long = LinearImage.DEFAULT_STACK_PIXELS): LinearImage {
-        return LinearPixelDecoder.demosaicSensor(decodeFrameSensor(data, maxPixels), sensorFormat, sensorTraits)
+    fun decodeFrameLinear(data: ByteArray, maxPixels: Long = LinearImage.DEFAULT_STACK_PIXELS,
+        algorithm: DemosaicAlgorithm = DemosaicAlgorithm.BILINEAR, cancelCheck: () -> Unit = {}): LinearImage {
+        cancelCheck()
+        return LinearPixelDecoder.demosaicSensor(decodeFrameSensor(data, maxPixels, cancelCheck), sensorFormat, sensorTraits, algorithm, cancelCheck)
     }
 
     /** Raw linear samples for masters and light calibration, before CFA interpolation. */
-    fun readSensorFrame(index: Int, maxPixels: Long = LinearImage.DEFAULT_STACK_PIXELS): LinearImage? {
+    fun readSensorFrame(index: Int, maxPixels: Long = LinearImage.DEFAULT_STACK_PIXELS,
+        cancelCheck: () -> Unit = {}): LinearImage? {
         val h = header ?: return null
         require(h.width.toLong() * h.height <= maxPixels) { "Image exceeds calibration budget; use a smaller source ROI" }
-        return readFrame(index)?.let { decodeFrameSensor(it, maxPixels) }
+        cancelCheck()
+        return readFrame(index)?.let { decodeFrameSensor(it, maxPixels, cancelCheck) }
     }
 
-    fun decodeFrameSensor(data: ByteArray, maxPixels: Long = LinearImage.DEFAULT_STACK_PIXELS): LinearImage {
+    fun decodeFrameSensor(data: ByteArray, maxPixels: Long = LinearImage.DEFAULT_STACK_PIXELS,
+        cancelCheck: () -> Unit = {}): LinearImage {
+        cancelCheck()
         val h = checkNotNull(header) { "Reader is closed" }
         require(h.width.toLong() * h.height <= maxPixels) { "Image exceeds stacking budget; use a smaller source ROI" }
-        val raw = unpackSamples(data)
-        return LinearPixelDecoder.decodeSensor(FrameData(raw, h.width, h.height, sensorFormat, 0, 0), sensorTraits, maxPixels)
+        val raw = unpackSamples(data, cancelCheck)
+        return LinearPixelDecoder.decodeSensor(FrameData(raw, h.width, h.height, sensorFormat, 0, 0), sensorTraits, maxPixels, cancelCheck)
     }
 
     val sensorFormat: PixelFormat get() {
@@ -253,7 +262,7 @@ class SERReader(private val file: File,
     }
 
     /** PSERWriter stores a contiguous least-significant-bit-first bitstream, including tail pixels. */
-    private fun unpackSamples(data: ByteArray): ByteArray {
+    private fun unpackSamples(data: ByteArray, cancelCheck: () -> Unit = {}): ByteArray {
         val h = checkNotNull(header)
         require(data.size.toLong() >= bytesPerFrame) { "Truncated frame buffer" }
         if (!h.isPSER || h.pixelDepth == 8 || h.pixelDepth == 16) return data
@@ -262,6 +271,7 @@ class SERReader(private val file: File,
         var accumulator = 0L; var available = 0; var source = 0
         val mask = (1L shl h.pixelDepth) - 1L
         for (i in 0 until count) {
+            if (i % 16384 == 0) cancelCheck()
             while (available < h.pixelDepth) {
                 accumulator = accumulator or ((data[source++].toLong() and 255L) shl available)
                 available += 8

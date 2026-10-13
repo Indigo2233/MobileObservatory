@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="stack_debayer_summary">Bayer 去马赛克 · %1$s</string>
+    <string name="stack_debayer_ddfapd">DDFAPD · 推荐</string>
+    <string name="stack_debayer_vng">VNG</string>
+    <string name="stack_debayer_bilinear">双线性 · 快速</string>
+    <string name="stack_debayer_change">更换去马赛克算法</string>
+    <string name="stack_debayer_reanalyze">将清空当前分析与叠加结果。请先保存需要的结果，更换后重新分析。</string>
+    <string name="stack_debayer_live_locked">更换算法前，请先重置本次叠加。</string>
+    <string name="stack_debayer_busy">请等待处理或校准完成后再更换算法。</string>
+    <string name="stack_debayer_changed">去马赛克算法已改变，请开始新的叠加。</string>
+</resources>

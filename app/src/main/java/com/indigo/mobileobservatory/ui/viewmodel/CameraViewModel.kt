@@ -143,6 +143,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         } == true
     })
     @Volatile private var stackFrameGeometry: Triple<Int, Int, PixelFormat>? = null
+    private val _liveStackPixelFormat = MutableStateFlow<PixelFormat?>(null)
+    val liveStackPixelFormat: StateFlow<PixelFormat?> = _liveStackPixelFormat.asStateFlow()
     private val guideModule = com.indigo.mobileobservatory.guide.GuideModule()
     private val previewPipeline = PreviewPipeline(viewModelScope, frameProcessor, targetFps = 30)
     private val guidePreviewPipeline = PreviewPipeline(viewModelScope, guideFrameProcessor, targetFps = 12)
@@ -824,6 +826,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     is ConnectionState.Disconnected -> {
                         stacking.live.invalidate("camera_disconnected")
                         stackFrameGeometry = null
+                        _liveStackPixelFormat.value = null
                         previewPipeline.stop()
                         _previewBitmap.value = null
                         unbindCoolingFlows()
@@ -1611,6 +1614,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 // Science receives private raw bytes before display/capture binning and before
                 // PreviewPipeline takes ownership. Recording keeps its separate bounded copy.
                 stackFrameGeometry = Triple(frame.width, frame.height, frame.pixelFormat)
+                if (_liveStackPixelFormat.value != frame.pixelFormat) _liveStackPixelFormat.value = frame.pixelFormat
                 if (stacking.live.state.value.phase == LiveStackPhase.RUNNING) {
                     if (filterWheelMoving.value) stacking.live.invalidate("filter_moving")
                     else currentStackKey(frame)?.let { stacking.acceptFrame(frame, it) }
@@ -1619,7 +1623,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 // SER/PSER retain sensor samples and geometry. Copy before display binning
                 // can combine CFA colors or recycle the SDK-owned input buffer.
                 if (_isRecording.value && rawRecordingLayout != null) {
-                    if (currentStackKey(frame) != recordingCaptureKey) recordingCaptureChanged = true
+                    if (currentStackKey(frame)?.rawRecordingKey() != recordingCaptureKey) recordingCaptureChanged = true
                     val initialTemperature = recordingCaptureTemperature
                     val temperature = calibrationTemperature()
                     if (initialTemperature != null && (temperature == null || kotlin.math.abs(temperature - initialTemperature) > 2.0)) recordingCaptureChanged = true
@@ -1667,7 +1671,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             exposureUs = cam.currentExposureUs.toDouble(), gain = cam.currentGain,
             filter = if (filterWheelConnected.value) "${filterWheelPosition.value}:${currentFilterName()}" else "none",
             readout = "${cam.currentReadoutMode}/${_nativeReadoutModeId.value}", offset = _offset.value,
-            pixelTraits = traits
+            pixelTraits = traits,
+            demosaicAlgorithm = stacking.demosaicAlgorithm.value
         )
     }
 
@@ -1726,6 +1731,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             // ROI can change the interpretation of subsequently delivered samples.
             if (rawRecordingLayout != null) stopRecording()
             stackFrameGeometry = null
+            _liveStackPixelFormat.value = null
         }
     }
 
@@ -2611,7 +2617,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
 
             currentRecordingFile = file
-            recordingCaptureKey = if (rawRecording) currentStackKey() else null
+            recordingCaptureKey = if (rawRecording) currentStackKey()?.rawRecordingKey() else null
             recordingCaptureChanged = rawRecording && (recordingCaptureKey == null || autoExposureController.mode != AutoExposureMode.OFF)
             recordingCaptureTemperature = if (rawRecording) calibrationTemperature() else null
             // An interrupted recording must never look like a verified, fixed-settings sequence.

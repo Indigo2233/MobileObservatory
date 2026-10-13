@@ -111,6 +111,7 @@ class CalibrationCoordinatorInstrumentedTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
         val c = StackingCoordinator(app, scope, calibrationDirectory = masters)
         val liveKey = key.copy(height = 128, format = PixelFormat.BAYER_RG16, roi = Roi(0, 0, 128, 128))
+        val exports = mutableListOf<File>()
         try {
             val rawBias = FrameData(ByteArray(128 * 128 * 2), 128, 128, PixelFormat.BAYER_RG16, 0, 0)
             fun pedestal(x: Int, y: Int) = if (y % 2 == 0 && x % 2 == 0) 5000 else if (y % 2 == 1 && x % 2 == 1) 2000 else 3200
@@ -141,18 +142,27 @@ class CalibrationCoordinatorInstrumentedTest {
                 val sample = value.roundToInt()
                 put(clean.data, y * 128 + x, sample); put(light.data, y * 128 + x, sample + pedestal(x, y))
             }
-            val expected = LinearPixelDecoder.decode(clean, PixelTraits(alignment = SampleAlignment.RIGHT))
+            val expected = LinearPixelDecoder.decode(clean, PixelTraits(alignment = SampleAlignment.RIGHT), algorithm = liveKey.demosaicAlgorithm)
             main { c.open(StackMode.LIVE); c.startLive(liveKey); c.acceptFrame(light, liveKey) }
             await { c.live.state.value.accepted == 1L || c.live.state.value.phase == LiveStackPhase.FAILED }
             assertEquals(1L, c.live.state.value.accepted)
             await { c.live.latestSnapshot != null }
             assertArrayEquals(expected.pixels, c.live.latestSnapshot!!.image.pixels, .00001f)
+            main { c.selectPreset(ProcessingPreset.RAW); c.export() }
+            await { c.task.value.exportedFiles.size == 3 && !c.hasPlanetaryWork() }
+            exports += c.task.value.exportedFiles.map(::File)
+            val metadata = StackFitsReader.readMetadata(exports.single { it.extension == "fits" })
+            assertEquals(liveKey.demosaicAlgorithm.name, metadata["demosaicAlgorithm"])
+            assertEquals(liveKey.demosaicAlgorithm.name,
+                JSONObject(exports.single { it.extension == "json" }.readText()).getString("demosaicAlgorithm"))
+            assertEquals(LinearPixelDecoder.demosaicExtraBytes(128, 128, liveKey.format, liveKey.demosaicAlgorithm).toString(),
+                metadata["demosaicScratchBytes"])
             main { c.calibration.selectMaster(CalibrationType.BIAS, null) }
             assertEquals("calibration_reset_required", c.calibration.state.value.message)
             main { c.resetLive(); c.calibration.selectMaster(CalibrationType.BIAS, null) }
             await { !c.calibration.state.value.busy && c.calibration.state.value.selectedIds.isEmpty() }
         } finally {
-            main { c.close() }; scope.cancel(); folder.deleteRecursively()
+            main { c.close() }; scope.cancel(); exports.forEach { it.delete() }; folder.deleteRecursively()
             app.getSharedPreferences("stack-calibration-selection-${masters.name}", 0).edit().clear().commit()
         }
     }

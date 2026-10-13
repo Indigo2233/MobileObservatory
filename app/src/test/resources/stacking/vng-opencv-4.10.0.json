@@ -1,0 +1,19 @@
+{
+  "opencv_version": "4.10.0",
+  "wheel": "opencv-python-headless==4.10.0.84",
+  "source_commit": "71d3237a093b60a27601c20e9ee6c3e52154e8b1",
+  "source_sha256": "a35d8384039f47b531906ca03c577e5fd93b4319a36206f797b9d0284285ea91",
+  "width": 33,
+  "height": 31,
+  "cfa_order": [
+    "RGGB",
+    "GRBG",
+    "GBRG",
+    "BGGR"
+  ],
+  "layout": "four consecutive interleaved RGB unsigned 8-bit images; complete OpenCV returned images",
+  "input_formula": "raw[y,x] = 16*(4+(3*x+5*y+(x*y%7))%7)",
+  "comparison": "Kotlin[y,x] versus OpenCV[y-2,x]; x in 2..30, y in 4..28 inclusive",
+  "border": "OpenCV replicated borders excluded; Kotlin uses same-CFA bilinear two-pixel border",
+  "tolerance_dn": 0.501
+}

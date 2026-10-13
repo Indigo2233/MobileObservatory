@@ -25,12 +25,16 @@ data class PixelTraits(
 
 object LinearPixelDecoder {
     fun decode(frame: FrameData, traits: PixelTraits = PixelTraits(),
-               maxPixels: Long = LinearImage.DEFAULT_STACK_PIXELS): LinearImage =
-        demosaicSensor(decodeSensor(frame, traits, maxPixels), frame.pixelFormat, traits)
+               maxPixels: Long = LinearImage.DEFAULT_STACK_PIXELS,
+               algorithm: DemosaicAlgorithm = DemosaicAlgorithm.BILINEAR,
+               cancelCheck: () -> Unit = {}): LinearImage =
+        demosaicSensor(decodeSensor(frame, traits, maxPixels, cancelCheck), frame.pixelFormat, traits, algorithm, cancelCheck)
 
     /** Owned sensor samples before demosaic/resampling: CFA is one channel, RGB is interleaved. */
     fun decodeSensor(frame: FrameData, traits: PixelTraits = PixelTraits(),
-                     maxPixels: Long = LinearImage.DEFAULT_STACK_PIXELS): LinearImage {
+                     maxPixels: Long = LinearImage.DEFAULT_STACK_PIXELS,
+                     cancelCheck: () -> Unit = {}): LinearImage {
+        cancelCheck()
         require(frame.width > 0 && frame.height > 0)
         val count = frame.width.toLong() * frame.height
         require(count <= maxPixels && count <= LinearImage.MAX_PIXELS) {
@@ -56,6 +60,7 @@ object LinearPixelDecoder {
             alignment = SampleAlignment.RIGHT
             if (bits < sampleBytes * 8) {
                 for (i in 0 until sampleCount) {
+                    if (i % 16384 == 0) cancelCheck()
                     if (read(i) > max) { alignment = SampleAlignment.LEFT; break }
                 }
             }
@@ -63,6 +68,7 @@ object LinearPixelDecoder {
         val shift = if (alignment == SampleAlignment.LEFT) sampleBytes * 8 - bits else 0
         val samples = FloatArray(sampleCount)
         for (i in 0 until sampleCount) {
+            if (i % 16384 == 0) cancelCheck()
             val value = read(i) ushr shift
             require(value <= max) { "Sample exceeds declared bit depth; check alignment" }
             val dest = if (channels == 3 && traits.channelOrder == ChannelOrder.BGR) {
@@ -77,7 +83,10 @@ object LinearPixelDecoder {
     }
 
     /** Call after sensor-space calibration. Negative calibrated samples are deliberately retained. */
-    fun demosaicSensor(sensor: LinearImage, format: PixelFormat, traits: PixelTraits = PixelTraits()): LinearImage {
+    fun demosaicSensor(sensor: LinearImage, format: PixelFormat, traits: PixelTraits = PixelTraits(),
+                       algorithm: DemosaicAlgorithm = DemosaicAlgorithm.BILINEAR,
+                       cancelCheck: () -> Unit = {}): LinearImage {
+        cancelCheck()
         require(sensor.channels == if (format.isRgb) 3 else 1) { "Sensor channel layout does not match its format" }
         require(traits.binning > 0 && traits.roiX >= 0 && traits.roiY >= 0)
         if (!format.isBayer) return sensor
@@ -86,23 +95,40 @@ object LinearPixelDecoder {
         }
         val phaseX = if (traits.bayerPatternAtOutput) 0 else traits.roiX and 1
         val phaseY = if (traits.bayerPatternAtOutput) 0 else traits.roiY and 1
-        return debayer(sensor.pixels, sensor.width, sensor.height, format, phaseX, phaseY)
+        val redX = (if (format.name.startsWith("BAYER_GR") || format.name.startsWith("BAYER_BG")) 1 else 0) xor phaseX
+        val redY = (if (format.name.startsWith("BAYER_GB") || format.name.startsWith("BAYER_BG")) 1 else 0) xor phaseY
+        return when (algorithm) {
+            DemosaicAlgorithm.BILINEAR -> debayer(sensor.pixels, sensor.width, sensor.height, redX, redY, cancelCheck)
+            DemosaicAlgorithm.VNG -> VngDemosaicer.demosaic(sensor.pixels, sensor.width, sensor.height, redX, redY, cancelCheck)
+            DemosaicAlgorithm.DDFAPD -> DdfapdDemosaicer.demosaic(sensor.pixels, sensor.width, sensor.height, redX, redY, cancelCheck)
+        }
+    }
+
+    /** Additional peak scratch only: the sensor input and returned RGB are budgeted by callers.
+     * Account at sensor resolution, before software binning. Non-Bayer input is passed through. */
+    fun demosaicExtraBytes(width: Int, height: Int, format: PixelFormat, algorithm: DemosaicAlgorithm): Long {
+        require(width > 0 && height > 0)
+        if (!format.isBayer) return 0L
+        return when (algorithm) {
+            DemosaicAlgorithm.BILINEAR -> 0L
+            DemosaicAlgorithm.VNG -> VngDemosaicer.extraBytes(width, height)
+            DemosaicAlgorithm.DDFAPD -> DdfapdDemosaicer.extraBytes(width, height)
+        }
     }
 
     /** Bilinear interpolation in floating point, before any geometric resampling. At a border,
      * only existing samples of the requested color contribute (no clamped opposite-color taps).
      */
-    private fun debayer(src: FloatArray, w: Int, h: Int, format: PixelFormat, ox: Int, oy: Int): LinearImage {
+    private fun debayer(src: FloatArray, w: Int, h: Int, redX: Int, redY: Int, cancelCheck: () -> Unit): LinearImage {
         require(w >= 2 && h >= 2) { "A Bayer image needs at least 2 x 2 pixels" }
-        val redX = if (format.name.startsWith("BAYER_GR") || format.name.startsWith("BAYER_BG")) 1 else 0
-        val redY = if (format.name.startsWith("BAYER_GB") || format.name.startsWith("BAYER_BG")) 1 else 0
         fun color(x: Int, y: Int): Int = when {
-            ((x + ox) and 1) == redX && ((y + oy) and 1) == redY -> 0
-            ((x + ox) and 1) != redX && ((y + oy) and 1) != redY -> 2
+            (x and 1) == redX && (y and 1) == redY -> 0
+            (x and 1) != redX && (y and 1) != redY -> 2
             else -> 1
         }
         val out = FloatArray(w * h * 3)
         for (y in 0 until h) for (x in 0 until w) {
+            if (x == 0) cancelCheck()
             val own = color(x, y)
             for (c in 0..2) {
                 if (c == own) { out[(y * w + x) * 3 + c] = src[y * w + x]; continue }

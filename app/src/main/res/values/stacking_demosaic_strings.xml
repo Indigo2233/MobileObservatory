@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="stack_debayer_summary">Bayer demosaic · %1$s</string>
+    <string name="stack_debayer_ddfapd">DDFAPD · Recommended</string>
+    <string name="stack_debayer_vng">VNG</string>
+    <string name="stack_debayer_bilinear">Bilinear · Fast</string>
+    <string name="stack_debayer_change">Change demosaic algorithm</string>
+    <string name="stack_debayer_reanalyze">This clears the current analysis and stack. Save any result you need first, then analyze again.</string>
+    <string name="stack_debayer_live_locked">Reset this stack before changing the algorithm.</string>
+    <string name="stack_debayer_busy">Wait for processing or calibration to finish before changing the algorithm.</string>
+    <string name="stack_debayer_changed">The demosaic algorithm changed. Start a new stack.</string>
+</resources>

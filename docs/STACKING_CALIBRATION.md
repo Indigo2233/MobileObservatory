@@ -1,5 +1,9 @@
 # Calibration and background correction acceptance record
 
+This records the initial calibration implementation at commit `65d8dea`.
+For the later selectable Bayer algorithms and current build acceptance, see
+[STACKING_DEMOSAICING.md](STACKING_DEMOSAICING.md).
+
 Recorded 2026-10-13. This extends [STACKING_IMPLEMENTATION.md](STACKING_IMPLEMENTATION.md)
 and [STACKING_USABILITY.md](STACKING_USABILITY.md). It describes the current local
 implementation and synthetic evidence. Physical-camera, sustained low-end Android

@@ -22,7 +22,7 @@ enum class StackMode { LIVE, PLANETARY }
 enum class StackTaskPhase { EMPTY, READING, READY, ANALYZING, ANALYZED, REGISTERING, STACKING, PROCESSING, EXPORTING, COMPLETE, CANCELLED, FAILED }
 
 data class StackSourceInfo(val file: File, val width: Int, val height: Int, val channels: Int,
-    val bits: Int, val frames: Long, val identity: String)
+    val bits: Int, val frames: Long, val identity: String, val isBayer: Boolean = false)
 
 data class StackingTaskState(
     val phase: StackTaskPhase = StackTaskPhase.EMPTY,
@@ -74,6 +74,8 @@ class StackingCoordinator(
     val showLiveStack = _showLiveStack.asStateFlow()
     private val _processing = MutableStateFlow(StackProcessingParameters.preset(ProcessingPreset.NATURAL))
     val processing = _processing.asStateFlow()
+    private val _demosaicAlgorithm = MutableStateFlow(DemosaicAlgorithm.DDFAPD)
+    val demosaicAlgorithm = _demosaicAlgorithm.asStateFlow()
     // Keep only small model statistics in state; full processed float images are not retained.
     private val _backgroundWarning = MutableStateFlow("")
     val backgroundWarning = _backgroundWarning.asStateFlow()
@@ -101,6 +103,7 @@ class StackingCoordinator(
     private var analysis: PlanetaryAnalysis? = null
     private var analysisIdentity = ""
     private var analysisCalibration: CalibrationSelection? = null
+    private var analysisDemosaic: DemosaicAlgorithm? = null
     private var sourceFile: File? = null
     var endianConvention: SerEndianConvention = SerEndianConvention.COMPATIBILITY
         private set
@@ -112,21 +115,23 @@ class StackingCoordinator(
     private val engine = PlanetaryStacker()
     @Volatile private var liveCalibration = CalibrationSelection()
     @Volatile private var liveCalibrationWarnings: List<String> = emptyList()
+    @Volatile private var liveDemosaicScratchBytes = 0L
     val live: LiveStackSession = LiveStackSession(
         scope = scienceScope,
-        engineFactory = { LiveDeepSkyEngine(memoryBudgetBytes - liveCalibration.memoryBytes) },
+        engineFactory = { LiveDeepSkyEngine(memoryBudgetBytes - liveCalibration.memoryBytes - liveDemosaicScratchBytes) },
         decode = { frame, key ->
             val fixedCalibration = liveCalibration
             val generation = liveGeneration()
+            val cancelCheck = {
+                if (closed || liveGeneration() != generation) throw CancellationException("stack_cancelled")
+            }
             val traits = key.pixelTraits.copy(
                 roiX = key.roi.x, roiY = key.roi.y, binning = key.hardwareBin
             )
-            val sensor = LinearPixelDecoder.decodeSensor(frame, traits)
+            val sensor = LinearPixelDecoder.decodeSensor(frame, traits, cancelCheck = cancelCheck)
             val geometry = CalibrationGeometry.from(frame.width, frame.height, frame.pixelFormat, traits)
-            val calibrated = fixedCalibration.apply(sensor, geometry, liveCapture(key)) {
-                if (closed || liveGeneration() != generation) throw CancellationException("calibration_cancelled")
-            }
-            val decoded = LinearPixelDecoder.demosaicSensor(calibrated, frame.pixelFormat, traits)
+            val calibrated = fixedCalibration.apply(sensor, geometry, liveCapture(key), cancelCheck)
+            val decoded = LinearPixelDecoder.demosaicSensor(calibrated, frame.pixelFormat, traits, key.demosaicAlgorithm, cancelCheck)
             LinearPixelDecoder.bin(decoded, key.softwareBin)
         },
         onSnapshot = { snapshot -> synchronized(stateLock) {
@@ -205,6 +210,7 @@ class StackingCoordinator(
         if (closed) return
         // Button recomposition can lag a rapid second tap; starting is idempotent here.
         if (live.state.value.phase != LiveStackPhase.EMPTY) return
+        if (key.demosaicAlgorithm != _demosaicAlgorithm.value) { report("demosaic_changed"); return }
         if (taskRunning || planetaryProduct != null) {
             report("finish_offline_first")
             return
@@ -225,9 +231,10 @@ class StackingCoordinator(
         val height = key.height / key.softwareBin
         val inputExpansionBytes = (pixels - width.toLong() * height).coerceAtLeast(0) *
             (key.format.bytesPerPixel * 3L + (channels + 1) * 4L)
+        val demosaicScratch = LinearPixelDecoder.demosaicExtraBytes(key.width, key.height, key.format, key.demosaicAlgorithm)
         if (pixels > LinearImage.DEFAULT_STACK_PIXELS ||
             DeepSkyStacker.estimateWorkingBytes(width, height, channels) + inputExpansionBytes +
-                selectedCalibration.memoryBytes + (if (selectedCalibration.enabled) geometry.sampleCount * 4L else 0L) > memoryBudgetBytes) {
+                selectedCalibration.memoryBytes + demosaicScratch + (if (selectedCalibration.enabled) geometry.sampleCount * 4L else 0L) > memoryBudgetBytes) {
             report("memory_budget")
             return
         }
@@ -235,6 +242,7 @@ class StackingCoordinator(
         activateModeLocked(StackMode.LIVE)
         liveCalibration = selectedCalibration
         liveCalibrationWarnings = selectedCalibration.unknownWarnings(geometry, capture)
+        liveDemosaicScratchBytes = demosaicScratch
         live.start(key)
         _task.value = _task.value.copy(message = "", exportedFiles = emptyList())
     }
@@ -247,6 +255,7 @@ class StackingCoordinator(
         live.reset()
         liveCalibration = CalibrationSelection()
         liveCalibrationWarnings = emptyList()
+        liveDemosaicScratchBytes = 0L
     }
 
     /** One-shot display adaptation on the existing renderer; raw accumulation is unchanged. */
@@ -281,6 +290,24 @@ class StackingCoordinator(
 
     fun resetProcessing() = updateProcessing(StackProcessingParameters.preset(_processing.value.preset))
 
+    /** A decoder choice is part of the scientific input, not a display recipe. */
+    fun setDemosaicAlgorithm(algorithm: DemosaicAlgorithm): Unit = synchronized(stateLock) {
+        if (closed || algorithm == _demosaicAlgorithm.value) return
+        if (live.state.value.phase != LiveStackPhase.EMPTY) { report("reset_live_first"); return }
+        if (taskRunning || renderJob != null || calibration.state.value.busy) { report("demosaic_busy"); return }
+        cancelRenderingLocked()
+        _demosaicAlgorithm.value = algorithm
+        analysis?.close(); analysis = null; analysisCalibration = null; analysisDemosaic = null
+        planetaryProduct = null; planetaryPreview = null
+        if (activeMode == StackMode.PLANETARY) _preview.value = null
+        val file = sourceFile
+        _task.update { it.copy(phase = if (file == null) StackTaskPhase.EMPTY else StackTaskPhase.READY,
+            completed = 0, total = 0, histogram = emptyList(), qualityFrames = 0, referenceFrame = 0,
+            stats = null, message = "", exportedFiles = emptyList()) }
+        // Reserve the reload before releasing the monitor; Analyze cannot use the old decode.
+        if (file != null) loadFile(file)
+    }
+
     fun setDecodeOptions(endian: SerEndianConvention, alignment: SampleAlignment): Unit = synchronized(stateLock) {
         if (taskRunning || calibration.state.value.busy) return
         require(alignment != SampleAlignment.AUTO) { "Choose an explicit sequence bit alignment" }
@@ -292,17 +319,23 @@ class StackingCoordinator(
     fun loadFile(file: File) = runTask(StackTaskPhase.READING) {
         ensureOfflineAvailable()
         check(!isSourceBusy(file)) { "recording_active" }
-        analysis?.close(); analysis = null; analysisCalibration = null
+        // Re-decoding the same source must not reset the user's ROI fields in the UI.
+        val retainedSource = _task.value.source?.takeIf { it.identity == identity(file) }
+        analysis?.close(); analysis = null; analysisCalibration = null; analysisDemosaic = null
         planetaryProduct = null
         sourceFile = null
         synchronized(stateLock) {
             planetaryPreview = null
             if (activeMode == StackMode.PLANETARY) _preview.value = null
         }
-        _task.value = StackingTaskState(phase = StackTaskPhase.READING)
+        _task.value = StackingTaskState(phase = StackTaskPhase.READING, source = retainedSource)
         source(file).use { source ->
             val info = source.info
-            checkBudget(source.width, source.height, source.channels)
+            // Keep a validated source selectable when the chosen decoder exceeds the budget
+            // or fails to decode. The user can then select a cheaper algorithm and retry.
+            sourceFile = file
+            _task.value = StackingTaskState(phase = StackTaskPhase.READING, source = info)
+            checkBudget(source)
             val first = source.readFrame(0)
             val processed = StackPostProcessor.process(first, StackProcessingParameters.preset(ProcessingPreset.NATURAL)) { !isActive }
             val bitmap = StackBitmap.create(processed.image, 1280) { ensureActive() }
@@ -343,9 +376,11 @@ class StackingCoordinator(
                     }
                 }
             } ?: error("source_unreadable")
-            source(partial).use { checkBudget(it.width, it.height, it.channels) }
+            // Validate the recording before publishing the import, but defer processing
+            // budget checks: a valid file may fit a cheaper demosaic algorithm.
+            source(partial).use { }
             check(partial.renameTo(target)) { "storage_unavailable" }
-            analysis?.close(); analysis = null; analysisCalibration = null
+            analysis?.close(); analysis = null; analysisCalibration = null; analysisDemosaic = null
             planetaryProduct = null
             sourceFile = null
             synchronized(stateLock) {
@@ -354,6 +389,9 @@ class StackingCoordinator(
             }
             _task.value = StackingTaskState(phase = StackTaskPhase.READING)
             source(target).use {
+                sourceFile = target
+                _task.value = StackingTaskState(phase = StackTaskPhase.READING, source = it.info)
+                checkBudget(it)
                 val first = it.readFrame(0)
                 val processed = StackPostProcessor.process(first, StackProcessingParameters.preset(ProcessingPreset.NATURAL)) { !isActive }
                 publishPlanetaryPreview(StackBitmap.create(processed.image, 1280) { ensureActive() })
@@ -367,18 +405,19 @@ class StackingCoordinator(
         ensureOfflineAvailable()
         val file = sourceFile ?: error("choose_source")
         check(!isSourceBusy(file)) { "recording_active" }
-        analysis?.close(); analysis = null; analysisCalibration = null
+        analysis?.close(); analysis = null; analysisCalibration = null; analysisDemosaic = null
         planetaryProduct = null
         _task.update { it.copy(histogram = emptyList(), qualityFrames = 0, referenceFrame = 0, stats = null) }
         source(file).use { source ->
-            checkBudget(source.width, source.height, source.channels)
+            checkBudget(source)
             val options = PlanetaryOptions(roi = roi, localAlignment = localAlignment,
-                memoryBudgetBytes = memoryBudgetBytes - source.calibrationOverheadBytes)
+                memoryBudgetBytes = memoryBudgetBytes - source.processingOverheadBytes)
             val result = engine.analyze(source, options, cache, control())
             try { ensureActive(); analysis = result }
             catch (failure: Throwable) { result.close(); throw failure }
             analysisIdentity = source.info.identity
             analysisCalibration = source.calibration
+            analysisDemosaic = source.algorithm
             _task.update { it.copy(phase = StackTaskPhase.ANALYZED, source = source.info,
                 histogram = result.histogram.toList(), qualityFrames = result.validFrames,
                 referenceFrame = result.referenceFrame, message = "", completed = result.frameCount, total = result.frameCount) }
@@ -396,16 +435,19 @@ class StackingCoordinator(
         source(file).use { source ->
             check(source.info.identity == analysisIdentity) { "source_changed" }
             check(source.calibration === analysisCalibration) { "calibration_changed_analyze_again" }
+            check(source.algorithm == analysisDemosaic) { "demosaic_changed_analyze_again" }
             val result = engine.stack(source, quality, selection, control())
             ensureActive()
             check(identity(file) == analysisIdentity) { "source_changed" }
-            val stats = result.stats.copy(estimatedPeakBytes = result.stats.estimatedPeakBytes + source.calibrationOverheadBytes)
+            val stats = result.stats.copy(estimatedPeakBytes = result.stats.estimatedPeakBytes + source.processingOverheadBytes)
             val meta = linkedMapOf(
                 "kind" to "planetary", "source" to file.name, "sourceIdentity" to source.info.identity,
                 "frameCount" to stats.stackedFrames.toString(), "exposureSeconds" to stats.effectiveExposureSeconds.toString(),
                 "unknownExposureFrames" to stats.framesWithUnknownExposure.toString(),
                 "inputFormat" to "${source.reader.header?.colorId}/${source.info.bits}bit",
                 "byteOrderConvention" to endianConvention.name, "sampleAlignment" to sampleAlignment.name,
+                "demosaicAlgorithm" to if (source.info.isBayer) source.algorithm.name else "NONE",
+                "demosaicScratchBytes" to source.demosaicScratchBytes.toString(),
                 "qualitySelection" to JSONObject().apply { put("percent", selection.percent); put("count", selection.count ?: JSONObject.NULL) }.toString(),
                 "registration" to JSONObject().apply {
                     put("referenceFrame", stats.referenceFrame); put("alignmentPoints", stats.alignmentPoints)
@@ -428,6 +470,7 @@ class StackingCoordinator(
     fun clearPlanetary() = runTask(StackTaskPhase.EMPTY) {
         analysis?.close(); analysis = null
         analysisCalibration = null
+        analysisDemosaic = null
         planetaryProduct = null; sourceFile = null
         synchronized(stateLock) {
             planetaryPreview = null
@@ -671,10 +714,10 @@ class StackingCoordinator(
         check(live.state.value.phase == LiveStackPhase.EMPTY) { "reset_live_first" }
     }
 
-    private fun checkBudget(width: Int, height: Int, channels: Int) {
-        require(width.toLong() * height <= PlanetaryStacker.MAX_PIXELS &&
-            PlanetaryStacker.estimatedPeakBytes(width, height, channels) + calibration.memoryBytes +
-                (if (calibration.memoryBytes > 0) width.toLong() * height * channels * 4L else 0L) <= memoryBudgetBytes) { "memory_budget" }
+    private fun checkBudget(source: SerSource) {
+        require(source.width.toLong() * source.height <= PlanetaryStacker.MAX_PIXELS &&
+            PlanetaryStacker.estimatedPeakBytes(source.width, source.height, source.channels) +
+                source.processingOverheadBytes <= memoryBudgetBytes) { "memory_budget" }
     }
 
     private fun CoroutineScope.control() = PlanetaryControl(checkCancelled = { ensureActive() }, progress = { progress ->
@@ -696,26 +739,30 @@ class StackingCoordinator(
     }
 
     private suspend fun CoroutineScope.source(file: File): SerSource =
-        SerSource(file, endianConvention, sampleAlignment, calibration.snapshot()) { ensureActive() }
+        SerSource(file, endianConvention, sampleAlignment, calibration.snapshot(), _demosaicAlgorithm.value) { ensureActive() }
 
     private class SerSource(file: File, endian: SerEndianConvention, alignment: SampleAlignment,
-        val calibration: CalibrationSelection, private val cancelCheck: () -> Unit) : PlanetaryFrameSource {
+        val calibration: CalibrationSelection, val algorithm: DemosaicAlgorithm,
+        private val cancelCheck: () -> Unit) : PlanetaryFrameSource {
         val reader = SERReader(file, endian).apply { sampleAlignment = alignment }
         val info: StackSourceInfo
         private val capture: CalibrationCapture
         private val geometry: CalibrationGeometry
         val calibrationOverheadBytes: Long
+        val demosaicScratchBytes: Long
+        val processingOverheadBytes: Long get() = calibrationOverheadBytes + demosaicScratchBytes
         init {
             try {
                 check(reader.open()) { reader.lastError ?: "invalid_source" }
                 val header = reader.header!!
                 info = StackSourceInfo(file, header.width, header.height,
-                    if (header.colorId == 0) 1 else 3, header.pixelDepth, header.frameCount.toLong(), identity(file))
+                    if (header.colorId == 0) 1 else 3, header.pixelDepth, header.frameCount.toLong(), identity(file), reader.sensorFormat.isBayer)
                 capture = if (calibration.enabled) CalibrationCoordinator.recordingCapture(file)
                     else runCatching { CalibrationCoordinator.recordingCapture(file) }.getOrDefault(CalibrationCapture())
                 geometry = CalibrationGeometry.from(header.width, header.height, reader.sensorFormat, reader.sensorTraits)
                 calibration.validate(geometry, capture)
                 calibrationOverheadBytes = calibration.memoryBytes + if (calibration.enabled) geometry.sampleCount * 4L else 0L
+                demosaicScratchBytes = LinearPixelDecoder.demosaicExtraBytes(header.width, header.height, reader.sensorFormat, algorithm)
             } catch (failure: Throwable) { reader.close(); throw failure }
         }
         override val width get() = info.width
@@ -725,8 +772,9 @@ class StackingCoordinator(
         override fun readFrame(index: Long): LinearImage {
             require(index in 0 until frameCount && index <= Int.MAX_VALUE)
             cancelCheck()
-            val sensor = reader.readSensorFrame(index.toInt()) ?: error(reader.lastError ?: "read_failed")
-            return LinearPixelDecoder.demosaicSensor(calibration.apply(sensor, geometry, capture, cancelCheck), reader.sensorFormat, reader.sensorTraits)
+            val sensor = reader.readSensorFrame(index.toInt(), cancelCheck = cancelCheck) ?: error(reader.lastError ?: "read_failed")
+            return LinearPixelDecoder.demosaicSensor(calibration.apply(sensor, geometry, capture, cancelCheck),
+                reader.sensorFormat, reader.sensorTraits, algorithm, cancelCheck)
         }
         override fun exposureSeconds(index: Long): Double = capture.exposureUs?.div(1_000_000.0) ?: 0.0
         fun calibrationMetadata() = calibration.metadata() + mapOf(
@@ -741,6 +789,8 @@ class StackingCoordinator(
         return snapshot.details.mapValues { it.value.toString() } + liveCalibration.metadata() + mapOf(
             "calibrationMemoryBytes" to liveCalibration.memoryBytes.toString(),
             "calibrationUnknownSettings" to JSONArray(liveCalibrationWarnings).toString(),
+            "demosaicAlgorithm" to (s.key?.takeIf { it.format.isBayer }?.demosaicAlgorithm?.name ?: "NONE"),
+            "demosaicScratchBytes" to liveDemosaicScratchBytes.toString(),
             "kind" to "live_deep_sky", "source" to s.key?.camera.orEmpty(), "captureSettings" to s.key.toString(),
             "frameCount" to s.accepted.toString(), "exposureSeconds" to s.exposureSeconds.toString(),
             "received" to s.received.toString(), "rejected" to s.rejected.toString(), "queueDropped" to s.dropped.toString(),
@@ -766,7 +816,7 @@ class StackingCoordinator(
         // Defer index cleanup until the running single worker has observed cancellation.
         CoroutineScope(worker + SupervisorJob()).launch {
             jobs.first?.join(); jobs.second?.join(); live.awaitClosed(); calibration.awaitClosed()
-            analysis?.close(); analysis = null; analysisCalibration = null
+            analysis?.close(); analysis = null; analysisCalibration = null; analysisDemosaic = null
             liveCalibration = CalibrationSelection()
             worker.close(); renderer.close()
         }

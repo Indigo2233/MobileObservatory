@@ -217,6 +217,9 @@ private fun LiveStackControls(vm: CameraViewModel, state: LiveStackState, showSt
     val c = vm.stacking
     val calibration by c.calibration.state.collectAsState()
     val task by c.task.collectAsState()
+    val algorithm by c.demosaicAlgorithm.collectAsState()
+    val captureFormat by vm.liveStackPixelFormat.collectAsState()
+    val rendering by c.rendering.collectAsState()
     var readiness by remember { mutableStateOf(vm.liveStackStartIssue()) }
     LaunchedEffect(vm) { while (true) { readiness = vm.liveStackStartIssue(); delay(500) } }
     val recording by vm.isRecording.collectAsState()
@@ -232,6 +235,12 @@ private fun LiveStackControls(vm: CameraViewModel, state: LiveStackState, showSt
         }
     }
     TextButton(onClick = onCamera) { Text(stringResource(R.string.stack_camera_settings)) }
+    if ((state.key?.format ?: captureFormat)?.isBayer == true) {
+        DemosaicSelector(algorithm, enabled = state.phase == LiveStackPhase.EMPTY && !task.busy && !calibration.busy && !rendering,
+            requiresResetConfirmation = c.hasResult(StackMode.PLANETARY) || task.histogram.isNotEmpty(), onSelect = c::setDemosaicAlgorithm)
+        if (state.phase != LiveStackPhase.EMPTY)
+            Text(stringResource(R.string.stack_debayer_live_locked), style = MaterialTheme.typography.bodySmall)
+    }
     if (task.busy || c.hasResult(StackMode.PLANETARY)) {
         Text(stackMessage("finish_offline_first"), color = MaterialTheme.colorScheme.tertiary)
         TextButton(onClick = { c.open(StackMode.PLANETARY) }) { Text(stringResource(R.string.stack_planetary)) }
@@ -267,6 +276,9 @@ private fun LiveStackControls(vm: CameraViewModel, state: LiveStackState, showSt
 private fun PlanetaryControls(c: StackingCoordinator, task: StackingTaskState, drawn: PixelRoi?,
     onChoose: () -> Unit, onBrowse: () -> Unit, onDrawRoi: () -> Unit) {
     val live by c.live.state.collectAsState()
+    val algorithm by c.demosaicAlgorithm.collectAsState()
+    val calibration by c.calibration.state.collectAsState()
+    val rendering by c.rendering.collectAsState()
     val source = task.source
     var roiX by rememberSaveable(source?.identity) { mutableStateOf("0") }
     var roiY by rememberSaveable(source?.identity) { mutableStateOf("0") }
@@ -276,7 +288,7 @@ private fun PlanetaryControls(c: StackingCoordinator, task: StackingTaskState, d
     var percent by rememberSaveable { mutableStateOf("25") }
     var count by rememberSaveable { mutableStateOf("") }
     var analyzedConfig by rememberSaveable { mutableStateOf("") }
-    val currentConfig = "$roiX,$roiY,$roiW,$roiH,$local,${source?.identity},${c.endianConvention},${c.sampleAlignment}"
+    val currentConfig = "$roiX,$roiY,$roiW,$roiH,$local,${source?.identity},${c.endianConvention},${c.sampleAlignment},$algorithm"
     LaunchedEffect(drawn) { drawn?.let { roiX = it.left.toString(); roiY = it.top.toString(); roiW = it.width.toString(); roiH = it.height.toString() } }
     if (live.phase != LiveStackPhase.EMPTY) {
         Text(stackMessage("reset_live_first"), color = MaterialTheme.colorScheme.tertiary)
@@ -288,6 +300,9 @@ private fun PlanetaryControls(c: StackingCoordinator, task: StackingTaskState, d
     Text(stackTaskPhase(task.phase), style = MaterialTheme.typography.titleSmall)
     if (source != null) {
         Text(stringResource(R.string.stack_source, source.file.name, source.width, source.height, source.bits, source.frames))
+        if (source.isBayer) DemosaicSelector(algorithm,
+            enabled = !task.busy && !calibration.busy && !rendering && live.phase == LiveStackPhase.EMPTY,
+            requiresResetConfirmation = task.histogram.isNotEmpty() || c.hasResult(StackMode.PLANETARY), onSelect = c::setDemosaicAlgorithm)
         var decodeExpanded by remember { mutableStateOf(false) }
         TextButton(onClick = { decodeExpanded = !decodeExpanded }) { Text(stringResource(R.string.stack_endian)) }
         if (decodeExpanded) {
@@ -601,7 +616,9 @@ internal fun stackMessage(code: String): String {
         "calibration_clipped_flat", "calibration_invalid_flat_response" -> R.string.stack_cal_invalid_flat
         "calibration_ser_required", "calibration_source_format" -> R.string.stack_cal_ser_required
         "calibration_capture_changed" -> R.string.stack_cal_changed
-        "calibration_changed_analyze_again" -> R.string.stack_reason_analyze
+        "calibration_changed_analyze_again", "demosaic_changed_analyze_again" -> R.string.stack_reason_analyze
+        "demosaic_busy" -> R.string.stack_debayer_busy
+        "demosaic_changed" -> R.string.stack_debayer_changed
         "calibration_selection_unavailable", "calibration_master_missing", "calibration_read_failed",
         "calibration_corrupt_master", "calibration_truncated_master", "calibration_invalid_master" -> R.string.stack_cal_unavailable
         "calibration_master_created" -> R.string.stack_cal_created

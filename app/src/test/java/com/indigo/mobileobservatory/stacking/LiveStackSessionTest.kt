@@ -152,7 +152,8 @@ class LiveStackSessionTest {
         val changes = listOf(
             key.copy(camera = "camera-b"), key.copy(exposureUs = 500_000.0), key.copy(gain = 21f),
             key.copy(roi = Roi(1, 0, 2, 2)), key.copy(hardwareBin = 2), key.copy(softwareBin = 2),
-            key.copy(format = PixelFormat.MONO16), key.copy(filter = "R"), key.copy(readout = "fast"), key.copy(offset = 2f)
+            key.copy(format = PixelFormat.MONO16), key.copy(filter = "R"), key.copy(readout = "fast"), key.copy(offset = 2f),
+            key.copy(demosaicAlgorithm = DemosaicAlgorithm.BILINEAR), key.copy(demosaicAlgorithm = DemosaicAlgorithm.VNG)
         )
         for (changed in changes) {
             val session = LiveStackSession(this, { Engine() }, ::decode, {})
@@ -168,6 +169,16 @@ class LiveStackSessionTest {
                 assertEquals(changed, session.state.value.key)
                 assertEquals(0L, session.state.value.accepted)
             } finally { session.close(); runCurrent() }
+        }
+    }
+
+    @Test fun rawRecordingIdentityIgnoresOnlyDemosaicChoice() {
+        for (algorithm in DemosaicAlgorithm.values()) {
+            val selected = key.copy(demosaicAlgorithm = algorithm)
+            assertEquals(key.rawRecordingKey(), selected.rawRecordingKey())
+            assertNotEquals(selected.rawRecordingKey(), selected.copy(gain = key.gain + 1).rawRecordingKey())
+            assertNotEquals(selected.rawRecordingKey(), selected.copy(roi = Roi(1, 0, 2, 2)).rawRecordingKey())
+            assertNotEquals(selected.rawRecordingKey(), selected.copy(format = PixelFormat.BAYER_RG16).rawRecordingKey())
         }
     }
 
