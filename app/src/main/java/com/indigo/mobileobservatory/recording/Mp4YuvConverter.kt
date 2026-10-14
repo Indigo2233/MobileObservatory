@@ -1,6 +1,10 @@
 package com.indigo.mobileobservatory.recording
 
 import com.indigo.mobileobservatory.camera.FrameData
+import com.indigo.mobileobservatory.stacking.ChannelOrder
+import com.indigo.mobileobservatory.stacking.PixelTraits
+import com.indigo.mobileobservatory.stacking.SampleAlignment
+import java.nio.ByteOrder
 
 /**
  * Converts science frames into tightly packed NV12 (Y plane + interleaved UV).
@@ -17,7 +21,7 @@ class Mp4YuvConverter {
     var wbGreenGain = 1.0f
     var wbBlueGain = 1.0f
 
-    fun convert(frame: FrameData, outW: Int, outH: Int): Nv12Frame {
+    fun convert(frame: FrameData, outW: Int, outH: Int, traits: PixelTraits? = null): Nv12Frame {
         require(outW > 0 && outH > 0)
         val srcW = frame.width
         val srcH = frame.height
@@ -25,10 +29,12 @@ class Mp4YuvConverter {
         ensure(srcUv, srcW * ((srcH + 1) / 2)).also { srcUv = it }
         srcUv.fill(128.toByte())
 
-        if (frame.pixelFormat.isBayer) {
-            fillBayerNv12(frame, srcY, srcUv)
+        if (frame.pixelFormat.isRgb) {
+            fillRgbNv12(frame, srcY, srcUv, traits)
+        } else if (frame.pixelFormat.isBayer) {
+            fillBayerNv12(frame, srcY, srcUv, traits)
         } else {
-            fillMonoY(frame, srcY)
+            fillMonoY(frame, srcY, traits)
         }
 
         if (srcW == outW && srcH == outH) {
@@ -41,23 +47,57 @@ class Mp4YuvConverter {
         return Nv12Frame(dstY, dstUv, outW, outH)
     }
 
-    private fun fillMonoY(frame: FrameData, yOut: ByteArray) {
+    private fun displayShift(frame: FrameData, traits: PixelTraits?): Int {
+        if (!frame.pixelFormat.isHighBit) return 0
+        return if (traits?.alignment == SampleAlignment.LEFT) 8
+        else ((traits?.validBits ?: frame.pixelFormat.nativeBits) - 8).coerceAtLeast(0)
+    }
+
+    private fun sample8(data: ByteArray, index: Int, highBit: Boolean, shift: Int, bigEndian: Boolean): Int {
+        val offset = index * if (highBit) 2 else 1
+        if (offset < 0 || offset >= data.size) return 0
+        if (!highBit) return data[offset].toInt() and 255
+        if (offset + 1 >= data.size) return 0
+        val a = data[offset].toInt() and 255
+        val b = data[offset + 1].toInt() and 255
+        val value = if (bigEndian) (a shl 8) or b else a or (b shl 8)
+        return (value ushr shift).coerceIn(0, 255)
+    }
+
+    private fun fillRgbNv12(frame: FrameData, yOut: ByteArray, uvOut: ByteArray, traits: PixelTraits?) {
+        val high = frame.pixelFormat.isHighBit
+        val shift = displayShift(frame, traits)
+        val bigEndian = traits?.byteOrder == ByteOrder.BIG_ENDIAN
+        val bgr = traits?.channelOrder == ChannelOrder.BGR
+        for (y in 0 until frame.height) {
+            for (x in 0 until frame.width) {
+                val base = (y * frame.width + x) * 3
+                val r = (sample8(frame.data, base + if (bgr) 2 else 0, high, shift, bigEndian) * wbRedGain).toInt().coerceIn(0, 255)
+                val g = (sample8(frame.data, base + 1, high, shift, bigEndian) * wbGreenGain).toInt().coerceIn(0, 255)
+                val b = (sample8(frame.data, base + if (bgr) 0 else 2, high, shift, bigEndian) * wbBlueGain).toInt().coerceIn(0, 255)
+                yOut[y * frame.width + x] = (((66 * r + 129 * g + 25 * b + 128) shr 8) + 16).coerceIn(16, 235).toByte()
+                if (y % 2 == 0 && x % 2 == 0) {
+                    val index = (y / 2) * frame.width + x
+                    if (index + 1 < uvOut.size) {
+                        uvOut[index] = (((-38 * r - 74 * g + 112 * b + 128) shr 8) + 128).coerceIn(16, 240).toByte()
+                        uvOut[index + 1] = (((112 * r - 94 * g - 18 * b + 128) shr 8) + 128).coerceIn(16, 240).toByte()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun fillMonoY(frame: FrameData, yOut: ByteArray, traits: PixelTraits?) {
         val src = frame.data
         val w = frame.width
         val h = frame.height
         val isHigh = frame.pixelFormat.isHighBit
-        val shift = if (isHigh) (frame.pixelFormat.nativeBits - 8).coerceAtLeast(0) else 0
+        val shift = displayShift(frame, traits)
+        val bigEndian = traits?.byteOrder == ByteOrder.BIG_ENDIAN
         val pixels = w * h
         if (isHigh) {
             for (i in 0 until pixels) {
-                val idx = i * 2
-                yOut[i] = if (idx + 1 < src.size) {
-                    val lo = src[idx].toInt() and 0xFF
-                    val hi = src[idx + 1].toInt() and 0xFF
-                    ((lo or (hi shl 8)) shr shift).coerceIn(0, 255).toByte()
-                } else {
-                    0
-                }
+                yOut[i] = sample8(src, i, true, shift, bigEndian).toByte()
             }
         } else {
             val copyLen = pixels.coerceAtMost(src.size).coerceAtMost(yOut.size)
@@ -66,21 +106,18 @@ class Mp4YuvConverter {
         }
     }
 
-    private fun fillBayerNv12(frame: FrameData, yOut: ByteArray, uvOut: ByteArray) {
+    private fun fillBayerNv12(frame: FrameData, yOut: ByteArray, uvOut: ByteArray, traits: PixelTraits?) {
         val src = frame.data
         val w = frame.width
         val h = frame.height
         val is10 = frame.pixelFormat.isHighBit
-        val shf = if (is10) (frame.pixelFormat.nativeBits - 8).coerceAtLeast(0) else 0
+        val shf = displayShift(frame, traits)
+        val bigEndian = traits?.byteOrder == ByteOrder.BIG_ENDIAN
         ensure(grey8, w * h).also { grey8 = it }
 
         if (is10) {
             for (i in 0 until w * h) {
-                val idx = i * 2
-                grey8[i] = if (idx + 1 < src.size) {
-                    (((src[idx].toInt() and 0xFF) or ((src[idx + 1].toInt() and 0xFF) shl 8)) shr shf)
-                        .coerceIn(0, 255).toByte()
-                } else 0
+                grey8[i] = sample8(src, i, true, shf, bigEndian).toByte()
             }
         } else {
             val copyLen = (w * h).coerceAtMost(src.size)

@@ -163,7 +163,9 @@ fun ControlPanel(
     onMountHome: () -> Unit = {},
     onMountSetHome: () -> Unit = {},
     onOpenLiveStack: () -> Unit = {},
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onEafSettings: (() -> Unit)? = null,
+    showLegacyFilterSettings: Boolean = true
 ) {
     val exposureMin by exposureMinFlow.collectAsState()
     val exposureMax by exposureMaxFlow.collectAsState()
@@ -180,7 +182,6 @@ fun ControlPanel(
     var mountExpanded by remember { mutableStateOf(true) }
     val decreaseCoarseFocusDescription = stringResource(R.string.decrease_coarse_focus)
     val decreaseFineFocusDescription = stringResource(R.string.decrease_fine_focus)
-    val haltOrZeroFocusDescription = stringResource(R.string.halt_or_zero_focus)
     val increaseFineFocusDescription = stringResource(R.string.increase_fine_focus)
     val increaseCoarseFocusDescription = stringResource(R.string.increase_coarse_focus)
     val decreaseCoolingDurationDescription = stringResource(R.string.decrease_cooling_duration)
@@ -287,7 +288,7 @@ fun ControlPanel(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (showLegacyFilterSettings) Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(stringResource(R.string.bidirectional), fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Switch(
                                 checked = fwBidirectional,
@@ -392,7 +393,7 @@ fun ControlPanel(
                         Text(stringResource(R.string.pos_format, eafPosition, eafInfo.maxPosition),
                             fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         IconButton(
-                            onClick = { showEafEditDialog = true },
+                            onClick = onEafSettings ?: { showEafEditDialog = true },
                             modifier = Modifier.size(24.dp)
                         ) {
                             Icon(Icons.Default.Edit, stringResource(R.string.eaf_settings),
@@ -437,14 +438,7 @@ fun ControlPanel(
                             modifier = Modifier.size(32.dp).semantics { contentDescription = decreaseFineFocusDescription },
                             contentPadding = PaddingValues(0.dp)
                         ) { Text("<", fontSize = 10.sp) }
-                        FilledTonalButton(
-                            onClick = { if (eafMoving) onEafHalt() else onEafSetZero() },
-                            modifier = Modifier.size(32.dp).semantics { contentDescription = haltOrZeroFocusDescription },
-                            contentPadding = PaddingValues(0.dp),
-                            colors = if (eafMoving) ButtonDefaults.filledTonalButtonColors(
-                                containerColor = MaterialTheme.colorScheme.errorContainer
-                            ) else ButtonDefaults.filledTonalButtonColors()
-                        ) { Text(if (eafMoving) "■" else "0", fontSize = 10.sp) }
+                        FocuserStopButton(eafMoving, onEafHalt, Modifier.size(32.dp))
                         FilledTonalButton(
                             onClick = { onEafMoveRelative(eafInfo.fineStep) },
                             modifier = Modifier.size(32.dp).semantics { contentDescription = increaseFineFocusDescription },

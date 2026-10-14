@@ -8,18 +8,26 @@
     const canvas = document.getElementById("stel-canvas");
     let stel = null;
     let lastSelectionKey = "";
+    let lastViewKey = "";
+    let lastViewPublishedAt = 0;
     let manualCenterTarget = null;
     let pendingObserver = null;
     let pendingTimeMillis = null;
     let pendingMountCoordinates = null;
+    let pendingPointingCoordinates = null;
     let pendingAtmosphereVisible = false;
+    // Android passes the saved choice with the document URL so a disabled backdrop
+    // does not flash on while WASM initializes, before the native Ready callback.
+    let pendingLandscapeVisible = new URL(window.location.href).searchParams.get("landscape") !== "0";
+    let followPhone = false;
+    let pendingPhoneOrientation = null;
     let pendingOnlineSurveyEnabled = false;
     let onlineSurveyAdded = false;
     let pendingFovDegrees = null;
     let pendingCurrentFov = null;
     let pendingTargetFov = null;
     let followMount = false;
-    // While a finger/mouse is down, mount RA/Dec polls must not yank the view.
+    // While a finger/mouse is down, optical-path updates must not yank the view.
     let userPointerActive = false;
     const PAN_PAUSE_FOLLOW_PX = 16;
     let pendingSkyAppearance = {
@@ -49,8 +57,8 @@
             lines.visible = true;
             // Of-date RA/Dec matches the rest of the app (JNOW / 赤道仪坐标).
             setChildVisible(lines, "equatorial_jnow", pendingSkyAppearance.equatorialGrid);
-            setChildVisible(lines, "azimuthal", pendingSkyAppearance.azimuthalGrid);
-            setChildVisible(lines, "meridian", pendingSkyAppearance.meridian);
+            setChildVisible(lines, "azimuthal", pendingSkyAppearance.azimuthalGrid && pendingObserver);
+            setChildVisible(lines, "meridian", pendingSkyAppearance.meridian && pendingObserver);
             setChildVisible(lines, "ecliptic", pendingSkyAppearance.ecliptic);
         }
         const constellations = stel.core.constellations;
@@ -117,11 +125,22 @@
     }
 
     function applyObserver(observer) {
-        if (!observer) return;
+        if (!observer) {
+            if (stel && stel.core) {
+                if (stel.core.atmosphere) stel.core.atmosphere.visible = false;
+            }
+            applyLandscapeVisibility();
+            applySkyAppearance();
+            stopInvalidPointingFollow();
+            return;
+        }
         pendingTimeMillis = Number(observer.epochMillis);
         if (!stel) return;
         stel.observer.latitude = observer.latitudeDeg * stel.D2R;
         stel.observer.longitude = observer.longitudeDeg * stel.D2R;
+        applyLandscapeVisibility();
+        applyAtmosphereVisibility(pendingAtmosphereVisible);
+        applySkyAppearance();
         applyTime(pendingTimeMillis);
     }
 
@@ -142,14 +161,65 @@
             "赤道仪  RA " + coordinates.raHours.toFixed(5) +
             " h  Dec " + coordinates.decDegrees.toFixed(4) + "°";
         mountPositionElement.style.display = "block";
-        if (followMount && stel && !userPointerActive) {
-            centerOnRaDec(coordinates.raHours, coordinates.decDegrees, 0);
+    }
+
+    function stopInvalidPointingFollow() {
+        if (!followMount) return;
+        followMount = false;
+        notifyAndroid("onFollowMountChanged", "false");
+    }
+
+    function usablePointingCoordinates() {
+        const value = pendingPointingCoordinates;
+        const now = Date.now();
+        if (!pendingObserver || !value || !isFinite(value.raHours) || !isFinite(value.decDegrees) ||
+            value.decDegrees < -90 || value.decDegrees > 90 ||
+            (value.frame !== "ICRF" && value.frame !== "JNOW") ||
+            !isFinite(value.absoluteUtcMs) || !isFinite(value.estimateUtcMs) ||
+            now - value.absoluteUtcMs < 0 || now - value.absoluteUtcMs > 30000 ||
+            now - value.estimateUtcMs < 0 || now - value.estimateUtcMs > 3000) {
+            stopInvalidPointingFollow();
+            return null;
+        }
+        return value;
+    }
+
+    function applyPointingCoordinates() {
+        const value = usablePointingCoordinates();
+        if (value && followMount && stel && !userPointerActive) {
+            centerOnRaDec(value.raHours, value.decDegrees, 0, value.frame);
         }
     }
 
     function applyAtmosphereVisibility(visible) {
         if (!stel) return;
-        stel.core.atmosphere.visible = Boolean(visible);
+        stel.core.atmosphere.visible = Boolean(visible && pendingObserver);
+    }
+
+    function applyLandscapeVisibility() {
+        // This is a simulated visual backdrop, independent of a real observing site.
+        // Local grids, atmosphere and optical pointing still require pendingObserver.
+        if (stel && stel.core) setChildVisible(stel.core, "landscapes", pendingLandscapeVisible);
+    }
+
+    function stopPhoneFollow() {
+        if (!followPhone) return;
+        followPhone = false;
+        pendingPhoneOrientation = null;
+        notifyAndroid("onPhoneFollowChanged", "false");
+    }
+
+    function applyPhoneOrientation() {
+        const value = pendingPhoneOrientation;
+        if (!followPhone || !value || !stel || userPointerActive) return false;
+        if (Date.now() - value.utcMs < 0 || Date.now() - value.utcMs > 1000) {
+            stopPhoneFollow();
+            return false;
+        }
+        // The upstream OBSERVED frame is north / east / up (frames.h).
+        // This updates the browsing camera only, never an optical-path observation.
+        stel.lookAt(stel.s2c(value.azimuthDeg * stel.D2R, value.altitudeDeg * stel.D2R), 0);
+        return true;
     }
 
     function applyOnlineSurveyEnabled(enabled) {
@@ -569,20 +639,22 @@
     }
 
     function pauseFollowAfterUserPan() {
+        stopPhoneFollow();
         if (!followMount) return;
         followMount = false;
         notifyAndroid("onFollowMountChanged", "false");
     }
 
     /**
-     * Follow-mount is for keeping the FOV box on the telescope. Dragging to
-     * find a target must pause it; otherwise every mount poll recenters.
+     * Follow keeps the selected, valid optical-path source in view. A mount
+     * model is diagnostic only. Dragging to find another target pauses follow.
      */
     function installFollowPauseOnPan() {
         if (!canvas) return;
         let startX = 0;
         let startY = 0;
         let moved = false;
+        let pinchGesture = false;
 
         function pointerDown(x, y) {
             userPointerActive = true;
@@ -600,16 +672,19 @@
             pauseFollowAfterUserPan();
         }
 
-        function pointerUp() {
-            userPointerActive = false;
+        function pointerUp(event) {
+            // Do not resume mount polls between the two fingers lifting after a pinch.
+            userPointerActive = Boolean(event && event.touches && event.touches.length);
+            if (!userPointerActive) pinchGesture = false;
         }
 
         canvas.addEventListener("touchstart", function (event) {
+            if (event.touches.length > 1) { pinchGesture = true; userPointerActive = true; return; }
             if (event.touches.length !== 1) return;
             pointerDown(event.touches[0].clientX, event.touches[0].clientY);
         }, {passive: true});
         canvas.addEventListener("touchmove", function (event) {
-            if (event.touches.length !== 1) return;
+            if (pinchGesture || event.touches.length !== 1) return;
             pointerMove(event.touches[0].clientX, event.touches[0].clientY);
         }, {passive: true});
         canvas.addEventListener("touchend", pointerUp, {passive: true});
@@ -731,6 +806,7 @@
             // pointAndLock resolves the position inside the engine, so the view
             // and the reported target cannot drift apart.
             stel.pointAndLock(obj, 1);
+            publishSelection(true);
             return true;
         }
         return false;
@@ -787,7 +863,7 @@
         };
     }
 
-    function publishSelection() {
+    function publishSelection(explicitSelection) {
         let target;
         try {
             target = selectedTarget();
@@ -799,16 +875,37 @@
             if (manualCenterTarget) return;
             if (lastSelectionKey) {
                 lastSelectionKey = "";
-                notifyAndroid("onSelectionCleared", "");
             }
             return;
         }
         manualCenterTarget = null;
         const key = target.name + "|" + target.raHours.toFixed(8) + "|" +
             target.decDegrees.toFixed(8);
-        if (key === lastSelectionKey) return;
+        if (key === lastSelectionKey && !explicitSelection) return;
         lastSelectionKey = key;
-        notifyAndroid("onTargetSelected", JSON.stringify(target));
+        notifyAndroid(explicitSelection ? "onTargetSelected" : "onTargetUpdated", JSON.stringify(target));
+    }
+
+    function publishCanvasTap() {
+        if (selectedTarget()) publishSelection(true);
+        else notifyAndroid("onBlankTapped", "");
+    }
+
+    function publishView() {
+        const now = Date.now();
+        if (now - lastViewPublishedAt < 100) return;
+        const center = targetAtMapCenter("");
+        const fovDegrees = coreFovDegrees();
+        if (!center || !(fovDegrees > 0) || !isFinite(fovDegrees)) return;
+        const key = center.raHours.toFixed(6) + "|" + center.decDegrees.toFixed(5) + "|" + fovDegrees.toFixed(5);
+        if (key === lastViewKey) return;
+        lastViewKey = key;
+        lastViewPublishedAt = now;
+        notifyAndroid("onViewChanged", JSON.stringify({
+            raHours: center.raHours,
+            decDegrees: center.decDegrees,
+            fovDegrees: fovDegrees
+        }));
     }
 
     window.MercStarMap = {
@@ -824,12 +921,18 @@
             return true;
         },
         setObserver: function (latitudeDeg, longitudeDeg, epochMillis) {
+            if (!isFinite(Number(latitudeDeg)) || !isFinite(Number(longitudeDeg)) ||
+                Math.abs(Number(latitudeDeg)) > 90 || Math.abs(Number(longitudeDeg)) > 180) return false;
             pendingObserver = {
                 latitudeDeg: Number(latitudeDeg),
                 longitudeDeg: Number(longitudeDeg),
                 epochMillis: Number(epochMillis)
             };
             applyObserver(pendingObserver);
+        },
+        clearObserver: function () {
+            pendingObserver = null;
+            applyObserver(null);
         },
         setTime: function (epochMillis) {
             applyTime(epochMillis);
@@ -849,18 +952,47 @@
             // A drag already paused follow; ignore a stale Android re-enable
             // until the pointer is up and the toggle callback has landed.
             if (userPointerActive && enabled) return;
-            followMount = Boolean(enabled);
-            if (followMount && pendingMountCoordinates && !userPointerActive) {
-                centerOnRaDec(
-                    pendingMountCoordinates.raHours,
-                    pendingMountCoordinates.decDegrees,
-                    0
-                );
-            }
+            const requested = Boolean(enabled);
+            if (requested) stopPhoneFollow();
+            followMount = false;
+            followMount = requested && Boolean(usablePointingCoordinates());
+            if (requested && !followMount) notifyAndroid("onFollowMountChanged", "false");
+            applyPointingCoordinates();
+        },
+        setPointingCoordinates: function (raHours, decDegrees, frame, absoluteUtcMs, estimateUtcMs) {
+            pendingPointingCoordinates = {raHours: Number(raHours), decDegrees: Number(decDegrees),
+                frame: String(frame), absoluteUtcMs: Number(absoluteUtcMs), estimateUtcMs: Number(estimateUtcMs)};
+            applyPointingCoordinates();
+        },
+        clearPointingCoordinates: function () {
+            pendingPointingCoordinates = null;
+            stopInvalidPointingFollow();
+        },
+        centerOnPointing: function (duration) {
+            const value = usablePointingCoordinates();
+            if (!value || userPointerActive) return false;
+            return centerOnRaDec(value.raHours, value.decDegrees, duration, value.frame);
         },
         setAtmosphereVisible: function (visible) {
             pendingAtmosphereVisible = Boolean(visible);
             applyAtmosphereVisibility(pendingAtmosphereVisible);
+        },
+        setLandscapeVisible: function (visible) {
+            pendingLandscapeVisible = Boolean(visible);
+            applyLandscapeVisibility();
+        },
+        setPhoneFollow: function (enabled) {
+            if (userPointerActive && enabled) return;
+            followPhone = Boolean(enabled);
+            pendingPhoneOrientation = null;
+            if (followPhone) stopInvalidPointingFollow();
+        },
+        setPhoneOrientation: function (azimuthDeg, altitudeDeg, utcMs) {
+            const azimuth = Number(azimuthDeg), altitude = Number(altitudeDeg), timestamp = Number(utcMs);
+            if (!isFinite(azimuth) || !isFinite(altitude) || altitude < -90 || altitude > 90 ||
+                !isFinite(timestamp)) return false;
+            pendingPhoneOrientation = {azimuthDeg: azimuth, altitudeDeg: altitude, utcMs: timestamp};
+            return applyPhoneOrientation();
         },
         setNightVision: function (enabled) {
             document.documentElement.classList.toggle("night-vision", Boolean(enabled));
@@ -932,12 +1064,13 @@
                 applyFovOverlay(fovCurrentElement, pendingCurrentFov);
             }
         },
-        setCurrentRectFovOverlay: function (widthDeg, heightDeg, alsoZoom, label, raHours, decDegrees, frame) {
+        setCurrentRectFovOverlay: function (widthDeg, heightDeg, alsoZoom, label, raHours, decDegrees, frame, positionAngleDeg) {
             const anchor = parseAnchor(raHours, decDegrees, frame);
             pendingCurrentFov = {
                 shape: "rect",
                 widthDeg: Number(widthDeg),
                 heightDeg: Number(heightDeg),
+                positionAngleDeg: Number(positionAngleDeg) || 0,
                 label: label || "",
                 raHours: anchor.raHours,
                 decDegrees: anchor.decDegrees,
@@ -953,6 +1086,7 @@
             pendingCurrentFov = null;
             applyFovOverlay(fovCurrentElement, null);
         },
+        zoomToTargetFov: function () { zoomToTargetFov(); },
         setTargetCircleFovOverlay: function (fovDegrees, label, raHours, decDegrees, frame) {
             const anchor = parseAnchor(raHours, decDegrees, frame);
             pendingTargetFov = {
@@ -1045,6 +1179,14 @@
 
     syncCanvasSize();
     installFollowPauseOnPan();
+    if (typeof window.setInterval === "function") {
+        // Do not retain a valid-looking source if Android updates stop arriving.
+        window.setInterval(function () {
+            if (followMount) usablePointingCoordinates();
+            if (followPhone && pendingPhoneOrientation && Date.now() - pendingPhoneOrientation.utcMs > 1000)
+                stopPhoneFollow();
+        }, 1000);
+    }
     window.addEventListener("resize", syncCanvasSize);
     if (window.visualViewport) {
         window.visualViewport.addEventListener("resize", syncCanvasSize);
@@ -1061,8 +1203,10 @@
             try {
                 engine.core.atmosphere.visible = false;
                 installTouchRecovery(engine);
+                if (window.IndigoSkyTap) window.IndigoSkyTap.install(canvas, publishCanvasTap);
                 addDataSources(engine);
                 applyObserver(pendingObserver);
+                applyPointingCoordinates();
                 applyTime(pendingTimeMillis);
                 applyMountCoordinates(pendingMountCoordinates);
                 applyAtmosphereVisibility(pendingAtmosphereVisible);
@@ -1074,6 +1218,7 @@
                 engine.change(function () {
                     window.requestAnimationFrame(function () {
                         publishSelection();
+                        publishView();
                         // Pinch-zoom / zoomTo animations mutate core.fov;
                         // refresh is cheap (deduped) and keeps overlays locked
                         // to a fixed angular size on the sky.

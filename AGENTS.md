@@ -64,6 +64,16 @@ Product and interaction decisions that must not regress (star-map follow, global
 STOP vs manual pad, zero-position wording, equatorial vs alt-az, plate-solve
 optics) are in `docs/DESIGN_NOTES.md`.
 
+## Interaction priorities
+
+Interaction quality is the next P0 product workstream. For new or changed UI,
+follow `docs/INTERACTION_GUIDELINES.md`: task-based ownership, contextual controls,
+predictable navigation/back behavior, shared task state, and progressive disclosure.
+The first application is `docs/OBSERVING_WORKFLOW_DESIGN.md`; implementation and
+acceptance remain tracked in `TODO.md`. Fix device safety, crashes, data loss, and
+scientific correctness when urgent. Do not add incompatible entry points while
+the interaction workstream is pending, or mark planned UX as implemented.
+
 ## In-app updates
 
 The application updates from the newest published GitHub Release. Every release

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="external_media_title">Open image or recording</string>
+    <string name="external_media_up">Open Images in Indigo Observatory</string>
+    <string name="external_media_importing">Adding a copy to Images…</string>
+    <string name="external_media_return">Return to previous app</string>
+    <string name="external_media_missing">No readable file was provided. Open or share one image or recording.</string>
+    <string name="external_media_unsupported">This viewer supports SER, PSER, FITS, JPG and PNG files.</string>
+    <string name="external_media_permission">The file cannot be read. Open it again from the app that owns it.</string>
+    <string name="external_media_space">There is not enough free storage to add this file. Free some space and retry.</string>
+    <string name="external_media_large">This file exceeds the import budget: recordings up to 8 GB, images up to 128 MB, FITS previews up to 32 MB.</string>
+    <string name="external_media_invalid">The file is incomplete, unsupported, or too large to preview safely. Open another image or recording.</string>
+    <string name="external_media_copy_failed">The file could not be added. Check that it is still available and retry.</string>
+</resources>

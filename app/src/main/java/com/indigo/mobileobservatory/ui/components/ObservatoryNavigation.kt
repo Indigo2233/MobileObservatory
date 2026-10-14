@@ -2,6 +2,8 @@ package com.indigo.mobileobservatory.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,6 +25,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.indigo.mobileobservatory.ui.theme.ObservatoryTheme
@@ -83,8 +88,9 @@ private fun BottomBarItem(
     Column(
         modifier = modifier
             .fillMaxHeight()
-            .clickable { onClick() }
-            .semantics { contentDescription = entry.contentDescription },
+            .clickable(role = Role.Tab) { onClick() }
+            .testTag("workspace-${entry.key}")
+            .semantics { contentDescription = entry.contentDescription; this.selected = selected },
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
@@ -138,6 +144,7 @@ fun ObservatoryNavRail(
                 modifier = Modifier
                     .fillMaxHeight()
                     .width(if (showLabels) 92.dp else 64.dp)
+                    .verticalScroll(rememberScrollState())
                     .padding(vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
@@ -168,8 +175,9 @@ private fun RailItem(
             .fillMaxWidth()
             .height(if (showLabel) 64.dp else 52.dp)
             .padding(horizontal = 8.dp)
-            .clickable { onClick() }
-            .semantics { contentDescription = entry.contentDescription },
+            .clickable(role = Role.Tab) { onClick() }
+            .testTag("workspace-${entry.key}")
+            .semantics { contentDescription = entry.contentDescription; this.selected = selected },
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {

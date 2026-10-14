@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="external_media_title">打开图片或录像</string>
+    <string name="external_media_up">前往靛空台的影像</string>
+    <string name="external_media_importing">正在添加副本到影像…</string>
+    <string name="external_media_return">返回之前的应用</string>
+    <string name="external_media_missing">没有提供可读文件。请打开或分享一张图片或一段录像。</string>
+    <string name="external_media_unsupported">此查看器支持 SER、PSER、FITS、JPG 和 PNG 文件。</string>
+    <string name="external_media_permission">无法读取文件。请从原应用重新打开它。</string>
+    <string name="external_media_space">存储空间不足。释放一些空间后重试。</string>
+    <string name="external_media_large">文件超过导入容量限制：录像 8 GB、图片 128 MB、FITS 预览 32 MB。</string>
+    <string name="external_media_invalid">文件不完整、不支持，或超出安全预览范围。请选择其他图片或录像。</string>
+    <string name="external_media_copy_failed">无法添加文件。请确认文件仍可访问，然后重试。</string>
+</resources>

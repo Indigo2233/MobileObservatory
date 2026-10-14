@@ -46,9 +46,9 @@ object FitsHeaderReader {
     private fun readText(file: File): Map<String, String> {
         val cards = mutableMapOf<String, String>()
         runCatching { file.readLines() }.getOrDefault(emptyList()).forEach { line ->
-            val key = line.take(8).trim()
             val separator = line.indexOf('=')
-            if (key.isNotEmpty() && separator >= 0) {
+            val key = if (separator >= 0) line.substring(0, separator).trim() else ""
+            if (key.isNotEmpty() && key.length <= 8 && separator >= 0) {
                 cards[key] = line.substring(separator + 1).substringBefore('/').trim().trim('\'').trim()
             }
         }

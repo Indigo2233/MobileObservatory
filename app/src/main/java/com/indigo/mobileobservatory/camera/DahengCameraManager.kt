@@ -800,6 +800,14 @@ class DahengCameraManager(
         Log.i(TAG, "Uploading QHY firmware: fd=$fd VID=0x${vid.toString(16)} PID=0x${pid.toString(16)}")
 
         Thread(Runnable {
+            CameraSdkLease.process.withSdkLock("qhy") {
+                if (CameraSdkLease.process.isClaimed("qhy")) {
+                    abandonReservation()
+                    _connectionState.value = ConnectionState.Error(context.getString(com.indigo.mobileobservatory.R.string.wfa_sdk_single_camera))
+                    connection.close()
+                    qhyFirmwareUploading = false
+                    return@withSdkLock
+                }
             try {
                 if (!qhySdkInitialized) {
                     val initRet = QhyccdJni.initResource()
@@ -807,7 +815,7 @@ class DahengCameraManager(
                         Log.e(TAG, "InitQHYCCDResource failed during firmware upload: $initRet")
                         connection.close()
                         qhyFirmwareUploading = false
-                        return@Runnable
+                        return@withSdkLock
                     }
                     qhySdkInitialized = true
                 }
@@ -822,7 +830,7 @@ class DahengCameraManager(
                     Log.e(TAG, "QHY firmware upload failed: ret=$fwRet PID=0x${pid.toString(16)}")
                     _connectionState.value = ConnectionState.Error(
                         "QHY firmware upload failed (ret=$fwRet) 鈥?SDK may lack firmware for this model")
-                    return@Runnable
+                    return@withSdkLock
                 }
 
                 _connectionState.value = ConnectionState.Connecting
@@ -844,7 +852,7 @@ class DahengCameraManager(
                     Log.e(TAG, "QHY camera did not re-enumerate after firmware upload")
                     _connectionState.value = ConnectionState.Error(
                         "QHY camera did not re-enumerate after firmware upload")
-                    return@Runnable
+                    return@withSdkLock
                 }
 
                 Log.i(TAG, "QHY re-enumerated after firmware upload: PID=0x${reloaded.productId.toString(16)}")
@@ -856,6 +864,7 @@ class DahengCameraManager(
             } catch (e: Throwable) {
                 Log.e(TAG, "QHY firmware upload failed: ${e.message}", e)
                 qhyFirmwareUploading = false
+            }
             }
         }, "QHY-FirmwareThread").start()
     }
@@ -908,6 +917,14 @@ class DahengCameraManager(
         Log.i(TAG, "Opening QHY: fd=$fd VID=0x${vid.toString(16)} PID=0x${pid.toString(16)}")
 
         Thread(Runnable {
+            CameraSdkLease.process.withSdkLock("qhy") {
+                if (CameraSdkLease.process.isClaimed("qhy")) {
+                    abandonReservation()
+                    _connectionState.value = ConnectionState.Error(context.getString(com.indigo.mobileobservatory.R.string.wfa_sdk_single_camera))
+                    connection.close()
+                    qhyFirmwareUploading = false
+                    return@withSdkLock
+                }
             try {
                 if (!qhySdkInitialized) {
                     val initRet = QhyccdJni.initResource()
@@ -915,7 +932,7 @@ class DahengCameraManager(
                         Log.e(TAG, "InitQHYCCDResource failed: $initRet")
                         _connectionState.value = ConnectionState.Error("QHY SDK init failed")
                         closeQhyUsbConnection()
-                        return@Runnable
+                        return@withSdkLock
                     }
                     qhySdkInitialized = true
                 }
@@ -936,7 +953,7 @@ class DahengCameraManager(
                     abandonReservation()
                     _connectionState.value = ConnectionState.Error("No QHY camera found after scan")
                     closeQhyUsbConnection()
-                    return@Runnable
+                    return@withSdkLock
                 }
 
                 val cameraId = QhyccdJni.getId(0)
@@ -962,16 +979,19 @@ class DahengCameraManager(
                 _connectionState.value = ConnectionState.Error("QHY open failed: ${e.message}")
                 closeQhyUsbConnection()
             }
+            }
         }, "QHY-OpenThread").start()
     }
 
     private fun closeQhyUsbConnection() {
         try { qhyUsbConnection?.close() } catch (_: Throwable) {}
         qhyUsbConnection = null
-        if (qhySdkInitialized) {
+        CameraSdkLease.process.withSdkLock("qhy") {
+        if (qhySdkInitialized && !CameraSdkLease.process.isClaimed("qhy")) {
             try { QhyccdJni.releaseResource() } catch (_: Throwable) {}
-            qhySdkInitialized = false
             Log.i(TAG, "QHY SDK resource released for clean reconnect")
+        }
+        qhySdkInitialized = false
         }
     }
 
@@ -1022,6 +1042,7 @@ class DahengCameraManager(
     }
 
     private var zwoUsbConnection: android.hardware.usb.UsbDeviceConnection? = null
+    private var zwoUsbRegisteredDevice: UsbDevice? = null
 
     private fun openZwoDevice(usbDevice: UsbDevice) {
         try {
@@ -1049,7 +1070,7 @@ class DahengCameraManager(
             val fd = connection.fileDescriptor
             Log.i(TAG, "ZWO USB fd=$fd, installing hooks for libusb redirection")
 
-            UsbHelper.registerUsbFd(context, usbDevice, fd)
+            if (UsbHelper.registerUsbFd(context, usbDevice, fd)) zwoUsbRegisteredDevice = usbDevice
             UsbHelper.installZwoHooks()
 
             com.zwo.ASIUSBManager.initContext(context)
@@ -1105,7 +1126,8 @@ class DahengCameraManager(
     private fun closeZwoUsbConnection() {
         try { zwoUsbConnection?.close() } catch (_: Throwable) {}
         zwoUsbConnection = null
-        UsbHelper.clearUsbFds()
+        zwoUsbRegisteredDevice?.let(UsbHelper::unregisterUsbFd)
+        zwoUsbRegisteredDevice = null
     }
 
     private fun requestDslrPermission(usbDevice: UsbDevice) {

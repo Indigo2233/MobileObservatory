@@ -360,7 +360,6 @@
     <string name="star_map_search_empty">无匹配天体</string>
     <string name="star_map_use_center">取星图中心</string>
     <string name="star_map_custom_target">自定义目标</string>
-    <string name="lock_star_map_overlays">锁定浮层</string>
     <string name="show_star_map_controls">显示星图控件</string>
     <string name="expand_target_details">展开或收起目标详情</string>
     <string name="select_celestial_target">点击天体以选择目标</string>

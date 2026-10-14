@@ -10,6 +10,8 @@ import android.content.pm.PackageManager
 import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbManager
 import android.os.Build
+import android.os.SystemClock
+import com.indigo.mobileobservatory.pointing.PointingMountCapabilities
 import android.util.Log
 import com.indigo.mobileobservatory.util.FileLogger
 import com.hoho.android.usbserial.driver.UsbSerialPort
@@ -175,7 +177,14 @@ private data class SerialLineMode(
     val delayMs: Long
 )
 
-class Lx200MountController {
+class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClock.elapsedRealtime() }) {
+    private val pointingAccess = MountPointingAccess()
+    val accessMode get() = pointingAccess.accessMode
+    val pointingCapabilities get() = pointingAccess.capabilities
+    val modelRevision get() = pointingAccess.revision
+    val axisObservation get() = pointingAccess.axisObservation
+    fun setAccessMode(mode: MountAccessMode) = pointingAccess.setAccessMode(mode)
+    private var injectedTestSession = false
     private var socket: Socket? = null
     private var input: BufferedInputStream? = null
     private var output: BufferedOutputStream? = null
@@ -191,18 +200,28 @@ class Lx200MountController {
     var mountModel: String? = null
         private set
     val supportsSync: Boolean
-        get() = skyWatcherAdapter?.supportsSync
-            ?: (activeProtocol != MountProtocolType.SKYWATCHER)
+        get() = pointingCapabilities.value.sync
     val supportsTimeSync: Boolean
-        get() = skyWatcherAdapter?.supportsTimeSync
-            ?: (activeProtocol == MountProtocolType.LX200_ONSTEP ||
-                activeProtocol == MountProtocolType.IOPTRON)
+        get() = pointingCapabilities.value.writeTime
 
     val isConnected: Boolean
         get() = (socket?.isConnected == true && socket?.isClosed == false) ||
             serialPort != null ||
             (bluetoothSocket?.isConnected == true) ||
-            (synScanSocket?.isClosed == false)
+            (synScanSocket?.isClosed == false) || injectedTestSession
+
+    private fun publishPointingConnection() {
+        if (!isConnected || activeProtocol == MountProtocolType.AUTO) return
+        val adapter = skyWatcherAdapter
+        val capabilities = adapter?.pointingCapabilities ?: PointingMountCapabilities(readCoordinates = true,
+            goto = true, sync = true, tracking = true, manualMove = true, home = true, setHome = true,
+            readSite = true, writeSite = true, readTime = true, writeTime = true)
+        pointingAccess.connected(capabilities, adapter?.coordinateMode ?: activeProtocol.name)
+    }
+    internal fun attachSessionForTesting(session: SkyWatcherMountSession) {
+        skyWatcherAdapter = session; injectedTestSession = true; activeProtocol = MountProtocolType.SKYWATCHER
+        mountModel = session.modelName; publishPointingConnection()
+    }
 
     suspend fun connect(
         host: String,
@@ -314,6 +333,7 @@ class Lx200MountController {
                         skyWatcherAdapter = adapter
                         activeProtocol = MountProtocolType.SKYWATCHER
                         mountModel = adapter.modelName
+                        publishPointingConnection()
                         return@withContext adapter.readCoordinates()
                     }
                     drainSerialInput(port)
@@ -363,6 +383,7 @@ class Lx200MountController {
             activeProtocol = MountProtocolType.SKYWATCHER
             mountModel = adapter.modelName
             udp.soTimeout = SERIAL_TIMEOUT_MS
+            publishPointingConnection()
             adapter.readCoordinates()
         } catch (e: Throwable) {
             udp.close()
@@ -470,6 +491,8 @@ class Lx200MountController {
     }
 
     private fun closeTransports() {
+        pointingAccess.disconnected()
+        injectedTestSession = false
         val oldInput = input
         val oldOutput = output
         val oldSocket = socket
@@ -499,7 +522,14 @@ class Lx200MountController {
     }
 
     suspend fun readCoordinates(): MountCoordinates = withContext(Dispatchers.IO) {
-        skyWatcherAdapter?.let { return@withContext it.readCoordinates() }
+        publishPointingConnection()
+        val revision = modelRevision.value
+        val started = elapsedRealtime()
+        skyWatcherAdapter?.let {
+            val snapshot = it.readCoordinatesWithAxes()
+            pointingAccess.observe(snapshot.axes, revision, started, elapsedRealtime())
+            return@withContext snapshot.coordinates
+        }
         if (activeProtocol == MountProtocolType.IOPTRON) {
             val response = sendFixedCommand(":GEP#", 20)
             return@withContext MountProtocolCodec.parseIoptronCoordinates(response)
@@ -511,7 +541,7 @@ class Lx200MountController {
     }
 
     fun refreshTracking() {
-        skyWatcherAdapter?.refreshTracking()
+        if (accessMode.value == MountAccessMode.READ_WRITE) skyWatcherAdapter?.refreshTracking()
     }
 
     suspend fun readSite(): MountSite = withContext(Dispatchers.IO) {
@@ -529,6 +559,9 @@ class Lx200MountController {
     }
 
     suspend fun setSite(site: MountSite) = withContext(Dispatchers.IO) {
+        pointingAccess.requireWritable()
+        check(pointingCapabilities.value.writeSite) { "This protocol uses an application site configuration, not a mount site write." }
+        pointingAccess.modelChanged()
         skyWatcherAdapter?.let {
             it.setSite(site)
             return@withContext
@@ -550,6 +583,15 @@ class Lx200MountController {
         if (!latOk || !lonOk) error("Mount rejected site coordinates.")
     }
 
+    suspend fun setLocalSiteConfiguration(site: MountSite) = withContext(Dispatchers.IO) {
+        require(site.latitudeDeg.isFinite() && site.latitudeDeg in -90.0..90.0 &&
+            site.longitudeDeg.isFinite() && site.longitudeDeg in -180.0..180.0) { "Invalid application site." }
+        val adapter = skyWatcherAdapter ?: error("No local-site mount session.")
+        check(adapter.pointingCapabilities.siteUsesLocalConfiguration) { "This protocol reads its site from the mount." }
+        pointingAccess.modelChanged()
+        adapter.setSite(site) // The direct motor adapter only changes its local projection model.
+    }
+
     suspend fun readTime(): MountTime = withContext(Dispatchers.IO) {
         skyWatcherAdapter?.let { return@withContext it.readTime() }
         if (activeProtocol == MountProtocolType.IOPTRON) {
@@ -567,6 +609,8 @@ class Lx200MountController {
     }
 
     suspend fun setTime(time: MountTime) = withContext(Dispatchers.IO) {
+        pointingAccess.requireWritable(); check(pointingCapabilities.value.writeTime) { "Mount time write is unsupported." }
+        pointingAccess.modelChanged()
         skyWatcherAdapter?.let {
             it.setTime(time)
             return@withContext
@@ -611,6 +655,7 @@ class Lx200MountController {
     }
 
     suspend fun slewTo(coordinates: MountCoordinates) = withContext(Dispatchers.IO) {
+        pointingAccess.requireWritable()
         require(coordinates.raHours.isFinite()) { "Target RA is invalid." }
         require(coordinates.decDeg.isFinite() && coordinates.decDeg in -90.0..90.0) {
             "Target Dec is invalid."
@@ -648,6 +693,8 @@ class Lx200MountController {
      * Does not move the mount.
      */
     suspend fun syncTo(coordinates: MountCoordinates) = withContext(Dispatchers.IO) {
+        pointingAccess.requireWritable(); check(supportsSync) { "Mount SYNC is unsupported." }
+        pointingAccess.modelChanged()
         require(coordinates.raHours.isFinite()) { "Sync RA is invalid." }
         require(coordinates.decDeg.isFinite() && coordinates.decDeg in -90.0..90.0) {
             "Sync Dec is invalid."
@@ -691,6 +738,7 @@ class Lx200MountController {
     }
 
     suspend fun startMove(direction: MountDirection) = withContext(Dispatchers.IO) {
+        pointingAccess.requireWritable()
         FileLogger.i(TAG, "Mount manual move start ${direction.name} command=${direction.command}")
         skyWatcherAdapter?.let {
             it.startMove(direction)
@@ -725,7 +773,7 @@ class Lx200MountController {
     private fun stopMoveBlocking(direction: MountDirection? = null) {
         FileLogger.i(TAG, "Mount manual move stop ${direction?.name ?: "ALL"}")
         skyWatcherAdapter?.let {
-            it.stopMove(direction)
+            if (accessMode.value == MountAccessMode.READ_ONLY) it.abortMotion() else it.stopMove(direction)
             return
         }
         if (activeProtocol == MountProtocolType.IOPTRON) {
@@ -743,6 +791,7 @@ class Lx200MountController {
     }
 
     suspend fun setMoveRate(rate: MountSlewRate) = withContext(Dispatchers.IO) {
+        pointingAccess.requireWritable()
         FileLogger.i(TAG, "Mount move rate ${rate.name} command=${rate.command}")
         skyWatcherAdapter?.let {
             it.setMoveRate(rate)
@@ -762,7 +811,18 @@ class Lx200MountController {
         if (enabled) MountTrackingRate.SIDEREAL else MountTrackingRate.OFF
     )
 
+    /** A safety stop, including READ_ONLY. Only successful protocol acknowledgements confirm OFF. */
+    suspend fun stopTrackingForSafety() = withContext(Dispatchers.IO) {
+        skyWatcherAdapter?.let { it.setTrackingRate(MountTrackingRate.OFF); return@withContext }
+        if (activeProtocol == MountProtocolType.IOPTRON) {
+            check(sendIoptronOk(":ST0#")) { "Mount did not confirm tracking stop." }
+        } else {
+            check(sendBooleanCommand(":Td#")) { "Mount did not confirm tracking stop." }
+        }
+    }
+
     suspend fun setTrackingRate(rate: MountTrackingRate) = withContext(Dispatchers.IO) {
+        pointingAccess.requireWritable()
         FileLogger.i(TAG, "Mount tracking $rate")
         skyWatcherAdapter?.let {
             it.setTrackingRate(rate)
@@ -793,6 +853,7 @@ class Lx200MountController {
     }
 
     suspend fun goHome() = withContext(Dispatchers.IO) {
+        pointingAccess.requireWritable()
         skyWatcherAdapter?.let {
             it.goHome()
             return@withContext
@@ -805,6 +866,7 @@ class Lx200MountController {
     }
 
     suspend fun setHomeHere() = withContext(Dispatchers.IO) {
+        pointingAccess.requireWritable(); pointingAccess.modelChanged(zero = true)
         skyWatcherAdapter?.let {
             it.setHomeHere()
             return@withContext
@@ -831,7 +893,8 @@ class Lx200MountController {
         val adapter = SkyWatcherMotorAdapter(
             exchange = { payload -> exchangeSkyWatcher(payload, null) },
             site = site ?: MountSite(0.0, 0.0),
-            mode = mode
+            mode = mode,
+            initializeMotors = accessMode.value == MountAccessMode.READ_WRITE
         )
         adapter.open()
         return adapter
@@ -893,6 +956,7 @@ class Lx200MountController {
         payload: ByteArray,
         fixedResponseLength: Int?
     ): ByteArray {
+        pointingAccess.requireWireAllowed(payload)
         val udp = synScanSocket
         if (udp != null) {
             val outgoing = DatagramPacket(payload, payload.size)
@@ -982,6 +1046,7 @@ class Lx200MountController {
 
     private fun sendSerialCommand(port: UsbSerialPort, command: String, timeoutMs: Int): String {
         synchronized(port) {
+            pointingAccess.requireWireAllowed(command.toByteArray(Charsets.US_ASCII))
             port.write(command.toByteArray(Charsets.US_ASCII), SERIAL_TIMEOUT_MS)
         }
         val bytes = ArrayList<Byte>(32)
@@ -1089,12 +1154,14 @@ class Lx200MountController {
         val port = serialPort
         if (port != null) {
             synchronized(port) {
+                pointingAccess.requireWireAllowed(bytes)
                 port.write(bytes, SERIAL_TIMEOUT_MS)
             }
             return
         }
         val out = output ?: error("Mount is not connected.")
         synchronized(out) {
+            pointingAccess.requireWireAllowed(bytes)
             out.write(bytes)
             out.flush()
         }

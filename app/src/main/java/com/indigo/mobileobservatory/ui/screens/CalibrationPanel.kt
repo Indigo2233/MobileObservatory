@@ -41,18 +41,20 @@ internal fun CalibrationPanel(vm: CameraViewModel, onDismiss: () -> Unit, onCame
     val type = typeName?.let(CalibrationType::valueOf)
     var guideStep by rememberSaveable { mutableIntStateOf(-1) }
     var confirmMatching by rememberSaveable { mutableStateOf(false) }
+    var masterCfa by rememberSaveable { mutableStateOf(SerCfaInterpretation.AUTO) }
     var browse by rememberSaveable { mutableStateOf(false) }
     var resetConfirmation by remember { mutableStateOf(false) }
     var deleteId by remember { mutableStateOf<String?>(null) }
     val latestType by rememberUpdatedState(type)
     val latestConfirmed by rememberUpdatedState(confirmMatching)
+    val latestCfa by rememberUpdatedState(masterCfa)
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         val category = latestType
-        if (uri != null && category != null) library.importMaster(category, uri, latestConfirmed)
+        if (uri != null && category != null) library.importMaster(category, uri, latestConfirmed, latestCfa)
     }
     if (browse && type != null) {
         AppRecordingPicker(vm, onDismiss = { browse = false },
-            onSelect = { file -> browse = false; library.createMaster(type, file, confirmMatching) },
+            onSelect = { file -> browse = false; library.createMaster(type, file, confirmMatching, masterCfa) },
             onCamera = { browse = false; onDismiss(); onCamera() })
         return
     }
@@ -161,6 +163,8 @@ internal fun CalibrationPanel(vm: CameraViewModel, onDismiss: () -> Unit, onCame
                             }
                         }
                         if (state.masters.none { it.type == type }) Text(stringResource(R.string.stack_cal_library_empty), style = MaterialTheme.typography.bodySmall)
+                        Text(stringResource(R.string.stack_cfa_master), style = MaterialTheme.typography.labelMedium)
+                        SerCfaSelector(masterCfa, enabled = !state.locked && !state.busy, onSelect = { masterCfa = it })
                         Button(onClick = { browse = true }, enabled = !state.locked && !state.busy, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.stack_cal_from_recording)) }
                         TextButton(onClick = { picker.launch(arrayOf("*/*")) }, enabled = !state.locked && !state.busy) { Text(stringResource(R.string.stack_cal_import_ser)) }
                     }

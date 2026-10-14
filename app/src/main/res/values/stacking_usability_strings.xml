@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="stack_eaa_title">EAA · Live observing</string>
+    <string name="stack_eaa_title">Live stacking</string>
     <string name="stack_eaa_tool_hint">Watch the view improve as exposures accumulate; no video recording needed</string>
     <string name="stack_eaa_intro">Connect the main camera, focus and center the target, then start. No recording is required. Pause and switch to a single frame while focusing or moving; reset for a new target.</string>
     <string name="stack_eaa_ready">Ready to start with the current camera settings.</string>
@@ -28,7 +28,7 @@
     <string name="stack_prepare_ser">Set SER and go to camera</string>
     <string name="stack_refresh_library">Refresh</string>
     <string name="stack_auto_stretch">Auto display stretch</string>
-    <string name="stack_auto_stretch_hint">Only the display changes. EAA adjusts the first accepted stack once; use this button again if needed.</string>
+    <string name="stack_auto_stretch_hint">Only the display changes. Live stacking adjusts the first accepted stack once; use this button again if needed.</string>
     <string name="stack_auto_stretch_unavailable">Not enough varying signal for an automatic stretch. Keep accumulating or adjust brightness manually.</string>
     <string name="stack_show_details">Storage and technical details</string>
     <string name="stack_hide_details">Hide technical details</string>

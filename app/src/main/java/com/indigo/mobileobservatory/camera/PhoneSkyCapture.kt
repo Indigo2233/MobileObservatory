@@ -1,6 +1,7 @@
 package com.indigo.mobileobservatory.camera
 
 import android.content.Context
+import android.app.ActivityManager
 import android.graphics.ImageFormat
 import android.hardware.camera2.CameraAccessException
 import android.hardware.camera2.CameraCaptureSession
@@ -24,12 +25,13 @@ import android.view.Surface
 import com.indigo.mobileobservatory.pointing.CameraLensCalibration
 import com.indigo.mobileobservatory.pointing.LensCalibrationCoordinateDomain
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.Executor
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
-import kotlin.math.min
 
 data class PhoneSkyCaptureResult(
     val frame: FrameData,
@@ -72,7 +74,11 @@ data class PhoneCaptureMetadata(
     val calibrationCoordinateDomain: LensCalibrationCoordinateDomain,
     val lensCalibration: CameraLensCalibration?,
     val exposureMidpointEpochMs: Long?,
-    val fov: CameraFovEstimate?
+    val fov: CameraFovEstimate?,
+    val observationStamp: com.indigo.mobileobservatory.pointing.ObservationStamp? = null,
+    /** Camera2 crop above is unchanged; this is the exact rectangle retained by reduction. */
+    val solveFootprint: CameraPixelFootprint? = null,
+    val solveReduction: PhoneMonoReduction? = null
 )
 
 /** A short-exposure sequence captured while one Camera2 session remains open. */
@@ -130,6 +136,7 @@ class PhoneSkyCapture(private val context: Context) {
         onFrameCaptured: (completed: Int, total: Int) -> Unit = { _, _ -> }
     ): PhoneSkyBurstCaptureResult {
         require(frameCount in 1..16) { "frameCount must be in 1..16" }
+        require(maxLongSide in 1..8192)
         val capability = if (cameraId != null) {
             resolveCapability(cameraId)
         } else {
@@ -160,6 +167,20 @@ class PhoneSkyCapture(private val context: Context) {
             if (useRaw) openCapability.rawOutputSizes else openCapability.yuvOutputSizes,
             maxLongSide
         ) ?: throw IllegalStateException("No suitable output size")
+        val reduction = PhoneMonoFrameConverter.plan(outputSize.width, outputSize.height, maxLongSide, useRaw)
+        val monoBpp = if (useRaw) 2 else 1
+        PhoneSkyResourceBudget.requireCaptureHeap(reduction, monoBpp, frameCount)
+        val memoryInfo = ActivityManager.MemoryInfo()
+        (context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).getMemoryInfo(memoryInfo)
+        if (memoryInfo.lowMemory) throw PhoneSkyResourceException(PhoneSkyResourceLimit.CAMERA_BUFFERS)
+        PhoneSkyResourceBudget.requireNativeCapture(outputSize.width, outputSize.height, useRaw, memoryInfo.availMem)
+        val solveStorage = context.getExternalFilesDir(null) ?: context.filesDir
+        val solveBytes = PhoneSkyResourceBudget.frameBytes(reduction.outputWidth, reduction.outputHeight, monoBpp) * 2 + 1_048_576
+        PhoneSkyResourceBudget.requireStorage(solveStorage.usableSpace, outputSize.width, outputSize.height, 0, solveBytes)
+        if (useRaw && dngOutputDirectory != null) {
+            if (!dngOutputDirectory.isDirectory && !dngOutputDirectory.mkdirs()) throw PhoneSkyResourceException(PhoneSkyResourceLimit.STORAGE)
+            PhoneSkyResourceBudget.requireStorage(dngOutputDirectory.usableSpace, outputSize.width, outputSize.height, frameCount, solveBytes)
+        }
 
         val exposureRange = openChars.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
             ?: openCapability.exposureTimeRangeNs
@@ -177,7 +198,9 @@ class PhoneSkyCapture(private val context: Context) {
         val thread = HandlerThread("PhoneSkyCapture").also { it.start() }
         val handler = Handler(thread.looper)
         val format = if (useRaw) ImageFormat.RAW_SENSOR else ImageFormat.YUV_420_888
-        val reader = ImageReader.newInstance(outputSize.width, outputSize.height, format, 2)
+        val reader = try { ImageReader.newInstance(outputSize.width, outputSize.height, format, 2) }
+        catch (_: OutOfMemoryError) { thread.quitSafely(); throw PhoneSkyResourceException(PhoneSkyResourceLimit.CAMERA_BUFFERS) }
+        catch (failure: Throwable) { thread.quitSafely(); throw failure }
         var device: CameraDevice? = null
         var session: CameraCaptureSession? = null
 
@@ -203,6 +226,11 @@ class PhoneSkyCapture(private val context: Context) {
                 )
             }
             repeat(frameCount) { index ->
+                currentCoroutineContext().ensureActive()
+                PhoneSkyResourceBudget.requireCaptureHeap(reduction, monoBpp, frameCount - index)
+                PhoneSkyResourceBudget.requireStorage(solveStorage.usableSpace, outputSize.width, outputSize.height, 0, solveBytes)
+                if (useRaw && dngOutputDirectory != null) PhoneSkyResourceBudget.requireStorage(
+                    dngOutputDirectory.usableSpace, outputSize.width, outputSize.height, frameCount - index, solveBytes)
                 val captureStart = System.nanoTime()
                 val (image, result) = stillCapture(
                     device = device,
@@ -217,6 +245,7 @@ class PhoneSkyCapture(private val context: Context) {
                 val captureLatencyMs = (System.nanoTime() - captureStart) / 1_000_000
                 var dngPath: String? = null
                 var dngError: String? = null
+                val captureContext = currentCoroutineContext()
                 try {
                     val frame = if (useRaw) {
                         val dngFile = dngOutputDirectory?.let { directory ->
@@ -230,12 +259,15 @@ class PhoneSkyCapture(private val context: Context) {
                                 dngError = t.message ?: t.javaClass.simpleName
                             }
                         }
-                        rawToMono16Frame(image, frameId = System.currentTimeMillis())
+                        rawToMono16Frame(image, frameId = System.currentTimeMillis(), maxLongSide = maxLongSide,
+                            checkCancelled = { captureContext.ensureActive() })
                     } else {
-                        yuvToMono8Frame(image, frameId = System.currentTimeMillis())
+                        yuvToMono8Frame(image, frameId = System.currentTimeMillis(), maxLongSide = maxLongSide,
+                            checkCancelled = { captureContext.ensureActive() })
                     }
                     val metadata = captureMetadata(
-                        capability, openId, physicalId, result, frame.width, frame.height, useRaw
+                        capability, openId, physicalId, result, frame.width, frame.height, useRaw,
+                        PhoneMonoFrameConverter.plan(image.width, image.height, maxLongSide, useRaw)
                     )
                     val actualExposureNs = result.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: exposureNs
                     val actualIso = result.get(CaptureResult.SENSOR_SENSITIVITY) ?: sensitivity
@@ -291,7 +323,8 @@ class PhoneSkyCapture(private val context: Context) {
         result: TotalCaptureResult,
         outputWidth: Int,
         outputHeight: Int,
-        usedRaw: Boolean
+        usedRaw: Boolean,
+        reduction: PhoneMonoReduction
     ): PhoneCaptureMetadata {
         val physicalResult = if (physicalCameraId != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             result.physicalCameraResults[physicalCameraId]
@@ -327,6 +360,7 @@ class PhoneSkyCapture(private val context: Context) {
         }
         val focal = lensResult?.get(CaptureResult.LENS_FOCAL_LENGTH)?.toDouble()
             ?: capability.focalLengthMm?.toDouble()
+        val footprint = crop?.let { reduction.footprint(it.left.toDouble(), it.top.toDouble(), it.width().toDouble(), it.height().toDouble(), usedRaw) }
         val fov = if (lensResult != null && coordinateArray != null && crop != null && focal != null &&
             (!usedRaw || domain != LensCalibrationCoordinateDomain.UNKNOWN)
         ) {
@@ -337,14 +371,18 @@ class PhoneSkyCapture(private val context: Context) {
                 activeWidthPx = coordinateArray.width(), activeHeightPx = coordinateArray.height(),
                 cropLeftPx = crop.left, cropTopPx = crop.top,
                 cropWidthPx = crop.width(), cropHeightPx = crop.height(),
-                outputWidthPx = outputWidth, outputHeightPx = outputHeight
+                outputWidthPx = outputWidth, outputHeightPx = outputHeight,
+                sampledFootprint = footprint
             ))
         } else null
         val timestampNs = lensResult?.get(CaptureResult.SENSOR_TIMESTAMP)
-        val midpointMs = timestampNs?.let {
-            System.currentTimeMillis() - (System.nanoTime() - it) / 1_000_000L +
-                (lensResult.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L) / 2_000_000L
-        }
+        val clockBefore = android.os.SystemClock.elapsedRealtimeNanos()
+        val clockUtc = System.currentTimeMillis()
+        val clockAfter = android.os.SystemClock.elapsedRealtimeNanos()
+        val stamp = com.indigo.mobileobservatory.pointing.ObservationClock.fromRealtimeSensor(
+            timestampNs, lensResult?.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L,
+            capability.timestampIsRealtime, clockUtc, clockBefore + (clockAfter - clockBefore) / 2,
+            (clockAfter - clockBefore + 1_999_999L) / 2_000_000L + 1)
         val frameCalibration = if (lensResult != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             calibrationFrom(
                 lensResult.get(CaptureResult.LENS_INTRINSIC_CALIBRATION),
@@ -354,7 +392,8 @@ class PhoneSkyCapture(private val context: Context) {
         val calibration = frameCalibration ?: capability.lensCalibration
         return PhoneCaptureMetadata(
             logicalCameraId = openCameraId,
-            physicalCameraId = physicalCameraId,
+            physicalCameraId = physicalCameraId ?: if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+                result.get(CaptureResult.LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID) else null,
             focalLengthMm = focal,
             sensorWidthMm = capability.sensorWidthMm?.toDouble(), sensorHeightMm = capability.sensorHeightMm?.toDouble(),
             activeArrayLeftPx = active?.left, activeArrayTopPx = active?.top,
@@ -368,8 +407,11 @@ class PhoneSkyCapture(private val context: Context) {
             distortionCorrectionMode = correctionMode,
             calibrationCoordinateDomain = domain,
             lensCalibration = calibration,
-            exposureMidpointEpochMs = midpointMs,
-            fov = fov
+            exposureMidpointEpochMs = stamp?.utcMidpointMs,
+            fov = fov,
+            observationStamp = stamp,
+            solveFootprint = footprint,
+            solveReduction = reduction
         )
     }
 
@@ -401,8 +443,7 @@ class PhoneSkyCapture(private val context: Context) {
 
     private fun chooseSize(sizes: List<Size>, maxLongSide: Int): Size? {
         if (sizes.isEmpty()) return null
-        val capped = sizes.filter { maxOf(it.width, it.height) <= maxLongSide }
-        return (capped.ifEmpty { sizes }).maxByOrNull { it.width.toLong() * it.height }
+        return PhoneMonoFrameConverter.chooseStreamIndex(sizes.map { it.width to it.height }, maxLongSide)?.let(sizes::get)
     }
 
     private suspend fun openCamera(cameraId: String, handler: Handler): CameraDevice =
@@ -627,72 +668,17 @@ class PhoneSkyCapture(private val context: Context) {
     }
 
     companion object {
-        /** Average 2×2 Bayer neighborhood into MONO16 at half resolution. */
-        fun rawToMono16Frame(image: Image, frameId: Long): FrameData {
+        /** Average complete even Bayer blocks into a bounded solve frame; DNG stays untouched. */
+        fun rawToMono16Frame(image: Image, frameId: Long, maxLongSide: Int = 2048, checkCancelled: () -> Unit = {}): FrameData {
             val plane = image.planes[0]
-            val rowStride = plane.rowStride
-            val pixelStride = plane.pixelStride
-            val buffer = plane.buffer
-            val width = image.width
-            val height = image.height
-            val outW = width / 2
-            val outH = height / 2
-            val out = ByteArray(outW * outH * 2)
-            val row = ByteArray(rowStride)
-            for (y in 0 until outH) {
-                val y0 = y * 2
-                buffer.position(y0 * rowStride)
-                buffer.get(row, 0, min(rowStride, buffer.remaining()))
-                val row1 = ByteArray(rowStride)
-                if (y0 + 1 < height) {
-                    buffer.position((y0 + 1) * rowStride)
-                    buffer.get(row1, 0, min(rowStride, buffer.remaining()))
-                }
-                for (x in 0 until outW) {
-                    val x0 = x * 2
-                    fun sample(r: ByteArray, xx: Int): Int {
-                        val i = xx * pixelStride
-                        if (i + 1 >= r.size) return 0
-                        return (r[i].toInt() and 0xFF) or ((r[i + 1].toInt() and 0xFF) shl 8)
-                    }
-                    val a = sample(row, x0)
-                    val b = sample(row, x0 + 1)
-                    val c = sample(row1, x0)
-                    val d = sample(row1, x0 + 1)
-                    val avg = ((a + b + c + d) / 4).coerceIn(0, 65535)
-                    val o = (y * outW + x) * 2
-                    out[o] = (avg and 0xFF).toByte()
-                    out[o + 1] = ((avg shr 8) and 0xFF).toByte()
-                }
-            }
-            return FrameData(out, outW, outH, PixelFormat.MONO16, frameId, System.nanoTime())
+            return PhoneMonoFrameConverter.convert(plane.buffer, plane.rowStride, plane.pixelStride,
+                PhoneMonoFrameConverter.plan(image.width, image.height, maxLongSide, true), true, frameId, System.nanoTime(), checkCancelled)
         }
 
-        fun yuvToMono8Frame(image: Image, frameId: Long): FrameData {
+        fun yuvToMono8Frame(image: Image, frameId: Long, maxLongSide: Int = 2048, checkCancelled: () -> Unit = {}): FrameData {
             val yPlane = image.planes[0]
-            val rowStride = yPlane.rowStride
-            val pixelStride = yPlane.pixelStride
-            val buffer = yPlane.buffer
-            val width = image.width
-            val height = image.height
-            val out = ByteArray(width * height)
-            val row = ByteArray(rowStride)
-            for (y in 0 until height) {
-                buffer.position(y * rowStride)
-                val toRead = min(rowStride, buffer.remaining())
-                buffer.get(row, 0, toRead)
-                if (pixelStride == 1) {
-                    System.arraycopy(row, 0, out, y * width, width)
-                } else {
-                    var o = y * width
-                    var i = 0
-                    repeat(width) {
-                        out[o++] = row[i]
-                        i += pixelStride
-                    }
-                }
-            }
-            return FrameData(out, width, height, PixelFormat.MONO8, frameId, System.nanoTime())
+            return PhoneMonoFrameConverter.convert(yPlane.buffer, yPlane.rowStride, yPlane.pixelStride,
+                PhoneMonoFrameConverter.plan(image.width, image.height, maxLongSide, false), false, frameId, System.nanoTime(), checkCancelled)
         }
     }
 }

@@ -28,6 +28,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -53,6 +54,7 @@ import kotlinx.coroutines.withContext
 fun TargetLibraryScreen(
     onBack: () -> Unit,
     onGuideTo: (CatalogObject) -> Unit = {},
+    onSelectTarget: ((CatalogObject) -> Unit)? = null,
     onAddToSequence: (CatalogObject) -> Unit = {},
     showSequenceActions: Boolean = true
 ) {
@@ -74,6 +76,7 @@ fun TargetLibraryScreen(
                 .padding(padding)
                 .padding(16.dp),
             onGuideTo = onGuideTo,
+            onSelectTarget = onSelectTarget,
             onAddToSequence = onAddToSequence,
             showSequenceActions = showSequenceActions
         )
@@ -84,14 +87,15 @@ fun TargetLibraryScreen(
 @Composable
 fun TargetLibraryContent(
     onGuideTo: (CatalogObject) -> Unit,
+    onSelectTarget: ((CatalogObject) -> Unit)? = null,
     onAddToSequence: (CatalogObject) -> Unit = {},
     showSequenceActions: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val catalog = remember { AssetDeepSkyCatalog(context.applicationContext) }
-    var query by remember { mutableStateOf("") }
-    var filter by remember { mutableStateOf(CatalogBrowseFilter.ALL) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var filter by rememberSaveable { mutableStateOf(CatalogBrowseFilter.ALL) }
     var site by remember { mutableStateOf<ObserverSite?>(null) }
     var results by remember { mutableStateOf<List<CatalogObject>>(emptyList()) }
 
@@ -148,7 +152,7 @@ fun TargetLibraryContent(
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { onGuideTo(obj) }
+                        .clickable { (onSelectTarget ?: onGuideTo)(obj) }
                 ) {
                     Row(
                         modifier = Modifier

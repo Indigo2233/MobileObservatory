@@ -13,6 +13,7 @@ enum class PrecisionGotoPhase {
     SYNCING,
     CORRECTING,
     SUCCEEDED,
+    CANCELLED,
     FAILED
 }
 
@@ -29,6 +30,7 @@ data class PrecisionGotoProgress(
     val isActive: Boolean
         get() = phase != PrecisionGotoPhase.IDLE &&
             phase != PrecisionGotoPhase.SUCCEEDED &&
+            phase != PrecisionGotoPhase.CANCELLED &&
             phase != PrecisionGotoPhase.FAILED
 }
 

@@ -22,6 +22,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.defaultMinSize
@@ -33,15 +35,18 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Nightlight
-import androidx.compose.material.icons.filled.NightlightRound
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -54,35 +59,55 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.doOnLayout
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.webkit.WebViewAssetLoader
 import com.indigo.mobileobservatory.R
+import com.indigo.mobileobservatory.starmap.StarMapPhoneOrientation
 import com.indigo.mobileobservatory.astro.FovInstrumentMode
 import com.indigo.mobileobservatory.astro.FovSkyAnchor
+import com.indigo.mobileobservatory.astro.FovPointingCandidate
+import com.indigo.mobileobservatory.astro.FovPointingSources
+import com.indigo.mobileobservatory.astro.FovPointingRole
+import com.indigo.mobileobservatory.astro.FovPointingReason
 import com.indigo.mobileobservatory.astro.MosaicStartCorner
 import com.indigo.mobileobservatory.astro.MosaicTraversal
 import com.indigo.mobileobservatory.astro.OpticsEquipment
-import com.indigo.mobileobservatory.astro.OpticsPrefReader
 import com.indigo.mobileobservatory.astro.OpticsTrainConfig
 import com.indigo.mobileobservatory.astro.OpticsTrainId
+import com.indigo.mobileobservatory.astro.AndroidOpticsPrefs
+import com.indigo.mobileobservatory.astro.ConnectedOpticsGeometry
+import com.indigo.mobileobservatory.astro.PointingOpticsConfiguration
+import com.indigo.mobileobservatory.astro.PointingOpticsChange
+import com.indigo.mobileobservatory.astro.ObserverSite
+import com.indigo.mobileobservatory.pointing.PointingMountCapabilities
 import com.indigo.mobileobservatory.astro.StarMapFovOverlay
 import com.indigo.mobileobservatory.astro.StarMapMosaicConfig
 import com.indigo.mobileobservatory.astro.StarMapMosaicPlanner
@@ -106,7 +131,6 @@ import com.indigo.mobileobservatory.mount.PrecisionGotoPhase
 import com.indigo.mobileobservatory.mount.PrecisionGotoProgress
 import com.indigo.mobileobservatory.starmap.HipsTileCache
 import com.indigo.mobileobservatory.starmap.StarMapSearch
-import com.indigo.mobileobservatory.ui.components.StarMapBackButton
 import com.indigo.mobileobservatory.ui.components.StarMapGotoConfirmation
 import com.indigo.mobileobservatory.ui.components.StarMapPrecisionGotoConfirmation
 import com.indigo.mobileobservatory.ui.components.StarMapSyncConfirmation
@@ -160,6 +184,28 @@ data class StarMapTarget(
     }
 }
 
+private val StarMapTargetSaver = listSaver<StarMapTarget?, Any>(
+    save = { target ->
+        target?.let { listOf(it.name, it.raHours, it.decDegrees, it.frame, it.positionAngleDeg) } ?: emptyList()
+    },
+    restore = { values ->
+        values.takeIf { it.size == 5 }?.let {
+            StarMapTarget(it[0] as String, it[1] as Double, it[2] as Double, it[3] as String, it[4] as Double)
+        }
+    }
+)
+
+private val StarMapInteractionSaver = listSaver<StarMapInteractionState, Any>(
+    save = { listOf(it.targetCardVisible, it.targetExpanded, it.panel.name) },
+    restore = {
+        StarMapInteractionState(it[0] as Boolean, it[1] as Boolean, StarMapCornerPanel.valueOf(it[2] as String))
+    }
+)
+
+private fun StarMapTarget?.hasSameIdentity(other: StarMapTarget?): Boolean =
+    this?.name == other?.name && this?.raHours == other?.raHours &&
+        this?.decDegrees == other?.decDegrees && this?.frame == other?.frame
+
 private fun normalizePositionAngle(value: Double): Double = ((value % 360.0) + 360.0) % 360.0
 
 private fun positionAngleText(value: Double): String {
@@ -204,7 +250,11 @@ private class StarMapJavascriptBridge(
     private val onReady: () -> Unit,
     private val onError: (String) -> Unit,
     private val onSelected: (StarMapTarget?) -> Unit,
+    private val onUpdated: (StarMapTarget) -> Unit,
+    private val onBlankTap: () -> Unit,
+    private val onViewChanged: (Double, Double, Double) -> Unit,
     private val onFollowChanged: (Boolean) -> Unit,
+    private val onPhoneFollowChanged: (Boolean) -> Unit,
     private val fallbackTargetName: String,
     private val parseError: (Throwable) -> String
 ) {
@@ -222,6 +272,15 @@ private class StarMapJavascriptBridge(
 
     @JavascriptInterface
     fun onTargetSelected(payload: String) {
+        readTarget(payload, selected = true)
+    }
+
+    @JavascriptInterface
+    fun onTargetUpdated(payload: String) {
+        readTarget(payload, selected = false)
+    }
+
+    private fun readTarget(payload: String, selected: Boolean) {
         val result = runCatching {
             val json = JSONObject(payload)
             StarMapTarget(
@@ -232,14 +291,28 @@ private class StarMapJavascriptBridge(
             )
         }
         mainHandler.post {
-            result.onSuccess { onSelected(it) }
+            result.onSuccess { if (selected) onSelected(it) else onUpdated(it) }
                 .onFailure { onError(parseError(it)) }
         }
     }
 
     @JavascriptInterface
     fun onSelectionCleared(@Suppress("UNUSED_PARAMETER") ignored: String) {
-        mainHandler.post { onSelected(null) }
+        // The engine may clear its reticle on a blank tap. The observing target stays selected.
+    }
+
+    @JavascriptInterface
+    fun onBlankTapped(@Suppress("UNUSED_PARAMETER") ignored: String) {
+        mainHandler.post { onBlankTap() }
+    }
+
+    @JavascriptInterface
+    fun onViewChanged(payload: String) {
+        val view = runCatching {
+            val json = JSONObject(payload)
+            Triple(json.getDouble("raHours"), json.getDouble("decDegrees"), json.getDouble("fovDegrees"))
+        }.getOrNull() ?: return
+        mainHandler.post { onViewChanged(view.first, view.second, view.third) }
     }
 
     @JavascriptInterface
@@ -247,17 +320,25 @@ private class StarMapJavascriptBridge(
         val follow = enabled.equals("true", ignoreCase = true)
         mainHandler.post { onFollowChanged(follow) }
     }
+
+    @JavascriptInterface
+    fun onPhoneFollowChanged(enabled: String) {
+        mainHandler.post { onPhoneFollowChanged(enabled.equals("true", ignoreCase = true)) }
+    }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @SuppressLint("SetJavaScriptEnabled", "JavascriptInterface")
 @Composable
 fun StarMapScreen(
     mountCoordinates: MountCoordinates?,
     mountSite: MountSite?,
     mountTime: MountTime? = null,
+    observerSite: ObserverSite? = null,
+    observerSiteLabel: String? = null,
+    onObserverSiteSettings: () -> Unit = {},
     mountConnected: Boolean,
-    mountSupportsSync: Boolean = true,
+    mountPointingCapabilities: PointingMountCapabilities = PointingMountCapabilities(),
     mountBusy: Boolean,
     mountMotionState: MountMotionState = MountMotionState.Idle,
     mountSlewRate: MountSlewRate = MountSlewRate.DEFAULT,
@@ -265,6 +346,12 @@ fun StarMapScreen(
     cameraPixelSizeUm: Float? = null,
     cameraFrameWidthPx: Int = 0,
     cameraFrameHeightPx: Int = 0,
+    cameraHardwareBinning: Int = 1,
+    cameraDeviceId: String = "primary-connected",
+    cameraGeometry: ConnectedOpticsGeometry? = null,
+    guideCameraGeometry: ConnectedOpticsGeometry? = null,
+    opticsPreferencesRevision: Long = 0L,
+    pointingUtcNow: () -> Long = System::currentTimeMillis,
     lastSolvedPositionAngleDeg: Double? = null,
     rotatorConnected: Boolean = false,
     rotatorMechanicalAngleDeg: Double = 0.0,
@@ -276,6 +363,13 @@ fun StarMapScreen(
     onMoveRotator: (Double) -> Unit = {},
     showSequenceActions: Boolean = true,
     onTargetSelected: (StarMapTarget) -> Unit = {},
+    selectedObservationTarget: StarMapTarget? = null,
+    pointingSources: List<FovPointingCandidate> = emptyList(),
+    opticalPathIds: Map<OpticsTrainId, String> = emptyMap(),
+    onOpticalPathInvalidated: (OpticsTrainId, PointingOpticsChange) -> Unit = { _, _ -> },
+    onOpenTargets: () -> Unit = {},
+    onOpenPreparation: () -> Unit = {},
+    onPushTo: (StarMapTarget) -> Unit = {},
     onSlewRateChange: (MountSlewRate) -> Unit = {},
     onManualMoveStart: (MountDirection) -> Unit = {},
     onManualMoveStop: (MountDirection) -> Unit = {},
@@ -286,10 +380,22 @@ fun StarMapScreen(
     onBack: () -> Unit
 ) {
     var webView by remember { mutableStateOf<WebView?>(null) }
+    val foreground = rememberPageForeground()
+    LaunchedEffect(webView, foreground) {
+        webView?.let { view ->
+            if (foreground) {
+                view.visibility = android.view.View.VISIBLE
+                view.onResume()
+            } else {
+                view.onPause()
+                view.visibility = android.view.View.INVISIBLE
+            }
+        }
+    }
     var webViewSession by remember { mutableIntStateOf(0) }
-    var selectedTarget by remember {
+    var selectedTarget by rememberSaveable(stateSaver = StarMapTargetSaver) {
         mutableStateOf(
-            initialSequencePlan?.let {
+            selectedObservationTarget ?: initialSequencePlan?.let {
                 StarMapTarget(
                     it.name,
                     it.centerRaHours,
@@ -305,17 +411,28 @@ fun StarMapScreen(
     var syncConfirmation by remember { mutableStateOf<StarMapTarget?>(null) }
     var precisionConfirmation by remember { mutableStateOf<StarMapTarget?>(null) }
     var atmosphereVisible by remember { mutableStateOf(false) }
-    var overlaysVisible by remember { mutableStateOf(true) }
-    var overlaysLocked by remember { mutableStateOf(false) }
-    var targetExpanded by remember { mutableStateOf(false) }
-    var importAngleText by remember {
-        mutableStateOf(positionAngleText(initialSequencePlan?.positionAngleDeg ?: 0.0))
+    var overlaysVisible by rememberSaveable { mutableStateOf(true) }
+    var overlaysLocked by rememberSaveable { mutableStateOf(false) }
+    var hudPointerActive by remember { mutableStateOf(false) }
+    var hudActivityRevision by remember { mutableIntStateOf(0) }
+    LaunchedEffect(foreground) { if (!foreground) hudPointerActive = false }
+    var interaction by rememberSaveable(stateSaver = StarMapInteractionSaver) {
+        mutableStateOf(StarMapInteractionState(targetCardVisible = selectedTarget != null))
+    }
+    val targetExpanded = interaction.targetExpanded
+    val cornerPanel = interaction.panel
+    var savedCenterRaHours by rememberSaveable { mutableStateOf<Double?>(null) }
+    var savedCenterDecDegrees by rememberSaveable { mutableStateOf<Double?>(null) }
+    var savedCenterFrame by rememberSaveable { mutableStateOf("JNOW") }
+    var savedFovDegrees by rememberSaveable { mutableStateOf<Double?>(null) }
+    var acceptViewUpdates by remember(webViewSession) { mutableStateOf(false) }
+    var importAngleText by rememberSaveable {
+        mutableStateOf(positionAngleText(selectedTarget?.positionAngleDeg ?: 0.0))
     }
     var sequenceImportPlan by remember { mutableStateOf<SequenceMosaicPlan?>(null) }
     var searchDialogVisible by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var searchResults by remember { mutableStateOf<List<CatalogObject>>(emptyList()) }
-    var cornerPanel by remember { mutableStateOf(StarMapCornerPanel.NONE) }
     var confirmHome by remember { mutableStateOf(false) }
     var fovDialogVisible by remember { mutableStateOf(false) }
     var starMapTimeDialogVisible by remember { mutableStateOf(false) }
@@ -325,6 +442,15 @@ fun StarMapScreen(
     val prefs = remember {
         context.getSharedPreferences("mobile_observatory", android.content.Context.MODE_PRIVATE)
     }
+    var landscapeVisible by remember {
+        mutableStateOf(prefs.getBoolean("star_map_simulated_landscape", true))
+    }
+    var followPhone by remember {
+        mutableStateOf(prefs.getBoolean("star_map_follow_phone", false))
+    }
+    val phoneOrientation = remember(context) { StarMapPhoneOrientation(context) }
+    var phoneFollowRegistrationFailed by remember { mutableStateOf(false) }
+    var phoneFollowHasSample by remember { mutableStateOf(false) }
     var sensorAngleCalibration by remember {
         mutableStateOf(
             SensorAngleCalibration(
@@ -342,8 +468,11 @@ fun StarMapScreen(
         mutableStateOf(HipsTileCache.formatCacheSize(hipsCache.cacheSizeBytes()))
     }
     var followMount by remember {
-        mutableStateOf(prefs.getBoolean("star_map_follow_mount", false))
+        mutableStateOf(prefs.getBoolean("star_map_follow_mount", false) && !followPhone)
     }
+    var followInterrupted by rememberSaveable { mutableStateOf(false) }
+    val resolvedObserverSite = observerSite ?: mountSite?.let { ObserverSite(it.latitudeDeg, it.longitudeDeg) }
+    val latestObserverSite by rememberUpdatedState(resolvedObserverSite)
     var starMapTimeManual by remember {
         mutableStateOf(prefs.contains(STAR_MAP_TIME_PREF))
     }
@@ -387,23 +516,34 @@ fun StarMapScreen(
             )
         )
     }
-    val moveEnabled = mountConnected && !mountBusy
+    val moveEnabled = mountConnected && mountPointingCapabilities.manualMove && !mountBusy
+    val canGoto = mountConnected && mountPointingCapabilities.goto && !mountBusy
+    val canSync = mountConnected && mountPointingCapabilities.sync && !mountBusy
+    val canHome = mountConnected && mountPointingCapabilities.home && !mountBusy
+    val canReadCoordinates = mountConnected && mountPointingCapabilities.readCoordinates
+    LaunchedEffect(mountConnected, mountPointingCapabilities) {
+        if (!mountConnected || !mountPointingCapabilities.goto) {
+            gotoConfirmation = null
+            precisionConfirmation = null
+        }
+        if (!mountConnected || !mountPointingCapabilities.sync) syncConfirmation = null
+        if (!mountConnected || !mountPointingCapabilities.home) confirmHome = false
+    }
     val showGlobalStop = mountMotionState.showsGlobalStop
 
     val connectedSensorName = stringResource(R.string.connected_camera_sensor)
-    val connectedSensor = remember(
+    val primaryGeometry = remember(
+        cameraGeometry,
         cameraPixelSizeUm,
         cameraFrameWidthPx,
         cameraFrameHeightPx,
-        connectedSensorName
+        cameraHardwareBinning,
+        cameraDeviceId
     ) {
-        OpticsEquipment.connectedSensor(
-            cameraPixelSizeUm,
-            cameraFrameWidthPx,
-            cameraFrameHeightPx,
-            connectedSensorName
-        )
+        cameraGeometry ?: cameraPixelSizeUm?.let { ConnectedOpticsGeometry(it, cameraFrameWidthPx,
+            cameraFrameHeightPx, cameraHardwareBinning, cameraDeviceId) }
     }
+    val connectedGuideSensor = guideCameraGeometry?.sensor(connectedSensorName)
     var telescopes by remember {
         mutableStateOf(
             UserOpticsCatalog.loadTelescopes(
@@ -425,13 +565,7 @@ fun StarMapScreen(
             )
         )
     }
-    val sensors = remember(connectedSensor, userCameras) {
-        buildList {
-            connectedSensor?.let { add(it) }
-            addAll(userCameras.filter { it.id != OpticsEquipment.CONNECTED_SENSOR_ID })
-        }
-    }
-    val opticsPrefs = remember { SharedOpticsPrefs(prefs) }
+    val opticsPrefs = remember { AndroidOpticsPrefs(prefs) }
     var primaryTrain by remember {
         mutableStateOf(StarMapOpticsPrefs.loadPrimary(opticsPrefs))
     }
@@ -439,7 +573,7 @@ fun StarMapScreen(
         mutableStateOf(
             StarMapOpticsPrefs.loadSecondary(
                 opticsPrefs,
-                hasConnectedCamera = connectedSensor != null
+                hasConnectedCamera = connectedGuideSensor != null
             )
         )
     }
@@ -447,8 +581,40 @@ fun StarMapScreen(
         mutableStateOf(StarMapOpticsPrefs.loadActive(opticsPrefs))
     }
     var editingTrain by remember { mutableStateOf(activeTrain) }
+    var confirmedTrains by remember {
+        mutableStateOf(OpticsTrainId.entries.filter {
+            prefs.getBoolean(PointingOpticsConfiguration.confirmationKey(it), false)
+        }.toSet())
+    }
+    val opticsConfiguration = remember(primaryTrain, secondaryTrain, telescopes, eyepieces,
+        userCameras, primaryGeometry, guideCameraGeometry, confirmedTrains, connectedSensorName) {
+        PointingOpticsConfiguration(primaryTrain, secondaryTrain, telescopes, eyepieces, userCameras,
+            primaryGeometry, guideCameraGeometry, confirmedTrains, connectedSensorName)
+    }
+    val primarySensors = remember(opticsConfiguration) { opticsConfiguration.sensorsFor(OpticsTrainId.PRIMARY) }
+    val secondarySensors = remember(opticsConfiguration) { opticsConfiguration.sensorsFor(OpticsTrainId.SECONDARY) }
+    // Detect device swaps and library edits only for the affected train. Initial composition is not a swap.
+    var previousOptics by remember { mutableStateOf(opticsConfiguration) }
+    LaunchedEffect(opticsConfiguration) {
+        OpticsTrainId.entries.forEach { id ->
+            previousOptics.changeTo(opticsConfiguration, id)?.let { onOpticalPathInvalidated(id, it) }
+        }
+        previousOptics = opticsConfiguration
+    }
     var showFovOverlay by remember {
         mutableStateOf(prefs.getBoolean(StarMapOpticsPrefs.SHOW_OVERLAY, true))
+    }
+    LaunchedEffect(opticsPreferencesRevision) {
+        // Other tasks may confirm or edit this shared setup while the map stays composed underneath.
+        val stored = PointingOpticsConfiguration.load(opticsPrefs, primaryGeometry, guideCameraGeometry, connectedSensorName)
+        primaryTrain = stored.primary
+        secondaryTrain = stored.secondary
+        telescopes = stored.telescopes
+        eyepieces = stored.eyepieces
+        userCameras = stored.cameras
+        confirmedTrains = stored.confirmedTrains
+        activeTrain = StarMapOpticsPrefs.loadActive(opticsPrefs)
+        showFovOverlay = prefs.getBoolean(StarMapOpticsPrefs.SHOW_OVERLAY, true)
     }
     var mosaicConfig by remember {
         mutableStateOf(
@@ -474,16 +640,17 @@ fun StarMapScreen(
             ).normalized()
         )
     }
-    LaunchedEffect(connectedSensor) {
+    LaunchedEffect(connectedGuideSensor) {
         if (!prefs.contains("star_map_secondary_fov_mode")) {
             secondaryTrain = StarMapOpticsPrefs.defaultSecondary(
-                hasConnectedCamera = connectedSensor != null,
+                hasConnectedCamera = connectedGuideSensor != null,
                 plateFocalLengthMm = prefs.getFloat("plate_focal_length_mm", 0f).takeIf { it > 0f }
             )
         }
     }
     LaunchedEffect(
-        sensors,
+        primarySensors,
+        secondarySensors,
         telescopes,
         eyepieces,
         primaryTrain.sensorId,
@@ -496,6 +663,7 @@ fun StarMapScreen(
         secondaryTrain.mode
     ) {
         fun fallback(train: OpticsTrainConfig): OpticsTrainConfig {
+            val sensors = if (train.id == OpticsTrainId.PRIMARY) primarySensors else secondarySensors
             var next = train
             if (telescopes.none { it.id == next.telescopeId }) {
                 val spec = telescopes.firstOrNull() ?: return next
@@ -526,17 +694,53 @@ fun StarMapScreen(
         }
         val nextPrimary = fallback(primaryTrain)
         val nextSecondary = fallback(secondaryTrain)
-        if (nextPrimary != primaryTrain) primaryTrain = nextPrimary
-        if (nextSecondary != secondaryTrain) secondaryTrain = nextSecondary
+        fun clearConfirmation(id: OpticsTrainId) {
+            confirmedTrains = confirmedTrains - id
+            prefs.edit().putBoolean(PointingOpticsConfiguration.confirmationKey(id), false).apply()
+        }
+        if (nextPrimary != primaryTrain) { primaryTrain = nextPrimary; clearConfirmation(OpticsTrainId.PRIMARY) }
+        if (nextSecondary != secondaryTrain) { secondaryTrain = nextSecondary; clearConfirmation(OpticsTrainId.SECONDARY) }
     }
 
     val activeConfig = if (activeTrain == OpticsTrainId.PRIMARY) primaryTrain else secondaryTrain
     val editingConfig = if (editingTrain == OpticsTrainId.PRIMARY) primaryTrain else secondaryTrain
-    val activeComputation = remember(activeConfig, sensors, telescopes, eyepieces) {
-        activeConfig.compute(telescopes, eyepieces, sensors)
+    val activeSensors = if (activeTrain == OpticsTrainId.PRIMARY) primarySensors else secondarySensors
+    val editingSensors = if (editingTrain == OpticsTrainId.PRIMARY) primarySensors else secondarySensors
+    val activeComputation = remember(opticsConfiguration, activeTrain) {
+        opticsConfiguration.computation(activeTrain)
     }
-    val editingComputation = remember(editingConfig, sensors, telescopes, eyepieces) {
-        editingConfig.compute(telescopes, eyepieces, sensors)
+    val currentFrameCentered = opticsConfiguration.currentFrameCentered(activeTrain)
+    val latestPointingClock by rememberUpdatedState(pointingUtcNow)
+    var pointingClockUtcMs by remember { mutableStateOf(pointingUtcNow()) }
+    LaunchedEffect(Unit) {
+        while (true) { delay(1_000); pointingClockUtcMs = latestPointingClock() }
+    }
+    val currentFovSource = remember(pointingSources, opticalPathIds, activeTrain, activeComputation, pointingClockUtcMs) {
+        val limit = activeComputation?.let { computation ->
+            computation.circleDeg?.div(2) ?: listOfNotNull(computation.rectWidthDeg, computation.rectHeightDeg).minOrNull()?.div(2)
+        } ?: Double.POSITIVE_INFINITY
+        FovPointingSources.select(opticalPathIds[activeTrain] ?: activeTrain.prefValue(), pointingSources, pointingClockUtcMs,
+            requireRoll = activeComputation?.mode == FovInstrumentMode.SENSOR, maxUncertaintyDeg = limit)
+    }
+    val currentFollowSource = remember(pointingSources, opticalPathIds, activeTrain, activeComputation, pointingClockUtcMs) {
+        val limit = activeComputation?.let { computation ->
+            computation.circleDeg?.div(2) ?: listOfNotNull(computation.rectWidthDeg, computation.rectHeightDeg).minOrNull()?.div(2)
+        } ?: Double.POSITIVE_INFINITY
+        // An axis can be followed without claiming an image-up angle for a rectangular FOV.
+        FovPointingSources.select(opticalPathIds[activeTrain] ?: activeTrain.prefValue(), pointingSources,
+            pointingClockUtcMs, requireRoll = false, maxUncertaintyDeg = limit)
+    }
+    val latestFollowSource by rememberUpdatedState(currentFollowSource)
+    LaunchedEffect(currentFollowSource.showCurrent, followMount, resolvedObserverSite) {
+        if (followMount && (!currentFollowSource.showCurrent || resolvedObserverSite == null)) {
+            followInterrupted = true
+            followMount = false
+            prefs.edit().putBoolean("star_map_follow_mount", false).apply()
+            webView?.evaluateJavascript("window.MercStarMap && window.MercStarMap.setFollowMount(false);", null)
+        }
+    }
+    val editingComputation = remember(opticsConfiguration, editingTrain) {
+        opticsConfiguration.computation(editingTrain)
     }
     val defaultPrimaryLabel = stringResource(R.string.star_map_train_primary)
     val defaultSecondaryLabel = stringResource(R.string.star_map_train_secondary)
@@ -544,18 +748,52 @@ fun StarMapScreen(
         activeConfig,
         telescopes,
         eyepieces,
-        sensors,
+        activeSensors,
         defaultPrimaryLabel,
         defaultSecondaryLabel,
         activeTrain
     ) {
-        UserOpticsCatalog.combinationName(activeConfig, telescopes, eyepieces, sensors)
+        UserOpticsCatalog.combinationName(activeConfig, telescopes, eyepieces, activeSensors)
             .ifEmpty {
                 if (activeTrain == OpticsTrainId.PRIMARY) defaultPrimaryLabel else defaultSecondaryLabel
             }
     }
-    val fovCurrentWord = stringResource(R.string.star_map_fov_current)
+    val fovCurrentWord = stringResource(if (!currentFrameCentered && activeComputation?.mode == FovInstrumentMode.SENSOR)
+        R.string.wf_fov_cropped_frame else when (currentFovSource.role) {
+        FovPointingRole.OPTICAL -> R.string.wf_fov_optical
+        FovPointingRole.CALIBRATED -> R.string.wf_fov_calibrated
+        FovPointingRole.ESTIMATED -> R.string.wf_fov_estimated
+        FovPointingRole.PLANNING -> R.string.wf_fov_planning
+    })
+    val sourceStatusWord = currentFollowSource.source?.let { source -> stringResource(when {
+        source.kind == com.indigo.mobileobservatory.astro.FovPointingKind.DIRECT_OPTICAL -> R.string.wf_follow_source_camera
+        source.sourceId.contains("PHONE", ignoreCase = true) -> R.string.wf_follow_source_phone
+        source.sourceId.contains("AUX", ignoreCase = true) -> R.string.wf_follow_source_aux
+        else -> when (currentFollowSource.role) {
+            FovPointingRole.OPTICAL -> R.string.wf_fov_optical
+            FovPointingRole.CALIBRATED -> R.string.wf_fov_calibrated
+            else -> R.string.wf_fov_estimated
+        }
+    }) }
+    val propagationCaption = if (currentFollowSource.role == FovPointingRole.ESTIMATED)
+        " · ${stringResource(R.string.wf_fov_estimated)}" else ""
+    val missingRollCaption = if (currentFovSource.reason == FovPointingReason.ROLL_UNKNOWN)
+        " · ${stringResource(R.string.wf_fov_roll_unknown)}" else ""
+    val croppedFrameCaption = if (activeComputation?.mode == FovInstrumentMode.SENSOR &&
+        currentFollowSource.showCurrent && !currentFrameCentered) " · ${stringResource(R.string.wf_fov_cropped_frame)}" else ""
+    val pointingSourceCaption = if (currentFollowSource.source != null) stringResource(R.string.wf_follow_source_age,
+        if (activeTrain == OpticsTrainId.PRIMARY) defaultPrimaryLabel else defaultSecondaryLabel,
+        sourceStatusWord.orEmpty() + propagationCaption,
+        ((pointingClockUtcMs - currentFollowSource.source.absoluteUtcMs).coerceAtLeast(0) / 1000)) +
+        missingRollCaption + croppedFrameCaption
+        else stringResource(when (currentFollowSource.reason) {
+            FovPointingReason.STALE -> R.string.wf_fov_stale
+            FovPointingReason.CONFLICT -> R.string.wf_fov_conflict
+            FovPointingReason.ROLL_UNKNOWN -> R.string.wf_fov_roll_unknown
+            else -> R.string.wf_fov_planning
+        })
     val fovTargetWord = stringResource(R.string.star_map_fov_target)
+    val fovTargetRole = if (selectedTarget == null) stringResource(R.string.wf_fov_planning) else fovTargetWord
     val mosaicOverlaySummary = stringResource(
         R.string.fov_mosaic_overlay_summary,
         mosaicConfig.rows,
@@ -567,12 +805,12 @@ fun StarMapScreen(
     }
     val overlayTargetLabel = remember(
         overlayTrainLabel,
-        fovTargetWord,
+        fovTargetRole,
         activeComputation,
         mosaicConfig,
         mosaicOverlaySummary
     ) {
-        StarMapFovOverlay.overlayCaption(overlayTrainLabel, fovTargetWord, activeComputation) +
+        StarMapFovOverlay.overlayCaption(overlayTrainLabel, fovTargetRole, activeComputation) +
             if (activeComputation?.mode == FovInstrumentMode.SENSOR &&
                 mosaicConfig.panelCount > 1
             ) {
@@ -702,15 +940,15 @@ fun StarMapScreen(
     }
 
     fun persistImagingFocalLength(focalLengthMm: Double?) {
-        focalLengthMm?.toFloat()?.takeIf { it > 0f }?.let {
+        focalLengthMm?.toFloat()?.takeIf { it.isFinite() && it > 0f }?.let {
             prefs.edit().putFloat("plate_focal_length_mm", it).apply()
         }
     }
 
-    fun maybeWritePlateFocalLength(train: OpticsTrainConfig) {
-        if (!StarMapOpticsPrefs.shouldWritePlateFocalLength(train.id, train.mode)) return
+    fun maybeWritePlateFocalLength(before: OpticsTrainConfig, train: OpticsTrainConfig) {
+        if (!StarMapOpticsPrefs.shouldWritePlateFocalLength(before, train)) return
         persistImagingFocalLength(
-            resolveTelescopeFl(telescopes, train.telescopeId, train.customTelescopeFl)
+            train.focalLengthMm(telescopes)
         )
     }
 
@@ -737,11 +975,7 @@ fun StarMapScreen(
     }
 
     fun applyFovOverlays(alsoZoom: Boolean) {
-        val currentAnchor = if (mountConnected) {
-            mountCoordinates?.let { FovSkyAnchor(it.raHours, it.decDeg, "JNOW") }
-        } else {
-            null
-        }
+        val currentAnchor = currentFovSource.currentAnchor.takeIf { currentFrameCentered }
         val targetAnchor = selectedTarget?.let {
             FovSkyAnchor(it.raHours, it.decDegrees, it.frame)
         }
@@ -752,17 +986,36 @@ fun StarMapScreen(
             targetLabel = overlayTargetLabel,
             alsoZoom = alsoZoom,
             currentAnchor = currentAnchor,
-            targetAnchor = targetAnchor
+            targetAnchor = targetAnchor,
+            showCurrent = currentFovSource.showCurrent && currentFrameCentered && resolvedObserverSite != null,
+            currentPositionAngleDeg = currentFovSource.source?.positionAngleDeg
         ).forEach(::evalStarMap)
         applyTargetFraming(alsoZoom)
     }
 
     fun setFollowMountEnabled(enabled: Boolean) {
-        followMount = enabled
+        val source = latestFollowSource.source
+        val now = latestPointingClock()
+        val usable = latestObserverSite != null && latestFollowSource.showCurrent && source != null &&
+            now - source.absoluteUtcMs in 0..30_000 && now - source.estimateUtcMs in 0..3_000
+        if (!enabled && followMount && !usable) followInterrupted = true
+        followMount = enabled && usable
+        if (followMount) {
+            followPhone = false
+            prefs.edit().putBoolean("star_map_follow_phone", false).apply()
+        }
+        if (enabled) followInterrupted = !followMount
         persistFovPrefs()
         evalStarMap(
-            "window.MercStarMap && window.MercStarMap.setFollowMount(${if (enabled) "true" else "false"});"
+            "window.MercStarMap && window.MercStarMap.setFollowMount(${if (followMount) "true" else "false"});"
         )
+        overlaysVisible = true
+    }
+
+    fun setPhoneFollowEnabled(enabled: Boolean) {
+        followPhone = enabled && phoneOrientation.available
+        prefs.edit().putBoolean("star_map_follow_phone", followPhone).apply()
+        if (followPhone) setFollowMountEnabled(false)
         overlaysVisible = true
     }
 
@@ -771,13 +1024,33 @@ fun StarMapScreen(
         applySkyAppearance()
     }
 
+    fun centerOnPointing() {
+        if (!latestFollowSource.showCurrent) return
+        evalStarMap("window.MercStarMap && window.MercStarMap.centerOnPointing(1);")
+        overlaysVisible = true
+    }
     fun centerOnMount() {
+        // Explicit model diagnostic; it is never used as the follow source.
+        if (!canReadCoordinates) return
         evalStarMap("window.MercStarMap && window.MercStarMap.centerOnMount(1);")
+        overlaysVisible = true
+    }
+    fun refreshPointing() {
+        if (resolvedObserverSite == null) onObserverSiteSettings()
+        else if (selectedTarget != null) onPushTo(requireNotNull(selectedTarget)) else onOpenPreparation()
+    }
+
+    fun centerOnRaDec(raHours: Double, decDegrees: Double, frame: String = "JNOW", duration: Int = 1) {
+        val source = if (frame == "J2000" || frame == "ICRF") "ICRF" else "JNOW"
+        evalStarMap(
+            "window.MercStarMap && window.MercStarMap.centerOnRaDec(" +
+                "%.8f,%.8f,%d,'%s');".format(Locale.US, raHours, decDegrees, duration, source)
+        )
         overlaysVisible = true
     }
 
     fun centerOnTarget() {
-        evalStarMap("window.MercStarMap && window.MercStarMap.centerOnSelection(1);")
+        selectedTarget?.let { centerOnRaDec(it.raHours, it.decDegrees, it.frame) }
         overlaysVisible = true
     }
 
@@ -785,7 +1058,7 @@ fun StarMapScreen(
         val name = JSONObject.quote(context.getString(R.string.star_map_custom_target))
         evalStarMap("window.MercStarMap && window.MercStarMap.selectMapCenter($name);")
         overlaysVisible = true
-        cornerPanel = StarMapCornerPanel.NONE
+        interaction = interaction.selectTarget()
     }
 
     fun adjustImportAngle(delta: Double) {
@@ -843,15 +1116,8 @@ fun StarMapScreen(
         )
     }
 
-    fun centerOnRaDec(raHours: Double, decDegrees: Double, frame: String = "JNOW") {
-        evalStarMap(
-            "window.MercStarMap && window.MercStarMap.centerOnRaDec(" +
-                "%.8f,%.8f,1,'%s');".format(Locale.US, raHours, decDegrees, frame)
-        )
-        overlaysVisible = true
-    }
-
     fun gotoCatalogObject(obj: CatalogObject) {
+        importAngleText = "0"
         selectedTarget = StarMapTarget(
             name = "${obj.id} · ${obj.name}",
             raHours = obj.raHours,
@@ -862,7 +1128,7 @@ fun StarMapScreen(
         centerOnRaDec(obj.raHours, obj.decDeg, frame = "ICRF")
         searchDialogVisible = false
         searchQuery = ""
-        cornerPanel = StarMapCornerPanel.NONE
+        interaction = interaction.selectTarget()
         overlaysVisible = true
     }
 
@@ -903,13 +1169,20 @@ fun StarMapScreen(
      * kill the replacement and leave a permanent black screen.
      */
     fun reloadStarMap() {
-        selectedTarget = null
-        targetExpanded = false
-        cornerPanel = StarMapCornerPanel.NONE
+        // Reloading the renderer preserves observing context and explicitly dismissed cards.
+        interaction = interaction.copy(targetExpanded = false, panel = StarMapCornerPanel.NONE)
         engineState = StarMapEngineState.Loading
         overlaysVisible = true
         webView = null
         webViewSession++
+    }
+
+    val latestOnBlankTap by rememberUpdatedState {
+        // Explicit blank taps toggle the whole HUD, even when pinned. Keep the
+        // observing target but do not resurrect its dismissed card on wakeup.
+        interaction = interaction.dismissTopLayer()
+        overlaysVisible = !overlaysVisible
+        hudActivityRevision++
     }
 
     val bridge = remember(context, webViewSession) {
@@ -923,18 +1196,73 @@ fun StarMapScreen(
                 overlaysVisible = true
             },
             onSelected = {
+                if (selectedTarget?.name != it?.name) importAngleText = "0"
                 selectedTarget = it
-                targetExpanded = false
-                cornerPanel = StarMapCornerPanel.NONE
+                interaction = interaction.selectTarget()
                 overlaysVisible = true
             },
+            onUpdated = { updated ->
+                // Coordinate refreshes update the same selection without reopening its card.
+                if (selectedTarget?.name == updated.name) selectedTarget = updated
+            },
+            onBlankTap = { latestOnBlankTap() },
+            onViewChanged = { ra, dec, fov ->
+                if (acceptViewUpdates) {
+                    savedCenterRaHours = ra
+                    savedCenterDecDegrees = dec
+                    savedCenterFrame = "JNOW"
+                    savedFovDegrees = fov
+                }
+            },
             onFollowChanged = { enabled -> setFollowMountEnabled(enabled) },
+            onPhoneFollowChanged = { enabled -> setPhoneFollowEnabled(enabled) },
             fallbackTargetName = context.getString(R.string.selected_target),
             parseError = { context.getString(R.string.star_target_parse_error, it.message.orEmpty()) }
         )
     }
 
-    BackHandler(onBack = onBack)
+    BackHandler {
+        when {
+            gotoConfirmation != null -> gotoConfirmation = null
+            syncConfirmation != null -> syncConfirmation = null
+            precisionConfirmation != null -> precisionConfirmation = null
+            sequenceImportPlan != null -> sequenceImportPlan = null
+            confirmHome -> confirmHome = false
+            searchDialogVisible -> searchDialogVisible = false
+            starMapTimeDialogVisible -> starMapTimeDialogVisible = false
+            fovDialogVisible -> fovDialogVisible = false
+            interaction.hasInformationLayer -> interaction = interaction.dismissTopLayer()
+            else -> onBack()
+        }
+    }
+
+    LaunchedEffect(selectedObservationTarget?.name, selectedObservationTarget?.raHours,
+        selectedObservationTarget?.decDegrees, selectedObservationTarget?.frame) {
+        val next = selectedObservationTarget ?: return@LaunchedEffect
+        if (!selectedTarget.hasSameIdentity(next)) {
+            selectedTarget = next
+            interaction = interaction.selectTarget()
+            importAngleText = positionAngleText(next.positionAngleDeg)
+            savedCenterRaHours = next.raHours
+            savedCenterDecDegrees = next.decDegrees
+            savedCenterFrame = next.frame
+            overlaysVisible = true
+            centerOnRaDec(next.raHours, next.decDegrees, next.frame)
+        }
+    }
+
+    LaunchedEffect(webView, engineState) {
+        if (engineState !is StarMapEngineState.Ready) return@LaunchedEffect
+        val ra = savedCenterRaHours ?: selectedTarget?.raHours
+        val dec = savedCenterDecDegrees ?: selectedTarget?.decDegrees
+        if (ra != null && dec != null) centerOnRaDec(ra, dec,
+            if (savedCenterRaHours != null) savedCenterFrame else selectedTarget?.frame ?: "JNOW", duration = 0)
+        savedFovDegrees?.let { fov ->
+            evalStarMap("window.MercStarMap && window.MercStarMap.setFovDegrees($fov,0);")
+        }
+        // Ignore the renderer's default first view until restoration has executed.
+        webView?.evaluateJavascript("true;") { acceptViewUpdates = true }
+    }
 
     LaunchedEffect(webViewSession, engineState) {
         if (engineState !is StarMapEngineState.Loading) return@LaunchedEffect
@@ -945,11 +1273,7 @@ fun StarMapScreen(
     }
 
     LaunchedEffect(showGlobalStop) {
-        if (showGlobalStop) cornerPanel = StarMapCornerPanel.NONE
-    }
-
-    LaunchedEffect(selectedTarget?.name, selectedTarget?.raHours, selectedTarget?.decDegrees) {
-        importAngleText = "0"
+        if (showGlobalStop) interaction = interaction.copy(panel = StarMapCornerPanel.NONE)
     }
 
     LaunchedEffect(selectedTarget, importAngleText) {
@@ -974,10 +1298,15 @@ fun StarMapScreen(
     }
 
     LaunchedEffect(
+        foreground,
         overlaysVisible,
         overlaysLocked,
+        hudPointerActive,
+        hudActivityRevision,
+        targetExpanded,
         engineState,
         selectedTarget,
+        sequenceImportPlan,
         gotoConfirmation,
         syncConfirmation,
         precisionConfirmation,
@@ -988,9 +1317,12 @@ fun StarMapScreen(
         confirmHome,
         starMapTimeDialogVisible
     ) {
-        if (!overlaysVisible ||
+        if (!foreground || !overlaysVisible ||
             overlaysLocked ||
+            hudPointerActive ||
+            targetExpanded ||
             engineState !is StarMapEngineState.Ready ||
+            sequenceImportPlan != null ||
             gotoConfirmation != null ||
             syncConfirmation != null ||
             precisionConfirmation != null ||
@@ -1003,13 +1335,26 @@ fun StarMapScreen(
         ) {
             return@LaunchedEffect
         }
+        val idleRevision = hudActivityRevision
         delay(StarMapLoadRules.OVERLAY_IDLE_MS)
+        // A press or menu opening at the deadline can precede the next composition.
+        // Recheck the live state so a resumed old coroutine cannot close that interaction.
+        if (idleRevision != hudActivityRevision || hudPointerActive || overlaysLocked ||
+            interaction.targetExpanded || interaction.panel != StarMapCornerPanel.NONE ||
+            sequenceImportPlan != null || gotoConfirmation != null || syncConfirmation != null || precisionConfirmation != null ||
+            searchDialogVisible || fovDialogVisible || confirmHome || starMapTimeDialogVisible ||
+            precisionGotoProgress.isActive) return@LaunchedEffect
         overlaysVisible = false
+        interaction = interaction.copy(targetCardVisible = false, targetExpanded = false)
     }
 
-    LaunchedEffect(webView, mountSite, starMapEpochMillis, engineState) {
+    LaunchedEffect(webView, resolvedObserverSite, starMapEpochMillis, engineState) {
         if (engineState !is StarMapEngineState.Ready) return@LaunchedEffect
-        val site = mountSite ?: return@LaunchedEffect
+        val site = resolvedObserverSite
+        if (site == null) {
+            evalStarMap("window.MercStarMap && window.MercStarMap.clearObserver();")
+            return@LaunchedEffect
+        }
         val script = "window.MercStarMap && window.MercStarMap.setObserver(" +
             "${site.latitudeDeg},${site.longitudeDeg},$starMapEpochMillis);"
         webView?.evaluateJavascript(script, null)
@@ -1044,6 +1389,14 @@ fun StarMapScreen(
         }
         webView?.evaluateJavascript(script, null)
     }
+    LaunchedEffect(webView, currentFollowSource, engineState) {
+        if (engineState !is StarMapEngineState.Ready) return@LaunchedEffect
+        val source = currentFollowSource.source?.takeIf { currentFollowSource.showCurrent }
+        evalStarMap(if (source == null) "window.MercStarMap && window.MercStarMap.clearPointingCoordinates();"
+            else "window.MercStarMap && window.MercStarMap.setPointingCoordinates(" +
+                "${source.anchor.raHours},${source.anchor.decDegrees},${JSONObject.quote(source.anchor.jsFrame())}," +
+                "${source.absoluteUtcMs},${source.estimateUtcMs});")
+    }
 
     LaunchedEffect(
         webView,
@@ -1055,6 +1408,8 @@ fun StarMapScreen(
         secondaryTrain,
         overlayCurrentLabel,
         overlayTargetLabel,
+        currentFovSource,
+        currentFrameCentered,
         mountCoordinates,
         mountConnected,
         cameraPixelSizeUm,
@@ -1105,6 +1460,42 @@ fun StarMapScreen(
         webView?.evaluateJavascript(script, null)
     }
 
+    LaunchedEffect(webView, landscapeVisible, engineState) {
+        if (engineState !is StarMapEngineState.Ready) return@LaunchedEffect
+        evalStarMap("window.MercStarMap && window.MercStarMap.setLandscapeVisible($landscapeVisible);")
+    }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(phoneOrientation, lifecycleOwner, foreground, followPhone, engineState, webView, resolvedObserverSite) {
+        var registered = false
+        phoneFollowHasSample = false
+        fun updateSubscription() {
+            val shouldRun = foreground && followPhone && engineState is StarMapEngineState.Ready &&
+                webView != null && lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+            if (shouldRun && !registered) {
+                registered = phoneOrientation.start(resolvedObserverSite) { direction, utcMs ->
+                    phoneFollowHasSample = true
+                    evalStarMap("window.MercStarMap && window.MercStarMap.setPhoneOrientation(" +
+                        "${direction.azimuthDeg},${direction.altitudeDeg},$utcMs);")
+                }
+                phoneFollowRegistrationFailed = !registered
+                evalStarMap("window.MercStarMap && window.MercStarMap.setPhoneFollow($registered);")
+            } else if (!shouldRun) {
+                phoneOrientation.stop()
+                registered = false
+                evalStarMap("window.MercStarMap && window.MercStarMap.setPhoneFollow(false);")
+            }
+        }
+        val observer = LifecycleEventObserver { _, _ -> updateSubscription() }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        updateSubscription()
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            phoneOrientation.stop()
+            evalStarMap("window.MercStarMap && window.MercStarMap.setPhoneFollow(false);")
+        }
+    }
+
     LaunchedEffect(webView, redNightMode, engineState) {
         applyNightVision()
     }
@@ -1135,10 +1526,25 @@ fun StarMapScreen(
     }
 
     LaunchedEffect(overlaysVisible) {
-        if (!overlaysVisible) cornerPanel = StarMapCornerPanel.NONE
+        if (!overlaysVisible) interaction = interaction.copy(panel = StarMapCornerPanel.NONE)
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    BoxWithConstraints(modifier = Modifier.fillMaxSize().pointerInput(Unit) {
+        // Observe, without consuming, all Compose/WebView presses. A live press/scroll
+        // cancels the idle coroutine; release starts a complete new interval.
+        awaitPointerEventScope {
+            while (true) {
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+                val pressed = event.changes.any { it.pressed }
+                if (hudPointerActive != pressed) {
+                    hudPointerActive = pressed
+                    hudActivityRevision++
+                }
+            }
+        }
+    }) {
+        val availablePanelHeight = minOf(420.dp, (maxHeight - 78.dp).coerceAtLeast(48.dp))
+        val compactLandscape = maxWidth > maxHeight && maxHeight < 400.dp
         key(webViewSession) {
             AndroidView(
                 factory = { viewContext ->
@@ -1217,7 +1623,8 @@ fun StarMapScreen(
                             laidOutView.post {
                                 if (laidOutView.isAttachedToWindow) {
                                     (laidOutView as WebView).loadUrl(
-                                        "https://appassets.androidplatform.net/assets/stellarium/index.html"
+                                        "https://appassets.androidplatform.net/assets/stellarium/index.html?landscape=" +
+                                            if (landscapeVisible) "1" else "0"
                                     )
                                 }
                             }
@@ -1228,37 +1635,75 @@ fun StarMapScreen(
                     if (webView === released) webView = null
                     destroyWebView(released)
                 },
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier.fillMaxSize().testTag("star-map-canvas")
             )
         }
 
-        if (!overlaysVisible && engineState is StarMapEngineState.Ready) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .pointerInput(Unit) {
-                        detectTapGestures {
-                            overlaysVisible = true
-                        }
-                    }
-                    .semantics {
-                        contentDescription =
-                            context.getString(R.string.show_star_map_controls)
-                    }
-            )
-        }
-
+        // Every ordinary browsing control shares one idle timer and blank-tap wakeup.
         AnimatedVisibility(
             visible = overlaysVisible || engineState !is StarMapEngineState.Ready,
-            enter = fadeIn(),
-            exit = fadeOut(),
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(8.dp)
+            enter = fadeIn(), exit = fadeOut(),
+            modifier = Modifier.align(Alignment.TopStart)
         ) {
-            Card {
-                StarMapBackButton(onBack = onBack)
-            }
+        FlowRow(
+            modifier = Modifier
+                .padding(8.dp)
+                .widthIn(max = if (compactLandscape) (maxWidth - 80.dp).coerceAtLeast(160.dp) else 240.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+                Card {
+                    TextButton(onClick = onOpenTargets) {
+                        Text(stringResource(R.string.target_library_title))
+                    }
+                }
+                Card {
+                    TextButton(onClick = onOpenPreparation) {
+                        Text(stringResource(R.string.wf_star_map_preparation))
+                    }
+                }
+                Card(colors = if (resolvedObserverSite == null) {
+                    CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
+                } else CardDefaults.cardColors()) {
+                    TextButton(
+                        onClick = onObserverSiteSettings,
+                        modifier = Modifier.testTag("star-map-location"),
+                        colors = ButtonDefaults.textButtonColors(
+                            contentColor = if (resolvedObserverSite == null) MaterialTheme.colorScheme.onErrorContainer
+                                else MaterialTheme.colorScheme.primary
+                        )
+                    ) {
+                        Text(
+                            if (resolvedObserverSite == null) stringResource(R.string.sky_set_location)
+                                else observerSiteLabel ?: stringResource(R.string.wf_observer_site),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+                if (showFovOverlay && activeComputation?.hasOverlay == true || followMount || followInterrupted) {
+                    Card {
+                        Column {
+                        Text(pointingSourceCaption,
+                            Modifier.testTag("pointing-follow-source").padding(horizontal = 10.dp, vertical = 6.dp), style = MaterialTheme.typography.labelSmall
+                        )
+                        if (followInterrupted) TextButton(onClick = {
+                            if (currentFollowSource.showCurrent && resolvedObserverSite != null) setFollowMountEnabled(true) else refreshPointing()
+                        }) { Text(stringResource(if (resolvedObserverSite == null) R.string.wf_observer_site else if (currentFollowSource.showCurrent) R.string.wf_follow_resume else R.string.wf_follow_refresh)) }
+                        }
+                    }
+                }
+                if (selectedTarget != null && !interaction.targetCardVisible) {
+                    Card {
+                        TextButton(onClick = {
+                            interaction = interaction.selectTarget()
+                            overlaysVisible = true
+                        }) {
+                            Text(stringResource(R.string.wf_star_map_current_target))
+                        }
+                    }
+                }
+        }
         }
 
         AnimatedVisibility(
@@ -1298,32 +1743,6 @@ fun StarMapScreen(
                                 Icon(
                                     Icons.Default.Search,
                                     contentDescription = stringResource(R.string.star_map_search)
-                                )
-                            }
-                        }
-                        Card {
-                            IconButton(
-                                onClick = {
-                                    onRedNightModeChange(!redNightMode)
-                                    overlaysVisible = true
-                                },
-                                modifier = Modifier.semantics {
-                                    contentDescription =
-                                        context.getString(R.string.red_night_mode)
-                                }
-                            ) {
-                                Icon(
-                                    if (redNightMode) {
-                                        Icons.Default.Nightlight
-                                    } else {
-                                        Icons.Default.NightlightRound
-                                    },
-                                    contentDescription = stringResource(R.string.red_night_mode),
-                                    tint = if (redNightMode) {
-                                        MaterialTheme.colorScheme.primary
-                                    } else {
-                                        MaterialTheme.colorScheme.onSurface
-                                    }
                                 )
                             }
                         }
@@ -1376,9 +1795,10 @@ fun StarMapScreen(
             BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
                 val panelMax = minOf(360.dp, maxWidth - 16.dp)
                 val target = selectedTarget
-                val showTargetCard = target != null && cornerPanel == StarMapCornerPanel.NONE
-                val canSlewMount = mountConnected && !mountBusy
-                val canSyncMount = canSlewMount && mountSupportsSync
+                val showTargetCard = target != null && interaction.targetCardVisible &&
+                    cornerPanel == StarMapCornerPanel.NONE
+                val canSlewMount = canGoto
+                val canSyncMount = canSync
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -1386,16 +1806,31 @@ fun StarMapScreen(
                 ) {
             StarMapCornerControls(
                 modifier = Modifier.widthIn(max = panelMax),
+                maxPanelHeight = availablePanelHeight,
                 panel = cornerPanel,
                 onPanelChange = {
-                    cornerPanel = it
+                    interaction = interaction.openPanel(it)
                     overlaysVisible = true
                     if (it == StarMapCornerPanel.SKY) refreshHipsCacheLabel()
                 },
                 mountConnected = mountConnected,
+                followAvailable = currentFollowSource.showCurrent && resolvedObserverSite != null,
+                pointingSourceCaption = pointingSourceCaption,
+                canManualMove = mountPointingCapabilities.manualMove,
+                canHome = mountPointingCapabilities.home,
+                homeEnabled = canHome,
                 moveEnabled = moveEnabled,
                 mountSlewRate = mountSlewRate,
                 followMount = followMount,
+                followPhone = followPhone,
+                phoneFollowAvailable = phoneOrientation.available,
+                phoneFollowCaption = stringResource(when {
+                    !phoneOrientation.available -> R.string.sky_phone_follow_unavailable
+                    phoneFollowRegistrationFailed -> R.string.sky_phone_follow_failed
+                    followPhone && !phoneFollowHasSample -> R.string.sky_phone_follow_waiting
+                    resolvedObserverSite == null -> R.string.sky_phone_follow_magnetic
+                    else -> R.string.sky_phone_follow_hint
+                }),
                 activeTrain = activeTrain,
                 showFovOverlay = showFovOverlay,
                 equatorialGrid = equatorialGrid,
@@ -1407,6 +1842,7 @@ fun StarMapScreen(
                 constellationBounds = constellationBounds,
                 starHints = starHints,
                 atmosphereVisible = atmosphereVisible,
+                landscapeVisible = landscapeVisible,
                 onlineDssEnabled = onlineDssEnabled,
                 starMapTimeLabel = formatStarMapTime(starMapEpochMillis),
                 overlaysLocked = overlaysLocked,
@@ -1415,9 +1851,11 @@ fun StarMapScreen(
                 onManualMoveStart = onManualMoveStart,
                 onManualMoveStop = onManualMoveStop,
                 onStopMount = onStopMount,
-                onConfirmHome = { confirmHome = true },
+                onConfirmHome = { if (canHome) confirmHome = true },
                 onFollowMountChange = ::setFollowMountEnabled,
-                onCenterOnMount = ::centerOnMount,
+                onFollowPhoneChange = ::setPhoneFollowEnabled,
+                onCenterOnPointing = ::centerOnPointing,
+                onRefreshPointing = ::refreshPointing,
                 onActiveTrainChange = {
                     activeTrain = it
                     persistFovPrefs()
@@ -1469,10 +1907,15 @@ fun StarMapScreen(
                     persistAndApplySkyAppearance()
                 },
                 onAtmosphereChange = { atmosphereVisible = it },
+                onLandscapeChange = {
+                    landscapeVisible = it
+                    prefs.edit().putBoolean("star_map_simulated_landscape", it).apply()
+                },
                 onOnlineDssChange = ::setOnlineDssEnabled,
                 onOverlaysLockedChange = {
                     overlaysLocked = it
-                    if (it) overlaysVisible = true
+                    overlaysVisible = true
+                    hudActivityRevision++
                 },
                 onRefreshHipsCache = ::refreshHipsCacheLabel,
                 onClearHipsCache = {
@@ -1486,177 +1929,116 @@ fun StarMapScreen(
                     modifier = Modifier
                         .padding(8.dp)
                         .widthIn(max = panelMax)
+                        .heightIn(max = availablePanelHeight)
+                        .testTag("star-map-target-card")
+                        .consumeStarMapPanelTouches()
                 ) {
                     Column(
-                        modifier = Modifier.padding(10.dp),
+                        modifier = Modifier.padding(10.dp).verticalScroll(rememberScrollState()),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Text(
-                            target.name,
-                            style = MaterialTheme.typography.titleSmall,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { targetExpanded = !targetExpanded }
-                                .semantics {
-                                    contentDescription =
-                                        context.getString(R.string.expand_target_details)
-                                }
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Button(
-                                enabled = canSlewMount,
-                                onClick = {
-                                    overlaysVisible = true
-                                    gotoConfirmation = target
-                                },
-                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 8.dp),
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .defaultMinSize(minWidth = 0.dp)
-                            ) {
-                                Text(
-                                    stringResource(R.string.goto_label),
-                                    maxLines = 1,
-                                    softWrap = false,
-                                    overflow = TextOverflow.Clip
-                                )
-                            }
-                            FilledTonalButton(
-                                enabled = canSyncMount,
-                                onClick = {
-                                    overlaysVisible = true
-                                    syncConfirmation = target
-                                },
-                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 8.dp),
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .defaultMinSize(minWidth = 0.dp)
-                            ) {
-                                Text(
-                                    stringResource(R.string.sync_label),
-                                    maxLines = 1,
-                                    softWrap = false,
-                                    overflow = TextOverflow.Clip
-                                )
-                            }
-                        }
-                        OutlinedButton(
-                            enabled = canSlewMount,
-                            onClick = {
-                                overlaysVisible = true
-                                precisionConfirmation = target
-                            },
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                stringResource(R.string.precision_goto_label),
+                                target.name,
+                                style = MaterialTheme.typography.titleSmall,
                                 maxLines = 1,
-                                softWrap = false,
-                                overflow = TextOverflow.Ellipsis
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clickable {
+                                        interaction = interaction.copy(targetExpanded = !interaction.targetExpanded)
+                                    }
+                                    .semantics {
+                                        contentDescription = context.getString(R.string.expand_target_details)
+                                    }
                             )
+                            IconButton(onClick = { interaction = interaction.dismissTopLayer() }) {
+                                Icon(Icons.Default.Close, contentDescription = stringResource(R.string.close))
+                            }
                         }
-                        Text(
-                            stringResource(R.string.sequence_sensor_angle),
-                            style = MaterialTheme.typography.labelMedium
-                        )
-                        Text(
-                            stringResource(
-                                if (showFovOverlay && activeComputation?.mode == FovInstrumentMode.SENSOR) {
-                                    R.string.sequence_sensor_angle_preview_active
-                                } else {
-                                    R.string.sequence_sensor_angle_preview_hint
-                                }
-                            ),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            OutlinedTextField(
-                                value = importAngleText,
-                                onValueChange = { importAngleText = it },
-                                suffix = { Text("°") },
-                                singleLine = true,
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                                modifier = Modifier.weight(1f)
-                            )
-                            OutlinedButton(
-                                onClick = { adjustImportAngle(-1.0) },
-                                contentPadding = PaddingValues(horizontal = 8.dp),
-                                modifier = Modifier.defaultMinSize(minWidth = 0.dp)
-                            ) { Text("−1°") }
-                            OutlinedButton(
-                                onClick = { adjustImportAngle(1.0) },
-                                contentPadding = PaddingValues(horizontal = 8.dp),
-                                modifier = Modifier.defaultMinSize(minWidth = 0.dp)
-                            ) { Text("+1°") }
+                        val startPushTo = {
+                            onPushTo(target.copy(positionAngleDeg = normalizePositionAngle(importAngleText.toDoubleOrNull() ?: 0.0)))
                         }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            listOf(0, 90, 180, 270).forEach { angle ->
-                                TextButton(
-                                    onClick = { importAngleText = angle.toString() },
-                                    contentPadding = PaddingValues(horizontal = 2.dp),
+                        if (mountConnected && mountPointingCapabilities.goto) {
+                            FilledTonalButton(onClick = startPushTo, modifier = Modifier.fillMaxWidth()) {
+                                Text(stringResource(R.string.push_to_title))
+                            }
+                        } else {
+                            Button(onClick = startPushTo, modifier = Modifier.fillMaxWidth()) {
+                                Text(stringResource(R.string.push_to_title))
+                            }
+                        }
+                        if (mountConnected && (mountPointingCapabilities.goto || mountPointingCapabilities.sync)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                if (mountPointingCapabilities.goto) Button(
+                                    enabled = canSlewMount,
+                                    onClick = {
+                                        overlaysVisible = true
+                                        gotoConfirmation = target
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 8.dp),
                                     modifier = Modifier
                                         .weight(1f)
                                         .defaultMinSize(minWidth = 0.dp)
-                                ) { Text("$angle°", maxLines = 1) }
-                            }
-                        }
-                        lastSolvedPositionAngleDeg?.let { solvedAngle ->
-                            val plannedAngle = normalizePositionAngle(
-                                importAngleText.toDoubleOrNull() ?: 0.0
-                            )
-                            val error = SensorAngleCalibration.angularError(plannedAngle, solvedAngle)
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    stringResource(
-                                        R.string.fov_solved_sensor_angle,
-                                        positionAngleText(solvedAngle)
-                                    ),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                TextButton(onClick = {
-                                    importAngleText = positionAngleText(solvedAngle)
-                                }) {
-                                    Text(stringResource(R.string.fov_use_solved_angle))
+                                ) {
+                                    Text(
+                                        stringResource(R.string.goto_label),
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        overflow = TextOverflow.Clip
+                                    )
+                                }
+                                if (mountPointingCapabilities.sync) FilledTonalButton(
+                                    enabled = canSyncMount,
+                                    onClick = {
+                                        overlaysVisible = true
+                                        syncConfirmation = target
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 8.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .defaultMinSize(minWidth = 0.dp)
+                                ) {
+                                    Text(
+                                        stringResource(R.string.sync_label),
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        overflow = TextOverflow.Clip
+                                    )
                                 }
                             }
-                            if (rotatorConnected && error > 1.0) {
+                            if (mountPointingCapabilities.goto) OutlinedButton(
+                                enabled = canSlewMount,
+                                onClick = {
+                                    overlaysVisible = true
+                                    precisionConfirmation = target
+                                },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
                                 Text(
-                                    stringResource(R.string.fov_sensor_angle_error, error),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.error
+                                    stringResource(R.string.precision_goto_label),
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                         }
-                        if (rotatorConnected) {
-                            val plannedAngle = normalizePositionAngle(
-                                importAngleText.toDoubleOrNull() ?: 0.0
+                        if (targetExpanded) {
+                            Text(
+                                stringResource(R.string.sequence_sensor_angle),
+                                style = MaterialTheme.typography.labelMedium
                             )
-                            val targetMechanical = sensorAngleCalibration.mechanicalAngle(plannedAngle)
                             Text(
                                 stringResource(
-                                    R.string.fov_rotator_angle_summary,
-                                    rotatorMechanicalAngleDeg,
-                                    targetMechanical,
-                                    sensorAngleCalibration.offsetDeg
+                                    if (showFovOverlay && activeComputation?.mode == FovInstrumentMode.SENSOR) {
+                                        R.string.sequence_sensor_angle_preview_active
+                                    } else {
+                                        R.string.sequence_sensor_angle_preview_hint
+                                    }
                                 ),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -1666,58 +2048,149 @@ fun StarMapScreen(
                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                FilterChip(
-                                    selected = sensorAngleCalibration.reversed,
-                                    onClick = {
-                                        updateSensorAngleCalibration(
-                                            sensorAngleCalibration.copy(
-                                                reversed = !sensorAngleCalibration.reversed
-                                            )
-                                        )
-                                    },
-                                    label = { Text(stringResource(R.string.fov_rotator_reverse_mapping)) }
+                                OutlinedTextField(
+                                    value = importAngleText,
+                                    onValueChange = { importAngleText = it },
+                                    suffix = { Text("°") },
+                                    singleLine = true,
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                    modifier = Modifier.weight(1f)
                                 )
-                                TextButton(
-                                    enabled = lastSolvedPositionAngleDeg != null,
-                                    onClick = {
-                                        val solved = lastSolvedPositionAngleDeg ?: return@TextButton
-                                        updateSensorAngleCalibration(
-                                            sensorAngleCalibration.calibrated(
-                                                solved,
-                                                rotatorMechanicalAngleDeg
-                                            )
-                                        )
-                                    }
-                                ) {
-                                    Text(stringResource(R.string.fov_calibrate_rotator_angle))
+                                OutlinedButton(
+                                    onClick = { adjustImportAngle(-1.0) },
+                                    contentPadding = PaddingValues(horizontal = 8.dp),
+                                    modifier = Modifier.defaultMinSize(minWidth = 0.dp)
+                                ) { Text("−1°") }
+                                OutlinedButton(
+                                    onClick = { adjustImportAngle(1.0) },
+                                    contentPadding = PaddingValues(horizontal = 8.dp),
+                                    modifier = Modifier.defaultMinSize(minWidth = 0.dp)
+                                ) { Text("+1°") }
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                listOf(0, 90, 180, 270).forEach { angle ->
+                                    TextButton(
+                                        onClick = { importAngleText = angle.toString() },
+                                        contentPadding = PaddingValues(horizontal = 2.dp),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .defaultMinSize(minWidth = 0.dp)
+                                    ) { Text("$angle°", maxLines = 1) }
                                 }
                             }
-                            OutlinedButton(
-                                onClick = { onMoveRotator(targetMechanical) },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text(stringResource(R.string.fov_rotate_to_composition))
-                            }
-                        }
-                        if (showSequenceActions) {
-                            OutlinedButton(
-                                onClick = {
-                                    overlaysVisible = true
-                                    sequenceImportPlan = sequenceMosaicPlan(target)
-                                },
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text(
-                                    stringResource(R.string.sequence_add_from_star_map),
-                                    maxLines = 1,
-                                    softWrap = false,
-                                    overflow = TextOverflow.Ellipsis
+                            lastSolvedPositionAngleDeg?.let { solvedAngle ->
+                                val plannedAngle = normalizePositionAngle(
+                                    importAngleText.toDoubleOrNull() ?: 0.0
                                 )
+                                val error = SensorAngleCalibration.angularError(plannedAngle, solvedAngle)
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        stringResource(
+                                            R.string.fov_solved_sensor_angle,
+                                            positionAngleText(solvedAngle)
+                                        ),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    TextButton(onClick = {
+                                        importAngleText = positionAngleText(solvedAngle)
+                                    }) {
+                                        Text(stringResource(R.string.fov_use_solved_angle))
+                                    }
+                                }
+                                if (rotatorConnected && error > 1.0) {
+                                    Text(
+                                        stringResource(R.string.fov_sensor_angle_error, error),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                }
+                            }
+                            if (rotatorConnected) {
+                                val plannedAngle = normalizePositionAngle(
+                                    importAngleText.toDoubleOrNull() ?: 0.0
+                                )
+                                val targetMechanical = sensorAngleCalibration.mechanicalAngle(plannedAngle)
+                                Text(
+                                    stringResource(
+                                        R.string.fov_rotator_angle_summary,
+                                        rotatorMechanicalAngleDeg,
+                                        targetMechanical,
+                                        sensorAngleCalibration.offsetDeg
+                                    ),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    FilterChip(
+                                        selected = sensorAngleCalibration.reversed,
+                                        onClick = {
+                                            updateSensorAngleCalibration(
+                                                sensorAngleCalibration.copy(
+                                                    reversed = !sensorAngleCalibration.reversed
+                                                )
+                                            )
+                                        },
+                                        label = { Text(stringResource(R.string.fov_rotator_reverse_mapping)) }
+                                    )
+                                    TextButton(
+                                        enabled = lastSolvedPositionAngleDeg != null,
+                                        onClick = {
+                                            val solved = lastSolvedPositionAngleDeg ?: return@TextButton
+                                            updateSensorAngleCalibration(
+                                                sensorAngleCalibration.calibrated(
+                                                    solved,
+                                                    rotatorMechanicalAngleDeg
+                                                )
+                                            )
+                                        }
+                                    ) {
+                                        Text(stringResource(R.string.fov_calibrate_rotator_angle))
+                                    }
+                                }
+                                OutlinedButton(
+                                    onClick = { onMoveRotator(targetMechanical) },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(stringResource(R.string.fov_rotate_to_composition))
+                                }
+                            }
+                            if (showSequenceActions) {
+                                OutlinedButton(
+                                    onClick = {
+                                        overlaysVisible = true
+                                        sequenceImportPlan = sequenceMosaicPlan(target)
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        stringResource(R.string.sequence_add_from_star_map),
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
                             }
                         }
+                        TextButton(
+                            onClick = { interaction = interaction.copy(targetExpanded = !interaction.targetExpanded) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text(stringResource(if (targetExpanded) R.string.wf_star_map_hide_details else R.string.wf_star_map_target_details)) }
                         if (precisionGotoProgress.isActive ||
                             precisionGotoProgress.phase == PrecisionGotoPhase.SUCCEEDED ||
+                            precisionGotoProgress.phase == PrecisionGotoPhase.CANCELLED ||
                             precisionGotoProgress.phase == PrecisionGotoPhase.FAILED
                         ) {
                             Text(
@@ -1738,14 +2211,14 @@ fun StarMapScreen(
                                 maxLines = 2
                             )
                         }
-                        if (mountConnected && !mountSupportsSync) {
+                        if (mountConnected && mountPointingCapabilities.goto && !mountPointingCapabilities.sync) {
                             Text(
                                 stringResource(R.string.mount_sync_unsupported),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.outline
                             )
                         }
-                        if (!mountConnected) {
+                        if (!mountConnected && targetExpanded) {
                             Text(
                                 stringResource(R.string.connect_mount_for_goto),
                                 style = MaterialTheme.typography.bodySmall,
@@ -1772,7 +2245,7 @@ fun StarMapScreen(
                                 ) {
                                     Text(stringResource(R.string.center_on_target))
                                 }
-                                if (mountConnected && mountCoordinates != null) {
+                                if (canReadCoordinates && mountCoordinates != null) {
                                     TextButton(
                                         onClick = ::centerOnMount,
                                         modifier = Modifier.weight(1f)
@@ -1809,7 +2282,7 @@ fun StarMapScreen(
             coordinates = target.coordinatesText(),
             onConfirm = {
                 gotoConfirmation = null
-                onGoto(target)
+                if (canGoto) onGoto(target)
             },
             onDismiss = { gotoConfirmation = null }
         )
@@ -1821,7 +2294,7 @@ fun StarMapScreen(
             coordinates = target.coordinatesText(),
             onConfirm = {
                 syncConfirmation = null
-                onSync(target)
+                if (canSync) onSync(target)
             },
             onDismiss = { syncConfirmation = null }
         )
@@ -1834,7 +2307,7 @@ fun StarMapScreen(
             toleranceArcmin = currentPrecisionToleranceArcmin(),
             onConfirm = {
                 precisionConfirmation = null
-                onPrecisionGoto(target, currentPrecisionToleranceArcmin())
+                if (canGoto) onPrecisionGoto(target, currentPrecisionToleranceArcmin())
             },
             onDismiss = { precisionConfirmation = null }
         )
@@ -1882,7 +2355,7 @@ fun StarMapScreen(
             confirmButton = {
                 TextButton(onClick = {
                     confirmHome = false
-                    onGoHome()
+                    if (canHome) onGoHome()
                 }) { Text(stringResource(R.string.go)) }
             },
             dismissButton = {
@@ -2024,21 +2497,33 @@ fun StarMapScreen(
             config = editingConfig,
             telescopes = telescopes,
             eyepieces = eyepieces,
-            sensors = sensors,
+            sensors = editingSensors,
             showOverlay = showFovOverlay,
             computation = editingComputation,
             mosaicConfig = mosaicConfig,
             positionAngleText = importAngleText,
             onEditingTrainChange = { editingTrain = it },
             onConfigChange = { updated ->
+                val before = if (updated.id == OpticsTrainId.PRIMARY) primaryTrain else secondaryTrain
+                val configured = updated.copy(telescopeFocalLengthOverrideMm =
+                    if (before.telescopeId != updated.telescopeId || before.customTelescopeFl != updated.customTelescopeFl)
+                        updated.customTelescopeFl.toDoubleOrNull() else before.telescopeFocalLengthOverrideMm)
+                val nextOptics = if (updated.id == OpticsTrainId.PRIMARY) opticsConfiguration.copy(primary = configured)
+                    else opticsConfiguration.copy(secondary = configured)
+                opticsConfiguration.changeTo(nextOptics, updated.id)?.let { onOpticalPathInvalidated(updated.id, it) }
+                previousOptics = nextOptics
                 if (updated.id == OpticsTrainId.PRIMARY) {
-                    primaryTrain = updated
+                    primaryTrain = configured
                 } else {
-                    secondaryTrain = updated
+                    secondaryTrain = configured
                 }
                 showFovOverlay = true
+                if (before != configured) {
+                    confirmedTrains = confirmedTrains - updated.id
+                    prefs.edit().putBoolean(PointingOpticsConfiguration.confirmationKey(updated.id), false).apply()
+                }
                 persistFovPrefs()
-                maybeWritePlateFocalLength(updated)
+                maybeWritePlateFocalLength(before, configured)
             },
             onMosaicConfigChange = {
                 mosaicConfig = it.normalized()
@@ -2055,6 +2540,15 @@ fun StarMapScreen(
                 persistFovPrefs()
             },
             onTelescopesChange = {
+                // A named model can be selected in both trains. Preserve the other train's focal length.
+                fun freezeFocal(train: OpticsTrainConfig): OpticsTrainConfig {
+                    val old = telescopes.firstOrNull { spec -> spec.id == train.telescopeId }
+                    val next = it.firstOrNull { spec -> spec.id == train.telescopeId }
+                    return if (old?.focalLengthMm != next?.focalLengthMm)
+                        train.copy(telescopeFocalLengthOverrideMm = train.focalLengthMm(telescopes)) else train
+                }
+                primaryTrain = freezeFocal(primaryTrain)
+                secondaryTrain = freezeFocal(secondaryTrain)
                 telescopes = it
                 persistFovPrefs()
                 applyFovOverlays(alsoZoom = false)
@@ -2073,6 +2567,16 @@ fun StarMapScreen(
                 persistFovPrefs()
                 applyFovOverlays(alsoZoom = false)
                 fovDialogVisible = false
+            },
+            configurationConfirmed = editingTrain in confirmedTrains,
+            onConfirmConfiguration = {
+                confirmedTrains = confirmedTrains + editingTrain
+                prefs.edit().putBoolean(PointingOpticsConfiguration.confirmationKey(editingTrain), true).apply()
+                persistFovPrefs()
+            },
+            onInvalidConfigurationDraft = {
+                confirmedTrains = confirmedTrains - editingTrain
+                prefs.edit().putBoolean(PointingOpticsConfiguration.confirmationKey(editingTrain), false).apply()
             }
         )
     }
@@ -2098,7 +2602,7 @@ internal fun StarMapMountDirectionButton(
         tonalElevation = 1.dp,
         modifier = Modifier
             .size(44.dp)
-            .semantics { this.contentDescription = contentDescription }
+            .semantics { this.contentDescription = contentDescription; if (!enabled) disabled() }
             .pointerInput(enabled, direction) {
                 detectTapGestures(
                     onPress = {
@@ -2120,13 +2624,4 @@ internal fun StarMapMountDirectionButton(
             Text(label, style = MaterialTheme.typography.titleMedium)
         }
     }
-}
-
-private class SharedOpticsPrefs(
-    private val prefs: android.content.SharedPreferences
-) : OpticsPrefReader {
-    override fun getString(key: String, default: String?): String? = prefs.getString(key, default)
-    override fun getBoolean(key: String, default: Boolean): Boolean = prefs.getBoolean(key, default)
-    override fun getFloat(key: String, default: Float): Float = prefs.getFloat(key, default)
-    override fun contains(key: String): Boolean = prefs.contains(key)
 }

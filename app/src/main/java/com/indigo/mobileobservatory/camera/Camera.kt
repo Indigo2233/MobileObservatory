@@ -12,6 +12,8 @@ enum class ReadoutMode(val displayName: String) {
 }
 
 interface Camera {
+    /** Sensor pixels per native ROI coordinate: vendor ROI APIs differ after hardware/digital binning. */
+    val roiSensorScale: Int get() = 1
     val isOpen: StateFlow<Boolean>
     val isCapturing: StateFlow<Boolean>
     val cameraInfo: CameraInfo?

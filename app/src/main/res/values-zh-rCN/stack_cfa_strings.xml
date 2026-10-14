@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="stack_cfa_summary">颜色排列（CFA）：%1$s</string>
+    <string name="stack_cfa_mono">单色</string>
+    <string name="stack_cfa_change">更改颜色排列</string>
+    <string name="stack_cfa_effective">按 %1$s 解码 · 文件标记 %2$d</string>
+    <string name="stack_cfa_detected">按 %1$s 解码</string>
+    <string name="stack_cfa_rgb">此文件已包含 RGB/BGR 彩色像素。</string>
+    <string name="stack_cfa_rgb_not_raw">RGB/BGR 彩色像素不能当作 Bayer 原始排列处理。</string>
+    <string name="stack_cfa_unknown">无法识别排列。请选择相机的原始排列后重试。</string>
+    <string name="stack_cfa_master">新校准帧的颜色排列（CFA）</string>
+</resources>

@@ -1,5 +1,9 @@
 package com.indigo.mobileobservatory.ui.screens
 
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.saveable.listSaver
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
@@ -29,6 +33,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -37,6 +42,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import android.graphics.BitmapFactory
 import com.indigo.mobileobservatory.R
+import com.indigo.mobileobservatory.media.LibraryImportViewModel
+import com.indigo.mobileobservatory.media.ExternalMediaImportError
 import com.indigo.mobileobservatory.mount.MountCoordinates
 import com.indigo.mobileobservatory.recording.SERReader
 import com.indigo.mobileobservatory.recording.MediaLibrary
@@ -98,6 +105,9 @@ typealias VideoFileInfo = com.indigo.mobileobservatory.recording.VideoFileInfo
 typealias MediaCategory = com.indigo.mobileobservatory.recording.MediaCategory
 
 private fun mediaCategoryLabel(category: MediaCategory) = when (category) {
+    MediaCategory.RECENT -> R.string.wf_recent
+    MediaCategory.PHOTOS -> R.string.media_category_photos
+    MediaCategory.VIDEOS -> R.string.wf_videos
     MediaCategory.SER_PSER -> R.string.media_category_ser
     MediaCategory.MP4 -> R.string.media_category_mp4
     MediaCategory.FITS -> R.string.media_category_fits
@@ -106,6 +116,9 @@ private fun mediaCategoryLabel(category: MediaCategory) = when (category) {
 }
 
 private fun mediaEmptyHint(category: MediaCategory) = when (category) {
+    MediaCategory.RECENT -> R.string.wf_media_empty
+    MediaCategory.PHOTOS -> R.string.media_empty_photos
+    MediaCategory.VIDEOS -> R.string.media_empty_ser
     MediaCategory.SER_PSER -> R.string.media_empty_ser
     MediaCategory.MP4 -> R.string.media_empty_mp4
     MediaCategory.FITS -> R.string.media_empty_fits
@@ -147,17 +160,44 @@ fun PlayerScreen(
     initialFile: File? = null,
     initialCategory: MediaCategory = MediaCategory.SER_PSER,
     excludeFile: File? = null,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    isWorkspace: Boolean = false,
+    onCamera: (() -> Unit)? = null,
+    onImport: (() -> Unit)? = null,
+    onPostStack: (() -> Unit)? = null,
+    onPlateSolve: (() -> Unit)? = null,
+    /** External file viewing has a platform Back boundary and a separate app-owned Up destination. */
+    onNavigateUp: (() -> Unit)? = null
 ) {
     // Orientation belongs to CameraScreen's navigation owner. Mutating it again here,
     // especially during disposal, can request a second Activity configuration change.
-    var selectedFile by remember { mutableStateOf<VideoFileInfo?>(null) }
+    val fileSaver = listSaver<VideoFileInfo?, String>(
+        save = { info -> info?.let { listOf(it.file.absolutePath, it.name, it.size.toString(), it.format) } ?: emptyList() },
+        restore = { if (it.isEmpty()) null else VideoFileInfo(File(it[0]), it[1], it[2].toLong(), it[3]) })
+    var selectedFile by rememberSaveable(stateSaver = fileSaver) { mutableStateOf<VideoFileInfo?>(null) }
     var plateSolveFile by remember { mutableStateOf<File?>(null) }
     var selectedCategory by rememberSaveable(initialCategory) { mutableStateOf(initialCategory) }
-    var showFilePicker by remember { mutableStateOf(true) }
+    var showFilePicker by rememberSaveable { mutableStateOf(true) }
+    com.indigo.mobileobservatory.ui.components.ReportObservatoryImmersion(selectedFile != null && !showFilePicker)
     var refreshTrigger by remember { mutableIntStateOf(0) }
+    val importer: LibraryImportViewModel = androidx.lifecycle.viewmodel.compose.viewModel(key = "library-import")
+    val importState by importer.state.collectAsState()
+    var lastImportCompletion by rememberSaveable { mutableStateOf<String?>(null) }
+    val importPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) importer.importFile(uri)
+    }
+    LaunchedEffect(importState.completionId) {
+        if (isWorkspace && importState.completionId != null && importState.completionId != lastImportCompletion) {
+            lastImportCompletion = importState.completionId
+            selectedCategory = MediaCategory.RECENT
+            refreshTrigger++
+        }
+    }
     var directFileUnavailable by remember { mutableStateOf(false) }
+    var initialFileLoaded by rememberSaveable(initialFile?.absolutePath) { mutableStateOf(false) }
     LaunchedEffect(initialFile) {
+        if (initialFileLoaded) return@LaunchedEffect
+        initialFileLoaded = true
         initialFile?.let { file ->
             val info = withContext(Dispatchers.IO) {
                 if (file.absolutePath == excludeFile?.absolutePath) null else MediaLibrary.describe(file)
@@ -168,6 +208,17 @@ fun PlayerScreen(
         }
     }
 
+    val leaveFile: () -> Unit = {
+        if (initialFile != null) onBack() else { selectedFile = null; showFilePicker = true }
+    }
+    val navigateBack: () -> Unit = {
+        when {
+            plateSolveFile != null -> plateSolveFile = null
+            selectedFile != null -> leaveFile()
+            else -> onBack()
+        }
+    }
+    BackHandler(enabled = !isWorkspace || selectedFile != null || plateSolveFile != null) { navigateBack() }
     plateSolveFile?.let { file ->
         PlateSolveScreen(
             initialFile = file,
@@ -193,12 +244,16 @@ fun PlayerScreen(
                 selectedFile = info
                 showFilePicker = false
             },
-            onBack = onBack,
+            onBack = onNavigateUp ?: onBack,
             onStackFile = onStackFile,
             selectedCategory = selectedCategory,
             excludeFile = excludeFile,
             fileUnavailable = directFileUnavailable,
-            onCategoryChange = { cat -> selectedCategory = cat }
+            onCategoryChange = { cat -> selectedCategory = cat },
+            isWorkspace = isWorkspace, onCamera = onCamera,
+            onImport = onImport ?: if (isWorkspace) ({ importPicker.launch(arrayOf("*/*")) }) else null,
+            onPostStack = onPostStack, onPlateSolve = onPlateSolve, importState = if (isWorkspace) importState else null,
+            onCancelImport = importer::cancel, refreshVersion = refreshTrigger
         )
     } else {
         val info = selectedFile
@@ -206,14 +261,10 @@ fun PlayerScreen(
             key(info.file.absolutePath) {
             PlaybackView(
                 fileInfo = info,
-                onBack = {
-                    selectedFile = null
-                    showFilePicker = true
-                },
+                onBack = leaveFile,
+                onNavigateUp = onNavigateUp,
                 onSolve = { plateSolveFile = firstFitsIn(info.file) ?: info.file },
                 onStackFile = onStackFile?.let { launch -> { file: File ->
-                    selectedFile = null
-                    showFilePicker = true
                     launch(file)
                 } },
                 onDelete = {
@@ -259,10 +310,19 @@ private fun FilePickerView(
     selectedCategory: MediaCategory,
     excludeFile: File? = null,
     fileUnavailable: Boolean = false,
-    onCategoryChange: (MediaCategory) -> Unit = {}
+    onCategoryChange: (MediaCategory) -> Unit = {},
+    isWorkspace: Boolean = false,
+    onCamera: (() -> Unit)? = null,
+    onImport: (() -> Unit)? = null,
+    onPostStack: (() -> Unit)? = null,
+    onPlateSolve: (() -> Unit)? = null,
+    importState: com.indigo.mobileobservatory.media.LibraryImportState? = null,
+    onCancelImport: () -> Unit = {},
+    refreshVersion: Int = 0
 ) {
     val context = LocalContext.current
-    var showTrash by remember { mutableStateOf(false) }
+    var showTrash by rememberSaveable { mutableStateOf(false) }
+    BackHandler(enabled = showTrash) { showTrash = false }
     var fileToDelete by remember { mutableStateOf<VideoFileInfo?>(null) }
     var refreshTrigger by remember { mutableIntStateOf(0) }
     
@@ -271,7 +331,7 @@ private fun FilePickerView(
     }
 
     var loading by remember { mutableStateOf(true) }
-    val files by produceState<List<VideoFileInfo>>(emptyList(), recordingsDir, capturesDir, selectedCategory, refreshTrigger, excludeFile) {
+    val files by produceState<List<VideoFileInfo>>(emptyList(), recordingsDir, capturesDir, selectedCategory, refreshTrigger, refreshVersion, excludeFile) {
         loading = true
         value = emptyList()
         value = withContext(Dispatchers.IO) { MediaLibrary.list(recordingsDir, capturesDir, selectedCategory, excludeFile) }
@@ -322,7 +382,7 @@ private fun FilePickerView(
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = onBack) {
+            if (!isWorkspace || showTrash) IconButton(onClick = { if (showTrash) showTrash = false else onBack() }) {
                 Icon(Icons.Default.ArrowBack, stringResource(R.string.back))
             }
             Text(
@@ -341,6 +401,29 @@ private fun FilePickerView(
         }
         
         if (!showTrash) {
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (onImport != null) TextButton(onClick = onImport, enabled = importState?.busy != true,
+                    modifier = Modifier.testTag("media-import")) { Text(stringResource(R.string.wf_import_video)) }
+                if (onPostStack != null) OutlinedButton(onClick = onPostStack,
+                    modifier = Modifier.testTag("media-post-stack")) { Text(stringResource(R.string.stack_offline_title)) }
+                if (onPlateSolve != null) TextButton(onClick = onPlateSolve,
+                    modifier = Modifier.testTag("media-plate-solve")) { Text(stringResource(R.string.plate_solve)) }
+            }
+            if (importState?.busy == true) Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Text(stringResource(R.string.external_media_importing), Modifier.weight(1f))
+                TextButton(onClick = onCancelImport) { Text(stringResource(R.string.cancel)) }
+            }
+            importState?.error?.let { reason -> Text(stringResource(when (reason) {
+                ExternalMediaImportError.MISSING_FILE -> R.string.external_media_missing
+                ExternalMediaImportError.UNSUPPORTED -> R.string.external_media_unsupported
+                ExternalMediaImportError.READ_PERMISSION -> R.string.external_media_permission
+                ExternalMediaImportError.NO_SPACE -> R.string.external_media_space
+                ExternalMediaImportError.TOO_LARGE -> R.string.external_media_large
+                ExternalMediaImportError.INVALID_FILE -> R.string.external_media_invalid
+                ExternalMediaImportError.COPY_FAILED -> R.string.external_media_copy_failed
+            }), Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.error) }
             Text(stringResource(if (fileUnavailable) R.string.media_file_unavailable else R.string.media_library_hint),
                 Modifier.padding(horizontal = 16.dp, vertical = 6.dp), style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -351,14 +434,15 @@ private fun FilePickerView(
                     .padding(horizontal = 8.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                MediaCategory.entries.forEach { cat ->
+                (if (isWorkspace) listOf(MediaCategory.RECENT, MediaCategory.PHOTOS, MediaCategory.VIDEOS, MediaCategory.STACK_RESULTS)
+                else MediaCategory.entries).forEach { cat ->
                     FilterChip(
                         selected = selectedCategory == cat,
                         onClick = { 
                             onCategoryChange(cat)
                         },
                         label = { Text(stringResource(mediaCategoryLabel(cat)), fontSize = 11.sp) },
-                        modifier = Modifier.height(32.dp)
+                        modifier = Modifier.heightIn(min = 32.dp)
                     )
                 }
             }
@@ -371,7 +455,8 @@ private fun FilePickerView(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(vertical = 8.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(
                         if (showTrash) Icons.Default.Delete else Icons.Default.VideoLibrary,
                         contentDescription = null,
@@ -379,6 +464,7 @@ private fun FilePickerView(
                         modifier = Modifier.size(48.dp)
                     )
                     Spacer(Modifier.height(8.dp))
+                    if (!showTrash && !loading && onCamera != null) TextButton(onClick = onCamera) { Text(stringResource(R.string.wf_go_capture)) }
                     Text(
                         if (showTrash) stringResource(R.string.trash_empty) else if (loading) stringResource(R.string.media_loading)
                         else stringResource(mediaEmptyHint(selectedCategory)),
@@ -487,7 +573,7 @@ private fun FilePickerView(
                                     maxLines = 1
                                 )
                                 Text(
-                                    "${info.format}  •  ${ImageUtils.formatFileSize(info.size)}",
+                                    "${java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT).format(java.util.Date(info.file.lastModified()))}  ·  ${info.format}  ·  ${ImageUtils.formatFileSize(info.size)}",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.outline
                                 )
@@ -542,7 +628,8 @@ private fun PlaybackView(
     onBack: () -> Unit,
     onSolve: () -> Unit = {},
     onStackFile: ((File) -> Unit)? = null,
-    onDelete: () -> Unit = {}
+    onDelete: () -> Unit = {},
+    onNavigateUp: (() -> Unit)? = null
 ) {
     val isImage = fileInfo.format.equals("JPG", true) ||
                   fileInfo.format.equals("JPEG", true) ||
@@ -551,24 +638,27 @@ private fun PlaybackView(
                   fileInfo.format.equals("FITS", true)
 
     if (isImage) {
-        ImageViewScreen(fileInfo = fileInfo, onBack = onBack, onSolve = onSolve, onDelete = onDelete)
+        ImageViewScreen(fileInfo = fileInfo, onBack = onNavigateUp ?: onBack, onSolve = onSolve, onDelete = onDelete,
+            externalUp = onNavigateUp != null)
         return
     }
 
     val reader = remember { SERReader(fileInfo.file) }
     var isOpened by remember { mutableStateOf(false) }
     var isPlaying by remember { mutableStateOf(false) }
-    var currentFrame by remember { mutableIntStateOf(0) }
+    var currentFrame by rememberSaveable { mutableIntStateOf(0) }
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
     val scope = rememberCoroutineScope()
     var playJob by remember { mutableStateOf<Job?>(null) }
     var seekJob by remember { mutableStateOf<Job?>(null) }
     var openJob by remember { mutableStateOf<Job?>(null) }
     var readerClosed by remember { mutableStateOf(false) }
+    var navigationJob by remember { mutableStateOf<Job?>(null) }
+    var navigationPending by remember { mutableStateOf(false) }
 
     var totalFrames by remember { mutableIntStateOf(0) }
 
-    var pendingAutoPlay by remember { mutableStateOf(true) }
+    var pendingAutoPlay by rememberSaveable { mutableStateOf(true) }
 
     LaunchedEffect(Unit) {
         openJob = scope.launch(Dispatchers.IO) {
@@ -579,7 +669,7 @@ private fun PlaybackView(
                 withContext(Dispatchers.Main) {
                     totalFrames = reader.header?.frameCount ?: 0
                 }
-                val bmp = reader.readPreviewBitmap(0) { ensureActive() }
+                val bmp = reader.readPreviewBitmap(currentFrame.coerceIn(0, (totalFrames - 1).coerceAtLeast(0))) { ensureActive() }
                 if (bmp != null) {
                     withContext(Dispatchers.Main) {
                         if (!readerClosed) bitmap = bmp
@@ -598,6 +688,7 @@ private fun PlaybackView(
             playJob?.cancel()
             seekJob?.cancel()
             openJob?.cancel()
+            navigationJob?.cancel()
             reader.close()
         }
     }
@@ -605,6 +696,7 @@ private fun PlaybackView(
     fun closeThen(action: () -> Unit) {
         if (readerClosed) return
         readerClosed = true
+        navigationJob?.cancel()
         isPlaying = false
         pendingAutoPlay = false
         val pending = listOfNotNull(openJob, playJob, seekJob)
@@ -613,6 +705,27 @@ private fun PlaybackView(
             pending.joinAll()
             withContext(Dispatchers.IO) { reader.close() }
             action()
+        }
+    }
+
+    BackHandler { closeThen(onBack) }
+
+    fun pauseThen(action: () -> Unit) {
+        if (readerClosed || navigationPending) return
+        navigationPending = true
+        isPlaying = false
+        pendingAutoPlay = false
+        val pending = listOfNotNull(playJob, seekJob)
+        pending.forEach { it.cancel() }
+        navigationJob = scope.launch {
+            try {
+                pending.joinAll()
+                // A covered player stays composed. Retain its reader and current frame
+                // so returning from processing restores a paused, usable player.
+                if (!readerClosed) action()
+            } finally {
+                navigationPending = false
+            }
         }
     }
 
@@ -702,8 +815,12 @@ private fun PlaybackView(
         }
     }
 
-    LaunchedEffect(isOpened, pendingAutoPlay) {
-        if (isOpened && pendingAutoPlay && totalFrames > 1) {
+    val pageVisible = rememberPageForeground()
+    LaunchedEffect(pageVisible) {
+        if (!pageVisible) { isPlaying = false; pendingAutoPlay = false; playJob?.cancel() }
+    }
+    LaunchedEffect(isOpened, pendingAutoPlay, pageVisible) {
+        if (pageVisible && isOpened && pendingAutoPlay && totalFrames > 1) {
             pendingAutoPlay = false
             togglePlay()
         }
@@ -722,9 +839,9 @@ private fun PlaybackView(
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = {
-                closeThen(onBack)
+                closeThen(onNavigateUp ?: onBack)
             }) {
-                Icon(Icons.Default.ArrowBack, stringResource(R.string.back), tint = Color.White)
+                Icon(Icons.Default.ArrowBack, stringResource(if (onNavigateUp != null) R.string.external_media_up else R.string.back), tint = Color.White)
             }
             Text(
                 fileInfo.name,
@@ -734,7 +851,7 @@ private fun PlaybackView(
                 modifier = Modifier.weight(1f)
             )
             if (onStackFile != null && (fileInfo.format.equals("SER", true) || fileInfo.format.equals("PSER", true))) {
-                IconButton(onClick = { closeThen { onStackFile(fileInfo.file) } }, enabled = !readerClosed) {
+                IconButton(onClick = { pauseThen { onStackFile(fileInfo.file) } }, enabled = !readerClosed && !navigationPending) {
                     Icon(Icons.Default.Layers, stringResource(R.string.stack_planetary), tint = Color.White)
                 }
             }
@@ -869,7 +986,8 @@ private fun ImageViewScreen(
     fileInfo: VideoFileInfo,
     onBack: () -> Unit,
     onSolve: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    externalUp: Boolean = false
 ) {
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -915,7 +1033,13 @@ private fun ImageViewScreen(
                         error = null
                     }
                 } else {
-                    val bmp = BitmapFactory.decodeFile(fileInfo.file.absolutePath)
+                    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    BitmapFactory.decodeFile(fileInfo.file.absolutePath, bounds)
+                    var sample = 1
+                    while (maxOf(bounds.outWidth, bounds.outHeight) / sample > 2048) sample *= 2
+                    val bmp = BitmapFactory.decodeFile(fileInfo.file.absolutePath, BitmapFactory.Options().apply {
+                        inSampleSize = sample; inScaled = false
+                    })
                     val sidecar = File(fileInfo.file.parentFile, "${fileInfo.file.nameWithoutExtension}.json")
                     val metadata = if (sidecar.isFile && sidecar.length() <= 16 * 1024 * 1024) {
                         runCatching { JSONObject(sidecar.readText()).toString(2).take(20000) }.getOrDefault("")
@@ -949,7 +1073,7 @@ private fun ImageViewScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = onBack) {
-                Icon(Icons.Default.ArrowBack, stringResource(R.string.back), tint = Color.White)
+                Icon(Icons.Default.ArrowBack, stringResource(if (externalUp) R.string.external_media_up else R.string.back), tint = Color.White)
             }
             Text(
                 fileInfo.name,

@@ -48,7 +48,8 @@ data class PhoneCameraCapability(
     val logicalParentId: String? = null,
     val maxFrameDurationNs: Long? = null,
     /** Android 14+ exposure-time priority AE (manual shutter, auto ISO). */
-    val supportsAeExposurePriority: Boolean = false
+    val supportsAeExposurePriority: Boolean = false,
+    val timestampIsRealtime: Boolean = false
 ) {
     /** Camera id that [android.hardware.camera2.CameraManager.openCamera] must be called with. */
     val openableCameraId: String
@@ -321,7 +322,9 @@ data class PhoneCameraCapability(
                 } else intArrayOf(),
                 logicalParentId = logicalParentId,
                 maxFrameDurationNs = listOfNotNull(ownFrame, parentFrame).maxOrNull(),
-                supportsAeExposurePriority = false
+                supportsAeExposurePriority = false,
+                timestampIsRealtime = chars.get(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE) ==
+                    CameraMetadata.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME
             )
         }
 

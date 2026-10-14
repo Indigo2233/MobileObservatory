@@ -118,6 +118,7 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
     private var currentBin = 1
     private var supportedBins: List<Int> = listOf(1)
     override val currentHardwareBin: Int get() = currentBin
+    override val roiSensorScale: Int get() = currentBin
     override val supportedHardwareBins: List<Int> get() = supportedBins
     private var sensorModeIndices: Map<ReadoutMode, Int> = emptyMap()
     var gainOffsetPreset: GainOffsetPreset? = null; private set
@@ -185,7 +186,7 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
 
             cameraInfo = CameraInfo(
                 name = props.cameraModelName ?: "Player One Camera",
-                serialNumber = props.stableIdentity(),
+                serialNumber = props.serialNumber?.trim().orEmpty(),
                 sensorWidth = sensorW,
                 sensorHeight = sensorH,
                 maxBitDepth = props.bitDepth,

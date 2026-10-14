@@ -33,6 +33,22 @@ class AttitudeTimelineTest {
 }
 
 class PhoneSolveCaptureLadderTest {
+    @Test fun timedVerificationRetriesGainOrExposureWithoutReintroducingBurst() {
+        var current = PhoneCaptureAttempt(.5, PhoneManualExposure.ISO_AUTO, 1)
+        repeat(3) { attempt ->
+            current = requireNotNull(PhoneSolveCaptureLadder.next(current, WideFieldSolveFailure.INSUFFICIENT_STARS,
+                2, attempt, 2.0, 100, 6400, allowBurst = false))
+            assertEquals(1, current.burstFrameCount)
+        }
+        assertEquals(6400, current.iso)
+        assertTrue(current.exposureSeconds > .5)
+    }
+    @Test fun aResourceFailureNeverEscalatesBurstIsoOrExposure() {
+        for (burst in listOf(1, 4, 8, 16)) for (stars in listOf(0, 2, 10, 100)) for (attempt in 0..2) {
+            assertNull(PhoneSolveCaptureLadder.next(PhoneCaptureAttempt(1.0, PhoneManualExposure.ISO_AUTO, burst),
+                WideFieldSolveFailure.RESOURCE_LIMIT, stars, attempt, 2.0, 100, 6400))
+        }
+    }
     @Test
     fun fewStarsBumpsBurstThenIso() {
         val first = PhoneSolveCaptureLadder.next(

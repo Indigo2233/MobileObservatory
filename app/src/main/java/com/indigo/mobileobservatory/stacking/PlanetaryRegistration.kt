@@ -16,13 +16,14 @@ data class PlanetaryAlignment(
 
 /** Inverse mapping: reference (x,y) samples source (x+dx,y+dy). No display stretch is used. */
 class PlanetaryRegistration(
-    private val reference: LinearImage,
+    reference: LinearImage,
     private val roi: PixelRoi,
     private val options: PlanetaryOptions,
     private val checkCancelled: () -> Unit = {}
 ) {
     private val width = reference.width
     private val height = reference.height
+    private val channels = reference.channels
     private val ref = PlanetarySampling.plane(reference, checkCancelled)
     private val referenceCenter = center(ref)
     val points: List<PlanetaryAlignmentPoint> = makePoints()
@@ -70,13 +71,20 @@ class PlanetaryRegistration(
         return result
     }
 
-    /** Owned luminance snapshot for one frame. Share it across registration and edge checks,
-     * then release it; no frame/image-identity cache survives into the next iteration. */
+    /** A frame's luminance, owned by default or borrowed from explicit worker scratch. Finish
+     * registration/edge checks before reusing scratch; no image-identity cache is retained. */
     internal class PreparedFrame internal constructor(internal val pixels: FloatArray, internal val owner: PlanetaryRegistration)
 
     internal fun prepareFrame(image: LinearImage): PreparedFrame {
-        require(image.width == width && image.height == height && image.channels == reference.channels)
+        require(image.width == width && image.height == height && image.channels == channels)
         return PreparedFrame(PlanetarySampling.plane(image, checkCancelled),this)
+    }
+
+    /** Worker-owned scratch. The caller must finish alignment/edge checks before filling it again. */
+    internal fun prepareFrame(image: LinearImage, scratch: FloatArray): PreparedFrame {
+        require(image.width == width && image.height == height && image.channels == channels)
+        PlanetarySampling.fillPlane(image, scratch, checkCancelled)
+        return PreparedFrame(scratch, this)
     }
 
     fun align(image: LinearImage): PlanetaryAlignment = align(prepareFrame(image))
@@ -211,12 +219,13 @@ class PlanetaryRegistration(
 }
 
 /** Smooth partition-of-unity displacement interpolation, then bilinear mesh interpolation per pixel. */
-internal class PlanetaryWarp(width: Int, height: Int, alignment: PlanetaryAlignment, checkCancelled: () -> Unit = {}) {
+internal class PlanetaryWarp(width: Int, height: Int, alignment: PlanetaryAlignment, checkCancelled: () -> Unit = {}, workspace: Workspace? = null) {
     val step = max(4, min(32, alignment.local.firstOrNull()?.point?.radius ?: 16))
     val columns = (width + step - 1) / step + 1
     val rows = (height + step - 1) / step + 1
-    val dx = FloatArray(columns * rows)
-    val dy = FloatArray(columns * rows)
+    private val buffers = workspace?.buffers(columns * rows)
+    val dx = buffers?.first ?: FloatArray(columns * rows)
+    val dy = buffers?.second ?: FloatArray(columns * rows)
     var folded = false
         private set
     init {
@@ -253,4 +262,15 @@ internal class PlanetaryWarp(width: Int, height: Int, alignment: PlanetaryAlignm
     }
     fun offset(values: FloatArray, x: Int, y: Int): Double =
         PlanetarySampling.bilinear(values, columns, rows, x.toDouble() / step, y.toDouble() / step)
+
+    internal class Workspace {
+        private var arrays = FloatArray(0) to FloatArray(0)
+        fun buffers(size: Int): Pair<FloatArray, FloatArray> {
+            // Local/global fallback can change mesh dimensions. Keep the largest capacity so
+            // a seeing fluctuation does not reallocate two large meshes on each mode change.
+            if (arrays.first.size < size) arrays = FloatArray(size) to FloatArray(size)
+            return arrays
+        }
+        fun clear() { arrays = FloatArray(0) to FloatArray(0) }
+    }
 }

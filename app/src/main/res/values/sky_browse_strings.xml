@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sky_controls_pin">Keep controls visible</string>
+    <string name="sky_controls_unpin">Resume auto-hide</string>
+    <string name="sky_controls_pinned">Controls pinned</string>
+    <string name="sky_controls_auto_hide">Auto-hide enabled</string>
+    <string name="sky_simulated_landscape">Simulated landscape</string>
+    <string name="sky_set_location">Set location</string>
+    <string name="sky_phone_follow">Compass / gyroscope follow</string>
+    <string name="sky_phone_follow_hint">Estimated phone browsing direction. It does not verify telescope pointing. Drag to pause.</string>
+    <string name="sky_phone_follow_magnetic">Estimated magnetic-north browsing; location is not set. It does not verify telescope pointing. Drag to pause.</string>
+    <string name="sky_phone_follow_unavailable">This phone has no compass / gyroscope orientation sensor.</string>
+    <string name="sky_phone_follow_failed">Could not start the orientation sensor. Turn follow off and retry.</string>
+    <string name="sky_phone_follow_waiting">Waiting for phone orientation. Telescope pointing is unchanged.</string>
+</resources>

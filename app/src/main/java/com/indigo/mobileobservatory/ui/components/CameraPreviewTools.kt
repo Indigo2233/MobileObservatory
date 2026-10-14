@@ -65,6 +65,7 @@ fun CameraPreviewTools(
     onPlateSolve: () -> Unit,
     onOpenLibrary: () -> Unit,
     onOpenLiveStack: () -> Unit = {},
+    onCfaSettings: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var menuOpen by rememberSaveable { mutableStateOf(false) }
@@ -129,6 +130,8 @@ fun CameraPreviewTools(
                     }
                 )
                 if (connected) {
+                    DropdownMenuItem(text = { Text(stringResource(R.string.camera_cfa_title)) },
+                        onClick = { menuOpen = false; onCfaSettings() })
                     DropdownMenuItem(
                         text = { Text(stringResource(R.string.toggle_overlay)) },
                         onClick = onToggleOverlay,
@@ -164,14 +167,6 @@ fun CameraPreviewTools(
                         }
                     )
                     DropdownMenuItem(
-                        text = { Text(stringResource(R.string.plate_solve)) },
-                        onClick = {
-                            menuOpen = false
-                            onPlateSolve()
-                        },
-                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) }
-                    )
-                    DropdownMenuItem(
                         text = { Text(stringResource(R.string.video_library)) },
                         onClick = {
                             menuOpen = false
@@ -185,6 +180,12 @@ fun CameraPreviewTools(
                         leadingIcon = { Icon(Icons.Default.Layers, contentDescription = null) }
                     )
                 }
+                // Offline image solving and database preparation need no live camera.
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.plate_solve)) },
+                    onClick = { menuOpen = false; onPlateSolve() },
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) }
+                )
             }
         }
     }

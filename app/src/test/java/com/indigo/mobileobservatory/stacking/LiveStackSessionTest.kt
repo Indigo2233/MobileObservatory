@@ -18,6 +18,72 @@ class LiveStackSessionTest {
     private fun frame(id: Long, value: Int = 64) = FrameData(ByteArray(4) { value.toByte() }, 2, 2, PixelFormat.MONO8, id, id * 1_000)
     private fun decode(frame: FrameData, ignored: StackSessionKey) = LinearImage(2, 2, 1, FloatArray(4) { (frame.data[it].toInt() and 255) / 255f })
 
+    @Test fun targetIsScientificForLiveSessionsButDoesNotChangeRawRecordingProvenance() = runTest {
+        val session = LiveStackSession(this, { Engine() }, ::decode, {})
+        try {
+            val planetary = key.copy(target = StackTarget.PLANETARY)
+            assertEquals(key.rawRecordingKey(), planetary.rawRecordingKey())
+            session.start(key)
+            session.offer(frame(1), planetary)
+            runCurrent()
+            assertEquals(LiveStackPhase.RESET_REQUIRED, session.state.value.phase)
+            assertEquals(0L, session.state.value.accepted)
+            assertNull(session.latestSnapshot)
+        } finally { session.close(); runCurrent() }
+    }
+
+    @Test fun rejectionRefreshesEngineMetadataWithoutCopyingAcceptedPixels() = runTest {
+        val base = Engine()
+        val engine = object : LiveStackEngine {
+            override fun add(image: LinearImage, exposureSeconds: Double, cancelled: () -> Boolean) = base.add(image, exposureSeconds, cancelled)
+            override fun snapshot(state: LiveStackState) = base.snapshot(state)?.copy(details = snapshotDetails())
+            override fun snapshotDetails(): Map<String, Any> = mapOf("engineReceivedFrames" to base.samples.size)
+        }
+        var time = 1_000_000_000L
+        val session = LiveStackSession(this, { engine }, ::decode, {}, nowNanos = { time })
+        try {
+            session.start(key); session.offer(frame(1), key); runCurrent()
+            val first = session.latestSnapshot!!
+            time += 1_000_000_000L
+            session.offer(frame(2, 0), key); runCurrent()
+            assertSame(first.image, session.latestSnapshot!!.image)
+            assertSame(first.weights, session.latestSnapshot!!.weights)
+            assertEquals(1, first.details["engineReceivedFrames"])
+            assertEquals(2, session.latestSnapshot!!.details["engineReceivedFrames"])
+            assertEquals(1, base.snapshotCopies)
+        } finally { session.close(); runCurrent() }
+    }
+
+    @Test fun engineRequestedReferenceRestartStopsInputsUntilAnExplicitResetAndKeepsTheLastSnapshot() = runTest {
+        fun engine(): LiveStackEngine {
+            val base = Engine()
+            return object : LiveStackEngine {
+                override fun add(image: LinearImage, exposureSeconds: Double, cancelled: () -> Boolean): LiveFrameOutcome {
+                    val result = base.add(image, exposureSeconds, cancelled)
+                    return if (result.accepted) result else result.copy(reason = "REFERENCE_RESTART_REQUIRED", requiresReset = true)
+                }
+                override fun snapshot(state: LiveStackState) = base.snapshot(state)
+            }
+        }
+        val session = LiveStackSession(this, ::engine, ::decode, {})
+        try {
+            session.start(key); session.offer(frame(1), key); runCurrent()
+            val before = session.latestSnapshot!!
+            session.offer(frame(2, 0), key); runCurrent()
+            assertEquals(LiveStackPhase.RESET_REQUIRED, session.state.value.phase)
+            assertEquals("REFERENCE_RESTART_REQUIRED", session.state.value.reason)
+            assertEquals(1L, session.state.value.accepted)
+            assertEquals(.25, session.state.value.exposureSeconds, 0.0)
+            assertSame(before, session.latestSnapshot)
+            session.offer(frame(3), key); runCurrent()
+            assertEquals(2L, session.state.value.received)
+            session.reset(); runCurrent(); session.start(key); session.offer(frame(4), key); runCurrent()
+            assertEquals(1L, session.state.value.accepted)
+            assertNotSame(before, session.latestSnapshot)
+            assertTrue(before.image.pixels.all { it == 64f / 255f })
+        } finally { session.close(); runCurrent() }
+    }
+
     private class Engine(private val beforeAdd: () -> Unit = {}) : LiveStackEngine {
         val samples = Collections.synchronizedList(mutableListOf<Float>())
         val exposures = Collections.synchronizedList(mutableListOf<Double>())

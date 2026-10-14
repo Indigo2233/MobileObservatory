@@ -85,9 +85,7 @@ class DslrCamera : Camera, CameraStillCaptureCapable {
             liveViewOps = NikonLiveView.detect(info)
             cameraInfo = CameraInfo(
                 name = info.model.ifBlank { usbDevice.productName ?: "Nikon PTP" },
-                serialNumber = info.serialNumber.ifBlank {
-                    "NIKON-${usbDevice.productId.toString(16)}-${usbDevice.deviceId}"
-                },
+                serialNumber = info.serialNumber.trim(),
                 sensorWidth = 640,
                 sensorHeight = 424,
                 maxBitDepth = 14,

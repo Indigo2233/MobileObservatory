@@ -8,12 +8,19 @@ import android.provider.OpenableColumns
 import com.indigo.mobileobservatory.mount.MountCoordinates
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 import kotlin.math.absoluteValue
 
 class AstapRunner(private val context: Context) {
+    companion object {
+        // ASTAP instances share the catalog work directory and output discovery. Serialize all
+        // callers, including covered image tasks, so one result cannot consume another's WCS.
+        private val solveLock = Mutex()
+    }
     private val d50Manager = D50Manager(context)
 
     suspend fun copyUriToCache(uri: Uri): File = withContext(Dispatchers.IO) {
@@ -31,6 +38,15 @@ class AstapRunner(private val context: Context) {
         fovDeg: Double,
         mountCoordinates: MountCoordinates? = null,
         searchRadiusDeg: Double? = null
+    ): PlateSolveResult = solveLock.withLock {
+        solveExclusive(inputFile, fovDeg, mountCoordinates, searchRadiusDeg)
+    }
+
+    private suspend fun solveExclusive(
+        inputFile: File,
+        fovDeg: Double,
+        mountCoordinates: MountCoordinates?,
+        searchRadiusDeg: Double?
     ): PlateSolveResult = withContext(Dispatchers.IO) {
         val status = d50Manager.status()
         val database = status.database
@@ -102,7 +118,11 @@ class AstapRunner(private val context: Context) {
             }
         }.apply { start() }
 
-        val finished = process.waitFor(6, TimeUnit.MINUTES)
+        val finished = try { awaitSolverProcess(process, TimeUnit.MINUTES.toMillis(6)) }
+            catch (cancel: kotlinx.coroutines.CancellationException) {
+                readerThread.join(1_000)
+                throw cancel
+            }
         if (!finished) {
             process.destroyForcibly()
             return@withContext PlateSolveResult(false, "ASTAP solve timed out.", elapsedMs = elapsed(start), log = output.toString())
@@ -247,7 +267,7 @@ internal fun buildAstapCommand(
         "-d", databaseDir.absolutePath,
         "-D", database.displayName.lowercase(Locale.US),
         "-r", "%.6f".format(Locale.US, searchRadiusDeg.coerceIn(0.0, 180.0)),
-        "-fov", "%.6f".format(Locale.US, fovDeg.coerceIn(0.2, 90.0))
+        "-fov", "%.6f".format(Locale.US, if (fovDeg == 0.0) 0.0 else fovDeg.coerceIn(0.2, 90.0))
     )
     if (mountCoordinates != null) {
         command += listOf(

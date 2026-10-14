@@ -5,8 +5,8 @@
     <string name="stack_saturation_enabled">Saturation adjustment</string>
     <string name="stack_rendering">Updating processed preview…</string>
     <string name="stack_reason_layout">This camera mode has no verified linear pixel layout. Select a supported raw mode.</string>
-    <string name="stack_live">Deep-sky live stack</string>
-    <string name="stack_planetary">Planetary stacking</string>
+    <string name="stack_live">Live stacking</string>
+    <string name="stack_planetary">Post stacking</string>
     <string name="stack_process_file">Stack this recording</string>
     <string name="stack_hint">Analyze SER/PSER, select sharp frames and align local detail</string>
     <string name="stack_start">Start live stack</string>

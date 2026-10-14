@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="wf_fov_optical">光学定位</string>
+    <string name="wf_fov_calibrated">已标定光路</string>
+    <string name="wf_fov_estimated">估计指向</string>
+    <string name="wf_fov_planning">仅供构图</string>
+    <string name="wf_fov_stale">构图 · 需重新定位</string>
+    <string name="wf_fov_conflict">构图 · 来源不一致</string>
+    <string name="wf_fov_roll_unknown">构图 · 相机角度未知</string>
+    <string name="wf_push_calibration_needed">先校准手机与镜筒的安装关系。</string>
+    <string name="wf_push_calibrate">校准手机与镜筒</string>
+    <string name="wf_push_verified">已验证目标入框</string>
+    <string name="wf_push_verifying">保持静止 · 正在验证指向</string>
+    <string name="wf_push_estimated">估计方向 · 等待验证</string>
+    <string name="wf_push_retry_wait">保持静止 · 稍后重试</string>
+    <string name="wf_push_retry_limit">暂不能验证 · 重试或检查星空相机</string>
+    <string name="wf_push_phone_debug">解析手机画面</string>
+    <string name="wf_push_field">观测视场</string>
+    <string name="wf_push_field_unknown">视场尚未确认</string>
+    <string name="wf_push_field_circle">目镜</string>
+    <string name="wf_push_field_camera">相机</string>
+    <string name="wf_push_field_diameter">真实视场直径（°）</string>
+    <string name="wf_push_field_width">视场宽度（°）</string>
+    <string name="wf_push_field_height">视场高度（°）</string>
+    <string name="wf_push_field_confirm">采用此视场</string>
+    <string name="wf_push_field_camera_conservative">相机角度尚未标定时，按内接圆保守验证入框。</string>
+    <string name="wf_push_verification_rejected">画面已解析，仍需新的指向验证。</string>
+</resources>

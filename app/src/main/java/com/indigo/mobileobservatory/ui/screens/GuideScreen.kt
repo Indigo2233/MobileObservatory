@@ -109,7 +109,7 @@ fun GuideScreen(
     val mountCoordinates by viewModel.mountCoordinates.collectAsState()
     val mountBusy by viewModel.mountBusy.collectAsState()
 
-    if (showDevicePicker) {
+    if (showDevicePicker && rememberPageForeground()) {
         val connectable = viewModel.camerasAvailableToGuide(devices)
         GuideDevicePickerDialog(
             devices = connectable,

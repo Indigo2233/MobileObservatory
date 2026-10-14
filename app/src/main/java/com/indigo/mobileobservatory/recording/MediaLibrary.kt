@@ -5,6 +5,9 @@ import java.io.File
 data class VideoFileInfo(val file: File, val name: String, val size: Long, val format: String)
 
 enum class MediaCategory(val extensions: List<String>) {
+    RECENT(emptyList()),
+    PHOTOS(emptyList()),
+    VIDEOS(emptyList()),
     SER_PSER(listOf("ser", "pser")),
     STACK_RESULTS(listOf("png", "fit", "fits")),
     MP4(listOf("mp4")),
@@ -18,6 +21,15 @@ enum class MediaCategory(val extensions: List<String>) {
 object MediaLibrary {
     fun list(recordingsDir: File?, capturesDir: File?, category: MediaCategory,
              excludeFile: File? = null): List<VideoFileInfo> {
+        val groups = when (category) {
+            MediaCategory.RECENT -> listOf(MediaCategory.JPG, MediaCategory.FITS, MediaCategory.SER_PSER, MediaCategory.MP4)
+            MediaCategory.PHOTOS -> listOf(MediaCategory.JPG, MediaCategory.FITS)
+            MediaCategory.VIDEOS -> listOf(MediaCategory.SER_PSER, MediaCategory.MP4)
+            else -> emptyList()
+        }
+        if (groups.isNotEmpty()) return groups.flatMap { list(recordingsDir, capturesDir, it, excludeFile) }
+            .distinctBy { it.file.absoluteFile.normalize().path }
+            .sortedWith(compareByDescending<VideoFileInfo> { it.file.lastModified() }.thenBy { it.name })
         val excluded = excludeFile?.absoluteFile?.normalize()?.path
         fun visible(file: File): Boolean = !file.name.startsWith('.') &&
             !file.name.contains(".partial", ignoreCase = true) &&
@@ -30,6 +42,7 @@ object MediaLibrary {
             MediaCategory.FITS -> listOfNotNull(capturesDir?.resolve("FITS"), recordingsDir?.resolve("FITS"))
             MediaCategory.JPG -> listOfNotNull(capturesDir?.resolve("JPG"))
             MediaCategory.STACK_RESULTS -> listOfNotNull(capturesDir?.resolve("JPG"), capturesDir?.resolve("FITS"))
+            else -> emptyList()
         }
         return directories.flatMap { it.listFiles().orEmpty().toList() }.filter(::visible).mapNotNull { file ->
             when {

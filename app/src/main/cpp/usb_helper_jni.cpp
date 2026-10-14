@@ -12,8 +12,27 @@
 #include <elf.h>
 #include <android/log.h>
 #include <link.h>
+#include <mutex>
 
 #define TAG "UsbHelperJni"
+// Factory serial from the already-loaded official SDK; ASI_ID is writable.
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_indigo_mobileobservatory_camera_UsbHelper_nativeZwoFactorySerial(JNIEnv* env, jobject, jint camera_id) {
+    struct AsiSerial { unsigned char bytes[8]; } serial = {};
+    using GetSerial = int (*)(int, AsiSerial*);
+    void* sdk = dlopen("libASICamera2.so", RTLD_NOW | RTLD_NOLOAD);
+    if (!sdk) return env->NewStringUTF("");
+    auto get_serial = reinterpret_cast<GetSerial>(dlsym(sdk, "ASIGetSerialNumber"));
+    const int result = get_serial ? get_serial(camera_id, &serial) : -1;
+    dlclose(sdk);
+    bool nonzero = false;
+    for (unsigned char b : serial.bytes) nonzero = nonzero || b != 0;
+    if (result != 0 || !nonzero) return env->NewStringUTF("");
+    char text[17] = {};
+    for (int i = 0; i < 8; ++i) snprintf(text + i * 2, 3, "%02x", serial.bytes[i]);
+    return env->NewStringUTF(text);
+}
+
 
 static FILE *g_logfile = nullptr;
 static void log_to_file(const char *level, const char *fmt, ...) {
@@ -43,6 +62,7 @@ static struct {
     uint8_t devaddr;
     int fd;
 } g_usb_fds[MAX_FDS];
+static std::mutex g_usb_fd_lock;
 
 static char g_fake_usb_dir[256];
 static char g_fake_sysfs_dir[256];
@@ -51,6 +71,7 @@ static int find_registered_fd(const char *path) {
     int busnum = 0, devaddr = 0;
     if (sscanf(path, "/dev/bus/usb/%d/%d", &busnum, &devaddr) != 2)
         return -1;
+    std::lock_guard<std::mutex> ownership(g_usb_fd_lock);
     for (int i = 0; i < MAX_FDS; i++) {
         if (g_usb_fds[i].valid &&
             g_usb_fds[i].busnum == (uint8_t)busnum &&
@@ -266,6 +287,7 @@ static struct dirent *hooked_readdir(DIR *dirp) {
 
 static int hooked_fstat(int fd, struct stat *buf) {
     int ret = g_real_fstat(fd, buf);
+    std::lock_guard<std::mutex> ownership(g_usb_fd_lock);
     for (int i = 0; i < MAX_FDS; i++) {
         if (g_usb_fds[i].valid && g_usb_fds[i].fd == fd) {
             LOGI("fstat(fd=%d [registered USB]) -> ret=%d", fd, ret);
@@ -479,14 +501,22 @@ Java_com_indigo_mobileobservatory_camera_UsbHelper_nativeRegisterUsbFd(
         g_logfile = fopen(logpath, "w");
     }
 
-    for (int i = 0; i < MAX_FDS; i++) {
-        if (!g_usb_fds[i].valid) {
-            g_usb_fds[i].valid = 1;
-            g_usb_fds[i].busnum = (uint8_t)busNum;
-            g_usb_fds[i].devaddr = (uint8_t)devAddr;
-            g_usb_fds[i].fd = fd;
-            break;
+    {
+        std::lock_guard<std::mutex> ownership(g_usb_fd_lock);
+        int slot = -1;
+        for (int i = 0; i < MAX_FDS; ++i) {
+            if (g_usb_fds[i].valid && g_usb_fds[i].busnum == (uint8_t)busNum &&
+                g_usb_fds[i].devaddr == (uint8_t)devAddr) { slot = i; break; }
+            if (!g_usb_fds[i].valid && slot < 0) slot = i;
         }
+        if (slot < 0) {
+            env->ReleaseStringUTFChars(jCacheDir, cacheDir);
+            return JNI_FALSE;
+        }
+        g_usb_fds[slot].busnum = (uint8_t)busNum;
+        g_usb_fds[slot].devaddr = (uint8_t)devAddr;
+        g_usb_fds[slot].fd = fd;
+        g_usb_fds[slot].valid = 1;
     }
 
     /* Create fake usbfs structure: fake_usb/BBB/DDD â†?/proc/self/fd/N */
@@ -695,9 +725,45 @@ extern "C"
 JNIEXPORT void JNICALL
 Java_com_indigo_mobileobservatory_camera_UsbHelper_nativeClearUsbFds(
         JNIEnv *, jclass) {
+    std::lock_guard<std::mutex> ownership(g_usb_fd_lock);
     for (int i = 0; i < MAX_FDS; i++)
         g_usb_fds[i].valid = 0;
     g_fake_usb_dir[0] = 0;
     g_fake_sysfs_dir[0] = 0;
     LOGI("Cleared USB fd registry");
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_indigo_mobileobservatory_camera_UsbHelper_nativeUnregisterUsbFd(JNIEnv*, jobject, jint bus, jint address) {
+    std::lock_guard<std::mutex> ownership(g_usb_fd_lock);
+    for (int i = 0; i < MAX_FDS; ++i) {
+        if (g_usb_fds[i].valid && g_usb_fds[i].busnum == (uint8_t)bus &&
+            g_usb_fds[i].devaddr == (uint8_t)address) g_usb_fds[i].valid = 0;
+    }
+    // Remove only this connection's generated discovery entries; keep other cameras visible.
+    if (g_fake_usb_dir[0]) {
+        char path[512];
+        snprintf(path, sizeof(path), "%s/%03d/%03d", g_fake_usb_dir, bus, address);
+        unlink(path);
+    }
+    if (g_fake_sysfs_dir[0]) {
+        char path[512];
+        const char* files[] = { "busnum", "devnum", "speed", "bConfigurationValue", "bNumInterfaces", "descriptors" };
+        for (const char* name : files) {
+            snprintf(path, sizeof(path), "%s/%d-%d/%s", g_fake_sysfs_dir, bus, address, name);
+            unlink(path);
+        }
+        snprintf(path, sizeof(path), "%s/%d-%d", g_fake_sysfs_dir, bus, address);
+        rmdir(path);
+    }
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_indigo_mobileobservatory_camera_UsbHelper_nativeHasUsbFd(JNIEnv*, jobject, jint bus, jint address) {
+    std::lock_guard<std::mutex> ownership(g_usb_fd_lock);
+    for (int i = 0; i < MAX_FDS; ++i) {
+        if (g_usb_fds[i].valid && g_usb_fds[i].busnum == (uint8_t)bus &&
+            g_usb_fds[i].devaddr == (uint8_t)address) return JNI_TRUE;
+    }
+    return JNI_FALSE;
 }

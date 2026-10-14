@@ -238,7 +238,7 @@ class PlanetaryStacker {
             image.pixels.size.toLong() == source.width.toLong() * source.height * source.channels) { "Recording frame dimensions changed or data are truncated" }
     }
 
-    private fun accumulate(image: LinearImage, sums: DoubleArray, weights: FloatArray, warp: PlanetaryWarp, checkCancelled: () -> Unit) {
+    internal fun accumulate(image: LinearImage, sums: DoubleArray, weights: FloatArray, warp: PlanetaryWarp, checkCancelled: () -> Unit) {
         val width = image.width; val height = image.height; val channels = image.channels
         for (y in 0 until height) {
             checkCancelled()
@@ -250,7 +250,12 @@ class PlanetaryStacker {
                 val a = (iy * width + ix) * channels; val b = (iy * width + nx) * channels
                 val c = (ny * width + ix) * channels; val d = (ny * width + nx) * channels
                 // Skip the whole pixel on non-finite input so RGB channels always have identical coverage.
-                if ((0 until channels).any { !image.pixels[a + it].isFinite() || !image.pixels[b + it].isFinite() || !image.pixels[c + it].isFinite() || !image.pixels[d + it].isFinite() }) continue
+                var finite = true
+                for (channel in 0 until channels) {
+                    if (!image.pixels[a + channel].isFinite() || !image.pixels[b + channel].isFinite() ||
+                        !image.pixels[c + channel].isFinite() || !image.pixels[d + channel].isFinite()) { finite = false; break }
+                }
+                if (!finite) continue
                 val p = y * width + x
                 for (channel in 0 until channels) {
                     val value = (image.pixels[a + channel] * (1 - fx) + image.pixels[b + channel] * fx) * (1 - fy) +

@@ -1,0 +1,11 @@
+<resources>
+    <string name="wfp_reference_settings">等待相机设置完成后重试。</string>
+    <string name="wfp_reference_science">请先选择可验证的 RAW 或单色采集模式。</string>
+    <string name="wfp_reference_ae">采样前请关闭自动曝光。</string>
+    <string name="wfp_reference_preview">采样前请恢复相机预览。</string>
+    <string name="wfp_reference_filter">等待滤镜轮停止后再采样。</string>
+    <string name="wfp_reference_rotator">等待旋转器停止后再采样。</string>
+    <string name="wfp_reference_axis">请使用包含传感器中心的 ROI 再采样。</string>
+    <string name="wfp_reference_exposure">请使用不超过 30 秒的单次曝光再采样。</string>
+    <string name="wfp_rotator_changed">主相机角度或连接已变化，请重新校准主光路。</string>
+</resources>

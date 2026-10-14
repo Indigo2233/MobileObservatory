@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="wf_mount_read_only">只读连接</string>
+    <string name="wf_mount_read_only_hint">仅查看坐标和状态，不发起移动或同步写入。</string>
+    <string name="wf_mount_site_time">地点与时间</string>
+    <string name="wf_mount_local_site">地点来自应用配置。</string>
+    <string name="wf_mount_read_app_site">读取应用地点</string>
+    <string name="wf_mount_phone_to_app_site">使用手机地点（仅应用）</string>
+    <string name="wf_mount_connection_changed">赤道仪连接或模型已变化，请重试。</string>
+</resources>

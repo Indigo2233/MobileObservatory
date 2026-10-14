@@ -156,7 +156,7 @@ object OpticsEquipment {
         displayName: String
     ): SensorSpec? {
         val px = pixelSizeUm?.toDouble() ?: return null
-        if (!(px > 0.0) || widthPx <= 0 || heightPx <= 0) return null
+        if (!px.isFinite() || !(px > 0.0) || widthPx <= 0 || heightPx <= 0) return null
         return SensorSpec(CONNECTED_SENSOR_ID, displayName, px, widthPx, heightPx)
     }
 

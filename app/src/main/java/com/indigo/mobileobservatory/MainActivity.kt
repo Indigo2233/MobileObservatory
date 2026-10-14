@@ -21,10 +21,23 @@ import com.indigo.mobileobservatory.ui.screens.CameraScreen
 import com.indigo.mobileobservatory.ui.theme.MobileObservatoryTheme
 import com.indigo.mobileobservatory.ui.viewmodel.CameraViewModel
 import com.indigo.mobileobservatory.util.FileLogger
+import com.indigo.mobileobservatory.media.MediaNavigationContract
+import com.indigo.mobileobservatory.media.MediaNavigationRequest
 
 class MainActivity : ComponentActivity() {
+    private var mediaNavigationRequest by mutableStateOf<MediaNavigationRequest?>(null)
+
+    private fun receiveMediaNavigation(intent: Intent) {
+        if (intent.action != MediaNavigationContract.ACTION_OPEN_MEDIA) return
+        val requestedPath = intent.getStringExtra(MediaNavigationContract.EXTRA_FILE_PATH)
+        val file = requestedPath?.let { MediaNavigationContract.ownedFile(this, it) }
+        if (requestedPath != null && file == null) return
+        mediaNavigationRequest = MediaNavigationRequest(android.os.SystemClock.elapsedRealtimeNanos(), file?.absolutePath)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        receiveMediaNavigation(intent)
         FileLogger.init(applicationContext)
         FileLogger.i(
             "App",
@@ -53,6 +66,13 @@ class MainActivity : ComponentActivity() {
                         onRedNightModeChange = { enabled ->
                             redNightMode = enabled
                             prefs.edit().putBoolean("red_night_mode", enabled).apply()
+                        },
+                        mediaNavigationRequest = mediaNavigationRequest,
+                        onMediaNavigationConsumed = { id ->
+                            if (mediaNavigationRequest?.id == id) {
+                                mediaNavigationRequest = null
+                                setIntent(Intent(this, MainActivity::class.java).setAction(Intent.ACTION_MAIN))
+                            }
                         }
                     )
                 }
@@ -63,6 +83,7 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        receiveMediaNavigation(intent)
         FileLogger.i("App", "Received intent action=${intent.action} in existing activity")
     }
 

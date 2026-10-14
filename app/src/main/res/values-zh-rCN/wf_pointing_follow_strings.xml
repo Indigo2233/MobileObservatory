@@ -1,0 +1,10 @@
+<resources>
+    <string name="wf_follow_pointing">跟随当前光路</string>
+    <string name="wf_center_pointing">居中到当前光路</string>
+    <string name="wf_follow_source_age">%1$s · %2$s · %3$d秒</string>
+    <string name="wf_follow_refresh">更新指向</string>
+    <string name="wf_follow_resume">继续跟随</string>
+    <string name="wf_follow_source_phone">已标定手机</string>
+    <string name="wf_follow_source_aux">已标定辅助光路</string>
+    <string name="wf_follow_source_camera">相机解析</string>
+</resources>

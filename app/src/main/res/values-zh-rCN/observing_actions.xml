@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="solve_and_offline_database">解析与离线库</string>
+    <string name="tools_live_stack_hint">行星 / 深空 · 实时画面</string>
+    <string name="tools_post_stack_hint">行星 / 深空 · SER / PSER</string>
+    <string name="tools_plate_database_hint">解析图像 · D20 / D50 离线星表</string>
+</resources>

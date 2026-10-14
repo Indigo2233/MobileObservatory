@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="wf_import_video">导入影像</string>
+    <string name="wf_phone_experimental">实验性手机引导 · 镜筒指向未验证</string>
+    <string name="wf_phone_near_target">手机方向接近目标 · 请用目镜确认</string>
+    <string name="wf_capture">拍摄</string>
+    <string name="wf_media">影像</string>
+    <string name="wf_equipment">器材</string>
+    <string name="wf_recent">最近</string>
+    <string name="wf_videos">录像</string>
+    <string name="wf_media_empty">拍摄的照片、录像和保存的叠加结果会显示在这里。</string>
+    <string name="wf_go_capture">前往拍摄</string>
+    <string name="wf_choose_target">选择观测目标</string>
+    <string name="wf_preparation">观测准备</string>
+    <string name="wf_pointing_setup">校准手机与镜筒</string>
+    <string name="wf_pointing_unavailable">手机与镜筒标定尚未接入。当前手机引导为实验功能，不能验证镜筒指向。</string>
+    <string name="wf_start_push_to">推镜引导</string>
+</resources>

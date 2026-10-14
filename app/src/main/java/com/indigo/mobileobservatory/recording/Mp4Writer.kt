@@ -9,6 +9,7 @@ import android.media.MediaMuxer
 import android.os.Build
 import android.util.Log
 import com.indigo.mobileobservatory.camera.FrameData
+import com.indigo.mobileobservatory.stacking.PixelTraits
 import java.io.File
 import java.nio.ByteBuffer
 
@@ -36,6 +37,9 @@ class Mp4Writer(private val file: File) {
     private var colorFormat = MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible
     private val converter = Mp4YuvConverter()
     private var nv12Scratch: ByteArray = ByteArray(0)
+
+    /** Capture layout frozen when recording starts, separate from display white balance. */
+    var sampleTraits: PixelTraits? = null
 
     var totalBytesWritten: Long = 0
         private set
@@ -130,7 +134,7 @@ class Mp4Writer(private val file: File) {
                 Log.w(TAG, "No input buffer available, skipping frame $frameIndex")
                 return
             }
-            val nv12 = converter.convert(frame, codecW, codecH)
+            val nv12 = converter.convert(frame, codecW, codecH, sampleTraits)
             val image = try {
                 codec.getInputImage(inputIdx)
             } catch (_: Throwable) {

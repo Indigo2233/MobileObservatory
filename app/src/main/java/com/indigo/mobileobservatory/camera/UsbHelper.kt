@@ -101,6 +101,24 @@ object UsbHelper {
         }
     }
 
+    fun unregisterUsbFd(device: UsbDevice) {
+        if (!available) return
+        val parts = device.deviceName.removePrefix("/dev/bus/usb/").split("/")
+        if (parts.size != 2) return
+        val bus = parts[0].toIntOrNull() ?: return
+        val address = parts[1].toIntOrNull() ?: return
+        runCatching { nativeUnregisterUsbFd(bus, address) }
+    }
+
+    /** Factory serial only; ASIGetID is writable and is not a physical identity. */
+    fun zwoFactorySerial(cameraId: Int): String {
+        if (!available) return ""
+        return runCatching { nativeZwoFactorySerial(cameraId) }.getOrDefault("")
+    }
+
+    private external fun nativeZwoFactorySerial(cameraId: Int): String
+    private external fun nativeUnregisterUsbFd(busNum: Int, devAddr: Int)
+    private external fun nativeHasUsbFd(busNum: Int, devAddr: Int): Boolean
     private external fun nativeRegisterUsbFd(cacheDir: String, busNum: Int, devAddr: Int, fd: Int): Boolean
     private external fun nativeInstallHooks(): Int
     private external fun nativeInstallZwoHooks(): Int

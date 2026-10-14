@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="wf_fov_optical">Optical position</string>
+    <string name="wf_fov_calibrated">Calibrated optical path</string>
+    <string name="wf_fov_estimated">Estimated pointing</string>
+    <string name="wf_fov_planning">Framing only</string>
+    <string name="wf_fov_stale">Framing · locate again</string>
+    <string name="wf_fov_conflict">Framing · sources disagree</string>
+    <string name="wf_fov_roll_unknown">Framing · camera angle unknown</string>
+    <string name="wf_push_calibration_needed">Calibrate the phone to the telescope first.</string>
+    <string name="wf_push_calibrate">Calibrate phone and telescope</string>
+    <string name="wf_push_verified">Verified inside the field</string>
+    <string name="wf_push_verifying">Hold still · verifying pointing</string>
+    <string name="wf_push_estimated">Estimated direction · awaiting verification</string>
+    <string name="wf_push_retry_wait">Hold still · retrying shortly</string>
+    <string name="wf_push_retry_limit">Could not verify · retry or check the sky camera</string>
+    <string name="wf_push_phone_debug">Solve phone image</string>
+    <string name="wf_push_field">Observing field</string>
+    <string name="wf_push_field_unknown">Field not confirmed</string>
+    <string name="wf_push_field_circle">Eyepiece</string>
+    <string name="wf_push_field_camera">Camera</string>
+    <string name="wf_push_field_diameter">True field diameter (°)</string>
+    <string name="wf_push_field_width">Field width (°)</string>
+    <string name="wf_push_field_height">Field height (°)</string>
+    <string name="wf_push_field_confirm">Use this field</string>
+    <string name="wf_push_field_camera_conservative">Without a calibrated camera angle, verify within the inscribed circle.</string>
+    <string name="wf_push_verification_rejected">Image solved; new pointing verification is needed.</string>
+</resources>

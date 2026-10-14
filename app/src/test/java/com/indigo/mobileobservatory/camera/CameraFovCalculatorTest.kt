@@ -22,6 +22,13 @@ class CameraFovCalculatorTest {
         org.junit.Assert.assertTrue(cropped.widthDeg < full.widthDeg)
         org.junit.Assert.assertTrue(cropped.heightDeg < full.heightDeg)
     }
+    @Test fun exactRetainedRawRectangleReducesTheFieldWithoutASecondCenteredAspectCrop() {
+        val reduction = PhoneMonoFrameConverter.plan(4001, 3001, 512, true)
+        val footprint = reduction.footprint(0.0, 0.0, 4000.0, 3000.0)
+        val sampled = CameraFovCalculator.estimate(input(reduction.outputWidth, reduction.outputHeight).copy(sampledFootprint = footprint))!!
+        assertEquals(8.0 * footprint.widthPx / 4000.0, sampled.effectiveSensorWidthMm, 1e-12)
+        assertEquals(6.0 * footprint.heightPx / 3000.0, sampled.effectiveSensorHeightMm, 1e-12)
+    }
 
     private fun input(outputWidth: Int, outputHeight: Int, cropWidth: Int = 4000, cropHeight: Int = 3000) = CameraFovInput(
         focalLengthMm = 4.0, sensorWidthMm = 8.0, sensorHeightMm = 6.0,

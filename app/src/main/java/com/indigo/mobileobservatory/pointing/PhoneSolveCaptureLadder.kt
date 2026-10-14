@@ -20,21 +20,23 @@ internal object PhoneSolveCaptureLadder {
         attemptIndex: Int,
         maxExposureSeconds: Double,
         minIso: Int,
-        maxIso: Int
+        maxIso: Int,
+        allowBurst: Boolean = true
     ): PhoneCaptureAttempt? {
         if (attemptIndex >= 3) return null
         return when (failure) {
+            WideFieldSolveFailure.RESOURCE_LIMIT -> null
             WideFieldSolveFailure.INSUFFICIENT_STARS -> bumpLight(
-                current, maxExposureSeconds, minIso, maxIso
+                current, maxExposureSeconds, minIso, maxIso, allowBurst
             )
             WideFieldSolveFailure.NO_CANDIDATE ->
-                if (starCount < 10) bumpLight(current, maxExposureSeconds, minIso, maxIso) else null
+                if (starCount < 10) bumpLight(current, maxExposureSeconds, minIso, maxIso, allowBurst) else null
             WideFieldSolveFailure.DEVICE_MOTION,
             WideFieldSolveFailure.AMBIGUOUS_CANDIDATE,
             WideFieldSolveFailure.HIGH_RESIDUAL ->
                 if (attemptIndex == 0) current else null
             WideFieldSolveFailure.CAPTURE_FAILED -> current
-            else -> if (starCount < 10) bumpLight(current, maxExposureSeconds, minIso, maxIso) else null
+            else -> if (starCount < 10) bumpLight(current, maxExposureSeconds, minIso, maxIso, allowBurst) else null
         }
     }
 
@@ -42,9 +44,10 @@ internal object PhoneSolveCaptureLadder {
         current: PhoneCaptureAttempt,
         maxExposureSeconds: Double,
         minIso: Int,
-        maxIso: Int
+        maxIso: Int,
+        allowBurst: Boolean
     ): PhoneCaptureAttempt? {
-        val nextBurst = PhoneManualExposure.BURST_PRESETS.firstOrNull { it > current.burstFrameCount }
+        val nextBurst = if (allowBurst) PhoneManualExposure.BURST_PRESETS.firstOrNull { it > current.burstFrameCount } else null
         if (nextBurst != null) return current.copy(burstFrameCount = nextBurst)
         if (current.iso == PhoneManualExposure.ISO_AUTO) {
             val manual = 3200.coerceIn(minIso, maxIso)

@@ -97,6 +97,8 @@ object ToupcamJni {
     fun pullImageRaw(buf: ByteArray, bits: Int): Int = nPullImageRaw(buf, bits)
 
     fun getSize(): IntArray = nGetSize()
+    fun getFinalSize(): IntArray = nGetFinalSize()
+    fun pullImageRawWithSize(buf: ByteArray, bits: Int, dimensions: IntArray): Int = nPullImageRawWithSize(buf, bits, dimensions)
     fun putSize(w: Int, h: Int): Boolean = nPutSize(w, h)
 
     fun getExpoTime(): Int = nGetExpoTime()
@@ -114,6 +116,7 @@ object ToupcamJni {
     fun getRoi(): IntArray = nGetRoi()
 
     fun getMaxBitDepth(): Int = nGetMaxBitDepth()
+    fun getSerialNumber(): String = nGetSerialNumber()
     fun getRawFormat(): IntArray = nGetRawFormat()
     fun putAutoExpoEnable(mode: Int): Boolean = nPutAutoExpoEnable(mode)
     fun getAutoExpoEnable(): Int = nGetAutoExpoEnable()
@@ -147,6 +150,8 @@ object ToupcamJni {
     private external fun nStop(): Boolean
     private external fun nPullImageRaw(buf: ByteArray, bits: Int): Int
     private external fun nGetSize(): IntArray
+    private external fun nGetFinalSize(): IntArray
+    private external fun nPullImageRawWithSize(buf: ByteArray, bits: Int, dimensions: IntArray): Int
     private external fun nPutSize(w: Int, h: Int): Boolean
     private external fun nGetExpoTime(): Int
     private external fun nPutExpoTime(us: Int): Boolean
@@ -159,6 +164,7 @@ object ToupcamJni {
     private external fun nPutRoi(x: Int, y: Int, w: Int, h: Int): Boolean
     private external fun nGetRoi(): IntArray
     private external fun nGetMaxBitDepth(): Int
+    private external fun nGetSerialNumber(): String
     private external fun nGetRawFormat(): IntArray
     private external fun nPutAutoExpoEnable(mode: Int): Boolean
     private external fun nGetAutoExpoEnable(): Int

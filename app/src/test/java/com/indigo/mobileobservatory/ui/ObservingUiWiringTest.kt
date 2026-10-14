@@ -139,11 +139,14 @@ class ObservingUiWiringTest {
         )
         assertTrue(starMap.contains("StarMapCornerControls("))
         assertTrue(starMap.contains("StarMapCornerPanel.NONE"))
-        assertTrue(starMap.contains("if (!overlaysVisible) cornerPanel = StarMapCornerPanel.NONE"))
+        assertTrue(starMap.contains("if (!overlaysVisible) interaction = interaction.copy(panel = StarMapCornerPanel.NONE)"))
         assertTrue(starMap.contains("BoxWithConstraints("))
         assertTrue(starMap.contains("Arrangement.SpaceBetween"))
         assertTrue(starMap.contains("val panelMax = minOf(360.dp, maxWidth - 16.dp)"))
-        assertTrue(starMap.contains("val showTargetCard = target != null && cornerPanel == StarMapCornerPanel.NONE"))
+        assertTrue(starMap.contains("val showTargetCard = target != null && interaction.targetCardVisible"))
+        assertTrue(starMap.contains("interaction.dismissTopLayer()"))
+        assertTrue(starMap.contains("onBlankTap = { latestOnBlankTap() }"))
+        assertTrue(!starMap.contains("StarMapBackButton("))
         assertTrue(!starMap.contains("R.string.select_celestial_target"))
         assertTrue(!starMap.contains("bottomSlotMax"))
         assertTrue(hud.contains("modifier: Modifier = Modifier"))
@@ -154,8 +157,8 @@ class ObservingUiWiringTest {
         assertTrue(hud.contains("stringResource(R.string.star_map_constellation_lines)"))
         assertTrue(!hud.contains("stringResource(R.string.red_night_mode)"))
         assertTrue(starMap.contains("redNightMode: Boolean"))
-        assertTrue(starMap.contains("Icons.Default.Nightlight"))
-        assertTrue(starMap.contains("onRedNightModeChange(!redNightMode)"))
+        assertTrue(!starMap.contains("Icons.Default.Nightlight"))
+        assertTrue(!starMap.contains("stringResource(R.string.red_night_mode)"))
         assertTrue(starMap.contains("applyNightVision()"))
         assertTrue(starMap.contains("ColorMatrixColorFilter"))
         assertTrue(starMap.contains("MercStarMap.setSkyAppearance("))
@@ -174,15 +177,19 @@ class ObservingUiWiringTest {
         val camera = read(
             "src/main/java/com/indigo/mobileobservatory/ui/screens/CameraScreen.kt"
         )
+        val sky = read("src/main/java/com/indigo/mobileobservatory/ui/screens/SkyWorkspaceScreen.kt")
+        val shell = read("src/main/java/com/indigo/mobileobservatory/ui/screens/ObservatoryShell.kt")
         val motion = read(
             "src/main/java/com/indigo/mobileobservatory/mount/MountMotionRunner.kt"
         )
         assertTrue(starMap.contains("onGoHome: () -> Unit"))
         assertTrue(hud.contains("stringResource(R.string.home)"))
         assertTrue(starMap.contains("onGoHome()"))
-        assertTrue(camera.contains("onGoHome = viewModel::goMountHome"))
+        assertTrue(sky.contains("onGoHome = viewModel::goMountHome"))
         assertTrue(camera.contains("if (!state.showsGlobalStop) return"))
-        assertTrue(camera.contains("selectedTab != MainControlTab.STAR_MAP"))
+        assertTrue(shell.contains("navigation.workspace == ObservatoryWorkspace.STAR_MAP && BuildConfig.STELLARIUM_ENABLED"))
+        assertTrue(shell.contains("MountMotionStopPopup(motion, viewModel::stopMountMotion)"))
+        assertTrue(shell.contains("quickDevice != null"))
         assertTrue(camera.contains("MountMotionStopBanner("))
         assertTrue(hud.contains("internal fun MountMotionStopBanner"))
         assertTrue(starMap.contains("mountMotionState.showsGlobalStop"))
@@ -415,7 +422,7 @@ class ObservingUiWiringTest {
     @Test
     fun precisionGotoUnifiesEpochsAndExposesSixArcminTolerance() {
         val camera = read(
-            "src/main/java/com/indigo/mobileobservatory/ui/screens/CameraScreen.kt"
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/SkyWorkspaceScreen.kt"
         )
         val viewModel = read(
             "src/main/java/com/indigo/mobileobservatory/ui/viewmodel/CameraViewModel.kt"
@@ -435,7 +442,7 @@ class ObservingUiWiringTest {
         assertTrue(camera.contains("frame = target.frame"))
         assertTrue(camera.contains("toleranceArcmin = toleranceArcmin"))
         assertTrue(viewModel.contains("EquatorialEpoch.toJnowHours(raHours, decDeg, frame)"))
-        assertTrue(viewModel.contains("EquatorialEpoch.j2000DegToJnowHours(raDeg, decDeg)"))
+        assertTrue(viewModel.contains("EquatorialEpoch.j2000DegToJnowHours(observation.direction.raDeg, observation.direction.decDeg)"))
         assertTrue(starMap.contains("PrecisionGotoMath.PREFS_TOLERANCE_ARCMIN"))
         assertTrue(starMap.contains("centerOnRaDec(ra, dec, frame = \"JNOW\")"))
         assertTrue(starMap.contains("onPrecisionGoto(target, currentPrecisionToleranceArcmin())"))
@@ -452,7 +459,7 @@ class ObservingUiWiringTest {
             "src/main/java/com/indigo/mobileobservatory/ui/screens/StarMapScreen.kt"
         )
         val camera = read(
-            "src/main/java/com/indigo/mobileobservatory/ui/screens/CameraScreen.kt"
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/SkyWorkspaceScreen.kt"
         )
         val viewModel = read(
             "src/main/java/com/indigo/mobileobservatory/ui/viewmodel/CameraViewModel.kt"
@@ -469,12 +476,12 @@ class ObservingUiWiringTest {
         assertTrue(syncIndex < expandedIndex)
         assertTrue(starMap.contains("defaultMinSize(minWidth = 0.dp)"))
         assertTrue(starMap.contains("softWrap = false"))
-        assertTrue(starMap.contains("val canSyncMount = canSlewMount && mountSupportsSync"))
+        assertTrue(starMap.contains("val canSync = mountConnected && mountPointingCapabilities.sync && !mountBusy"))
         assertTrue(starMap.contains("syncConfirmation = target"))
         assertTrue(starMap.contains("R.string.star_map_visual_sync_hint"))
-        assertTrue(starMap.contains("cornerPanel = StarMapCornerPanel.NONE"))
+        assertTrue(starMap.contains("interaction = interaction.selectTarget()"))
         assertTrue(!starMap.contains("R.string.star_map_sync_visual_caption"))
-        assertTrue(camera.contains("mountSupportsSync = viewModel.mountSupportsSync"))
+        assertTrue(camera.contains("mountPointingCapabilities = mountCapabilities"))
         assertTrue(camera.contains("frame = target.frame"))
         assertTrue(viewModel.contains("fun syncMountToTarget("))
         assertTrue(viewModel.contains("EquatorialEpoch.toJnowHours(raHours, decDeg, frame)"))
@@ -488,16 +495,19 @@ class ObservingUiWiringTest {
         val camera = read(
             "src/main/java/com/indigo/mobileobservatory/ui/screens/CameraScreen.kt"
         )
+        val shell = read("src/main/java/com/indigo/mobileobservatory/ui/screens/ObservatoryShell.kt")
         val sequence = read(
             "src/main/java/com/indigo/mobileobservatory/ui/screens/SequenceScreen.kt"
         )
-        assertTrue(camera.contains("SEQUENCE"))
+        assertTrue(shell.contains("ObservatoryDestination.SEQUENCE"))
         assertTrue(camera.contains("R.string.tab_sequence"))
-        assertTrue(camera.contains("SequenceScreen("))
-        assertTrue(camera.contains("SequenceProgressStrip("))
+        assertTrue(shell.contains("SequenceScreen("))
+        assertTrue(shell.contains("SequenceProgressStrip("))
+        assertTrue(camera.contains("if (SequenceFeature.ENABLED) TextButton(onClick = onSequence)"))
+        assertTrue(shell.contains("ObservatoryDestination.SEQUENCE -> if (SequenceFeature.ENABLED)"))
         assertTrue(sequence.contains("R.string.sequence_edit"))
         assertTrue(sequence.contains("R.string.sequence_status"))
-        assertTrue(!camera.contains("SequenceScreen(\n") || camera.contains("MainControlTab.SEQUENCE"))
+        assertTrue(!camera.contains("SequenceScreen("))
     }
 
     @Test

@@ -5,6 +5,7 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.os.SystemClock
 import com.indigo.mobileobservatory.astro.CoordinateTransform
 import com.indigo.mobileobservatory.astro.EquatorialCoordinates
 import com.indigo.mobileobservatory.astro.ObserverSite
@@ -16,6 +17,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.time.Instant
+import java.util.UUID
 import org.json.JSONObject
 import kotlin.math.acos
 import kotlin.math.asin
@@ -34,8 +36,20 @@ data class PhoneSkySolveResult(
     val frame: FrameData? = null,
     val extraction: StarExtractionResult? = null,
     val cameraLabel: String? = null,
-    val inputFrameCount: Int = 1
-)
+    val inputFrameCount: Int = 1,
+    val observation: OpticalObservation? = null,
+    val exposureMotionDeg: Double? = null,
+    val handEyeSample: HandEyeSample? = null
+) {
+    init {
+        require(inputFrameCount >= 0)
+        require(inputFrameCount == 1 || (observation == null && handEyeSample == null)) {
+            "Only a single contributing exposure can be published as timed optical evidence"
+        }
+    }
+    /** A multi-exposure image has no single timed pose until celestial-time reprojection exists. */
+    val requiresSingleFrameVerification get() = success && inputFrameCount > 1
+}
 
 enum class PhoneSkySolveStage {
     CAPTURING,
@@ -51,12 +65,32 @@ enum class PhoneSkySolveStage {
 class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventListener {
     override val id: String = "phone"
     override val displayName: String = "Phone camera + IMU"
-    override val capabilityTier: CapabilityTier = CapabilityTier.L1_PHONE
 
     private val appContext = context.applicationContext
     private val sensorManager = appContext.getSystemService(Context.SENSOR_SERVICE) as SensorManager
     private val rotationSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
-    private val alignment = DirectionAlignment()
+    private val samplingPolicy = PhoneImuSamplingPolicy()
+    private val sampleOrdering = PhoneImuSampleOrdering()
+    private val samplingLock = Any()
+    @Volatile private var sensorRunning = false
+    @Volatile private var activeSensorRegistered = false
+    private var nextActiveRegistrationAttemptMs = 0L
+    // This registration remains alive across rate changes, so the rotation-vector fusion is
+    // never deliberately stopped. A second, faster queue exists only while it is needed.
+    private val idleSensorListener = object : SensorEventListener {
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+        override fun onSensorChanged(event: SensorEvent) = onRotationEvent(event, PhoneImuSamplingMode.IDLE)
+    }
+    private val alignment = PhonePoseAlignment()
+    private var observerSite: ObserverSite? = null
+    private var activeLensKey: String? = null
+    private var sensorGapInvalidated = false
+    private var anchorHandEyeUncertaintyDeg = 0.0
+    private val sensorStreamIdentity = UUID.randomUUID().toString()
+    @Volatile private var sensorSessionRevision = 0L
+    var currentPose: SkyPose? = null
+        private set
+    val latestObservation: OpticalObservation? get() = alignment.observation
 
     @Volatile
     private var rawDirection: Direction3? = null
@@ -74,7 +108,7 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
     private var fix: SkyAttitudeFix? = null
 
     val motionGate = MotionGate()
-    private val attitudeTimeline = AttitudeTimeline()
+    private val attitudeTimeline = AttitudeTimeline(capacity = 12_000)
 
     @Volatile
     private var lastSensorOrientationDeg: Int = 90
@@ -83,23 +117,121 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
     var onMotion: ((MotionPhase) -> Unit)? = null
 
     val available: Boolean get() = rotationSensor != null
-    val plateSolved: Boolean get() = alignment.isCalibrated
+    val plateSolved: Boolean get() = alignment.observation != null && currentPose != null
+
+    private fun clearOpticalAnchor() {
+        sensorSessionRevision++
+        alignment.clear(); currentPose = null; fix = null; attitudeTimeline.clear()
+        anchorHandEyeUncertaintyDeg = 0.0
+    }
+
+    fun prepareLens(cameraId: String, sensorOrientationDeg: Int) {
+        if (activeLensKey != cameraId || lastSensorOrientationDeg != sensorOrientationDeg) {
+            clearOpticalAnchor()
+            lastRawDirection = null; lastSensorTimestampNs = 0
+            sampleOrdering.clear()
+            rawDirection = null; lastRotationMatrix = null
+            activeLensKey = cameraId; lastSensorOrientationDeg = sensorOrientationDeg
+        }
+    }
 
     fun start(): Boolean {
         val sensor = rotationSensor ?: return false
-        return sensorManager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_GAME)
+        clearOpticalAnchor()
+        sampleOrdering.clear()
+        motionGate.invalidateForDiscontinuity(SystemClock.elapsedRealtime())
+        onMotion?.invoke(motionGate.phase)
+        synchronized(samplingLock) {
+            if (sensorRunning) return true
+            if (!sensorManager.registerListener(idleSensorListener, sensor, PhoneImuSamplingMode.IDLE.periodUs)) return false
+            sensorRunning = true
+            samplingPolicy.start()
+            nextActiveRegistrationAttemptMs = 0
+            updateSensorSampling(SystemClock.elapsedRealtime())
+            return true
+        }
     }
 
     fun stop() {
-        sensorManager.unregisterListener(this)
+        synchronized(samplingLock) {
+            sensorRunning = false
+            activeSensorRegistered = false
+            samplingPolicy.stop()
+            sensorManager.unregisterListener(this)
+            sensorManager.unregisterListener(idleSensorListener)
+            sampleOrdering.clear()
+        }
+        clearOpticalAnchor()
+        lastRawDirection = null
+        lastSensorTimestampNs = 0
+        rawDirection = null
+        lastRotationMatrix = null
     }
 
     override fun latestFix(): SkyAttitudeFix? = fix
 
+    /** A requested optical check wakes sampling before camera startup or exposure begins. */
+    fun requestVerification() {
+        motionGate.requestVerification()
+        samplingPolicy.requestVerification(SystemClock.elapsedRealtime())
+        updateSensorSampling(SystemClock.elapsedRealtime())
+    }
+
+    private fun updateSensorSampling(elapsedNowMs: Long) = synchronized(samplingLock) {
+        if (!sensorRunning) return@synchronized
+        when (samplingPolicy.desiredMode(elapsedNowMs)) {
+            PhoneImuSamplingMode.ACTIVE -> if (!activeSensorRegistered && elapsedNowMs >= nextActiveRegistrationAttemptMs) {
+                val registered = sensorManager.registerListener(this, rotationSensor, PhoneImuSamplingMode.ACTIVE.periodUs)
+                if (registered) {
+                    sampleOrdering.activeQueueStarted()
+                    activeSensorRegistered = true
+                } else nextActiveRegistrationAttemptMs = elapsedNowMs + 1_000
+            }
+            PhoneImuSamplingMode.IDLE -> if (activeSensorRegistered) {
+                activeSensorRegistered = false
+                sensorManager.unregisterListener(this, rotationSensor)
+            }
+            null -> Unit
+        }
+        // Rate changes do not clear the alignment, timeline, clock, or sensor-session revision.
+    }
+
+    fun refreshCurrentPose(utcNowMs: Long = System.currentTimeMillis()) {
+        if (lastSensorTimestampNs > 0 && SystemClock.elapsedRealtimeNanos() - lastSensorTimestampNs > 500_000_000L && !sensorGapInvalidated) {
+            sensorGapInvalidated = true
+            clearOpticalAnchor()
+            lastRawDirection = null; lastSensorTimestampNs = 0
+            sampleOrdering.clear()
+            rawDirection = null; lastRotationMatrix = null
+            motionGate.invalidateForDiscontinuity(SystemClock.elapsedRealtime())
+            onMotion?.invoke(motionGate.phase)
+        }
+        samplingPolicy.observeMotion(motionGate.phase, SystemClock.elapsedRealtime())
+        updateSensorSampling(SystemClock.elapsedRealtime())
+        rawDirection?.let { publish(it, utcNowMs) }
+    }
+
+    fun motionBetween(startElapsedMs: Long, endElapsedMs: Long): Double? =
+        attitudeTimeline.motionDuring(startElapsedMs, endElapsedMs)
+
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
 
-    override fun onSensorChanged(event: SensorEvent) {
-        if (event.sensor.type != Sensor.TYPE_ROTATION_VECTOR) return
+    override fun onSensorChanged(event: SensorEvent) = onRotationEvent(event, PhoneImuSamplingMode.ACTIVE)
+
+    private fun onRotationEvent(event: SensorEvent, mode: PhoneImuSamplingMode) {
+        if (!sensorRunning || event.sensor.type != Sensor.TYPE_ROTATION_VECTOR) return
+        val disposition = sampleOrdering.classify(mode, event.timestamp,
+            if (activeSensorRegistered) PhoneImuSamplingMode.ACTIVE else PhoneImuSamplingMode.IDLE)
+        if (disposition == PhoneImuSampleDisposition.IGNORE) return
+        sensorGapInvalidated = false
+        val previous = lastRawDirection
+        val previousNs = lastSensorTimestampNs
+        val dtSec = if (previousNs > 0) (event.timestamp - previousNs) / 1_000_000_000.0 else null
+        if (disposition == PhoneImuSampleDisposition.DISCONTINUITY || (dtSec != null && (dtSec > .5 || dtSec <= 0))) {
+            clearOpticalAnchor()
+            motionGate.invalidateForDiscontinuity(SystemClock.elapsedRealtime())
+            onMotion?.invoke(motionGate.phase)
+        }
         val matrix = FloatArray(9)
         SensorManager.getRotationMatrixFromVector(matrix, event.values)
 
@@ -113,26 +245,33 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
         rawDirection = raw
         lastRotationMatrix = matrix.copyOf()
         val imageUp = CameraAttitudePrior.imageAxesEnu(matrix, lastSensorOrientationDeg).imageUp
-        attitudeTimeline.add(
-            AttitudeSnapshot(
-                timestampMs = System.currentTimeMillis(),
+        val previousPose = attitudeTimeline.latest()?.imuPose()
+        val sensorSnapshot = AttitudeSnapshot(
+                timestampMs = System.currentTimeMillis() - (SystemClock.elapsedRealtimeNanos() - event.timestamp) / 1_000_000L,
                 opticalAxis = raw,
-                imageUp = imageUp
+                imageUp = imageUp,
+                elapsedMs = event.timestamp / 1_000_000L
             )
-        )
-        val previous = lastRawDirection
-        val previousNs = lastSensorTimestampNs
+        attitudeTimeline.add(sensorSnapshot)
         lastRawDirection = raw
         lastSensorTimestampNs = event.timestamp
-        if (previous != null && previousNs > 0L) {
-            val dtSec = (event.timestamp - previousNs) / 1_000_000_000.0
+        if (previous != null && dtSec != null) {
             if (dtSec in 0.001..0.5) {
-                val rate = previous.angleDeg(raw) / dtSec
-                val phase = motionGate.ingest(rate, System.currentTimeMillis())
-                onMotion?.invoke(phase)
+                val currentSensorPose = sensorSnapshot.imuPose()
+                if (previousPose != null && currentSensorPose != null) {
+                    val rate = rotationDistanceDeg(previousPose, currentSensorPose) / dtSec
+                    val phase = motionGate.ingest(rate, SystemClock.elapsedRealtime())
+                    onMotion?.invoke(phase)
+                } else {
+                    clearOpticalAnchor()
+                    motionGate.invalidateForDiscontinuity(SystemClock.elapsedRealtime())
+                    onMotion?.invoke(motionGate.phase)
+                }
             }
         }
-        publish(alignment.apply(raw), System.currentTimeMillis())
+        samplingPolicy.observeMotion(motionGate.phase, SystemClock.elapsedRealtime())
+        updateSensorSampling(SystemClock.elapsedRealtime())
+        publish(raw, System.currentTimeMillis())
     }
 
     suspend fun captureAndSolve(
@@ -144,15 +283,28 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
         burstFrameCount: Int = 1,
         onProgress: (PhoneSkySolveStage) -> Unit = {},
         onCapture: (FrameData, StarExtractionResult, Int) -> Unit = { _, _, _ -> },
-        onBurstProgress: (completed: Int, total: Int) -> Unit = { _, _ -> }
+        onBurstProgress: (completed: Int, total: Int) -> Unit = { _, _ -> },
+        mirrored: Boolean = false,
+        installationRevision: Long = 0,
+        opticsRevision: Long = 0,
+        handEyeCalibration: HandEyeCalibration? = null
     ): PhoneSkySolveResult {
         // Plate solving remains available without a rotation-vector sensor. In that case it
         // returns the photographic solution while live push-to orientation awaits an IMU sample.
-        val rawAtCapture = rawDirection
-        val matrixAtCapture = lastRotationMatrix
+        val samplingLease = samplingPolicy.beginVerification(SystemClock.elapsedRealtime())
         val captureStartedAt = System.currentTimeMillis()
 
         return try {
+            updateSensorSampling(SystemClock.elapsedRealtime())
+            observerSite = site
+            val requestedLens = cameraId ?: "default"
+            cameraId?.let { lens ->
+                runCatching { com.indigo.mobileobservatory.camera.PhoneCameraCapability.enumerateBackCameras(appContext)
+                    .firstOrNull { it.cameraId == lens } }.getOrNull()?.let { prepareLens(requestedLens, it.sensorOrientation) }
+            }
+            val rawAtCapture = rawDirection
+            val matrixAtCapture = lastRotationMatrix
+            val capturedSensorSession = sensorSessionRevision
             onProgress(PhoneSkySolveStage.CAPTURING)
             val directory = PhoneSkyCaptureStore.directory(appContext)
             val fitsFile = File(directory, "${PhoneSkyCaptureStore.newBaseName()}_push_to.fits")
@@ -162,28 +314,55 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
                     iso = iso,
                     preferRaw = preferRaw,
                     cameraId = cameraId,
-                    frameCount = burstFrameCount,
+                    frameCount = if (mirrored && handEyeCalibration?.valid != true) 1 else burstFrameCount,
                     onFrameCaptured = onBurstProgress
                 )
             }
             val capture = burst.first
+            val captureOrientationMatches = lastSensorOrientationDeg == capture.metadata.sensorOrientation
+            if (!captureOrientationMatches) prepareLens(requestedLens, capture.metadata.sensorOrientation)
+            val captureIdentity = capture.metadata.pointingIdentity(installationRevision, opticsRevision)
+            val captureGeometry = capture.metadata.pointingGeometry(capture.frame.width, capture.frame.height, capture.usedRaw, mirrored)
+            require(burst.captures.all { item ->
+                item.metadata.pointingIdentity(installationRevision, opticsRevision) == captureIdentity &&
+                    item.metadata.pointingGeometry(item.frame.width, item.frame.height, item.usedRaw, mirrored) == captureGeometry &&
+                    item.frame.pixelFormat == capture.frame.pixelFormat &&
+                    item.fovWidthDeg == capture.fovWidthDeg && item.fovHeightDeg == capture.fovHeightDeg
+            }) { "Physical lens or image geometry changed during the burst" }
+            val matchedHandEye = handEyeCalibration?.takeIf {
+                it.valid && it.source == captureIdentity && it.geometry == captureGeometry
+            }
+            val extrinsic = matchedHandEye?.opticalInImu
+            val firstStamp = capture.metadata.observationStamp
+            val poses = burst.captures.map { item ->
+                val stamp = item.metadata.observationStamp ?: return@map null
+                if (firstStamp == null || !stamp.compatibleClock(firstStamp)) return@map null
+                attitudeTimeline.sampleElapsed(stamp.elapsedMidpointMs)?.opticalPoseForCapture(mirrored, extrinsic)?.let { pose ->
+                    BurstAttitude(Direction3(pose.forward.x, pose.forward.y, pose.forward.z),
+                        Direction3(pose.up.x, pose.up.y, pose.up.z), mirrored)
+                }
+            }
+            // A mirror image needs both measured X and timed poses to align multiple exposures.
+            // Before calibration, or across a clock/sensor gap, solve the first photograph alone.
+            val canAlignMirrorBurst = !mirrored || (extrinsic != null && poses.all { it != null } &&
+                capture.fovWidthDeg?.let { it > 1.0 } == true && capture.fovHeightDeg?.let { it > 1.0 } == true)
+            val includedCaptures = if (canAlignMirrorBurst) burst.captures else listOf(capture)
+            val lastStamp = includedCaptures.last().metadata.observationStamp
+            val exposureMotion = if (firstStamp != null && lastStamp != null) attitudeTimeline.motionDuring(
+                firstStamp.elapsedMidpointMs - firstStamp.exposureDurationMs / 2,
+                lastStamp.elapsedMidpointMs + lastStamp.exposureDurationMs / 2) else null
+            val exposurePose = firstStamp?.let { attitudeTimeline.sampleElapsed(it.elapsedMidpointMs) }
             lastSensorOrientationDeg = capture.metadata.sensorOrientation
             val stacked = withContext(Dispatchers.Default) {
-                val poses = burst.captures.map { item ->
-                    val stamp = item.metadata.exposureMidpointEpochMs ?: item.frame.timestamp
-                    attitudeTimeline.sample(stamp)?.let { snap ->
-                        val up = snap.imageUp ?: return@let null
-                        BurstAttitude(snap.opticalAxis, up)
-                    }
-                }
                 ShortExposureStacker.stack(
-                    frames = burst.captures.map { it.frame },
-                    attitudes = poses,
+                    frames = includedCaptures.map { it.frame },
+                    attitudes = if (canAlignMirrorBurst) poses else poses.take(1),
                     fovWidthDeg = capture.fovWidthDeg,
                     fovHeightDeg = capture.fovHeightDeg
                 )
             }
             onProgress(PhoneSkySolveStage.EXTRACTING_STARS)
+            val extractionStarted = System.nanoTime()
             val extraction = withContext(Dispatchers.Default) {
                 WideFieldStarExtractor.extractFromFrame(
                     frame = stacked.frame,
@@ -192,7 +371,7 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
                     fovHeightDeg = capture.fovHeightDeg
                 )
             }
-            val solveExtraction = StarCoordinateUndistorter.correct(
+            val correctedExtraction = StarCoordinateUndistorter.correct(
                 extraction = extraction,
                 calibration = capture.metadata.lensCalibration,
                 cropLeftPx = capture.metadata.cropLeftPx,
@@ -205,8 +384,12 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
                     android.hardware.camera2.CaptureRequest.DISTORTION_CORRECTION_MODE_FAST ||
                     capture.metadata.distortionCorrectionMode ==
                     android.hardware.camera2.CaptureRequest.DISTORTION_CORRECTION_MODE_HIGH_QUALITY),
-                coordinateDomain = capture.metadata.calibrationCoordinateDomain
+                coordinateDomain = capture.metadata.calibrationCoordinateDomain,
+                sampledFootprint = capture.metadata.solveFootprint
             )
+            val solveExtraction = if (!mirrored) correctedExtraction else correctedExtraction.copy(
+                stars = correctedExtraction.stars.map { it.copy(x = stacked.frame.width - it.x) })
+            val extractionNanos = System.nanoTime() - extractionStarted
             onCapture(stacked.frame, extraction, stacked.inputFrameCount)
             if (stacked.rejectedMotionFrames >= (burst.captures.size + 1) / 2 &&
                 extraction.stars.size < 8
@@ -243,11 +426,14 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
             val observationTime = Instant.ofEpochMilli(
                 capture.metadata.exposureMidpointEpochMs ?: (captureStartedAt + capture.exposureNs / 2_000_000L)
             )
-            val midSnapshot = attitudeTimeline.sample(observationTime.toEpochMilli())
-            val imuDirection = midSnapshot?.opticalAxis ?: rawAtCapture
-            val imuCameraUp = midSnapshot?.imageUp ?: matrixAtCapture?.let { matrix ->
+            val midSnapshot = exposurePose
+            val virtualOpticalPose = midSnapshot?.opticalPoseForCapture(mirrored, extrinsic)
+            val imuDirection = virtualOpticalPose?.forward?.let { Direction3(it.x, it.y, it.z) }
+                ?: if (!mirrored && captureOrientationMatches) midSnapshot?.opticalAxis ?: rawAtCapture else null
+            val imuCameraUp = virtualOpticalPose?.up?.let { Direction3(it.x, it.y, it.z) }
+                ?: if (!mirrored && captureOrientationMatches) midSnapshot?.imageUp ?: matrixAtCapture?.let { matrix ->
                 CameraAttitudePrior.imageAxesEnu(matrix, capture.metadata.sensorOrientation).imageUp
-            }
+            } else null
             val attitudePrior = imuDirection?.let { direction ->
                 CameraAttitudePrior.fromOpticalAxis(direction, imuCameraUp, observationTime, site)
             }
@@ -263,7 +449,12 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
                     attitudePrior = attitudePrior,
                     observationTime = observationTime,
                     site = site,
-                    catalog = PhoneBrightStarCatalog.load(appContext)
+                    catalog = PhoneBrightStarCatalog.load(appContext),
+                    captureMetrics = WideFieldCaptureMetrics(capture.metadata.logicalCameraId,
+                        capture.metadata.physicalCameraId, capture.metadata.focalLengthMm,
+                        capture.capability.equivalentFocalLengthMm?.toDouble(), capture.exposureNs, capture.iso,
+                        stacked.inputFrameCount, burst.sessionOpenLatencyMs, capture.captureLatencyMs,
+                        extractionNanos, mirrored, fitsFile.absolutePath)
                 ))
             }
             val raDeg = localSolve.raDeg
@@ -281,34 +472,67 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
                     inputFrameCount = stacked.inputFrameCount
                 )
             } else {
-                val horizontal = CoordinateTransform.j2000ToTopocentric(
-                    EquatorialCoordinates(raDeg, decDeg),
-                    observationTime,
-                    site,
-                    refraction = null
-                )
-                imuDirection?.let { sensorDirection ->
-                    alignment.calibrate(sensorDirection, Direction3.fromAltAz(
-                        horizontal.altitudeDeg,
-                        horizontal.azimuthDeg
-                    ))
-                    publish(alignment.apply(rawDirection ?: sensorDirection), System.currentTimeMillis())
+                val stamp = capture.metadata.observationStamp
+                val roll = localSolve.rotationDeg
+                val residual = localSolve.quality.rmsResidualDeg
+                val motion = exposureMotion
+                val opticalObservation = if (stacked.inputFrameCount == 1 && stamp != null && roll != null && residual != null &&
+                    residual.isFinite() && localSolve.quality.matchedStars >= 5 && motion != null && motion <= 0.05) {
+                    val direction = SkyDirection(raDeg, decDeg)
+                    OpticalObservation(fitsFile.nameWithoutExtension,
+                        captureIdentity, stamp, direction,
+                        SkyPose.fromSolution(direction, roll),
+                        captureGeometry,
+                        maxOf(residual, 0.005) + motion, OpticalObservationKind.PHONE_PLATE,
+                        acquisitionDeviceId = "phone/${captureIdentity.physicalLensId}",
+                        plateScaleDegPerPixel = localSolve.arcsecPerPixel?.div(3600.0))
+                } else null
+                if (opticalObservation != null && midSnapshot != null && capturedSensorSession == sensorSessionRevision) {
+                    alignment.align(opticalObservation, midSnapshot, site, matchedHandEye)
+                    anchorHandEyeUncertaintyDeg = matchedHandEye?.uncertaintyDeg ?: 0.0
+                    publish(rawDirection ?: midSnapshot.opticalAxis, System.currentTimeMillis())
                 }
                 onProgress(PhoneSkySolveStage.COMPLETE)
                 PhoneSkySolveResult(
                     success = true,
-                    message = "Solved in ${localSolve.quality.elapsedMs} ms; ${localSolve.quality.matchedStars} matched stars",
+                    message = if (stacked.inputFrameCount > 1) appContext.getString(com.indigo.mobileobservatory.R.string.wfp_burst_image_only)
+                        else "Solved in ${localSolve.quality.elapsedMs} ms; ${localSolve.quality.matchedStars} matched stars",
                     fix = fix,
                     skySolution = localSolve,
                     fitsPath = fitsFile.absolutePath,
                     frame = stacked.frame,
                     extraction = extraction,
                     cameraLabel = capture.capability.displayLabel,
-                    inputFrameCount = stacked.inputFrameCount
+                    inputFrameCount = stacked.inputFrameCount,
+                    observation = opticalObservation,
+                    exposureMotionDeg = motion,
+                    handEyeSample = if (opticalObservation != null && midSnapshot?.elapsedMs != null) midSnapshot.imuPose()?.let {
+                        HandEyeSample(opticalObservation, it, midSnapshot.timestampMs, midSnapshot.elapsedMs, site,
+                            "$sensorStreamIdentity:$capturedSensorSession")
+                    } else null
                 )
             }
+        } catch (cancel: kotlinx.coroutines.CancellationException) {
+            throw cancel
+        } catch (resource: com.indigo.mobileobservatory.camera.PhoneSkyResourceException) {
+            val message = appContext.getString(when (resource.limit) {
+                com.indigo.mobileobservatory.camera.PhoneSkyResourceLimit.HEAP -> com.indigo.mobileobservatory.R.string.wfp_resource_heap
+                com.indigo.mobileobservatory.camera.PhoneSkyResourceLimit.CAMERA_BUFFERS -> com.indigo.mobileobservatory.R.string.wfp_resource_camera
+                com.indigo.mobileobservatory.camera.PhoneSkyResourceLimit.STORAGE -> com.indigo.mobileobservatory.R.string.wfp_resource_storage
+            })
+            PhoneSkySolveResult(false, message, skySolution = WideFieldSolveResult(false, message, failure = WideFieldSolveFailure.RESOURCE_LIMIT),
+                inputFrameCount = 0)
+        } catch (_: OutOfMemoryError) {
+            // Admission checks cannot predict another device/UI allocation racing this work.
+            // Never turn a real allocation failure into a larger burst on the retry ladder.
+            val message = appContext.getString(com.indigo.mobileobservatory.R.string.wfp_resource_heap)
+            PhoneSkySolveResult(false, message, skySolution = WideFieldSolveResult(false, message, failure = WideFieldSolveFailure.RESOURCE_LIMIT),
+                inputFrameCount = 0)
         } catch (t: Throwable) {
             PhoneSkySolveResult(false, t.message ?: t.javaClass.simpleName)
+        } finally {
+            samplingPolicy.endVerification(samplingLease, SystemClock.elapsedRealtime())
+            updateSensorSampling(SystemClock.elapsedRealtime())
         }
     }
 
@@ -333,7 +557,19 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
             put("distortionCorrectionMode", metadata.distortionCorrectionMode)
             put("calibrationCoordinateDomain", metadata.calibrationCoordinateDomain.name)
             put("lensCalibrationAvailable", metadata.lensCalibration != null)
+            put("solveFootprint", metadata.solveFootprint?.let { rectangle -> JSONObject()
+                .put("leftPx", rectangle.leftPx).put("topPx", rectangle.topPx)
+                .put("widthPx", rectangle.widthPx).put("heightPx", rectangle.heightPx)
+                .put("firstPixelCenterX", rectangle.firstPixelCenterX).put("firstPixelCenterY", rectangle.firstPixelCenterY) })
+            put("solveReduction", metadata.solveReduction?.let { reduction -> JSONObject()
+                .put("sourceWidth", reduction.sourceWidth).put("sourceHeight", reduction.sourceHeight)
+                .put("blockSize", reduction.blockSize).put("coveredWidth", reduction.coveredWidth).put("coveredHeight", reduction.coveredHeight) })
             put("exposureMidpointEpochMs", metadata.exposureMidpointEpochMs)
+            put("exposureMidpointElapsedMs", metadata.observationStamp?.elapsedMidpointMs)
+            put("clockUncertaintyMs", metadata.observationStamp?.clockUncertaintyMs)
+            put("raDegJ2000", solve.raDeg)
+            put("decDegJ2000", solve.decDeg)
+            put("imageUpPositionAngleDeg", solve.rotationDeg)
             put("fovWidthDeg", capture.fovWidthDeg)
             put("fovHeightDeg", capture.fovHeightDeg)
             put("priorRaDeg", prior?.centerRaDeg)
@@ -351,13 +587,24 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
     }
 
     private fun publish(direction: Direction3, timestampMs: Long) {
-        val (alt, az) = direction.toAltAz()
+        val pose = attitudeTimeline.latest()?.let { alignment.pose(it, timestampMs, SystemClock.elapsedRealtime()) }
+        currentPose = pose
+        val sky = pose?.forward?.direction()
+        val h = if (sky != null && observerSite != null) CoordinateTransform.j2000ToTopocentric(
+            EquatorialCoordinates(sky.raDeg, sky.decDeg), Instant.ofEpochMilli(timestampMs), requireNotNull(observerSite), null) else null
+        val (alt, az) = if (h != null) h.altitudeDeg to h.azimuthDeg else direction.toAltAz()
+        val absolute = alignment.observation
         val next = SkyAttitudeFix(
+            raHours = sky?.raDeg?.div(15.0),
+            decDeg = sky?.decDeg,
             altDeg = alt,
             azDeg = az,
             timestampMs = timestampMs,
-            uncertaintyDeg = if (alignment.isCalibrated) 0.5 else null,
-            sourceId = id
+            uncertaintyDeg = if (pose != null && absolute != null) absolute.uncertaintyDeg +
+                anchorHandEyeUncertaintyDeg +
+                (SystemClock.elapsedRealtime() - absolute.stamp.elapsedMidpointMs).coerceAtLeast(0) * 0.00002 else null,
+            sourceId = id,
+            lastAbsoluteTimestampMs = absolute?.stamp?.utcMidpointMs
         )
         fix = next
         onFix?.invoke(next)

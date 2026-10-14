@@ -112,6 +112,8 @@ class AccessoryDeviceManager(context: Context) {
         wanderer = wandererRotator
     )
     val powerBoxController = GeminiPowerBoxController()
+    private val _activeFilterWheelDeviceId = MutableStateFlow<Int?>(null)
+    val activeFilterWheelDeviceId: StateFlow<Int?> = _activeFilterWheelDeviceId.asStateFlow()
     private val _activeFocuserDeviceId = MutableStateFlow<Int?>(null)
     val activeFocuserDeviceId: StateFlow<Int?> = _activeFocuserDeviceId.asStateFlow()
     private val _activeCoverDeviceId = MutableStateFlow<Int?>(null)
@@ -152,7 +154,10 @@ class AccessoryDeviceManager(context: Context) {
                         it.usbDevice.deviceId == device.deviceId
                     } ?: return
                     when (detached.type) {
-                        AccessoryType.FILTER_WHEEL -> filterWheelController.close()
+                        AccessoryType.FILTER_WHEEL -> {
+                            if (pendingFilterWheelDeviceId == device.deviceId) pendingFilterWheelDeviceId = null
+                            if (_activeFilterWheelDeviceId.value == device.deviceId) disconnectFilterWheel()
+                        }
                         AccessoryType.FOCUSER,
                         AccessoryType.EFUCOSER_FOCUSER -> {
                             if (connectingFocuserDeviceId == device.deviceId) {
@@ -458,18 +463,29 @@ class AccessoryDeviceManager(context: Context) {
     }
 
     private fun connectFilterWheelGranted(device: UsbDevice) {
-        if (device.vendorId == OasisUsbIds.vendorId && OasisUsbIds.isFilterWheel(device.productId)) {
-            if (oasisFilterWheel.open(appContext, device)) {
-                filterWheelController.useOasis()
+        // Keep identity tied to the physical USB device, never to the global connected flag.
+        disconnectFilterWheel()
+        _scanError.value = null
+        try {
+            if (device.vendorId == OasisUsbIds.vendorId && OasisUsbIds.isFilterWheel(device.productId)) {
+                if (oasisFilterWheel.open(appContext, device)) {
+                    filterWheelController.useOasis()
+                    _activeFilterWheelDeviceId.value = device.deviceId
+                } else {
+                    _scanError.value = "Failed to connect Oasis filter wheel"
+                }
             } else {
-                _scanError.value = "Failed to connect Oasis filter wheel"
+                if (toupTekFilterWheel.open(appContext, device)) {
+                    filterWheelController.useToupTek()
+                    _activeFilterWheelDeviceId.value = device.deviceId
+                } else {
+                    _scanError.value = "Failed to connect ToupTek filter wheel"
+                }
             }
-            return
-        }
-        if (toupTekFilterWheel.open(appContext, device)) {
-            filterWheelController.useToupTek()
-        } else {
-            _scanError.value = "Failed to connect ToupTek filter wheel"
+        } catch (error: Throwable) {
+            disconnectFilterWheel()
+            _scanError.value = error.message ?: "Failed to connect filter wheel"
+            FileLogger.e(TAG, "Filter wheel connection failed", error)
         }
     }
 
@@ -521,7 +537,14 @@ class AccessoryDeviceManager(context: Context) {
         }
     }
 
-    fun disconnectFilterWheel() = filterWheelController.close()
+    fun disconnectFilterWheel() {
+        pendingFilterWheelDeviceId = null
+        try {
+            filterWheelController.close()
+        } finally {
+            _activeFilterWheelDeviceId.value = null
+        }
+    }
 
     fun disconnectFocuser() {
         focuserConnectJob?.cancel()
@@ -571,6 +594,7 @@ class AccessoryDeviceManager(context: Context) {
         focuserConnectGeneration++
         focuserConnectJob = null
         connectingFocuserDeviceId = null
+        _activeFilterWheelDeviceId.value = null
         filterWheelController.destroy()
         focuserController.destroy()
         coverController.destroy()

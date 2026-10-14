@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="camera_cfa_title">CFA / color interpretation</string>
+    <string name="camera_cfa_auto">Auto (camera)</string>
+    <string name="camera_cfa_mono">Monochrome</string>
+    <string name="camera_cfa_apply">Apply</string>
+    <string name="camera_cfa_reset_apply">Reset stack and apply</string>
+    <string name="camera_cfa_scope">Applies to this camera output: preview, new photos and recordings, and live stacking. The camera samples stay unchanged.</string>
+    <string name="camera_cfa_rgb">RGB frames are already color images. CFA interpretation only applies to raw mono/Bayer output.</string>
+    <string name="camera_cfa_busy_recording">Stop recording before changing CFA.</string>
+    <string name="camera_cfa_busy_calibration">Finish or cancel calibration capture first.</string>
+    <string name="camera_cfa_busy_snapshot">Wait for the photo or reference capture to finish.</string>
+    <string name="camera_cfa_busy_settings">Wait for the camera settings to finish applying.</string>
+    <string name="camera_cfa_reset_stack">Changing CFA needs a fresh live stack. Applying will discard the current stack.</string>
+    <string name="camera_cfa_device_changed">Camera changed. Open CFA settings again.</string>
+    <string name="camera_cfa_layout_changed">Output layout changed; CFA restored to Auto. Select it again if needed.</string>
+</resources>

@@ -153,12 +153,14 @@ class CalibrationCoordinator(
         _state.update { it.copy(masters = library.list(), message = "") }
     }
 
-    fun createMaster(type: CalibrationType, file: File, confirmMatchingSettings: Boolean = false) = change {
-        create(type, file, file.name, confirmMatchingSettings)
+    fun createMaster(type: CalibrationType, file: File, confirmMatchingSettings: Boolean = false,
+        cfaInterpretation: SerCfaInterpretation = SerCfaInterpretation.AUTO) = change {
+        create(type, file, file.name, confirmMatchingSettings, cfaInterpretation)
     }
 
     /** External recordings are temporary inputs, never misleading new entries in My recordings. */
-    fun importMaster(type: CalibrationType, uri: Uri, confirmMatchingSettings: Boolean = false) = change {
+    fun importMaster(type: CalibrationType, uri: Uri, confirmMatchingSettings: Boolean = false,
+        cfaInterpretation: SerCfaInterpretation = SerCfaInterpretation.AUTO) = change {
         var name = "import.ser"
         var size = -1L
         app.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { cursor ->
@@ -184,14 +186,15 @@ class CalibrationCoordinator(
                     }
                 }
             } ?: error("source_unreadable")
-            create(type, temporary, name, confirmMatchingSettings)
+            create(type, temporary, name, confirmMatchingSettings, cfaInterpretation)
         } finally { temporary.delete() }
     }
 
-    private suspend fun CoroutineScope.create(type: CalibrationType, file: File, name: String, confirmed: Boolean) {
+    private suspend fun CoroutineScope.create(type: CalibrationType, file: File, name: String, confirmed: Boolean,
+        cfaInterpretation: SerCfaInterpretation) {
         check(!isSourceBusy(file)) { "recording_active" }
         val identity = sourceIdentity(file) { ensureActive() }
-        SERReader(file, endian()).use { reader ->
+        SERReader(file, endian(), cfaInterpretation).use { reader ->
             reader.sampleAlignment = alignment()
             check(reader.open()) { reader.lastError ?: "invalid_source" }
             val header = checkNotNull(reader.header)
@@ -204,7 +207,8 @@ class CalibrationCoordinator(
                 readFrame = { index ->
                     ensureActive()
                     reader.readSensorFrame(index.toInt()) ?: error(reader.lastError ?: "read_failed")
-                }, name = name, sourceIdentity = identity, bias = bias, allowUnknownCapture = confirmed,
+                }, name = name, sourceIdentity = cfaInterpretation.decodingIdentity(identity,
+                    reader.endianConvention.name, reader.sampleAlignment.name, "SENSOR"), bias = bias, allowUnknownCapture = confirmed,
                 cancelCheck = { ensureActive() }, progress = { done, total ->
                     _state.update { it.copy(completed = done, total = total) }
                 })

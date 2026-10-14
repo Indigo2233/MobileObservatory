@@ -70,11 +70,23 @@ class SERPreviewInstrumentedTest {
                 assertEquals(0f,red,0f); assertEquals(.5f,green,1f/255); assertEquals(1f,blue,0f)
                 val gain = ImageUtils.lp750WhiteBalanceGains(red,green,blue)
                 val expected = ImageUtils.lp750Matrix(red,green,blue)
+                // This constant CFA fixture produces a constant decoded image. Its
+                // converted 10th..60th percentile background is therefore the whole
+                // image, so the existing background WB applies with full weight.
+                for (y in 0 until h) for (x in 0 until w) assertEquals(rgb, plain.getPixel(x,y))
+                val matrixRgb = IntArray(3) { c -> (expected[c]*gain[c]*255).coerceIn(0f,255f).toInt() }
+                val backgroundTarget = (matrixRgb.sum()/3.0).coerceAtLeast(.255)
+                val completeRgb = IntArray(3) { c ->
+                    val backgroundGain = (backgroundTarget/matrixRgb[c].toDouble().coerceAtLeast(.255)).coerceIn(.75,1.35)
+                    (matrixRgb[c]*backgroundGain).toInt().coerceIn(0,255)
+                }
                 reader.lp750Enabled = true
                 val converted = reader.readPreviewBitmap(0)!!
                 val lp = converted.getPixel(10,10)
-                for (c in 0..2) assertTrue(kotlin.math.abs((expected[c]*gain[c]*255).coerceIn(0f,255f).toInt()-
-                    ((lp ushr (16-c*8)) and 255)) <= 1)
+                val actualRgb = IntArray(3) { c -> (lp ushr (16-c*8)) and 255 }
+                android.util.Log.i("SERPreviewLP750", "matrix=${matrixRgb.contentToString()} background=${completeRgb.contentToString()} actual=${actualRgb.contentToString()}")
+                for (c in 0..2) assertTrue("channel $c matrix=${matrixRgb.contentToString()} complete=${completeRgb.contentToString()} actual=${actualRgb.contentToString()}",
+                    kotlin.math.abs(completeRgb[c]-actualRgb[c]) <= 1)
                 plain.recycle(); converted.recycle()
             }
         } finally { file.delete() }

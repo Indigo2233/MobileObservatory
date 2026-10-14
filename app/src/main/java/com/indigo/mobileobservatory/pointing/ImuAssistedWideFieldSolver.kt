@@ -12,13 +12,15 @@ import kotlin.math.max
 import kotlin.math.sin
 import kotlin.math.tan
 
-data class ImuAssistedSolveResult(
+internal data class ImuAssistedSolveResult(
     val success: Boolean,
     val message: String,
     val center: TopocentricCoordinates? = null,
     val matchedStars: Int = 0,
     val residualDeg: Double? = null,
-    val rotationDeg: Double? = null
+    /** 2D rotation in the IMU-prior tangent basis; not a J2000 position angle. */
+    val rotationDeg: Double? = null,
+    val imageUpDirection: Direction3? = null
 )
 
 /**
@@ -102,6 +104,10 @@ internal object ImuAssistedWideFieldSolver {
         val result = best ?: return ImuAssistedSolveResult(false, "No catalog triangle matched IMU prior")
         val centerDirection = basis.unproject(result.translation.x, result.translation.y)
         val center = centerDirection.toAltAz().let { TopocentricCoordinates(it.first, it.second) }
+        // The Y column of the fitted 2D transform, differentiated through gnomonic
+        // unprojection and projected tangent to the fitted (not prior) optical axis.
+        val rawUp = basis.xAxis * -sin(result.rotation) + basis.yAxis * cos(result.rotation)
+        val imageUp = (rawUp - centerDirection * dot(rawUp, centerDirection)).unit()
         val priorError = angularDistanceDeg(imuDirection, centerDirection)
         val residualDeg = Math.toDegrees(atan2(result.residual, 1.0))
         return if (result.matches >= MINIMUM_MATCHES &&
@@ -113,7 +119,8 @@ internal object ImuAssistedWideFieldSolver {
                 center = center,
                 matchedStars = result.matches,
                 residualDeg = residualDeg,
-                rotationDeg = Math.toDegrees(result.rotation)
+                rotationDeg = Math.toDegrees(result.rotation),
+                imageUpDirection = imageUp
             )
         } else {
             ImuAssistedSolveResult(

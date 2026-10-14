@@ -62,6 +62,7 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
     private var sensorHeight = 0
     private var currentBin = 1
     override val currentHardwareBin: Int get() = currentBin
+    override val roiSensorScale: Int get() = currentBin
     override var supportedHardwareBins: List<Int> = listOf(1); private set
     private var maxBpp = 16
     private var bayerType = -1
@@ -98,6 +99,7 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
     }
 
     private fun openInternal(cameraId: String, singleFrame: Boolean, desiredBits: Int = 8): Boolean {
+        if (!CameraSdkLease.process.claim("qhy", this)) return false
         try {
             FileLogger.i(TAG, "openInternal: id=$cameraId singleFrame=$singleFrame usbFd=$usbFd")
 
@@ -177,7 +179,7 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
             val modelName = extractModelName(cameraId)
             cameraInfo = CameraInfo(
                 name = modelName,
-                serialNumber = extractSerialNumber(cameraId),
+                serialNumber = resolvedId.trim(),
                 sensorWidth = sensorWidth,
                 sensorHeight = sensorHeight,
                 maxBitDepth = maxBpp,
@@ -200,6 +202,8 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
             Log.e(TAG, "open failed", e)
             try { QhyccdJni.close() } catch (_: Throwable) {}
             return false
+        } finally {
+            if (!_isOpen.value) CameraSdkLease.process.release("qhy", this)
         }
     }
 
@@ -367,6 +371,8 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
     }
 
     override fun close() {
+        if (!CameraSdkLease.process.owns("qhy", this)) return
+        try {
         stopCapture()
         if (_isOpen.value) {
             try { QhyccdJni.close() } catch (e: Throwable) {
@@ -379,6 +385,7 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
         useSingleFrameMode = false
         try { usbConnection?.close() } catch (_: Throwable) {}
         usbConnection = null
+        } finally { CameraSdkLease.process.release("qhy", this) }
     }
 
     /**
@@ -389,6 +396,8 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
      * next plug-in). It only stops the capture thread and drops the handle.
      */
     fun markDisconnected() {
+        if (!CameraSdkLease.process.owns("qhy", this)) return
+        try {
         captureGeneration.stop()
         FileLogger.i(TAG, "markDisconnected: USB device gone, skipping SDK teardown I/O")
         _isCapturing.value = false
@@ -405,6 +414,7 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
         useSingleFrameMode = false
         try { usbConnection?.close() } catch (_: Throwable) {}
         usbConnection = null
+        } finally { CameraSdkLease.process.release("qhy", this) }
     }
 
     @Synchronized override fun startCapture(callback: FrameCallback) {
