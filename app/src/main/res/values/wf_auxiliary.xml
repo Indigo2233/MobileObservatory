@@ -1,5 +1,5 @@
 <resources>
-    <string name="wfa_title">Auxiliary camera alignment</string>
+    <string name="wfa_title">Align pointing camera</string>
     <string name="wfa_continue">Start alignment</string>
     <string name="wfa_setup">1 · Connect and fix the auxiliary camera</string>
     <string name="wfa_no_camera">No auxiliary camera connected</string>

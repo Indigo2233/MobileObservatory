@@ -105,6 +105,27 @@ class ObservatoryNavigationTest {
         assertEquals(1, settings.allPages.count { it.destination == SETTINGS })
     }
 
+    @Test fun calibrationAliasesReuseTheSamePageAndItsSelectedSource() {
+        val calibration = ObservatoryNavigation().select(STAR_MAP).open(PREPARATION).open(POINTING_SETUP)
+        val reopened = calibration.open(PLATE_SOLVE).open(AUXILIARY_CALIBRATION)
+        assertEquals(calibration.pages, reopened.pages)
+        assertEquals(POINTING_SETUP, reopened.current)
+        assertEquals(calibration.nextId + 1, reopened.nextId)
+        val auxiliary = ObservatoryNavigation().open(AUXILIARY_CALIBRATION)
+        assertEquals(auxiliary, auxiliary.open(POINTING_SETUP))
+    }
+
+    @Test fun calibrationAliasesRestoreTheirOriginalWorkspaceAcrossStacks() {
+        val calibration = ObservatoryNavigation().select(STAR_MAP).open(PREPARATION).open(AUXILIARY_CALIBRATION)
+        val capture = calibration.open(GUIDE).select(CAPTURE).open(PLATE_SOLVE)
+        val reopened = capture.open(POINTING_SETUP)
+        assertEquals(STAR_MAP, reopened.workspace)
+        assertEquals(calibration.pages, reopened.pages)
+        assertEquals(PLATE_SOLVE, reopened.select(CAPTURE).current)
+        assertEquals(1, reopened.allPages.count { it.destination in setOf(POINTING_SETUP, AUXILIARY_CALIBRATION) })
+        assertEquals(reopened, ObservatoryNavigation.restore(reopened.save()))
+    }
+
     @Test fun rootBackReturnsToCaptureTaskWithoutBuildingTabHistoryAndReadsLegacyState() {
         val nav = ObservatoryNavigation().open(PLATE_SOLVE).select(STAR_MAP)
         assertEquals(PLATE_SOLVE, nav.back().current)

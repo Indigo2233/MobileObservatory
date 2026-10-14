@@ -7,8 +7,9 @@
     <string name="wf_fov_stale">Framing · locate again</string>
     <string name="wf_fov_conflict">Framing · sources disagree</string>
     <string name="wf_fov_roll_unknown">Framing · camera angle unknown</string>
-    <string name="wf_push_calibration_needed">Calibrate the phone to the telescope first.</string>
-    <string name="wf_push_calibrate">Calibrate phone and telescope</string>
+    <string name="wf_push_calibration_needed">Align the selected pointing camera to the telescope first.</string>
+    <string name="wf_push_calibrate">Align pointing camera</string>
+    <string name="wf_push_camera_unavailable">Calibrated phone lens unavailable. Select a lens and align it.</string>
     <string name="wf_push_verified">Verified inside the field</string>
     <string name="wf_push_verifying">Hold still · verifying pointing</string>
     <string name="wf_push_estimated">Estimated direction · awaiting verification</string>

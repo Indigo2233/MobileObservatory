@@ -30,9 +30,12 @@ data class ObservatoryNavigation(
     fun open(destination: ObservatoryDestination, argument: String? = null, category: String? = null): ObservatoryNavigation {
         // Each stack mode has one coordinator/task. Reopening it must not create an
         // older-looking screen backed by a newer source. Global tools also reuse their page.
-        if (destination in setOf(ObservatoryDestination.STACK, ObservatoryDestination.SETTINGS, ObservatoryDestination.GUIDE)) {
+        val calibrationAliases = setOf(ObservatoryDestination.POINTING_SETUP, ObservatoryDestination.AUXILIARY_CALIBRATION)
+        val sharedCalibration = destination in calibrationAliases
+        if (sharedCalibration || destination in setOf(ObservatoryDestination.STACK, ObservatoryDestination.SETTINGS, ObservatoryDestination.GUIDE)) {
             workspaceStacks.forEach { (owner, stack) ->
-                val existing = stack.indexOfLast { it.destination == destination && it.argument == argument }
+                val existing = stack.indexOfLast { if (sharedCalibration) it.destination in calibrationAliases
+                    else it.destination == destination && it.argument == argument }
                 if (existing >= 0) return select(owner).copy(pages = stack.take(existing + 1))
             }
         }

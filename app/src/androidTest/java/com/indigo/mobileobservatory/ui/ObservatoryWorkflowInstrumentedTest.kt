@@ -171,15 +171,15 @@ class ObservatoryWorkflowInstrumentedTest {
             R.string.wf_star_map_preparation else R.string.wf_preparation)).performClick()
         compose.onNodeWithText(app.getString(R.string.wf_pointing_setup)).performClick()
         compose.onNodeWithText(app.getString(R.string.wf_pointing_setup)).assertIsDisplayed()
-        val setup = compose.onAllNodes(hasText(app.getString(R.string.wf_optics_title)) or
-            hasText(app.getString(R.string.wf_optics_confirmed))).onFirst()
+        val setup = compose.onNodeWithText(app.getString(R.string.wfc_main_optics))
         setup.performScrollTo().performClick()
         compose.onNodeWithText(app.getString(R.string.fov_simulator_title)).assertIsDisplayed()
-        compose.onNodeWithText(app.getString(R.string.star_map_train_secondary)).assertDoesNotExist()
+        compose.onNode(hasText(app.getString(R.string.star_map_train_secondary)) and hasAnyAncestor(isDialog())).assertDoesNotExist()
         systemBack()
         compose.onNodeWithText(app.getString(R.string.fov_simulator_title)).assertDoesNotExist()
         compose.onNodeWithText(app.getString(R.string.wf_pointing_setup)).assertIsDisplayed()
-        compose.onNodeWithText(app.getString(R.string.wfp_setup)).assertIsDisplayed()
+        compose.onNodeWithTag("pointing-source").performScrollTo().assertIsDisplayed()
+        captureWorkflowEvidence("pointing-camera-setup")
         systemBack()
         compose.onNodeWithText(app.getString(R.string.wf_preparation)).assertIsDisplayed()
     }
@@ -364,7 +364,7 @@ class ObservatoryWorkflowInstrumentedTest {
             compose.mainClock.advanceTimeBy(1_000)
             compose.onNodeWithText(app.getString(R.string.wf_push_calibrate)).assertIsDisplayed().performClick()
             compose.mainClock.advanceTimeBy(1_000)
-            compose.onNodeWithText(app.getString(R.string.wfp_setup)).assertIsDisplayed()
+            compose.onNodeWithTag("pointing-source").assertIsDisplayed()
             instrumentation.runOnMainSync { compose.activity.onBackPressedDispatcher.onBackPressed() }
             compose.mainClock.advanceTimeBy(1_000)
             compose.onNodeWithText(app.getString(R.string.wf_push_calibrate)).assertIsDisplayed()

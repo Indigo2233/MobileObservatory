@@ -26,6 +26,7 @@ import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.astro.EquatorialEpoch
 import com.indigo.mobileobservatory.astro.EquatorialCoordinates
 import com.indigo.mobileobservatory.camera.ConnectionState
+import com.indigo.mobileobservatory.pointing.PointingCameraSource
 import com.indigo.mobileobservatory.sequence.SequenceFeature
 import com.indigo.mobileobservatory.sequence.plannedFrames
 import com.indigo.mobileobservatory.stacking.StackMode
@@ -271,9 +272,23 @@ private fun ObservatoryContent(
     onDeviceSettings: (String) -> Unit,
     onDeviceControl: (String) -> Unit
 ) {
+    val context = LocalContext.current
+    val pointingPreferences = remember(context) { context.getSharedPreferences("mobile_observatory", android.content.Context.MODE_PRIVATE) }
+    var preferredPointingSource by remember {
+        mutableStateOf(pointingPreferences.getString("pointing_camera_source", null)?.let {
+            runCatching { PointingCameraSource.valueOf(it) }.getOrNull()
+        })
+    }
+    DisposableEffect(pointingPreferences) {
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { prefs, key ->
+            if (key == "pointing_camera_source") preferredPointingSource = prefs.getString(key, null)?.let {
+                runCatching { PointingCameraSource.valueOf(it) }.getOrNull()
+            }
+        }
+        pointingPreferences.registerOnSharedPreferenceChangeListener(listener)
+        onDispose { pointingPreferences.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
     val coordinates by vm.mountCoordinates.collectAsStateWithPageLifecycle()
-    val mountCapabilities by vm.mountPointingCapabilities.collectAsStateWithPageLifecycle()
-    val mountBusy by vm.mountBusy.collectAsStateWithPageLifecycle()
     val connection by vm.connectionState.collectAsStateWithPageLifecycle()
     val guideConnection by vm.guideConnectionState.collectAsStateWithPageLifecycle()
     val guideGeometry by vm.guideCameraGeometry.collectAsStateWithPageLifecycle()
@@ -312,17 +327,12 @@ private fun ObservatoryContent(
     when (navigation.current) {
         ObservatoryDestination.SETTINGS -> SettingsScreen(vm, back)
         ObservatoryDestination.PREPARATION -> ObservingPreparationScreen(open, back)
-        ObservatoryDestination.POINTING_SETUP -> CalibrationWizardScreen(vm.pointingRepository, back,
-            opticsConfiguration = opticsConfiguration,
-            captureMainReference = if (connection is ConnectionState.Connected) ({ vm.capturePointingReference() }) else null,
-            runAutomaticSampling = if (mountCapabilities.goto && !mountBusy && connection is ConnectionState.Connected)
-                ({ targets, sample -> vm.runPointingCalibrationMoves(targets, sample) }) else null,
-            automaticStartDirection = coordinates?.let { value ->
-                val p = EquatorialEpoch.jnowToJ2000(EquatorialCoordinates(value.raDeg, value.decDeg), Instant.now())
-                com.indigo.mobileobservatory.pointing.SkyDirection(p.raDeg, p.decDeg)
-            },
-            onAuxiliaryCalibration = { open(ObservatoryDestination.AUXILIARY_CALIBRATION) })
-        ObservatoryDestination.AUXILIARY_CALIBRATION -> AuxiliaryCalibrationScreen(vm, back,
+        ObservatoryDestination.POINTING_SETUP -> CalibrationWizardScreen(viewModel = vm, onBack = back,
+            opticsConfiguration = opticsConfiguration, initialSource = preferredPointingSource ?: PointingCameraSource.PHONE,
+            onPlateSolve = { open(ObservatoryDestination.PLATE_SOLVE) }, onDeviceControl = onDeviceControl,
+            onGuide = { open(ObservatoryDestination.GUIDE) })
+        ObservatoryDestination.AUXILIARY_CALIBRATION -> CalibrationWizardScreen(viewModel = vm, onBack = back,
+            opticsConfiguration = opticsConfiguration, initialSource = PointingCameraSource.AUXILIARY,
             onPlateSolve = { open(ObservatoryDestination.PLATE_SOLVE) }, onDeviceControl = onDeviceControl,
             onGuide = { open(ObservatoryDestination.GUIDE) })
         ObservatoryDestination.PLATE_SOLVE -> PlateSolveScreen(mountCoordinates = coordinates,
@@ -351,15 +361,28 @@ private fun ObservatoryContent(
                 taskTarget?.let { if (it.frame.equals("JNOW", true)) EquatorialEpoch.jnowToJ2000(
                     EquatorialCoordinates(it.raHours * 15.0, it.decDegrees), Instant.now()) else EquatorialCoordinates(it.raHours * 15.0, it.decDegrees) }
             }
-            var phoneSelected by rememberSaveable { mutableStateOf(guideConnection !is ConnectionState.Connected) }
-            if (direction != null && !phoneSelected) {
-                PointingSourceChooser(onBack = back, onPhone = { phoneSelected = true },
-                    onAuxiliary = { taskTarget?.let(chooseTarget); open(ObservatoryDestination.PUSH_TO_AUXILIARY) })
+            var selectedSource by rememberSaveable {
+                mutableStateOf(preferredPointingSource ?: PointingCameraSource.PHONE.takeIf { guideConnection !is ConnectionState.Connected })
+            }
+            LaunchedEffect(preferredPointingSource) { preferredPointingSource?.let { selectedSource = it } }
+            fun chooseSource(source: PointingCameraSource) {
+                selectedSource = source
+                pointingPreferences.edit().putString("pointing_camera_source", source.name).apply()
+            }
+            if (direction != null && selectedSource == null) {
+                PointingSourceChooser(onBack = back, onPhone = { chooseSource(PointingCameraSource.PHONE) },
+                    onAuxiliary = { chooseSource(PointingCameraSource.AUXILIARY) })
+            } else if (direction != null && selectedSource == PointingCameraSource.AUXILIARY) {
+                AuxiliaryPushToScreen(vm, com.indigo.mobileobservatory.pointing.SkyDirection(direction.raDeg, direction.decDeg),
+                    taskTarget?.name.orEmpty(), back,
+                    onCalibration = { open(ObservatoryDestination.AUXILIARY_CALIBRATION) },
+                    opticsConfiguration = opticsConfiguration,
+                    onPhoneGuide = { chooseSource(PointingCameraSource.PHONE) })
             } else if (direction != null) PushToScreen(onBack = back,
                 pointingRepository = vm.pointingRepository,
                 opticsConfiguration = opticsConfiguration,
                 onCalibration = { open(ObservatoryDestination.POINTING_SETUP) },
-                onAuxiliaryGuide = { taskTarget?.let(chooseTarget); open(ObservatoryDestination.PUSH_TO_AUXILIARY) },
+                onAuxiliaryGuide = { chooseSource(PointingCameraSource.AUXILIARY) },
                 onOpenTargets = { open(ObservatoryDestination.TARGETS) },
                 initialTargetName = taskTarget?.name, targetRaHours = direction.raDeg / 15.0, targetDecDeg = direction.decDeg,
                 onTargetChanged = { obj ->
@@ -379,7 +402,11 @@ private fun ObservatoryContent(
                 com.indigo.mobileobservatory.pointing.SkyDirection(p.raDeg, p.decDeg)
             }
             if (direction != null) AuxiliaryPushToScreen(vm, direction, taskTarget?.name.orEmpty(), back,
-                onCalibration = { open(ObservatoryDestination.AUXILIARY_CALIBRATION) }, opticsConfiguration = opticsConfiguration)
+                onCalibration = { open(ObservatoryDestination.AUXILIARY_CALIBRATION) }, opticsConfiguration = opticsConfiguration,
+                onPhoneGuide = {
+                    pointingPreferences.edit().putString("pointing_camera_source", PointingCameraSource.PHONE.name).apply()
+                    taskTarget?.let(chooseTarget); open(ObservatoryDestination.PUSH_TO)
+                })
             else TargetLibraryScreen(onBack = back, onGuideTo = { obj ->
                 taskTarget = StarMapTarget("${obj.id} · ${obj.name}", obj.raHours, obj.decDeg, "J2000")
                 taskTarget?.let(chooseTarget)

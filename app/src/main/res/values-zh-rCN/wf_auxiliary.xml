@@ -1,5 +1,5 @@
 <resources>
-    <string name="wfa_title">辅助相机与主镜标定</string>
+    <string name="wfa_title">指向相机校准</string>
     <string name="wfa_continue">开始标定</string>
     <string name="wfa_setup">1 · 连接并固定辅助相机</string>
     <string name="wfa_no_camera">尚未连接辅助相机</string>

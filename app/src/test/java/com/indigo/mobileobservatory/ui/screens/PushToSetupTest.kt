@@ -2,9 +2,32 @@ package com.indigo.mobileobservatory.ui.screens
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class PushToSetupTest {
+    @Test
+    fun calibratedLensTakesPriorityOverOldCaptureSettings() {
+        assertEquals("tele", selectPushToCameraId(listOf("main", "tele"), null, "tele", "main", "main"))
+    }
+
+    @Test
+    fun unavailableCalibratedLensDoesNotSilentlyUseAnotherCamera() {
+        assertNull(selectPushToCameraId(listOf("main"), null, "tele", "main", "main"))
+        assertNull(selectPushToCameraId(listOf("main"), "tele", "tele", "main", "main"))
+    }
+
+    @Test
+    fun explicitLensChoiceCanRequireItsOwnCalibration() {
+        assertEquals("main", selectPushToCameraId(listOf("main", "tele"), "main", "tele", "tele", "main"))
+    }
+
+    @Test
+    fun newUserFallsBackToSavedCaptureOrDefaultCamera() {
+        assertEquals("tele", selectPushToCameraId(listOf("main", "tele"), null, null, "tele", "main"))
+        assertEquals("main", selectPushToCameraId(listOf("main", "tele"), null, null, "missing", "main"))
+    }
+
     @Test
     fun defaultsRespectSelectedCameraLimits() {
         val settings = defaultPushToSettings(

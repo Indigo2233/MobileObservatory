@@ -7,8 +7,9 @@
     <string name="wf_fov_stale">构图 · 需重新定位</string>
     <string name="wf_fov_conflict">构图 · 来源不一致</string>
     <string name="wf_fov_roll_unknown">构图 · 相机角度未知</string>
-    <string name="wf_push_calibration_needed">先校准手机与镜筒的安装关系。</string>
-    <string name="wf_push_calibrate">校准手机与镜筒</string>
+    <string name="wf_push_calibration_needed">请先校准所选指向相机与镜筒的安装关系。</string>
+    <string name="wf_push_calibrate">指向相机校准</string>
+    <string name="wf_push_camera_unavailable">已校准的手机镜头不可用，请选择镜头并重新校准。</string>
     <string name="wf_push_verified">已验证目标入框</string>
     <string name="wf_push_verifying">保持静止 · 正在验证指向</string>
     <string name="wf_push_estimated">估计方向 · 等待验证</string>

@@ -161,12 +161,22 @@ fun PushToScreen(
     var clockUtcMs by remember { mutableStateOf(System.currentTimeMillis()) }
     var clockElapsedMs by remember { mutableStateOf(SystemClock.elapsedRealtime()) }
     val capturePrefs = remember { PushToCapturePrefs(context) }
+    val opticsPrefs = remember { context.getSharedPreferences("mobile_observatory", android.content.Context.MODE_PRIVATE) }
+    var calibratedCameraId by remember { mutableStateOf(opticsPrefs.getString("pointing_camera_lens_id", null)) }
+    DisposableEffect(opticsPrefs) {
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { prefs, key ->
+            if (key == "pointing_camera_lens_id") calibratedCameraId = prefs.getString(key, null)
+        }
+        opticsPrefs.registerOnSharedPreferenceChangeListener(listener)
+        onDispose { opticsPrefs.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
     var currentFix by remember { mutableStateOf<SkyAttitudeFix?>(null) }
     var site by remember { mutableStateOf<ObserverSite?>(null) }
     val sharedSite = rememberSavedObserverSite()
     LaunchedEffect(sharedSite?.site) { sharedSite?.site?.let { site = it } }
     var cameras by remember { mutableStateOf<List<PhoneCameraCapability>>(emptyList()) }
-    var selectedCameraId by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedCameraId by rememberSaveable { mutableStateOf(calibratedCameraId) }
+    var appliedCameraId by remember { mutableStateOf<String?>(null) }
     var exposureSeconds by rememberSaveable { mutableFloatStateOf(1f) }
     var iso by rememberSaveable { mutableFloatStateOf(1600f) }
     var autoIso by rememberSaveable { mutableStateOf(true) }
@@ -197,7 +207,6 @@ fun PushToScreen(
     var fieldDialog by remember { mutableStateOf(false) }
     var opticsDialog by rememberSaveable { mutableStateOf(false) }
     var fieldAdvanced by rememberSaveable { mutableStateOf(false) }
-    val opticsPrefs = remember { context.getSharedPreferences("mobile_observatory", android.content.Context.MODE_PRIVATE) }
     var localOptics by remember { mutableStateOf(com.indigo.mobileobservatory.astro.PointingOpticsConfiguration.load(
         com.indigo.mobileobservatory.astro.AndroidOpticsPrefs(opticsPrefs))) }
     val workingOptics = opticsConfiguration ?: localOptics
@@ -290,6 +299,9 @@ fun PushToScreen(
         val saved = capturePrefs.load()
         val defaults = defaultPushToSettings(camera)
         selectedCameraId = camera.cameraId
+        appliedCameraId = camera.cameraId
+        if (status == context.getString(R.string.wf_push_camera_unavailable) ||
+            status == context.getString(R.string.phone_camera_lens_none)) status = ""
         if (saved != null && saved.cameraId == camera.cameraId) {
             val range = camera.captureExposureRange()
             exposureSeconds = saved.exposureSeconds.toFloat().coerceIn(range.start, range.endInclusive)
@@ -321,14 +333,23 @@ fun PushToScreen(
                     .filter { it.supportsManualSensor }
             }
             cameras = found
-            val savedId = capturePrefs.load()?.cameraId
-            val selected = found.firstOrNull { it.cameraId == selectedCameraId }
-                ?: found.firstOrNull { it.cameraId == savedId }
-                ?: found.firstOrNull { it.lensRole == PhoneLensRole.MAIN }
-                ?: found.firstOrNull()
-            if (selected != null && selected.cameraId != selectedCameraId) applyCameraDefaults(selected)
-            if (found.isEmpty()) status = context.getString(R.string.phone_camera_lens_none)
+            val cameraId = selectPushToCameraId(found.map { it.cameraId }, selectedCameraId, calibratedCameraId,
+                capturePrefs.load()?.cameraId, found.firstOrNull { it.lensRole == PhoneLensRole.MAIN }?.cameraId)
+            val selected = found.firstOrNull { it.cameraId == cameraId }
+            if (selected != null && selected.cameraId != appliedCameraId) applyCameraDefaults(selected)
+            if (selected == null) {
+                selectedCameraId = null
+                appliedCameraId = null
+                axisEstimate = null
+                status = context.getString(if (found.isEmpty()) R.string.phone_camera_lens_none else R.string.wf_push_camera_unavailable)
+            }
         }
+    }
+
+    // A newly saved alignment selects its own lens, including when this task was retained.
+    LaunchedEffect(calibratedCameraId) {
+        calibratedCameraId?.let { selectedCameraId = it }
+        loadCameras()
     }
 
     fun loadSite() {
@@ -428,7 +449,6 @@ fun PushToScreen(
 
     LaunchedEffect(Unit) {
         loadSite()
-        loadCameras()
         if (!PhoneSiteProvider.canResolveSite(context) ||
             androidx.core.content.ContextCompat.checkSelfPermission(
                 context,

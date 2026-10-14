@@ -1183,7 +1183,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     suspend fun runPointingCalibrationMoves(targets: List<com.indigo.mobileobservatory.pointing.PhoneCatalogStar>,
-        sample: suspend () -> Unit) {
+        sample: suspend () -> Unit) = runPointingCalibrationMoves(targets, sample, beforeMove = {})
+
+    suspend fun runPointingCalibrationMoves(targets: List<com.indigo.mobileobservatory.pointing.PhoneCatalogStar>,
+        sample: suspend () -> Unit, beforeMove: () -> Unit) {
         require(targets.size in 2..4)
         val camera = synchronized(recordingLifecycleLock) { requirePointingReferenceReady() }
         val acquisitionIdentity = CameraReferenceIdentity.of(camera)
@@ -1203,6 +1206,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 // A later point can become unavailable after the preceding sample/settings edit.
                 // Never begin that move on the assumption that a connected camera can sample.
                 synchronized(recordingLifecycleLock) { requirePointingReferenceReady(expectedCamera = camera) }
+                beforeMove()
                 slew(target.name ?: "HIP ${target.hip}", MountCoordinates(ra, dec))
                 sample()
             }
