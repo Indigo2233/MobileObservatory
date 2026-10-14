@@ -186,7 +186,7 @@ fun CameraScreen(viewModel: CameraViewModel, redNightMode: Boolean = false,
         navigation.current in listOf(ObservatoryDestination.PLAYER, ObservatoryDestination.STACK) -> AppOrientationMode.SENSOR
         navigation.current == ObservatoryDestination.GUIDE -> AppOrientationMode.LANDSCAPE
         showRoot && navigation.workspace == ObservatoryWorkspace.CAPTURE -> AppOrientationMode.LANDSCAPE
-        else -> AppOrientationMode.PORTRAIT
+        else -> AppOrientationMode.SENSOR
     })
     // Registered before child handlers: inner cards, modes, editors and drawers win first.
     BackHandler(enabled = navigation.canGoBack) { back() }
@@ -411,7 +411,7 @@ private fun ObservatoryContent(
                 onStackFile = { file -> vm.openPlanetaryStack(file); open(ObservatoryDestination.STACK) },
                 initialCategory = MediaCategory.RECENT, excludeFile = vm.getActiveRecordingFile(),
                 isWorkspace = true, onCamera = { select(ObservatoryWorkspace.CAPTURE) },
-                onImport = { openStack(StackMode.PLANETARY) }, onBack = back)
+                onPostStack = { openStack(StackMode.PLANETARY) }, onBack = back)
             ObservatoryWorkspace.EQUIPMENT -> AccessoriesScreen(vm,
                 onOpenCamera = { select(ObservatoryWorkspace.CAPTURE) }, onOpenMount = {}, onBack = back)
         }

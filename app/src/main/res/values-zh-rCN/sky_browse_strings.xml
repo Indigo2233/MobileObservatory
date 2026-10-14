@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sky_simulated_landscape">模拟地景</string>
+    <string name="sky_simulated_site_missing">模拟地景 · 地点未设置</string>
+    <string name="sky_phone_follow">罗盘/陀螺仪跟随</string>
+    <string name="sky_phone_follow_hint">手机浏览方向为估计值，不能验证镜筒指向。拖动星图可暂停。</string>
+    <string name="sky_phone_follow_magnetic">地点未设置，暂按磁北估计浏览方向；不能验证镜筒指向。拖动可暂停。</string>
+    <string name="sky_phone_follow_unavailable">此手机没有可用的罗盘/陀螺仪姿态传感器。</string>
+    <string name="sky_phone_follow_failed">姿态传感器启动失败，可关闭跟随后重试。</string>
+    <string name="sky_phone_follow_waiting">正在等待手机姿态，镜筒指向状态保持原样。</string>
+</resources>

@@ -5,8 +5,8 @@
     <string name="stack_saturation_enabled">饱和度调节</string>
     <string name="stack_rendering">正在更新处理预览…</string>
     <string name="stack_reason_layout">此相机模式的线性像素格式尚未确认，请选择受支持的原始模式。</string>
-    <string name="stack_live">深空实时叠加</string>
-    <string name="stack_planetary">行星后处理叠加</string>
+    <string name="stack_live">实时叠加</string>
+    <string name="stack_planetary">后期叠加</string>
     <string name="stack_process_file">叠加此录像</string>
     <string name="stack_hint">分析 SER/PSER，筛选清晰帧并对齐局部细节</string>
     <string name="stack_start">开始实时叠加</string>

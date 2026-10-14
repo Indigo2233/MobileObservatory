@@ -77,6 +77,7 @@ import com.indigo.mobileobservatory.stacking.StackSessionKey
 import com.indigo.mobileobservatory.stacking.StackMode
 import com.indigo.mobileobservatory.stacking.StackingCoordinator
 import com.indigo.mobileobservatory.stacking.ScienceFrameProvenance
+import com.indigo.mobileobservatory.stacking.SerCfaInterpretation
 import com.indigo.mobileobservatory.stacking.CalibrationRecordingContext
 import com.indigo.mobileobservatory.settings.CameraDefaults
 import com.indigo.mobileobservatory.settings.CoverDefaults
@@ -158,6 +159,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     })
     @Volatile private var stackFrameGeometry: Triple<Int, Int, PixelFormat>? = null
     private val scienceProvenance = ScienceFrameProvenance()
+    private val previewEpoch = CameraPreviewEpoch()
+    @Volatile private var activePreviewTraits: PixelTraits? = null
+    @Volatile private var recordingDisplayTraits: PixelTraits? = null
+    private val _cameraCfa = MutableStateFlow(SerCfaInterpretation.AUTO)
+    val cameraCfa = _cameraCfa.asStateFlow()
+    private val _showCameraCfaDialog = MutableStateFlow(false)
+    val showCameraCfaDialog = _showCameraCfaDialog.asStateFlow()
+    private val _cameraCfaApplying = MutableStateFlow(false)
+    val cameraCfaApplying = _cameraCfaApplying.asStateFlow()
+    private var cameraCfaDialogIdentity: String? = null
+    private var cameraCfaDialogLayout: String? = null
+    private var requestedPreviewColorIdentity: String? = null
+    private val previewColorReset = PreviewColorReset()
+    private val cameraCfaChoices = java.util.concurrent.ConcurrentHashMap<String, Pair<SerCfaInterpretation, String>>()
     private val captureSettingsMutex = Mutex()
     private val pointingCaptureOwned = java.util.concurrent.atomic.AtomicBoolean(false)
     private val pendingCaptureChanges = java.util.concurrent.atomic.AtomicInteger()
@@ -500,7 +515,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _guideReverseDec = MutableStateFlow(false)
     val guideReverseDec: StateFlow<Boolean> = _guideReverseDec.asStateFlow()
 
-    private val pendingFrameSnapshot = AtomicReference<CompletableDeferred<FrameData>?>(null)
+    private val pendingFrameSnapshot = AtomicReference<CompletableDeferred<CameraCfaLayout.Snapshot>?>(null)
     private val frameSnapshotMutex = Mutex()
     private val cameraDefaultsMutex = Mutex()
     private val gainWriteMutex = Mutex()
@@ -926,6 +941,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         _statusMessage.value = state.message
                     }
                     is ConnectionState.Disconnected -> {
+                        previewEpoch.invalidate()
+                        _showCameraCfaDialog.value = false
+                        _cameraCfa.value = SerCfaInterpretation.AUTO
                         stacking.live.invalidate("camera_disconnected")
                         scienceProvenance.clear()
                         _scienceCaptureReady.value = false
@@ -1053,6 +1071,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun cancelOwnedJobs() {
+        previewEpoch.invalidate()
         stacking.close()
         viewModelScope.coroutineContext.cancelChildren()
         previewPipeline.close()
@@ -1254,6 +1273,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun disconnectCamera() {
+        previewEpoch.invalidate()
         stopRecording()
         stopExposureTimer()
         previewPipeline.stop()
@@ -1848,34 +1868,53 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun startPreview() {
         val cam = cameraManager.activeCamera ?: return
+        val runEpoch = previewEpoch.nextRun()
+        val selection = loadCameraCfa(cam)
+        val colorIdentity = "${CameraReferenceIdentity.of(cam)}|$selection|${cameraCfaLayoutIdentity(cam)}"
+        if (colorIdentity != requestedPreviewColorIdentity) { previewPipeline.stop(clearFrame = true); _previewBitmap.value = null }
+        requestedPreviewColorIdentity = colorIdentity
+        val runTraits = AtomicReference(cameraCfaTraits(cam, selection))
+        activePreviewTraits = runTraits.get()
+        val runRecycler: (ByteArray) -> Unit = { buf -> if (!softwareBinning.release(buf)) cam.recycleBuffer(buf) }
         scienceProvenance.clear()
         _scienceCaptureReady.value = false
 
-        previewPipeline.start(
+        val previewRun = previewPipeline.start(
             paused = { _previewPaused.value },
             onProcessed = {
+                if (!previewEpoch.isCurrent(runEpoch)) return@start
                 _previewBitmap.value = previewPipeline.frame.value?.bitmap
                 val detectedBits = frameProcessor.getDetectedEffectiveBits()
                 if (detectedBits != _detectedBitDepth.value) {
                     _detectedBitDepth.value = detectedBits
                 }
             },
-            recycleBuffer = { buf ->
-                if (!softwareBinning.release(buf)) cam.recycleBuffer(buf)
+            recycleBuffer = runRecycler,
+            beforeRender = {
+                // This runs after the old synchronous renderer has finished, on the same
+                // serialized render worker. Old AWB cannot write its gains back after reset.
+                previewColorReset.apply(colorIdentity) {
+                    frameProcessor.resetWb()
+                    frameProcessor.resetBitShiftDetection()
+                    _awbMode.value = FrameProcessor.AwbMode.OFF
+                }
             }
         )
 
         startExposureTimer()
         cam.startCapture(object : FrameCallback {
-            override fun onFrame(frame: FrameData) {
-                if (cameraManager.activeCamera !== cam) { cam.recycleBuffer(frame.data); return }
+            override fun onFrame(input: FrameData) {
+                if (!previewEpoch.isCurrent(runEpoch) || cameraManager.activeCamera !== cam) { cam.recycleBuffer(input.data); return }
                 val verifiedRun = cam.scienceCaptureGeneration
-                if (verifiedRun != null && frame.captureGeneration != null && frame.captureGeneration != verifiedRun) {
+                if (verifiedRun != null && input.captureGeneration != null && input.captureGeneration != verifiedRun) {
                     // A completed old SDK callback may arrive after a fresh session starts.
                     // Drop its owned delivery, without invalidating the newer stack or recording it.
-                    cam.recycleBuffer(frame.data)
+                    cam.recycleBuffer(input.data)
                     return
                 }
+                val actualSelection = if (input.pixelFormat.isRgb) SerCfaInterpretation.AUTO else selection
+                val frame = CameraCfaLayout.interpret(input, actualSelection)
+                val traits = runTraits.get()
                 onFrameArrived()
                 updateFps()
 
@@ -1901,10 +1940,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     enqueueRecordingFrame(frame)
                 }
 
-                val processed = softwareBinning.apply(frame)
-                if (processed !== frame) cam.recycleBuffer(frame.data)
+                val processed = softwareBinning.apply(frame, traits)
+                if (processed.data !== frame.data) cam.recycleBuffer(frame.data)
+                if (!previewEpoch.isCurrent(runEpoch)) {
+                    runRecycler(processed.data)
+                    return
+                }
 
-                fulfillFrameSnapshot(processed)
+                fulfillFrameSnapshot(processed, traits)
 
                 if (autoExpFrameSkip++ % 10 == 0) {
                     val aeMax = if (_longExposureEnabled.value) {
@@ -1921,12 +1964,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
                 updateSoftwareStackingProgress(cam)
 
-                if (_isRecording.value && rawRecordingLayout == null) enqueueRecordingFrame(processed)
+                val display = CameraCfaLayout.displayFrame(processed, traits)
+                if (_isRecording.value && rawRecordingLayout == null) enqueueRecordingFrame(display)
 
                 // Ownership transfers to the preview pipeline after all synchronous readers finish.
-                previewPipeline.submit(processed, cam.sciencePixelTraits)
+                previewPipeline.submit(display, traits?.copy(bayerPatternAtOutput = true), previewRun, runRecycler)
             }
         })
+        runTraits.set(cameraCfaTraits(cam, selection))
+        activePreviewTraits = runTraits.get()
         val generation = cam.scienceCaptureGeneration
         val snapshot = captureSettingsSnapshot(cam)
         // A concurrent control write clears the generation before changing any settings.
@@ -1940,17 +1986,109 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val key = if (frame == null) scienceProvenance.latest(cam.scienceCaptureGeneration)
             else scienceProvenance.frame(frame, cam.scienceCaptureGeneration)
         return key?.takeIf { it.filter == scienceFilter() }
-            ?.copy(demosaicAlgorithm = stacking.demosaicAlgorithm.value)
+            ?.copy(demosaicAlgorithm = stacking.demosaicAlgorithm.value, target = stacking.liveTarget.value)
+    }
+
+    private fun cameraCfaTraits(cam: Camera, selection: SerCfaInterpretation): PixelTraits? =
+        CameraCfaLayout.effectiveTraits(cam.sciencePixelTraits?.copy(roiX = cam.currentRoi.x,
+            roiY = cam.currentRoi.y, binning = (cam as? CameraBinningCapable)?.currentHardwareBin ?: 1), selection)
+
+    private fun cameraCfaLayoutIdentity(cam: Camera): String =
+        "${cam.currentPixelFormat}|${cam.currentRoi}|${cam.cropInfo}|${(cam as? CameraBinningCapable)?.currentHardwareBin ?: 1}|${softwareBinning.factor}|${cam.currentReadoutMode}|${(cam as? CameraNativeReadoutModeCapable)?.currentNativeReadoutModeId}"
+
+    private fun cameraCfaPrefKey(identity: String): String = "camera_cfa_" +
+        java.security.MessageDigest.getInstance("SHA-256").digest(identity.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+
+    private fun saveCameraCfa(cam: Camera, selection: SerCfaInterpretation) {
+        val identity = CameraReferenceIdentity.of(cam)
+        val layout = cameraCfaLayoutIdentity(cam)
+        cameraCfaChoices[identity] = selection to layout
+        if (!cam.cameraInfo?.serialNumber.isNullOrBlank()) prefs.edit()
+            .putString(cameraCfaPrefKey(identity), selection.name).putString("${cameraCfaPrefKey(identity)}_layout", layout).apply()
+        _cameraCfa.value = selection
+    }
+
+    private fun loadCameraCfa(cam: Camera): SerCfaInterpretation {
+        val identity = CameraReferenceIdentity.of(cam)
+        val stored = cameraCfaChoices[identity]
+        val key = cameraCfaPrefKey(identity)
+        val saved = stored?.first ?: runCatching { SerCfaInterpretation.valueOf(prefs.getString(key, "AUTO") ?: "AUTO") }
+            .getOrDefault(SerCfaInterpretation.AUTO)
+        val layout = cameraCfaLayoutIdentity(cam)
+        val selected = if (cam.currentPixelFormat.isRgb) SerCfaInterpretation.AUTO else
+            CameraCfaLayout.boundSelection(saved, stored?.second ?: prefs.getString("${key}_layout", null), layout)
+        if (selected != saved) {
+            saveCameraCfa(cam, SerCfaInterpretation.AUTO)
+            _statusMessage.value = app.getString(R.string.camera_cfa_layout_changed)
+        } else _cameraCfa.value = selected
+        return selected
+    }
+
+    fun showCameraCfaSettings() {
+        val cam = cameraManager.activeCamera ?: return
+        cameraCfaDialogIdentity = CameraReferenceIdentity.of(cam)
+        cameraCfaDialogLayout = cameraCfaLayoutIdentity(cam)
+        _showCameraCfaDialog.value = true
+    }
+    fun dismissCameraCfaSettings() { _showCameraCfaDialog.value = false; cameraCfaDialogIdentity = null; cameraCfaDialogLayout = null }
+
+    private fun cameraCfaChangeIssue(selection: SerCfaInterpretation, resetConfirmed: Boolean, includeSettings: Boolean = true): String? {
+        val cam = cameraManager.activeCamera
+        return CameraCfaChangePolicy.issue(CameraCfaChangeState(connected = cam?.isOpen?.value == true,
+            format = cam?.currentPixelFormat ?: PixelFormat.MONO8,
+            recording = _isRecording.value || recordingWriteSession != null || currentRecordingFile != null,
+            calibration = stacking.calibration.state.value.busy,
+            snapshot = pointingCaptureOwned.get() || pendingFrameSnapshot.get() != null || frameSnapshotMutex.isLocked,
+            settings = includeSettings && (_cameraCfaApplying.value || pendingCaptureChanges.get() != 0 || _gainWriteInProgress.value || binningSwitching),
+            stackExists = stacking.live.state.value.phase !in setOf(LiveStackPhase.EMPTY, LiveStackPhase.CLOSED)), selection, resetConfirmed)
+    }
+
+    fun cameraCfaChangeMessage(selection: SerCfaInterpretation, resetConfirmed: Boolean = true): String? =
+        cameraCfaChangeIssue(selection, resetConfirmed)?.let(::cameraCfaIssueMessage)
+
+    private fun cameraCfaIssueMessage(issue: String): String = app.getString(when (issue) {
+        "recording" -> R.string.camera_cfa_busy_recording
+        "calibration" -> R.string.camera_cfa_busy_calibration
+        "snapshot" -> R.string.camera_cfa_busy_snapshot
+        "settings" -> R.string.camera_cfa_busy_settings
+        "reset_stack" -> R.string.camera_cfa_reset_stack
+        "rgb_not_raw" -> R.string.camera_cfa_rgb
+        else -> R.string.camera_cfa_device_changed
+    })
+
+    /** Apply is explicit and serialized with all acquisition writes. It never calls setPixelFormat. */
+    fun applyCameraCfa(selection: SerCfaInterpretation, resetLiveStack: Boolean = false): Boolean = synchronized(recordingLifecycleLock) {
+        val cam = cameraManager.activeCamera ?: return@synchronized false
+        if (cameraCfaDialogIdentity != null && cameraCfaDialogIdentity != CameraReferenceIdentity.of(cam)) {
+            _statusMessage.value = app.getString(R.string.camera_cfa_device_changed); return@synchronized false
+        }
+        if (cameraCfaDialogLayout != null && cameraCfaDialogLayout != cameraCfaLayoutIdentity(cam)) {
+            _statusMessage.value = app.getString(R.string.camera_cfa_layout_changed); dismissCameraCfaSettings(); return@synchronized false
+        }
+        if (selection == _cameraCfa.value) { dismissCameraCfaSettings(); return@synchronized true }
+        cameraCfaChangeIssue(selection, resetLiveStack)?.let {
+            _statusMessage.value = cameraCfaIssueMessage(it); return@synchronized false
+        }
+        _cameraCfaApplying.value = true
+        changeCaptureSettings(cam, onFinished = { _cameraCfaApplying.value = false }) {
+            cameraCfaChangeIssue(selection, resetConfirmed = true, includeSettings = false)?.let { error(cameraCfaIssueMessage(it)) }
+            if (resetLiveStack) stacking.resetLive()
+            previewPipeline.stop(clearFrame = true)
+            _previewBitmap.value = null
+            saveCameraCfa(cam, selection)
+            dismissCameraCfaSettings()
+        }
+        true
     }
 
     private fun scienceFilter(): String =
         if (filterWheelConnected.value) "${filterWheelPosition.value}:${currentFilterName()}" else "none"
 
     private fun captureSettingsSnapshot(cam: Camera): StackSessionKey? {
-        val traits = cam.sciencePixelTraits ?: return null
+        val traits = cameraCfaTraits(cam, _cameraCfa.value) ?: return null
         return StackSessionKey(
             camera = "${cam.cameraInfo?.name}/${cam.cameraInfo?.serialNumber}",
-            width = cam.currentRoi.width, height = cam.currentRoi.height, format = cam.currentPixelFormat,
+            width = cam.currentRoi.width, height = cam.currentRoi.height, format = CameraCfaLayout.effectiveFormat(cam.currentPixelFormat, _cameraCfa.value),
             roi = cam.currentRoi,
             hardwareBin = (cam as? CameraBinningCapable)?.currentHardwareBin ?: 1,
             softwareBin = softwareBinning.factor,
@@ -2018,6 +2156,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 captureSettingsMutex.withLock {
                     if (cameraManager.activeCamera !== cam) return@withLock
                     if (_previewPaused.value) {
+                        previewEpoch.invalidate()
                         cam.stopCapture()
                         scienceProvenance.clear()
                         _scienceCaptureReady.value = false
@@ -2036,6 +2175,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun invalidateStackSettings(layoutChanged: Boolean = false) {
+        previewEpoch.invalidate()
         stacking.live.invalidate("settings_changed")
         scienceProvenance.clear()
         _scienceCaptureReady.value = false
@@ -2050,7 +2190,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /** Serialize stop -> control writes -> fresh SDK acquisition; never relabel buffered frames. */
-    private fun changeCaptureSettings(cam: Camera, action: suspend () -> Unit) {
+    private fun changeCaptureSettings(cam: Camera, onFinished: () -> Unit = {}, action: suspend () -> Unit) {
         pendingCaptureChanges.incrementAndGet()
         invalidateStackSettings()
         viewModelScope.launch(Dispatchers.IO) {
@@ -2060,7 +2200,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             catch (failure: Throwable) {
                 Log.e(TAG, "Camera settings/acquisition restart failed", failure)
                 _statusMessage.value = failure.message.orEmpty()
-            } finally { pendingCaptureChanges.decrementAndGet() }
+            } finally { pendingCaptureChanges.decrementAndGet(); onFinished() }
         }
     }
 
@@ -2068,6 +2208,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         captureSettingsMutex.withLock {
             if (cameraManager.activeCamera !== cam) return@withLock
             val restart = cam.isCapturing.value
+            previewEpoch.invalidate()
             if (restart) cam.stopCapture()
             try { action() }
             finally {
@@ -2140,7 +2281,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     }
                     fits != null && fits.isOpen -> {
                         applyFitsRecordingMeta(fits)
-                        fits.writeFrame(frame)
+                        val canonical = CameraCfaLayout.canonicalOwned(frame, recordingDisplayTraits).frame
+                        fits.configuredFormat = canonical.pixelFormat
+                        fits.writeFrame(canonical)
                         _recordingFrameCount.value = fits.currentFrameCount
                         _recordingBytes.value = fits.totalBytesWritten
                     }
@@ -2917,6 +3060,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun startRecording(): Unit = synchronized(recordingLifecycleLock) {
+        if (_cameraCfaApplying.value) { _statusMessage.value = app.getString(R.string.camera_cfa_busy_settings); return@synchronized }
         if (pointingCaptureOwned.get()) { _statusMessage.value = "Reference capture in progress"; return }
         // A timed-out old worker still owns its file and queue until final cleanup returns.
         if (_isRecording.value || recordingWriteSession != null || currentRecordingFile != null || hasOpenRecorder()) return
@@ -2939,16 +3083,21 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val filterPart = if (filterName != null) "-$filterName" else ""
 
             val fmt = _recordFormat.value
-            val rawFormat = cam.currentPixelFormat
+            val rawFormat = CameraCfaLayout.effectiveFormat(cam.currentPixelFormat, _cameraCfa.value)
             val rawRecording = fmt == RecordFormat.SER || fmt == RecordFormat.PSER
             val captureKey = if (rawRecording) currentStackKey()?.rawRecordingKey() else null
             val geometry = stackFrameGeometry
-            val rawTraits = if (rawRecording) (cam.sciencePixelTraits
+            val rawTraits = if (rawRecording) (cameraCfaTraits(cam, _cameraCfa.value)
                 ?: error(app.getString(R.string.stack_reason_layout))).copy(
                     roiX = roi.x, roiY = roi.y,
                     binning = (cam as? CameraBinningCapable)?.currentHardwareBin ?: 1) else null
             if (rawRecording) check(geometry != null && geometry.third == rawFormat) { app.getString(R.string.stack_reason_wait) }
-            val pixFmt = if (rawTraits != null) RawRecordingNormalizer.canonicalFormat(rawFormat, rawTraits) else rawFormat
+            val displayTraits = activePreviewTraits?.copy(bayerPatternAtOutput = true)
+            val displayFormat = CameraCfaLayout.displayFormat(rawFormat, activePreviewTraits)
+            val pixFmt = if (rawTraits != null) RawRecordingNormalizer.canonicalFormat(rawFormat, rawTraits)
+                else if (displayTraits != null && displayTraits.alignment != com.indigo.mobileobservatory.stacking.SampleAlignment.AUTO)
+                    RawRecordingNormalizer.canonicalFormat(displayFormat, displayTraits) else displayFormat
+            recordingDisplayTraits = displayTraits
             val rawWidth = geometry?.first ?: roi.width
             val rawHeight = geometry?.second ?: roi.height
             rawRecordingLayout = if (rawTraits != null) RawRecordingLayout(rawWidth, rawHeight, rawFormat, rawTraits) else null
@@ -2999,7 +3148,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 fmt == RecordFormat.MP4 -> {
                     val mp4 = Mp4Writer(file)
-                    mp4.sampleTraits = cam.sciencePixelTraits
+                    mp4.sampleTraits = displayTraits
                     mp4.wbRedGain = frameProcessor.wbRedGain
                     mp4.wbGreenGain = frameProcessor.wbGreenGain
                     mp4.wbBlueGain = frameProcessor.wbBlueGain
@@ -3090,6 +3239,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         recordingCaptureChanged = false
         recordingCaptureTemperature = null
         rawRecordingLayout = null
+        recordingDisplayTraits = null
         while (true) recordBufferPool.release((recordWriteQueue.poll() ?: break).data)
         recordBufferPool.clear()
         if (outcome.succeeded && recordingSaveToGallery && recordedFile != null &&
@@ -3119,7 +3269,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         writer.gainDbEquivalent = cam?.gainDbEquivalent(writer.gain)
         writer.cameraName = cam?.cameraInfo?.name ?: writer.cameraName
         writer.filterName = currentFilterName()
-        writer.configuredFormat = cam?.currentPixelFormat ?: writer.configuredFormat
+        writer.configuredFormat = cam?.let { CameraCfaLayout.effectiveFormat(it.currentPixelFormat, _cameraCfa.value) } ?: writer.configuredFormat
         writer.pixelSizeUm = cam?.cameraInfo?.pixelSizeUm
         writer.focalLengthMm = prefs.getFloat("plate_focal_length_mm", 0f).takeIf { it > 0f }
         writer.binning = _binning.value
@@ -3191,7 +3341,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             gainDbEquivalent = cam.gainDbEquivalent(cam.currentGain),
             cameraName = info?.name,
             filterName = currentFilterName(),
-            configuredFormat = cam.currentPixelFormat,
+            configuredFormat = frame.pixelFormat,
             pixelSizeUm = info?.pixelSizeUm,
             focalLengthMm = focalLengthMm,
             binning = _binning.value
@@ -3611,7 +3761,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             gainDbEquivalent = cam.gainDbEquivalent(cam.currentGain),
             cameraName = info?.name,
             filterName = filterName,
-            configuredFormat = cam.currentPixelFormat,
+            configuredFormat = frame.pixelFormat,
             pixelSizeUm = info?.pixelSizeUm,
             focalLengthMm = focalLengthMm,
             binning = _binning.value,
@@ -3657,7 +3807,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 bestPosition = position
             }
         }
-        if (samples.isEmpty()) throw IllegalStateException("autofocus")
+        if (samples.isEmpty()) {
+            throw IllegalStateException("autofocus")
+        }
+
         moveFocuserAndWait(bestPosition)
         return AutofocusRun(
             atMillis = System.currentTimeMillis(),
@@ -3725,7 +3878,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     gainDbEquivalent = cam.gainDbEquivalent(cam.currentGain),
                     cameraName = info?.name,
                     filterName = filterName,
-                    configuredFormat = cam.currentPixelFormat,
+                    configuredFormat = frame.pixelFormat,
                     pixelSizeUm = info?.pixelSizeUm,
                     focalLengthMm = focalLengthMm,
                     binning = _binning.value
@@ -3750,7 +3903,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val cam = cameraManager.activeCamera ?: return
         val filterName = currentFilterName()
         val target = _targetName.value.ifBlank { "Pla" } // Snapshot the capture task before awaiting a frame.
-        val previewTraits = cam.sciencePixelTraits
         val still = cam as? CameraStillCaptureCapable
         if (still != null && still.stillCaptureSupported) {
             viewModelScope.launch(Dispatchers.IO) {
@@ -3767,6 +3919,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     val fileName = "$ts-$target$filterPart-$cameraShort.jpg"
                     val dest = File(dir, fileName)
                     val result = still.captureStill(DslrStillFormat.JPEG, dir)
+
                     val jpeg = result.jpegFile ?: error("Camera did not return a JPEG")
                     if (jpeg.canonicalPath != dest.canonicalPath) {
                         jpeg.copyTo(dest, overwrite = true)
@@ -3789,7 +3942,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val frame = awaitFrameSnapshot() ?: return@launch
+                val snapshot = awaitFrameSnapshotWithTraits() ?: return@launch
+                val frame = snapshot.frame
                 val dir = File(
                     getApplication<Application>().getExternalFilesDir("captures"),
                     "JPG"
@@ -3802,7 +3956,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 val fileName = "$ts-$target$filterPart-$cameraShort.jpg"
                 val file = File(dir, fileName)
 
-                val bmp = captureFrameProcessor.frameToBitmap(frame, previewTraits)
+                val bmp = captureFrameProcessor.frameToBitmap(frame, snapshot.traits)
                 FileOutputStream(file).use { fos ->
                     bmp.compress(Bitmap.CompressFormat.JPEG, 95, fos)
                 }
@@ -3897,22 +4051,23 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    private fun fulfillFrameSnapshot(frame: FrameData) {
+    private fun fulfillFrameSnapshot(frame: FrameData, traits: PixelTraits?) {
         val request = pendingFrameSnapshot.getAndSet(null) ?: return
         if (!request.isActive) return
         try {
-            val expectedSize = (
-                frame.width.toLong() * frame.height * frame.pixelFormat.bytesPerPixel
-            ).coerceAtMost(frame.data.size.toLong()).toInt()
-            request.complete(frame.copy(data = frame.data.copyOf(expectedSize)))
+            request.complete(CameraCfaLayout.ownedSnapshot(frame, traits))
         } catch (error: Throwable) {
             request.completeExceptionally(error)
         }
     }
 
     private suspend fun awaitFrameSnapshot(timeoutMs: Long = 45_000L): FrameData? =
+        awaitFrameSnapshotWithTraits(timeoutMs)?.frame
+
+    private suspend fun awaitFrameSnapshotWithTraits(timeoutMs: Long = 45_000L): CameraCfaLayout.Snapshot? =
         frameSnapshotMutex.withLock {
-            val request = CompletableDeferred<FrameData>()
+            check(!_cameraCfaApplying.value) { app.getString(R.string.camera_cfa_busy_settings) }
+            val request = CompletableDeferred<CameraCfaLayout.Snapshot>()
             check(pendingFrameSnapshot.compareAndSet(null, request))
             try {
                 withTimeoutOrNull(timeoutMs) { request.await() }
@@ -3939,6 +4094,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             try {
                 while (true) {
                     val expUs = _exposureUs.value
+
                     val expMs = expUs / 1000f
                     if (expMs >= 1000f) {
                         val elapsed = System.currentTimeMillis() - lastFrameArrivalMs

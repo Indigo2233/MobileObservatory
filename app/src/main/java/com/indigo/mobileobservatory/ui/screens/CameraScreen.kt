@@ -57,6 +57,7 @@ internal fun CaptureWorkspaceScreen(
     val usbBandwidth by viewModel.usbBandwidth.collectAsState()
     val usbBandwidthRange by viewModel.usbBandwidthRange.collectAsState()
     val pixelFormat by viewModel.pixelFormat.collectAsState()
+    val interpretedFrameFormat by viewModel.liveStackPixelFormat.collectAsState()
     val supportedPixelFormats by viewModel.supportedPixelFormats.collectAsState()
     val supportsHostRoi by viewModel.supportsHostRoi.collectAsState()
     val roi by viewModel.roi.collectAsState()
@@ -92,6 +93,12 @@ internal fun CaptureWorkspaceScreen(
     val focusHistory by viewModel.focusHistory.collectAsState()
     val focusZoomCenter by viewModel.focusZoomCenter.collectAsState()
     val focusZoomFactor by viewModel.focusZoomFactor.collectAsState()
+    val cameraCfa by viewModel.cameraCfa.collectAsState()
+    val showCameraCfa by viewModel.showCameraCfaDialog.collectAsState()
+    val cameraCfaApplying by viewModel.cameraCfaApplying.collectAsState()
+    val cfaLiveState by viewModel.stacking.live.state.collectAsState()
+    val cfaCalibrationState by viewModel.stacking.calibration.state.collectAsState()
+    val cfaCalibrationMessage = stringResource(R.string.camera_cfa_busy_calibration)
 
     val fwConnected by viewModel.filterWheelConnected.collectAsState()
     val fwPosition by viewModel.filterWheelPosition.collectAsState()
@@ -162,6 +169,12 @@ internal fun CaptureWorkspaceScreen(
 
 
     val sensorWidth = imagingWidth
+    if (showCameraCfa && rememberPageForeground()) CameraCfaDialog(selection = cameraCfa, rawAvailable = !pixelFormat.isRgb,
+        requiresStackReset = cfaLiveState.phase !in setOf(com.indigo.mobileobservatory.stacking.LiveStackPhase.EMPTY,
+            com.indigo.mobileobservatory.stacking.LiveStackPhase.CLOSED), applying = cameraCfaApplying,
+        issue = { value -> if (cfaCalibrationState.busy) cfaCalibrationMessage
+            else viewModel.cameraCfaChangeMessage(value) },
+        onApply = { value, reset -> viewModel.applyCameraCfa(value, reset) }, onDismiss = viewModel::dismissCameraCfaSettings)
     val sensorHeight = imagingHeight
     val roiMinW = viewModel.cameraManager.activeCamera?.roiMinWidth ?: 8
     val roiMinH = viewModel.cameraManager.activeCamera?.roiMinHeight ?: 8
@@ -174,7 +187,7 @@ internal fun CaptureWorkspaceScreen(
             TextButton(onClick = onTargets, modifier = Modifier.weight(1f)) {
                 Text(selectedTarget ?: stringResource(R.string.wf_choose_target), maxLines = 1)
             }
-            TextButton(onClick = onOpenLiveStack) { Text("EAA") }
+            TextButton(onClick = onOpenLiveStack) { Text(stringResource(R.string.stack_live)) }
             TextButton(onClick = onGuide) { Text(stringResource(R.string.guiding)) }
             if (SequenceFeature.ENABLED) TextButton(onClick = onSequence) { Text(stringResource(R.string.tab_sequence)) }
         }
@@ -379,6 +392,7 @@ internal fun CaptureWorkspaceScreen(
                     onPlateSolve = onPlateSolve,
                     onOpenLibrary = { viewModel.openPlayer() },
                     onOpenLiveStack = onOpenLiveStack,
+                    onCfaSettings = viewModel::showCameraCfaSettings,
                     modifier = Modifier.align(Alignment.TopEnd)
                 )
 
@@ -466,7 +480,7 @@ internal fun CaptureWorkspaceScreen(
                         onAutoStretchToggle = { viewModel.setAutoStretch(it) },
                         onAutoExposureModeChange = { viewModel.setAutoExposureMode(it) },
                         awbMode = awbMode.ordinal,
-                        isBayerCamera = pixelFormat.isBayer,
+                        isBayerCamera = (interpretedFrameFormat ?: pixelFormat).isBayer,
                         onAwbModeChange = { viewModel.setAwbMode(FrameProcessor.AwbMode.entries[it]) },
                         onFlipH = { viewModel.toggleFlipH() },
                         onFlipV = { viewModel.toggleFlipV() },

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="wf_import_video">Import video</string>
+    <string name="wf_import_video">Import media</string>
     <string name="wf_phone_experimental">Experimental phone guidance · telescope not verified</string>
     <string name="wf_phone_near_target">Phone direction near target · check the eyepiece</string>
     <string name="wf_capture">Capture</string>

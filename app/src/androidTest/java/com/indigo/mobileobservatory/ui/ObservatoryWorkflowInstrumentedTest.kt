@@ -5,9 +5,12 @@ import android.content.Context
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.view.inputmethod.InputMethodManager
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.StateRestorationTester
@@ -24,6 +27,7 @@ import com.indigo.mobileobservatory.camera.ConnectionState
 import com.indigo.mobileobservatory.camera.GainCapability
 import kotlinx.coroutines.flow.MutableStateFlow
 import com.indigo.mobileobservatory.stacking.StackMode
+import com.indigo.mobileobservatory.stacking.StackTarget
 import com.indigo.mobileobservatory.ui.screens.CameraScreen
 import com.indigo.mobileobservatory.ui.theme.MobileObservatoryTheme
 import com.indigo.mobileobservatory.ui.viewmodel.CameraViewModel
@@ -34,6 +38,7 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.io.File
 
 /** Real shell and VM, no camera or mount connection, no simulated calibration. */
 @RunWith(AndroidJUnit4::class)
@@ -62,7 +67,9 @@ class ObservatoryWorkflowInstrumentedTest {
             val density = LocalDensity.current.density
             CompositionLocalProvider(LocalDensity provides Density(density, fontScale = fontScale.value)) {
                 MobileObservatoryTheme(redNightMode = redNight.value) {
+                    androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
                     CameraScreen(vm, redNightMode = redNight.value, onRedNightModeChange = { redNight.value = it })
+                    }
                 }
             }
         }
@@ -86,6 +93,53 @@ class ObservatoryWorkflowInstrumentedTest {
         systemBack()
         workspace("CAPTURE").assertIsSelected()
         assertFalse(compose.activity.isFinishing)
+    }
+
+    @Test fun liveAndPostStackingShareSubjectTabsButKeepSeparateSelectionsAndReturnPaths() {
+        selectWorkspace("MEDIA")
+        compose.onNodeWithTag("media-import").assertIsDisplayed()
+        captureWorkflowEvidence("media-actions")
+        compose.onNodeWithTag("media-post-stack").assertIsDisplayed().performClick()
+        compose.onNodeWithText(app.getString(R.string.stack_offline_title)).assertIsDisplayed()
+        compose.onNodeWithTag("stack-target-PLANETARY").assertIsSelected()
+        compose.onNodeWithTag("stack-target-DEEP_SKY").performClick().assertIsSelected()
+        captureWorkflowEvidence("post-deep-sky")
+        compose.runOnIdle {
+            org.junit.Assert.assertEquals(StackMode.PLANETARY, vm.stacking.destination.value)
+            org.junit.Assert.assertEquals(StackTarget.DEEP_SKY, vm.stacking.offlineTarget.value)
+        }
+        restoration.emulateSavedInstanceStateRestore()
+        compose.onNodeWithTag("stack-target-DEEP_SKY").assertIsSelected()
+        systemBack()
+        workspace("MEDIA").assertIsSelected()
+        selectWorkspace("CAPTURE")
+        compose.onNodeWithText(app.getString(R.string.stack_live)).performClick()
+        compose.onNodeWithTag("stack-target-DEEP_SKY").assertIsSelected()
+        compose.onNodeWithTag("stack-target-PLANETARY").performClick().assertIsSelected()
+        captureWorkflowEvidence("live-planetary")
+        compose.runOnIdle {
+            org.junit.Assert.assertEquals(StackMode.LIVE, vm.stacking.destination.value)
+            org.junit.Assert.assertEquals(StackTarget.PLANETARY, vm.stacking.liveTarget.value)
+            org.junit.Assert.assertEquals(StackTarget.DEEP_SKY, vm.stacking.offlineTarget.value)
+        }
+        systemBack()
+        workspace("CAPTURE").assertIsSelected()
+        selectWorkspace("MEDIA")
+        compose.onNodeWithTag("media-post-stack").performClick()
+        compose.onNodeWithTag("stack-target-DEEP_SKY").assertIsSelected()
+    }
+
+    @Test fun browsingWorkspacesAllowBothOrientationsAndCaptureKeepsItsLandscapePreference() {
+        listOf("MEDIA", "EQUIPMENT", "STAR_MAP").forEach { key ->
+            selectWorkspace(key)
+            compose.runOnIdle {
+                org.junit.Assert.assertEquals(ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR, compose.activity.requestedOrientation)
+            }
+        }
+        selectWorkspace("CAPTURE")
+        compose.runOnIdle {
+            org.junit.Assert.assertEquals(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE, compose.activity.requestedOrientation)
+        }
     }
 
     @Test fun starPreparationAndPolarReturnOneLevelAtATime() {
@@ -352,6 +406,13 @@ class ObservatoryWorkflowInstrumentedTest {
     }
 
     private fun workspace(key: String) = compose.onNodeWithTag("workspace-$key")
+
+    private fun captureWorkflowEvidence(name: String) {
+        val bitmap = compose.onRoot().captureToImage().asAndroidBitmap()
+        val file = File(app.getExternalFilesDir(null), "workflow-ui-evidence/$name.png")
+        file.parentFile!!.mkdirs()
+        file.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+    }
 
     @Suppress("UNCHECKED_CAST")
     private fun <T> setFlow(owner: Any, name: String, value: T) {

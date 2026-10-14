@@ -1,0 +1,20 @@
+<resources>
+    <string name="stack_export_busy">正在保存结果，请稍候再切换类型。</string>
+    <string name="stack_planetary_reference_warmup">正在选择参考帧…</string>
+    <string name="stack_planetary_reference_reset">参考帧与当前画面不一致，请重置会话后继续。</string>
+    <string name="stack_planetary_quality_threshold">本帧清晰度低于近期筛选门限。</string>
+    <string name="stack_target_changed">叠加类型已切换，请开始新会话。</string>
+    <string name="stack_deep_sky_no_frames">没有帧通过星场配准，请检查对焦、曝光及可见星点。</string>
+    <string name="stack_deep_sky_frame_limit">这段录像的帧数超过深空处理范围，请选择较短录像。</string>
+    <string name="stack_offline_title">后期叠加</string>
+    <string name="stack_target_planetary">行星</string>
+    <string name="stack_target_deep_sky">深空</string>
+    <string name="stack_change_target_title">切换为%1$s叠加？</string>
+    <string name="stack_change_target_body">停止当前任务，清空未保存的叠加与分析。已保存的文件不受影响。</string>
+    <string name="stack_change_target_confirm">重置并切换</string>
+    <string name="stack_deep_sky_steps">选择 SER/PSER 录像，按星场配准并叠加。校准帧可选。</string>
+    <string name="stack_deep_sky_start">配准并叠加深空</string>
+    <string name="stack_deep_sky_stats">接受 %1$d 帧 · 拒收 %2$d 帧 · 已知曝光 %3$.1f 秒</string>
+    <string name="stack_live_planetary_intro">居中并对焦行星，逐帧筛选、配准和叠加；如需整段录像排名选优，可使用后期叠加。</string>
+    <string name="stack_live_planetary_stats">收到 %1$d 帧 · 接受 %2$d 帧 · 拒收 %3$d 帧 · 队列丢弃 %4$d 帧</string>
+</resources>

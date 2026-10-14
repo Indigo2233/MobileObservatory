@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="wf_import_video">导入录像</string>
+    <string name="wf_import_video">导入影像</string>
     <string name="wf_phone_experimental">实验性手机引导 · 镜筒指向未验证</string>
     <string name="wf_phone_near_target">手机方向接近目标 · 请用目镜确认</string>
     <string name="wf_capture">拍摄</string>

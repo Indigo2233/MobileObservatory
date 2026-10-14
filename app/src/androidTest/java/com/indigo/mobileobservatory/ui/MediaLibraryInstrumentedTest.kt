@@ -33,6 +33,19 @@ class MediaLibraryInstrumentedTest {
     @Before fun fixtures() { root = File(context.cacheDir, "media-library-${UUID.randomUUID()}").apply { check(mkdirs()) } }
     @After fun cleanUp() { root.deleteRecursively(); externalVideo?.delete() }
 
+    @Test fun importAndPostStackingAreDistinctAdjacentLibraryActions() {
+        val imported = AtomicInteger(); val stacked = AtomicInteger()
+        compose.setContent { MaterialTheme {
+            PlayerScreen(File(root, "recordings"), File(root, "captures"), isWorkspace = true,
+                initialCategory = MediaCategory.RECENT, onBack = {},
+                onImport = { imported.incrementAndGet() }, onPostStack = { stacked.incrementAndGet() })
+        } }
+        compose.onNodeWithTag("media-import").assertIsDisplayed().performClick()
+        compose.runOnIdle { assertEquals(1, imported.get()); assertEquals(0, stacked.get()) }
+        compose.onNodeWithTag("media-post-stack").assertIsDisplayed().performClick()
+        compose.runOnIdle { assertEquals(1, imported.get()); assertEquals(1, stacked.get()) }
+    }
+
     @Test fun exportedPngOpensDirectlyThenReturnsToCallingTask() {
         val result = File(root, "captures/JPG/stack-live-fixture.png").apply { parentFile!!.mkdirs() }
         val bitmap = Bitmap.createBitmap(8, 6, Bitmap.Config.ARGB_8888)

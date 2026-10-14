@@ -1,0 +1,20 @@
+<resources>
+    <string name="stack_export_busy">Saving the result. Wait before changing stack type.</string>
+    <string name="stack_planetary_reference_warmup">Choosing a reference frame…</string>
+    <string name="stack_planetary_reference_reset">The reference no longer matches the current image. Reset the session to continue.</string>
+    <string name="stack_planetary_quality_threshold">This frame is less sharp than the recent quality threshold.</string>
+    <string name="stack_target_changed">The stack type changed. Start a new session.</string>
+    <string name="stack_deep_sky_no_frames">No frame passed star-field alignment. Check focus, exposure and visible stars.</string>
+    <string name="stack_deep_sky_frame_limit">This recording has too many frames for deep-sky processing. Choose a shorter recording.</string>
+    <string name="stack_offline_title">Post stacking</string>
+    <string name="stack_target_planetary">Planetary</string>
+    <string name="stack_target_deep_sky">Deep sky</string>
+    <string name="stack_change_target_title">Switch to %1$s?</string>
+    <string name="stack_change_target_body">Stop this task and clear its unsaved stack and analysis. Saved files stay available.</string>
+    <string name="stack_change_target_confirm">Reset and switch</string>
+    <string name="stack_deep_sky_steps">Choose a SER/PSER recording, align the star field and stack. Calibration frames are optional.</string>
+    <string name="stack_deep_sky_start">Align and stack deep sky</string>
+    <string name="stack_deep_sky_stats">%1$d accepted · %2$d rejected · %3$.1f s known exposure</string>
+    <string name="stack_live_planetary_intro">Center and focus the planet. Incoming frames are checked for quality, aligned and stacked; post stacking can rank a complete recording.</string>
+    <string name="stack_live_planetary_stats">Received %1$d · accepted %2$d · rejected %3$d · dropped %4$d</string>
+</resources>

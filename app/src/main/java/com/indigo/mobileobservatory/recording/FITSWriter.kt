@@ -56,6 +56,7 @@ class FITSWriter {
         cards.add(fitsCard("NAXIS", "2", "number of axes"))
         cards.add(fitsCard("NAXIS1", naxis1.toString(), "width"))
         cards.add(fitsCard("NAXIS2", naxis2.toString(), "height"))
+        cards.add(fitsCard("VALIDBIT", effectiveFormat.nativeBits.toString(), "valid sensor bits before FITS container"))
         if (is16) {
             cards.add(fitsCard("BZERO", "32768", "offset for unsigned 16-bit"))
             cards.add(fitsCard("BSCALE", "1", "default scaling"))

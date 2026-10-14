@@ -18,6 +18,7 @@ import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.Executors
 
+/** PLANETARY is the historic persisted name of the offline workflow; its target is separate. */
 enum class StackMode { LIVE, PLANETARY }
 enum class StackTaskPhase { EMPTY, READING, READY, ANALYZING, ANALYZED, REGISTERING, STACKING, PROCESSING, EXPORTING, COMPLETE, CANCELLED, FAILED }
 
@@ -36,6 +37,7 @@ data class StackingTaskState(
     val qualityFrames: Long = 0,
     val referenceFrame: Long = 0,
     val stats: PlanetaryStackStats? = null,
+    val deepSkyStats: OfflineDeepSkyStats? = null,
     val message: String = "",
     val javaPeakBytes: Long = 0,
     val nativePeakBytes: Long = 0,
@@ -67,6 +69,10 @@ class StackingCoordinator(
     private val scienceScope = CoroutineScope(scope.coroutineContext + worker)
     private val _destination = MutableStateFlow<StackMode?>(null)
     val destination = _destination.asStateFlow()
+    private val _liveTarget = MutableStateFlow(StackTarget.DEEP_SKY)
+    val liveTarget = _liveTarget.asStateFlow()
+    private val _offlineTarget = MutableStateFlow(StackTarget.PLANETARY)
+    val offlineTarget = _offlineTarget.asStateFlow()
     private val _task = MutableStateFlow(StackingTaskState())
     val task = _task.asStateFlow()
     private val _preview = MutableStateFlow<Bitmap?>(null)
@@ -86,10 +92,9 @@ class StackingCoordinator(
     val backgroundWarning = _backgroundWarning.asStateFlow()
     private val _rendering = MutableStateFlow(false)
     val rendering = _rendering.asStateFlow()
-    private val recipes = mutableMapOf<Pair<StackMode, ProcessingPreset>, StackProcessingParameters>()
-    private val selectedPresets = mutableMapOf<StackMode, ProcessingPreset>()
+    private val recipes = mutableMapOf<Triple<StackMode, StackTarget, ProcessingPreset>, StackProcessingParameters>()
+    private val selectedPresets = mutableMapOf<Pair<StackMode, StackTarget>, ProcessingPreset>()
     private var pendingAutoStretchMode: StackMode? = null
-    private var deferredExportMode: StackMode? = null
     // Consumed only when an estimate is committed. Navigation/cancellation cannot steal the
     // initial opportunity; deliberate recipe edits do, even before the first accepted frame.
     private var liveAutoStretchEligible = true
@@ -127,7 +132,7 @@ class StackingCoordinator(
     private val backgroundModelCache = BackgroundModelCache()
     val live: LiveStackSession = LiveStackSession(
         scope = scienceScope,
-        engineFactory = { LiveDeepSkyEngine(memoryBudgetBytes - liveCalibration.memoryBytes - liveDemosaicScratchBytes) },
+        engineFactory = ::createLiveEngine,
         decode = { frame, key ->
             val fixedCalibration = liveCalibration
             val generation = liveGeneration()
@@ -184,6 +189,12 @@ class StackingCoordinator(
 
     private fun liveGeneration(): Long = live.state.value.generation
 
+    private fun createLiveEngine(): LiveStackEngine {
+        val budget = memoryBudgetBytes - liveCalibration.memoryBytes - liveDemosaicScratchBytes
+        return if (live.state.value.key?.target == StackTarget.PLANETARY) LivePlanetaryEngine(budget)
+        else LiveDeepSkyEngine(budget)
+    }
+
     fun open(mode: StackMode, file: File? = null) {
         synchronized(stateLock) {
             if (closed) return
@@ -210,8 +221,8 @@ class StackingCoordinator(
     }
 
     private fun rememberRecipeLocked(parameters: StackProcessingParameters) {
-        recipes[activeMode to parameters.preset] = parameters
-        selectedPresets[activeMode] = parameters.preset
+        recipes[Triple(activeMode, target(activeMode), parameters.preset)] = parameters
+        selectedPresets[activeMode to target(activeMode)] = parameters.preset
     }
 
     private fun activateModeLocked(mode: StackMode) {
@@ -219,8 +230,65 @@ class StackingCoordinator(
         if (activeMode == mode) return
         pendingAutoStretchMode = null
         activeMode = mode
-        val preset = selectedPresets[mode] ?: ProcessingPreset.NATURAL
-        _processing.value = recipes[mode to preset] ?: StackProcessingParameters.preset(preset)
+        restoreRecipeLocked(mode)
+    }
+    private fun restoreRecipeLocked(mode: StackMode) {
+        val preset = selectedPresets[mode to target(mode)] ?: ProcessingPreset.NATURAL
+        _processing.value = recipes[Triple(mode, target(mode), preset)] ?: StackProcessingParameters.preset(preset)
+    }
+
+    fun target(mode: StackMode): StackTarget = if (mode == StackMode.LIVE) _liveTarget.value else _offlineTarget.value
+
+    fun targetChangeNeedsReset(mode: StackMode): Boolean = synchronized(stateLock) {
+        if (mode == StackMode.LIVE) live.state.value.phase != LiveStackPhase.EMPTY || liveProduct != null
+        else taskRunning || analysis != null || planetaryProduct != null ||
+            _task.value.phase !in setOf(StackTaskPhase.EMPTY, StackTaskPhase.READY)
+    }
+
+    /** Saving owns an immutable result independently of whichever workflow is visible. */
+    fun targetChangeBlockedReason(mode: StackMode): String? = synchronized(stateLock) {
+        when {
+            taskRunning && _task.value.phase == StackTaskPhase.EXPORTING -> "stack_export_busy"
+            mode == StackMode.LIVE && taskRunning -> "finish_offline_first"
+            else -> null
+        }
+    }
+
+    /** A confirmed switch discards the old science session before any new target can start. */
+    fun setTarget(mode: StackMode, newTarget: StackTarget, resetConfirmed: Boolean = false): Boolean = synchronized(stateLock) {
+        if (closed || calibration.state.value.busy) return false
+        if (target(mode) == newTarget) return true
+        targetChangeBlockedReason(mode)?.let { report(it); return false }
+        if (targetChangeNeedsReset(mode) && !resetConfirmed) return false
+        // Live export owns the same task/CPU worker. Do not let a live target change silently
+        // cancel an unrelated offline job or reinterpret its immutable output metadata.
+        if (mode == StackMode.LIVE && taskRunning) return false
+        if (activeMode == mode) rememberRecipeLocked(_processing.value)
+        cancelRenderingLocked()
+        backgroundModelCache.clear()
+        if (pendingAutoStretchMode == mode) pendingAutoStretchMode = null
+        if (mode == StackMode.LIVE) {
+            resetLive()
+            _liveTarget.value = newTarget
+        } else {
+            _offlineTarget.value = newTarget
+            planetaryProduct = null
+            planetaryPreview = null
+            if (activeMode == mode) _preview.value = null
+            val retainedFile = sourceFile ?: _task.value.source?.file
+            if (live.state.value.phase != LiveStackPhase.EMPTY) {
+                // The live science worker owns acquisition. Dropping an offline analysis is
+                // safe here because no offline worker can run concurrently, but re-reading
+                // would fail the live admission gate and leave the old histogram behind.
+                analysis?.close(); analysis = null; analysisCalibration = null; analysisDemosaic = null
+                analysisIdentity = ""
+                sourceFile = retainedFile
+                _task.value = StackingTaskState(phase = if (retainedFile == null) StackTaskPhase.EMPTY else StackTaskPhase.READY,
+                    source = _task.value.source?.takeIf { it.file == retainedFile })
+            } else if (retainedFile != null) loadFile(retainedFile) else clearPlanetary()
+        }
+        if (activeMode == mode) restoreRecipeLocked(mode)
+        true
     }
     fun toggleLiveDisplay() { _showLiveStack.value = !_showLiveStack.value }
     fun hasPlanetaryWork(): Boolean = synchronized(stateLock) { taskRunning }
@@ -231,6 +299,7 @@ class StackingCoordinator(
         if (closed) return
         // Button recomposition can lag a rapid second tap; starting is idempotent here.
         if (live.state.value.phase != LiveStackPhase.EMPTY) return
+        if (key.target != _liveTarget.value) { report("stack_target_changed"); return }
         if (key.demosaicAlgorithm != _demosaicAlgorithm.value) { report("demosaic_changed"); return }
         if (taskRunning || planetaryProduct != null) {
             report("finish_offline_first")
@@ -253,8 +322,11 @@ class StackingCoordinator(
         val inputExpansionBytes = (pixels - width.toLong() * height).coerceAtLeast(0) *
             (key.format.bytesPerPixel * 3L + (channels + 1) * 4L)
         val demosaicScratch = LinearPixelDecoder.demosaicExtraBytes(key.width, key.height, key.format, key.demosaicAlgorithm)
+        val engineBytes = if (key.target == StackTarget.PLANETARY)
+            LivePlanetaryEngine.estimateWorkingBytes(width, height, channels)
+        else DeepSkyStacker.estimateWorkingBytes(width, height, channels)
         if (pixels > LinearImage.DEFAULT_STACK_PIXELS ||
-            DeepSkyStacker.estimateWorkingBytes(width, height, channels) + inputExpansionBytes +
+            engineBytes + inputExpansionBytes +
                 selectedCalibration.memoryBytes + demosaicScratch + (if (selectedCalibration.enabled) geometry.sampleCount * 4L else 0L) > memoryBudgetBytes) {
             report("memory_budget")
             return
@@ -290,7 +362,6 @@ class StackingCoordinator(
     }
 
     private fun userChangedRecipeLocked() {
-        deferredExportMode = null
         pendingAutoStretchMode = null
         if (activeMode == StackMode.LIVE) liveAutoStretchEligible = false
     }
@@ -298,7 +369,7 @@ class StackingCoordinator(
     fun selectPreset(preset: ProcessingPreset) = synchronized(stateLock) {
         userChangedRecipeLocked()
         rememberRecipeLocked(_processing.value)
-        _processing.value = recipes[activeMode to preset] ?: StackProcessingParameters.preset(preset)
+        _processing.value = recipes[Triple(activeMode, target(activeMode), preset)] ?: StackProcessingParameters.preset(preset)
         rememberRecipeLocked(_processing.value)
         scheduleRender(activeMode)
     }
@@ -325,7 +396,7 @@ class StackingCoordinator(
         val file = sourceFile
         _task.update { it.copy(phase = if (file == null) StackTaskPhase.EMPTY else StackTaskPhase.READY,
             completed = 0, total = 0, histogram = emptyList(), qualityFrames = 0, referenceFrame = 0,
-            stats = null, message = "", exportedFiles = emptyList()) }
+            stats = null, deepSkyStats = null, message = "", exportedFiles = emptyList()) }
         // Reserve the reload before releasing the monitor; Analyze cannot use the old decode.
         if (file != null) loadFile(file)
     }
@@ -354,7 +425,7 @@ class StackingCoordinator(
         val file = sourceFile
         _task.update { it.copy(phase = if (file == null) StackTaskPhase.EMPTY else StackTaskPhase.READY,
             completed = 0, total = 0, histogram = emptyList(), qualityFrames = 0, referenceFrame = 0,
-            stats = null, message = "", exportedFiles = emptyList()) }
+            stats = null, deepSkyStats = null, message = "", exportedFiles = emptyList()) }
         if (file != null) loadFile(file)
     }
 
@@ -456,29 +527,37 @@ class StackingCoordinator(
 
     fun analyze(roi: PixelRoi?, localAlignment: Boolean) = runTask(StackTaskPhase.ANALYZING) {
         ensureOfflineAvailable()
+        check(_offlineTarget.value == StackTarget.PLANETARY) { "stack_target_changed" }
         val file = sourceFile ?: error("choose_source")
         check(!isSourceBusy(file)) { "recording_active" }
         analysis?.close(); analysis = null; analysisCalibration = null; analysisDemosaic = null
         planetaryProduct = null
-        _task.update { it.copy(histogram = emptyList(), qualityFrames = 0, referenceFrame = 0, stats = null) }
+        _task.update { it.copy(histogram = emptyList(), qualityFrames = 0, referenceFrame = 0, stats = null, deepSkyStats = null) }
         source(file).use { source ->
             checkBudget(source)
             val options = PlanetaryOptions(roi = roi, localAlignment = localAlignment,
                 memoryBudgetBytes = memoryBudgetBytes - source.processingOverheadBytes)
             val result = engine.analyze(source, options, cache, control())
-            try { ensureActive(); analysis = result }
+            try {
+                synchronized(stateLock) {
+                    ensureActive()
+                    check(_offlineTarget.value == StackTarget.PLANETARY) { "stack_target_changed" }
+                    analysis = result
+                    analysisIdentity = source.info.decodingIdentity
+                    analysisCalibration = source.calibration
+                    analysisDemosaic = source.algorithm
+                    _task.update { it.copy(phase = StackTaskPhase.ANALYZED, source = source.info,
+                        histogram = result.histogram.toList(), qualityFrames = result.validFrames,
+                        referenceFrame = result.referenceFrame, message = "", completed = result.frameCount, total = result.frameCount) }
+                }
+            }
             catch (failure: Throwable) { result.close(); throw failure }
-            analysisIdentity = source.info.decodingIdentity
-            analysisCalibration = source.calibration
-            analysisDemosaic = source.algorithm
-            _task.update { it.copy(phase = StackTaskPhase.ANALYZED, source = source.info,
-                histogram = result.histogram.toList(), qualityFrames = result.validFrames,
-                referenceFrame = result.referenceFrame, message = "", completed = result.frameCount, total = result.frameCount) }
         }
     }
 
     fun stack(selection: PlanetarySelection) = runTask(StackTaskPhase.REGISTERING) {
         ensureOfflineAvailable()
+        check(_offlineTarget.value == StackTarget.PLANETARY) { "stack_target_changed" }
         val file = sourceFile ?: error("choose_source")
         check(!isSourceBusy(file)) { "recording_active" }
         val quality = analysis ?: error("analyze_first")
@@ -494,7 +573,8 @@ class StackingCoordinator(
             check(identity(file) == source.info.identity) { "source_changed" }
             val stats = result.stats.copy(estimatedPeakBytes = result.stats.estimatedPeakBytes + source.processingOverheadBytes)
             val meta = linkedMapOf(
-                "kind" to "planetary", "source" to file.name, "sourceIdentity" to source.info.identity,
+                "kind" to "planetary", "workflow" to "offline", "target" to "planetary",
+                "source" to file.name, "sourceIdentity" to source.info.identity,
                 "decodingIdentity" to source.info.decodingIdentity,
                 "cfaInterpretation" to source.interpretation.name,
                 "headerColorId" to source.info.headerColorId.toString(),
@@ -518,9 +598,75 @@ class StackingCoordinator(
                 }.toString()
             )
             meta.putAll(source.calibrationMetadata())
-            planetaryProduct = StackProduct(result.image, result.weights, meta)
-            _task.update { it.copy(phase = StackTaskPhase.COMPLETE, stats = stats, message = "") }
-            scheduleRender(StackMode.PLANETARY)
+            synchronized(stateLock) {
+                ensureActive()
+                check(_offlineTarget.value == StackTarget.PLANETARY) { "stack_target_changed" }
+                planetaryProduct = StackProduct(result.image, result.weights, meta)
+                _task.update { it.copy(phase = StackTaskPhase.COMPLETE, stats = stats, deepSkyStats = null, message = "") }
+                scheduleRender(StackMode.PLANETARY)
+            }
+        }
+    }
+
+    fun stackDeepSky() = runTask(StackTaskPhase.STACKING) {
+        ensureOfflineAvailable()
+        check(_offlineTarget.value == StackTarget.DEEP_SKY) { "stack_target_changed" }
+        val file = sourceFile ?: error("choose_source")
+        check(!isSourceBusy(file)) { "recording_active" }
+        analysis?.close(); analysis = null; analysisCalibration = null; analysisDemosaic = null
+        planetaryProduct = null
+        _task.update { it.copy(histogram = emptyList(), qualityFrames = 0, referenceFrame = 0, stats = null, deepSkyStats = null) }
+        source(file).use { source ->
+            checkBudget(source)
+            val result = OfflineDeepSkyStacker().stack(source,
+                DeepSkyConfig(memoryBudgetBytes = memoryBudgetBytes - source.processingOverheadBytes),
+                checkCancelled = { ensureActive() },
+                progress = { completed, total, stats ->
+                    ensureActive()
+                    _task.update { it.copy(phase = StackTaskPhase.STACKING, completed = completed, total = total,
+                        qualityFrames = stats.accepted.toLong()) }
+                    recordMemory()
+                })
+            ensureActive()
+            check(identity(file) == source.info.identity) { "source_changed" }
+            val stats = result.stats.copy(stack = result.stats.stack.copy(
+                estimatedWorkingBytes = result.stats.stack.estimatedWorkingBytes + source.processingOverheadBytes))
+            val meta = linkedMapOf(
+                "kind" to "offline_deep_sky", "workflow" to "offline", "target" to "deep_sky",
+                "algorithm" to "rigid_star_ransac_online_welford_sigma",
+                "source" to file.name, "sourceIdentity" to source.info.identity,
+                "decodingIdentity" to source.info.decodingIdentity,
+                "cfaInterpretation" to source.interpretation.name,
+                "headerColorId" to source.info.headerColorId.toString(),
+                "effectiveSensorLayout" to source.info.effectiveLayout,
+                "frameCount" to stats.stack.accepted.toString(),
+                "exposureSeconds" to stats.stack.exposureSeconds.toString(),
+                "unknownExposureFrames" to stats.unknownExposureFrames.toString(),
+                "exposureSource" to "validated_capture_sidecar_or_unknown",
+                "inputFormat" to "${source.reader.header?.colorId}/${source.info.bits}bit",
+                "byteOrderConvention" to endianConvention.name, "sampleAlignment" to sampleAlignment.name,
+                "demosaicAlgorithm" to if (source.info.isBayer) source.algorithm.name else "NONE",
+                "demosaicScratchBytes" to source.demosaicScratchBytes.toString(),
+                "qualitySelection" to "all_frames_passing_star_field_and_registration_checks",
+                "registration" to JSONObject().apply {
+                    put("referenceFrame", stats.referenceFrame); put("referencePolicy", "first_accepted_star_field")
+                    put("inputFrames", stats.inputFrames); put("acceptedFrames", stats.stack.accepted)
+                    put("rejectedFrames", stats.stack.rejected); put("rejections", JSONObject(stats.rejectionCounts.mapKeys { it.key.name }))
+                    put("registrationRmsPx", stats.stack.registrationRmsPx); put("rotationDegrees", stats.stack.rotationDegrees)
+                    put("stars", stats.stack.stars); put("rejectedPixelSamples", stats.stack.rejectedPixelSamples)
+                    put("elapsedMillis", stats.elapsedMillis); put("estimatedWorkingBytes", stats.stack.estimatedWorkingBytes)
+                }.toString(),
+                "rejectionLimit" to DeepSkyStacker.REJECTION_LIMITATION
+            )
+            meta.putAll(source.calibrationMetadata())
+            synchronized(stateLock) {
+                ensureActive()
+                check(_offlineTarget.value == StackTarget.DEEP_SKY) { "stack_target_changed" }
+                planetaryProduct = StackProduct(result.image, result.weights, meta)
+                _task.update { it.copy(phase = StackTaskPhase.COMPLETE, deepSkyStats = stats, stats = null,
+                    qualityFrames = stats.stack.accepted.toLong(), referenceFrame = stats.referenceFrame, message = "") }
+                scheduleRender(StackMode.PLANETARY)
+            }
         }
     }
 
@@ -540,27 +686,43 @@ class StackingCoordinator(
     fun export(): Unit = synchronized(stateLock) {
         val mode = activeMode
         val snapshot = product(mode) ?: run { report("no_result"); return }
-        // Auto adaptation is asynchronous. A quick Save tap waits for its recipe instead of
-        // cancelling it, exporting old dark parameters, then showing a different recipe later.
-        if (needsAutoStretchLocked(mode, _processing.value)) {
-            deferredExportMode = mode
-            scheduleRender(mode, replaceRunning = false)
-            return
-        }
         val parameters = _processing.value
+        val capturedTarget = target(mode)
+        val capturedLiveGeneration = if (mode == StackMode.LIVE) liveGeneration() else -1L
+        val adapt = needsAutoStretchLocked(mode, parameters)
         val allRecipes = ProcessingPreset.values().associate { preset -> preset.name to
             StackResultMetadata.parameters(if (preset == parameters.preset) parameters else
-                recipes[mode to preset] ?: StackProcessingParameters.preset(preset)) }
+                recipes[Triple(mode, target(mode), preset)] ?: StackProcessingParameters.preset(preset)) }
         runTask(StackTaskPhase.EXPORTING) {
             // The immutable snapshot and recipe are captured together before the export starts.
             // Live accumulation may continue; these arrays belong to this completed snapshot.
-            val processed = StackPostProcessor.prepare(snapshot.image, parameters, backgroundModelCache) { !isActive }
+            // Reserve EXPORTING immediately, including automatic display adaptation. Navigation
+            // can no longer cancel a Save request by cancelling its former preview renderer.
+            val effective = if (adapt) StackAutoStretch.estimate(snapshot.image, parameters, snapshot.weights) { !isActive }
+                ?: parameters else parameters
+            ensureActive()
+            synchronized(stateLock) {
+                ensureActive()
+                if (adapt && (mode != StackMode.LIVE || capturedLiveGeneration == liveGeneration())) {
+                    if (mode == StackMode.LIVE) liveAutoStretchEligible = false
+                    if (pendingAutoStretchMode == mode) pendingAutoStretchMode = null
+                    // Preserve edits made after Save. The output still uses the captured recipe;
+                    // an unchanged workspace adopts it so its preview agrees with the PNG.
+                    if (activeMode == mode && target(mode) == capturedTarget && _processing.value == parameters) {
+                        _processing.value = effective
+                        rememberRecipeLocked(effective)
+                    } else if (recipes[Triple(mode, capturedTarget, parameters.preset)] == parameters) {
+                        recipes[Triple(mode, capturedTarget, parameters.preset)] = effective
+                    }
+                }
+            }
+            val processed = StackPostProcessor.prepare(snapshot.image, effective, backgroundModelCache) { !isActive }
             val root = app.getExternalFilesDir("captures") ?: error("storage_unavailable")
             val fitsDir = File(root, "FITS").also { check(it.isDirectory || it.mkdirs()) }
             val pngDir = File(root, "JPG").also { check(it.isDirectory || it.mkdirs()) }
             val expectedBytes = snapshot.image.pixels.size.toLong() * 12L + 16L * 1024 * 1024
             check(root.usableSpace >= expectedBytes) { "storage_full" }
-            val stem = "stack-${mode.name.lowercase()}-${System.currentTimeMillis()}-${UUID.randomUUID().toString().take(8)}-${parameters.preset.name.lowercase()}"
+            val stem = "stack-${snapshot.metadata["workflow"] ?: mode.name.lowercase()}-${snapshot.metadata["target"] ?: "planetary"}-${System.currentTimeMillis()}-${UUID.randomUUID().toString().take(8)}-${effective.preset.name.lowercase()}"
             val fits = File(fitsDir, "$stem-linear.fits")
             val png = File(pngDir, "$stem.png")
             val recipe = File(pngDir, "$stem.json")
@@ -568,7 +730,7 @@ class StackingCoordinator(
             val metadata = snapshot.metadata + mapOf(
                 "schema" to "indigo-stack-1", "linearFits" to fits.name, "processedPng" to png.name,
                 "processing" to StackResultMetadata.processing(processed).toString(),
-                "comparisonRecipes" to JSONObject(allRecipes).toString(),
+                "comparisonRecipes" to JSONObject(allRecipes + (effective.preset.name to StackResultMetadata.parameters(effective))).toString(),
                 "width" to snapshot.image.width.toString(), "height" to snapshot.image.height.toString(),
                 "channels" to snapshot.image.channels.toString(), "pixelScale" to "normalized_linear_0_to_1",
                 "weightMin" to (snapshot.weights.minOrNull() ?: 0f).toString(),
@@ -628,7 +790,6 @@ class StackingCoordinator(
     }
 
     private fun cancelRenderingLocked() {
-        deferredExportMode = null
         renderSerial++
         pendingRenderMode = null
         renderJob?.cancel()
@@ -698,10 +859,8 @@ class StackingCoordinator(
                 }
             } catch (_: CancellationException) {
             } catch (error: Exception) {
-                synchronized(stateLock) { if (serial == renderSerial) deferredExportMode = null }
                 report(error.message ?: "processing_failed")
             } catch (_: OutOfMemoryError) {
-                synchronized(stateLock) { if (serial == renderSerial) deferredExportMode = null }
                 report("memory_budget")
             }
         }
@@ -711,12 +870,7 @@ class StackingCoordinator(
                 if (renderJob === job) {
                     renderJob = null
                     _rendering.value = false
-                    val exportMode = deferredExportMode
-                    if (exportMode != null && activeMode == exportMode && !taskRunning &&
-                        !needsAutoStretchLocked(exportMode, _processing.value)) {
-                        deferredExportMode = null
-                        export()
-                    } else startPendingRenderLocked()
+                    startPendingRenderLocked()
                 }
             }
         }
@@ -773,9 +927,11 @@ class StackingCoordinator(
     }
 
     private fun checkBudget(source: SerSource) {
+        val engineBytes = if (_offlineTarget.value == StackTarget.DEEP_SKY)
+            DeepSkyStacker.estimateWorkingBytes(source.width, source.height, source.channels)
+        else PlanetaryStacker.estimatedPeakBytes(source.width, source.height, source.channels)
         require(source.width.toLong() * source.height <= PlanetaryStacker.MAX_PIXELS &&
-            PlanetaryStacker.estimatedPeakBytes(source.width, source.height, source.channels) +
-                source.processingOverheadBytes <= memoryBudgetBytes) { "memory_budget" }
+            engineBytes + source.processingOverheadBytes <= memoryBudgetBytes) { "memory_budget" }
     }
 
     private fun CoroutineScope.control() = PlanetaryControl(checkCancelled = { ensureActive() }, progress = { progress ->
@@ -851,16 +1007,24 @@ class StackingCoordinator(
 
     private fun liveMetadata(snapshot: LiveStackSnapshot): Map<String, String> {
         val s = snapshot.state
-        return snapshot.details.mapValues { it.value.toString() } + liveCalibration.metadata() + mapOf(
+        return snapshot.details.mapValues { (_, value) -> when (value) {
+            is Map<*, *> -> JSONObject(value).toString()
+            is Collection<*> -> JSONArray(value).toString()
+            else -> value.toString()
+        } } + liveCalibration.metadata() + mapOf(
             "calibrationMemoryBytes" to liveCalibration.memoryBytes.toString(),
             "calibrationUnknownSettings" to JSONArray(liveCalibrationWarnings).toString(),
             "demosaicAlgorithm" to (s.key?.takeIf { it.format.isBayer }?.demosaicAlgorithm?.name ?: "NONE"),
             "demosaicScratchBytes" to liveDemosaicScratchBytes.toString(),
-            "kind" to "live_deep_sky", "source" to s.key?.camera.orEmpty(), "captureSettings" to s.key.toString(),
+            "kind" to if (s.key?.target == StackTarget.PLANETARY) "live_planetary" else "live_deep_sky",
+            "workflow" to "live", "target" to if (s.key?.target == StackTarget.PLANETARY) "planetary" else "deep_sky",
+            "source" to s.key?.camera.orEmpty(), "captureSettings" to s.key.toString(),
             "frameCount" to s.accepted.toString(), "exposureSeconds" to s.exposureSeconds.toString(),
             "received" to s.received.toString(), "rejected" to s.rejected.toString(), "queueDropped" to s.dropped.toString(),
-            "registrationRmsPx" to s.rmsPixels.toString(), "rotationDegrees" to s.rotationDegrees.toString(),
-            "stars" to s.stars.toString(), "exposureSource" to "verified_acquisition_generation",
+            "registrationRmsPx" to if (s.key?.target == StackTarget.PLANETARY) "not_measured" else s.rmsPixels.toString(),
+            "rotationDegrees" to if (s.key?.target == StackTarget.PLANETARY) "not_measured" else s.rotationDegrees.toString(),
+            (if (s.key?.target == StackTarget.PLANETARY) "alignmentPoints" else "stars") to s.stars.toString(),
+            "exposureSource" to "verified_acquisition_generation",
             "javaPeakBytes" to s.javaPeakBytes.toString(), "nativePeakBytes" to s.nativePeakBytes.toString()
         )
     }

@@ -22,6 +22,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.defaultMinSize
@@ -37,8 +39,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Nightlight
-import androidx.compose.material.icons.filled.NightlightRound
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Close
@@ -57,6 +57,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -70,7 +71,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -81,8 +84,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.doOnLayout
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.webkit.WebViewAssetLoader
 import com.indigo.mobileobservatory.R
+import com.indigo.mobileobservatory.starmap.StarMapPhoneOrientation
 import com.indigo.mobileobservatory.astro.FovInstrumentMode
 import com.indigo.mobileobservatory.astro.FovSkyAnchor
 import com.indigo.mobileobservatory.astro.FovPointingCandidate
@@ -246,6 +252,7 @@ private class StarMapJavascriptBridge(
     private val onBlankTap: () -> Unit,
     private val onViewChanged: (Double, Double, Double) -> Unit,
     private val onFollowChanged: (Boolean) -> Unit,
+    private val onPhoneFollowChanged: (Boolean) -> Unit,
     private val fallbackTargetName: String,
     private val parseError: (Throwable) -> String
 ) {
@@ -311,9 +318,14 @@ private class StarMapJavascriptBridge(
         val follow = enabled.equals("true", ignoreCase = true)
         mainHandler.post { onFollowChanged(follow) }
     }
+
+    @JavascriptInterface
+    fun onPhoneFollowChanged(enabled: String) {
+        mainHandler.post { onPhoneFollowChanged(enabled.equals("true", ignoreCase = true)) }
+    }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @SuppressLint("SetJavaScriptEnabled", "JavascriptInterface")
 @Composable
 fun StarMapScreen(
@@ -399,6 +411,9 @@ fun StarMapScreen(
     var atmosphereVisible by remember { mutableStateOf(false) }
     var overlaysVisible by rememberSaveable { mutableStateOf(true) }
     var overlaysLocked by rememberSaveable { mutableStateOf(false) }
+    var hudPointerActive by remember { mutableStateOf(false) }
+    var hudActivityRevision by remember { mutableIntStateOf(0) }
+    LaunchedEffect(foreground) { if (!foreground) hudPointerActive = false }
     var interaction by rememberSaveable(stateSaver = StarMapInteractionSaver) {
         mutableStateOf(StarMapInteractionState(targetCardVisible = selectedTarget != null))
     }
@@ -425,6 +440,15 @@ fun StarMapScreen(
     val prefs = remember {
         context.getSharedPreferences("mobile_observatory", android.content.Context.MODE_PRIVATE)
     }
+    var landscapeVisible by remember {
+        mutableStateOf(prefs.getBoolean("star_map_simulated_landscape", true))
+    }
+    var followPhone by remember {
+        mutableStateOf(prefs.getBoolean("star_map_follow_phone", false))
+    }
+    val phoneOrientation = remember(context) { StarMapPhoneOrientation(context) }
+    var phoneFollowRegistrationFailed by remember { mutableStateOf(false) }
+    var phoneFollowHasSample by remember { mutableStateOf(false) }
     var sensorAngleCalibration by remember {
         mutableStateOf(
             SensorAngleCalibration(
@@ -442,10 +466,11 @@ fun StarMapScreen(
         mutableStateOf(HipsTileCache.formatCacheSize(hipsCache.cacheSizeBytes()))
     }
     var followMount by remember {
-        mutableStateOf(prefs.getBoolean("star_map_follow_mount", false))
+        mutableStateOf(prefs.getBoolean("star_map_follow_mount", false) && !followPhone)
     }
     var followInterrupted by rememberSaveable { mutableStateOf(false) }
     val resolvedObserverSite = observerSite ?: mountSite?.let { ObserverSite(it.latitudeDeg, it.longitudeDeg) }
+    val latestObserverSite by rememberUpdatedState(resolvedObserverSite)
     var starMapTimeManual by remember {
         mutableStateOf(prefs.contains(STAR_MAP_TIME_PREF))
     }
@@ -969,15 +994,26 @@ fun StarMapScreen(
     fun setFollowMountEnabled(enabled: Boolean) {
         val source = latestFollowSource.source
         val now = latestPointingClock()
-        val usable = resolvedObserverSite != null && latestFollowSource.showCurrent && source != null &&
+        val usable = latestObserverSite != null && latestFollowSource.showCurrent && source != null &&
             now - source.absoluteUtcMs in 0..30_000 && now - source.estimateUtcMs in 0..3_000
         if (!enabled && followMount && !usable) followInterrupted = true
         followMount = enabled && usable
+        if (followMount) {
+            followPhone = false
+            prefs.edit().putBoolean("star_map_follow_phone", false).apply()
+        }
         if (enabled) followInterrupted = !followMount
         persistFovPrefs()
         evalStarMap(
             "window.MercStarMap && window.MercStarMap.setFollowMount(${if (followMount) "true" else "false"});"
         )
+        overlaysVisible = true
+    }
+
+    fun setPhoneFollowEnabled(enabled: Boolean) {
+        followPhone = enabled && phoneOrientation.available
+        prefs.edit().putBoolean("star_map_follow_phone", followPhone).apply()
+        if (followPhone) setFollowMountEnabled(false)
         overlaysVisible = true
     }
 
@@ -1174,6 +1210,7 @@ fun StarMapScreen(
                 }
             },
             onFollowChanged = { enabled -> setFollowMountEnabled(enabled) },
+            onPhoneFollowChanged = { enabled -> setPhoneFollowEnabled(enabled) },
             fallbackTargetName = context.getString(R.string.selected_target),
             parseError = { context.getString(R.string.star_target_parse_error, it.message.orEmpty()) }
         )
@@ -1256,10 +1293,15 @@ fun StarMapScreen(
     }
 
     LaunchedEffect(
+        foreground,
         overlaysVisible,
         overlaysLocked,
+        hudPointerActive,
+        hudActivityRevision,
+        targetExpanded,
         engineState,
         selectedTarget,
+        sequenceImportPlan,
         gotoConfirmation,
         syncConfirmation,
         precisionConfirmation,
@@ -1270,9 +1312,12 @@ fun StarMapScreen(
         confirmHome,
         starMapTimeDialogVisible
     ) {
-        if (!overlaysVisible ||
+        if (!foreground || !overlaysVisible ||
             overlaysLocked ||
+            hudPointerActive ||
+            targetExpanded ||
             engineState !is StarMapEngineState.Ready ||
+            sequenceImportPlan != null ||
             gotoConfirmation != null ||
             syncConfirmation != null ||
             precisionConfirmation != null ||
@@ -1285,7 +1330,15 @@ fun StarMapScreen(
         ) {
             return@LaunchedEffect
         }
+        val idleRevision = hudActivityRevision
         delay(StarMapLoadRules.OVERLAY_IDLE_MS)
+        // A press or menu opening at the deadline can precede the next composition.
+        // Recheck the live state so a resumed old coroutine cannot close that interaction.
+        if (idleRevision != hudActivityRevision || hudPointerActive || overlaysLocked ||
+            interaction.targetExpanded || interaction.panel != StarMapCornerPanel.NONE ||
+            sequenceImportPlan != null || gotoConfirmation != null || syncConfirmation != null || precisionConfirmation != null ||
+            searchDialogVisible || fovDialogVisible || confirmHome || starMapTimeDialogVisible ||
+            precisionGotoProgress.isActive) return@LaunchedEffect
         overlaysVisible = false
         interaction = interaction.copy(targetCardVisible = false, targetExpanded = false)
     }
@@ -1402,6 +1455,42 @@ fun StarMapScreen(
         webView?.evaluateJavascript(script, null)
     }
 
+    LaunchedEffect(webView, landscapeVisible, engineState) {
+        if (engineState !is StarMapEngineState.Ready) return@LaunchedEffect
+        evalStarMap("window.MercStarMap && window.MercStarMap.setLandscapeVisible($landscapeVisible);")
+    }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(phoneOrientation, lifecycleOwner, foreground, followPhone, engineState, webView, resolvedObserverSite) {
+        var registered = false
+        phoneFollowHasSample = false
+        fun updateSubscription() {
+            val shouldRun = foreground && followPhone && engineState is StarMapEngineState.Ready &&
+                webView != null && lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+            if (shouldRun && !registered) {
+                registered = phoneOrientation.start(resolvedObserverSite) { direction, utcMs ->
+                    phoneFollowHasSample = true
+                    evalStarMap("window.MercStarMap && window.MercStarMap.setPhoneOrientation(" +
+                        "${direction.azimuthDeg},${direction.altitudeDeg},$utcMs);")
+                }
+                phoneFollowRegistrationFailed = !registered
+                evalStarMap("window.MercStarMap && window.MercStarMap.setPhoneFollow($registered);")
+            } else if (!shouldRun) {
+                phoneOrientation.stop()
+                registered = false
+                evalStarMap("window.MercStarMap && window.MercStarMap.setPhoneFollow(false);")
+            }
+        }
+        val observer = LifecycleEventObserver { _, _ -> updateSubscription() }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        updateSubscription()
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            phoneOrientation.stop()
+            evalStarMap("window.MercStarMap && window.MercStarMap.setPhoneFollow(false);")
+        }
+    }
+
     LaunchedEffect(webView, redNightMode, engineState) {
         applyNightVision()
     }
@@ -1435,7 +1524,22 @@ fun StarMapScreen(
         if (!overlaysVisible) interaction = interaction.copy(panel = StarMapCornerPanel.NONE)
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    BoxWithConstraints(modifier = Modifier.fillMaxSize().pointerInput(Unit) {
+        // Observe, without consuming, all Compose/WebView presses. A live press/scroll
+        // cancels the idle coroutine; release starts a complete new interval.
+        awaitPointerEventScope {
+            while (true) {
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+                val pressed = event.changes.any { it.pressed }
+                if (hudPointerActive != pressed) {
+                    hudPointerActive = pressed
+                    hudActivityRevision++
+                }
+            }
+        }
+    }) {
+        val availablePanelHeight = minOf(420.dp, (maxHeight - 78.dp).coerceAtLeast(48.dp))
+        val compactLandscape = maxWidth > maxHeight && maxHeight < 400.dp
         key(webViewSession) {
             AndroidView(
                 factory = { viewContext ->
@@ -1514,7 +1618,8 @@ fun StarMapScreen(
                             laidOutView.post {
                                 if (laidOutView.isAttachedToWindow) {
                                     (laidOutView as WebView).loadUrl(
-                                        "https://appassets.androidplatform.net/assets/stellarium/index.html"
+                                        "https://appassets.androidplatform.net/assets/stellarium/index.html?landscape=" +
+                                            if (landscapeVisible) "1" else "0"
                                     )
                                 }
                             }
@@ -1525,16 +1630,21 @@ fun StarMapScreen(
                     if (webView === released) webView = null
                     destroyWebView(released)
                 },
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier.fillMaxSize().testTag("star-map-canvas")
             )
         }
 
-        // Task entry points remain discoverable when optional observing chrome is hidden.
-        Column(
+        // Every ordinary browsing control shares one idle timer and blank-tap wakeup.
+        AnimatedVisibility(
+            visible = overlaysVisible || engineState !is StarMapEngineState.Ready,
+            enter = fadeIn(), exit = fadeOut(),
+            modifier = Modifier.align(Alignment.TopStart)
+        ) {
+        FlowRow(
             modifier = Modifier
-                .align(Alignment.TopStart)
                 .padding(8.dp)
-                .widthIn(max = 240.dp),
+                .widthIn(max = if (compactLandscape) (maxWidth - 80.dp).coerceAtLeast(160.dp) else 240.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
                 Card {
@@ -1548,7 +1658,8 @@ fun StarMapScreen(
                     }
                 }
                 Card { TextButton(onClick = onObserverSiteSettings) {
-                    Text(observerSiteLabel ?: stringResource(if (resolvedObserverSite == null) R.string.wf_observer_missing else R.string.wf_observer_site))
+                    Text(if (resolvedObserverSite == null && landscapeVisible) stringResource(R.string.sky_simulated_site_missing)
+                        else observerSiteLabel ?: stringResource(if (resolvedObserverSite == null) R.string.wf_observer_missing else R.string.wf_observer_site))
                 } }
                 if (showFovOverlay && activeComputation?.hasOverlay == true || followMount || followInterrupted) {
                     Card {
@@ -1572,6 +1683,7 @@ fun StarMapScreen(
                         }
                     }
                 }
+        }
         }
 
         AnimatedVisibility(
@@ -1611,32 +1723,6 @@ fun StarMapScreen(
                                 Icon(
                                     Icons.Default.Search,
                                     contentDescription = stringResource(R.string.star_map_search)
-                                )
-                            }
-                        }
-                        Card {
-                            IconButton(
-                                onClick = {
-                                    onRedNightModeChange(!redNightMode)
-                                    overlaysVisible = true
-                                },
-                                modifier = Modifier.semantics {
-                                    contentDescription =
-                                        context.getString(R.string.red_night_mode)
-                                }
-                            ) {
-                                Icon(
-                                    if (redNightMode) {
-                                        Icons.Default.Nightlight
-                                    } else {
-                                        Icons.Default.NightlightRound
-                                    },
-                                    contentDescription = stringResource(R.string.red_night_mode),
-                                    tint = if (redNightMode) {
-                                        MaterialTheme.colorScheme.primary
-                                    } else {
-                                        MaterialTheme.colorScheme.onSurface
-                                    }
                                 )
                             }
                         }
@@ -1700,6 +1786,7 @@ fun StarMapScreen(
                 ) {
             StarMapCornerControls(
                 modifier = Modifier.widthIn(max = panelMax),
+                maxPanelHeight = availablePanelHeight,
                 panel = cornerPanel,
                 onPanelChange = {
                     interaction = interaction.openPanel(it)
@@ -1715,6 +1802,15 @@ fun StarMapScreen(
                 moveEnabled = moveEnabled,
                 mountSlewRate = mountSlewRate,
                 followMount = followMount,
+                followPhone = followPhone,
+                phoneFollowAvailable = phoneOrientation.available,
+                phoneFollowCaption = stringResource(when {
+                    !phoneOrientation.available -> R.string.sky_phone_follow_unavailable
+                    phoneFollowRegistrationFailed -> R.string.sky_phone_follow_failed
+                    followPhone && !phoneFollowHasSample -> R.string.sky_phone_follow_waiting
+                    resolvedObserverSite == null -> R.string.sky_phone_follow_magnetic
+                    else -> R.string.sky_phone_follow_hint
+                }),
                 activeTrain = activeTrain,
                 showFovOverlay = showFovOverlay,
                 equatorialGrid = equatorialGrid,
@@ -1726,6 +1822,7 @@ fun StarMapScreen(
                 constellationBounds = constellationBounds,
                 starHints = starHints,
                 atmosphereVisible = atmosphereVisible,
+                landscapeVisible = landscapeVisible,
                 onlineDssEnabled = onlineDssEnabled,
                 starMapTimeLabel = formatStarMapTime(starMapEpochMillis),
                 overlaysLocked = overlaysLocked,
@@ -1736,6 +1833,7 @@ fun StarMapScreen(
                 onStopMount = onStopMount,
                 onConfirmHome = { if (canHome) confirmHome = true },
                 onFollowMountChange = ::setFollowMountEnabled,
+                onFollowPhoneChange = ::setPhoneFollowEnabled,
                 onCenterOnPointing = ::centerOnPointing,
                 onRefreshPointing = ::refreshPointing,
                 onActiveTrainChange = {
@@ -1789,6 +1887,10 @@ fun StarMapScreen(
                     persistAndApplySkyAppearance()
                 },
                 onAtmosphereChange = { atmosphereVisible = it },
+                onLandscapeChange = {
+                    landscapeVisible = it
+                    prefs.edit().putBoolean("star_map_simulated_landscape", it).apply()
+                },
                 onOnlineDssChange = ::setOnlineDssEnabled,
                 onOverlaysLockedChange = {
                     overlaysLocked = it
@@ -1806,7 +1908,8 @@ fun StarMapScreen(
                     modifier = Modifier
                         .padding(8.dp)
                         .widthIn(max = panelMax)
-                        .heightIn(max = 420.dp)
+                        .heightIn(max = availablePanelHeight)
+                        .testTag("star-map-target-card")
                         .consumeStarMapPanelTouches()
                 ) {
                     Column(

@@ -1,6 +1,8 @@
 package com.indigo.mobileobservatory.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.saveable.listSaver
 import android.app.Activity
 import android.content.Context
@@ -31,6 +33,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -39,6 +42,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import android.graphics.BitmapFactory
 import com.indigo.mobileobservatory.R
+import com.indigo.mobileobservatory.media.LibraryImportViewModel
+import com.indigo.mobileobservatory.media.ExternalMediaImportError
 import com.indigo.mobileobservatory.mount.MountCoordinates
 import com.indigo.mobileobservatory.recording.SERReader
 import com.indigo.mobileobservatory.recording.MediaLibrary
@@ -159,6 +164,7 @@ fun PlayerScreen(
     isWorkspace: Boolean = false,
     onCamera: (() -> Unit)? = null,
     onImport: (() -> Unit)? = null,
+    onPostStack: (() -> Unit)? = null,
     /** External file viewing has a platform Back boundary and a separate app-owned Up destination. */
     onNavigateUp: (() -> Unit)? = null
 ) {
@@ -173,6 +179,19 @@ fun PlayerScreen(
     var showFilePicker by rememberSaveable { mutableStateOf(true) }
     com.indigo.mobileobservatory.ui.components.ReportObservatoryImmersion(selectedFile != null && !showFilePicker)
     var refreshTrigger by remember { mutableIntStateOf(0) }
+    val importer: LibraryImportViewModel = androidx.lifecycle.viewmodel.compose.viewModel(key = "library-import")
+    val importState by importer.state.collectAsState()
+    var lastImportCompletion by rememberSaveable { mutableStateOf<String?>(null) }
+    val importPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) importer.importFile(uri)
+    }
+    LaunchedEffect(importState.completionId) {
+        if (isWorkspace && importState.completionId != null && importState.completionId != lastImportCompletion) {
+            lastImportCompletion = importState.completionId
+            selectedCategory = MediaCategory.RECENT
+            refreshTrigger++
+        }
+    }
     var directFileUnavailable by remember { mutableStateOf(false) }
     var initialFileLoaded by rememberSaveable(initialFile?.absolutePath) { mutableStateOf(false) }
     LaunchedEffect(initialFile) {
@@ -230,7 +249,10 @@ fun PlayerScreen(
             excludeFile = excludeFile,
             fileUnavailable = directFileUnavailable,
             onCategoryChange = { cat -> selectedCategory = cat },
-            isWorkspace = isWorkspace, onCamera = onCamera, onImport = onImport
+            isWorkspace = isWorkspace, onCamera = onCamera,
+            onImport = onImport ?: if (isWorkspace) ({ importPicker.launch(arrayOf("*/*")) }) else null,
+            onPostStack = onPostStack, importState = if (isWorkspace) importState else null,
+            onCancelImport = importer::cancel, refreshVersion = refreshTrigger
         )
     } else {
         val info = selectedFile
@@ -290,7 +312,11 @@ private fun FilePickerView(
     onCategoryChange: (MediaCategory) -> Unit = {},
     isWorkspace: Boolean = false,
     onCamera: (() -> Unit)? = null,
-    onImport: (() -> Unit)? = null
+    onImport: (() -> Unit)? = null,
+    onPostStack: (() -> Unit)? = null,
+    importState: com.indigo.mobileobservatory.media.LibraryImportState? = null,
+    onCancelImport: () -> Unit = {},
+    refreshVersion: Int = 0
 ) {
     val context = LocalContext.current
     var showTrash by rememberSaveable { mutableStateOf(false) }
@@ -303,7 +329,7 @@ private fun FilePickerView(
     }
 
     var loading by remember { mutableStateOf(true) }
-    val files by produceState<List<VideoFileInfo>>(emptyList(), recordingsDir, capturesDir, selectedCategory, refreshTrigger, excludeFile) {
+    val files by produceState<List<VideoFileInfo>>(emptyList(), recordingsDir, capturesDir, selectedCategory, refreshTrigger, refreshVersion, excludeFile) {
         loading = true
         value = emptyList()
         value = withContext(Dispatchers.IO) { MediaLibrary.list(recordingsDir, capturesDir, selectedCategory, excludeFile) }
@@ -364,7 +390,6 @@ private fun FilePickerView(
                     .padding(start = 8.dp)
                     .weight(1f)
             )
-            if (onImport != null && !showTrash) TextButton(onClick = onImport) { Text(stringResource(R.string.wf_import_video)) }
             IconButton(onClick = { showTrash = !showTrash }) {
                 Icon(
                     if (showTrash) Icons.Default.FolderOpen else Icons.Default.Delete,
@@ -374,6 +399,27 @@ private fun FilePickerView(
         }
         
         if (!showTrash) {
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (onImport != null) TextButton(onClick = onImport, enabled = importState?.busy != true,
+                    modifier = Modifier.testTag("media-import")) { Text(stringResource(R.string.wf_import_video)) }
+                if (onPostStack != null) OutlinedButton(onClick = onPostStack,
+                    modifier = Modifier.testTag("media-post-stack")) { Text(stringResource(R.string.stack_offline_title)) }
+            }
+            if (importState?.busy == true) Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Text(stringResource(R.string.external_media_importing), Modifier.weight(1f))
+                TextButton(onClick = onCancelImport) { Text(stringResource(R.string.cancel)) }
+            }
+            importState?.error?.let { reason -> Text(stringResource(when (reason) {
+                ExternalMediaImportError.MISSING_FILE -> R.string.external_media_missing
+                ExternalMediaImportError.UNSUPPORTED -> R.string.external_media_unsupported
+                ExternalMediaImportError.READ_PERMISSION -> R.string.external_media_permission
+                ExternalMediaImportError.NO_SPACE -> R.string.external_media_space
+                ExternalMediaImportError.TOO_LARGE -> R.string.external_media_large
+                ExternalMediaImportError.INVALID_FILE -> R.string.external_media_invalid
+                ExternalMediaImportError.COPY_FAILED -> R.string.external_media_copy_failed
+            }), Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.error) }
             Text(stringResource(if (fileUnavailable) R.string.media_file_unavailable else R.string.media_library_hint),
                 Modifier.padding(horizontal = 16.dp, vertical = 6.dp), style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -392,7 +438,7 @@ private fun FilePickerView(
                             onCategoryChange(cat)
                         },
                         label = { Text(stringResource(mediaCategoryLabel(cat)), fontSize = 11.sp) },
-                        modifier = Modifier.height(32.dp)
+                        modifier = Modifier.heightIn(min = 32.dp)
                     )
                 }
             }
@@ -405,7 +451,8 @@ private fun FilePickerView(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(vertical = 8.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(
                         if (showTrash) Icons.Default.Delete else Icons.Default.VideoLibrary,
                         contentDescription = null,

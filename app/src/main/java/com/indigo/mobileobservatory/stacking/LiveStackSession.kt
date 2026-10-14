@@ -29,10 +29,11 @@ data class StackSessionKey(
     val readout: String,
     val offset: Float? = null,
     val pixelTraits: PixelTraits = PixelTraits(alignment = SampleAlignment.RIGHT),
-    val demosaicAlgorithm: DemosaicAlgorithm = DemosaicAlgorithm.DDFAPD
+    val demosaicAlgorithm: DemosaicAlgorithm = DemosaicAlgorithm.DDFAPD,
+    val target: StackTarget = StackTarget.DEEP_SKY
 ) {
     /** Raw SER capture is independent of the subsequent CFA interpolation choice. */
-    fun rawRecordingKey(): StackSessionKey = copy(demosaicAlgorithm = DemosaicAlgorithm.BILINEAR)
+    fun rawRecordingKey(): StackSessionKey = copy(demosaicAlgorithm = DemosaicAlgorithm.BILINEAR, target = StackTarget.DEEP_SKY)
 }
 
 enum class LiveStackPhase { EMPTY, RUNNING, PAUSING, PAUSED, RESET_REQUIRED, FAILED, CLOSED }
@@ -70,13 +71,16 @@ data class LiveFrameOutcome(
     val stars: Int,
     val rmsPixels: Double,
     val rotationDegrees: Double,
-    val reason: String = ""
+    val reason: String = "",
+    val requiresReset: Boolean = false
 )
 
 /** Testable engine boundary. Called only by the single session worker. */
 interface LiveStackEngine {
     fun add(image: LinearImage, exposureSeconds: Double, cancelled: () -> Boolean): LiveFrameOutcome
     fun snapshot(state: LiveStackState): LiveStackSnapshot?
+    /** Small current statistics only; rejection updates must not copy accumulated image arrays. */
+    fun snapshotDetails(): Map<String, Any>? = null
 }
 
 /**
@@ -275,6 +279,7 @@ class LiveStackSession(
                     nativePeakBytes = maxOf(old.nativePeakBytes, nativeHeapBytes()),
                     reason = outcome.reason
                 )
+                if (outcome.requiresReset) invalidateLocked(outcome.reason)
             }
             if (nowNanos() - lastPublish >= 1_000_000_000L || latestSnapshot == null) publish(packet.generation)
         } catch (_: java.util.concurrent.CancellationException) {
@@ -299,7 +304,8 @@ class LiveStackSession(
         // Rejections change statistics, not accumulated pixels. Keep the immutable arrays
         // shared and let consumers distinguish statistics from a new image version.
         val snapshot = if (previous != null && previous.state.generation == generation &&
-            previous.state.imageVersion == snapshotState.imageVersion) previous.copy(state = snapshotState)
+            previous.state.imageVersion == snapshotState.imageVersion) previous.copy(state = snapshotState,
+                details = engine?.snapshotDetails() ?: previous.details)
         else engine?.snapshot(snapshotState) ?: return
         synchronized(lock) {
             if (generation != epoch || closed || _state.value.phase == LiveStackPhase.RESET_REQUIRED) return

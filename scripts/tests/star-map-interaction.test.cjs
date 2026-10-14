@@ -94,7 +94,7 @@ test('mouse click works but mouse pan does not dismiss', () => {
     assert.equal(f.taps, 1);
 });
 
-function integrationFixture() {
+function integrationFixture({beforeReady = () => {}, observer = true, landscape = null} = {}) {
     let now = 1700000000000;
     const ClockDate = class extends Date { constructor(...args) { super(...(args.length ? args : [now])); } static now() { return now; } };
     const elements = new Map();
@@ -113,7 +113,8 @@ function integrationFixture() {
     const deferred = [];
     const doc = {getElementById: id => elements.get(id), documentElement: {clientWidth: 400, clientHeight: 600}};
     const window = {
-        innerWidth: 400, innerHeight: 600, location: {href: 'https://example.test/index.html'},
+        innerWidth: 400, innerHeight: 600, location: {href: 'https://example.test/index.html' +
+            (landscape == null ? '' : '?landscape=' + (landscape ? '1' : '0'))},
         addEventListener() {}, requestAnimationFrame: fn => fn(),
         IndigoSkyTap: {install: (element, callback) => install(element, callback, Date.now, fn => deferred.push(fn))},
         AndroidStarMap: new Proxy({}, {get: (_, method) => value => messages.push({method, value})}),
@@ -138,8 +139,9 @@ function integrationFixture() {
         change: callback => { changed = callback; }
     };
     engine.observer = engine.core.observer;
+    beforeReady(window.MercStarMap);
     ready(engine);
-    window.MercStarMap.setObserver(31, 121, now);
+    if (observer) window.MercStarMap.setObserver(31, 121, now);
     return {window, engine, messages, looksAt, frames,
         get now() { return now; }, advance(ms) { now += ms; },
         get looks() { return looks; },
@@ -247,14 +249,14 @@ test('a single-finger pan pauses optical follow and coordinate refreshes do not 
     assert.equal(f.messages.filter(value => value.method === 'onFollowMountChanged' && value.value === 'false').length, 1);
 });
 
-test('an unset location cannot advertise a local horizon or optical follow', () => {
+test('an unset location allows simulated landscape but cannot advertise a local horizon or optical follow', () => {
     const f = integrationFixture();
     f.window.MercStarMap.setSkyAppearance(false, true, true, false, false, false, false, false);
     assert.equal(f.engine.core.lines.azimuthal.visible, true);
     f.window.MercStarMap.clearObserver();
     assert.equal(f.engine.core.lines.azimuthal.visible, false);
     assert.equal(f.engine.core.lines.meridian.visible, false);
-    assert.equal(f.engine.core.landscapes.visible, false);
+    assert.equal(f.engine.core.landscapes.visible, true);
     f.window.MercStarMap.setPointingCoordinates(5, 20, 'ICRF', f.now, f.now);
     f.window.MercStarMap.setFollowMount(true);
     assert.equal(f.window.MercStarMap.centerOnPointing(0), false);
@@ -263,4 +265,71 @@ test('an unset location cannot advertise a local horizon or optical follow', () 
     f.window.MercStarMap.setObserver(31, 121, f.now);
     f.window.MercStarMap.setFollowMount(true);
     assert.equal(f.looks, 1);
+});
+
+test('simulated landscape preference survives initialization, site loss and observer/time refresh', () => {
+    const f = integrationFixture({landscape: false, observer: false});
+    assert.equal(f.engine.core.landscapes.visible, false);
+    f.window.MercStarMap.setObserver(31, 121, f.now);
+    f.window.MercStarMap.setTime(f.now + 60000);
+    assert.equal(f.engine.core.landscapes.visible, false);
+    f.window.MercStarMap.clearObserver();
+    f.window.MercStarMap.setLandscapeVisible(true);
+    assert.equal(f.engine.core.landscapes.visible, true);
+    assert.equal(f.engine.core.atmosphere.visible, false);
+    f.window.MercStarMap.setLandscapeVisible(false);
+    assert.equal(f.engine.core.landscapes.visible, false);
+    const pending = integrationFixture({beforeReady: api => api.setLandscapeVisible(false), observer: false});
+    assert.equal(pending.engine.core.landscapes.visible, false);
+});
+
+test('phone browse follow works without a site and never publishes an optical pointing source', () => {
+    const f = integrationFixture({observer: false});
+    const frameCount = f.frames.length;
+    f.window.MercStarMap.setPhoneFollow(true);
+    assert.equal(f.window.MercStarMap.setPhoneOrientation(90, 30, f.now), true);
+    assert.deepEqual(f.looksAt.at(-1), [Math.PI / 2, Math.PI / 6, 1]);
+    assert.equal(f.frames.length, frameCount); // no celestial / optical-source conversion
+    assert.equal(f.messages.filter(m => /Pointing|TargetSelected/.test(m.method)).length, 0);
+    assert.equal(f.window.MercStarMap.centerOnPointing(0), false);
+});
+
+test('phone and optical following are mutually exclusive and stale phone samples pause browsing', () => {
+    const f = integrationFixture();
+    f.window.MercStarMap.setPointingCoordinates(5, 20, 'ICRF', f.now, f.now);
+    f.window.MercStarMap.setFollowMount(true);
+    f.window.MercStarMap.setPhoneFollow(true);
+    assert.equal(f.messages.filter(m => m.method === 'onFollowMountChanged' && m.value === 'false').length, 1);
+    assert.equal(f.window.MercStarMap.setPhoneOrientation(0, 0, f.now), true);
+    const before = f.looks;
+    f.window.MercStarMap.setPointingCoordinates(6, 30, 'ICRF', f.now, f.now);
+    assert.equal(f.looks, before);
+    f.window.MercStarMap.setFollowMount(true);
+    assert.equal(f.window.MercStarMap.setPhoneOrientation(0, 0, f.now), false);
+    assert.equal(f.messages.filter(m => m.method === 'onPhoneFollowChanged' && m.value === 'false').length, 1);
+    f.window.MercStarMap.setPhoneFollow(true);
+    f.advance(1001);
+    assert.equal(f.window.MercStarMap.setPhoneOrientation(0, 0, f.now - 1001), false);
+    assert.equal(f.window.MercStarMap.setPhoneOrientation(0, 0, f.now), false);
+});
+
+test('phone browse respects pinch protection, pan pause and lifecycle shutdown', () => {
+    const f = integrationFixture();
+    f.window.MercStarMap.setPhoneFollow(true);
+    f.touch('touchstart', [finger(20, 30), finger(60, 60)]);
+    assert.equal(f.window.MercStarMap.setPhoneOrientation(0, 0, f.now), false);
+    f.touch('touchend', [finger(60, 60)], [finger(20, 30)]);
+    assert.equal(f.window.MercStarMap.setPhoneOrientation(0, 0, f.now), false);
+    f.touch('touchend', [], [finger(60, 60)]);
+    assert.equal(f.window.MercStarMap.setPhoneOrientation(0, 0, f.now), true);
+    f.touch('touchstart', [finger(20, 30)]);
+    f.touch('touchmove', [finger(37, 30)]);
+    f.touch('touchend', [], [finger(37, 30)]);
+    assert.equal(f.window.MercStarMap.setPhoneOrientation(0, 0, f.now), false);
+    f.window.MercStarMap.setPhoneFollow(true);
+    assert.equal(f.window.MercStarMap.setPhoneOrientation(0, 0, f.now), true);
+    f.window.MercStarMap.setPhoneFollow(false); // native foreground/lifecycle owner stops
+    assert.equal(f.window.MercStarMap.setPhoneOrientation(0, 0, f.now), false);
+    assert.equal(f.window.MercStarMap.setPhoneOrientation(NaN, 0, f.now), false);
+    assert.equal(f.window.MercStarMap.setPhoneOrientation(0, 91, f.now), false);
 });

@@ -64,13 +64,15 @@ class PreviewPipeline internal constructor(
     val frame: StateFlow<PreviewFrame?> = _frame.asStateFlow()
     val performance: StateFlow<PreviewPerformanceStats> = _performance.asStateFlow()
 
-    fun submit(frame: FrameData, traits: PixelTraits? = null) {
+    fun submit(frame: FrameData, traits: PixelTraits? = null, expectedGeneration: Long? = null,
+               rejectedRecycler: ((ByteArray) -> Unit)? = null) {
         val discarded: PreviewSample?
         val recycler: (ByteArray) -> Unit
         synchronized(lifecycleLock) {
             val sample = PreviewSample(frame, traits)
-            discarded = if (acceptingFrames) latestFrame.offer(sample) else sample
-            recycler = recycleBuffer
+            val accepted = acceptingFrames && (expectedGeneration == null || expectedGeneration == generation)
+            discarded = if (accepted) latestFrame.offer(sample) else sample
+            recycler = if (accepted) recycleBuffer else rejectedRecycler ?: recycleBuffer
         }
         discarded?.let { releaseFrame(it.frame, recycler) }
     }
@@ -78,8 +80,9 @@ class PreviewPipeline internal constructor(
     fun start(
         paused: () -> Boolean = { false },
         onProcessed: (FrameData) -> Unit = {},
-        recycleBuffer: (ByteArray) -> Unit = {}
-    ) = synchronized(lifecycleLock) {
+        recycleBuffer: (ByteArray) -> Unit = {},
+        beforeRender: () -> Unit = {}
+    ): Long = synchronized(lifecycleLock) {
         stopLocked(clearFrame = false)
         val predecessor = renderJob
         this.recycleBuffer = recycleBuffer
@@ -90,6 +93,7 @@ class PreviewPipeline internal constructor(
             predecessor?.join()
             rendererMutex.withLock {
                 ensureActive()
+                beforeRender()
                 var sequence = _frame.value?.sequence ?: 0L
                 var rendered = 0L
                 var processingNanos = 0L
@@ -150,6 +154,7 @@ class PreviewPipeline internal constructor(
                 }
             }
         }
+        sessionGeneration
     }
 
     fun stop(clearFrame: Boolean = true) = synchronized(lifecycleLock) {

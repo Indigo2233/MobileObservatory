@@ -65,6 +65,7 @@ fun CameraPreviewTools(
     onPlateSolve: () -> Unit,
     onOpenLibrary: () -> Unit,
     onOpenLiveStack: () -> Unit = {},
+    onCfaSettings: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var menuOpen by rememberSaveable { mutableStateOf(false) }
@@ -129,6 +130,8 @@ fun CameraPreviewTools(
                     }
                 )
                 if (connected) {
+                    DropdownMenuItem(text = { Text(stringResource(R.string.camera_cfa_title)) },
+                        onClick = { menuOpen = false; onCfaSettings() })
                     DropdownMenuItem(
                         text = { Text(stringResource(R.string.toggle_overlay)) },
                         onClick = onToggleOverlay,

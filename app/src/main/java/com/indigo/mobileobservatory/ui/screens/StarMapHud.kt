@@ -3,13 +3,13 @@
 package com.indigo.mobileobservatory.ui.screens
 
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Explore
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.GridOn
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
@@ -48,8 +49,10 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.astro.OpticsTrainId
@@ -73,6 +76,7 @@ internal fun Modifier.consumeStarMapPanelTouches(): Modifier = pointerInput(Unit
 @Composable
 internal fun StarMapCornerControls(
     modifier: Modifier = Modifier,
+    maxPanelHeight: Dp = 420.dp,
     panel: StarMapCornerPanel,
     onPanelChange: (StarMapCornerPanel) -> Unit,
     mountConnected: Boolean,
@@ -84,6 +88,9 @@ internal fun StarMapCornerControls(
     moveEnabled: Boolean,
     mountSlewRate: MountSlewRate,
     followMount: Boolean,
+    followPhone: Boolean,
+    phoneFollowAvailable: Boolean,
+    phoneFollowCaption: String,
     activeTrain: OpticsTrainId,
     showFovOverlay: Boolean,
     equatorialGrid: Boolean,
@@ -95,6 +102,7 @@ internal fun StarMapCornerControls(
     constellationBounds: Boolean,
     starHints: Boolean,
     atmosphereVisible: Boolean,
+    landscapeVisible: Boolean,
     onlineDssEnabled: Boolean,
     starMapTimeLabel: String,
     overlaysLocked: Boolean,
@@ -105,6 +113,7 @@ internal fun StarMapCornerControls(
     onStopMount: () -> Unit,
     onConfirmHome: () -> Unit,
     onFollowMountChange: (Boolean) -> Unit,
+    onFollowPhoneChange: (Boolean) -> Unit,
     onCenterOnPointing: () -> Unit,
     onRefreshPointing: () -> Unit,
     onActiveTrainChange: (OpticsTrainId) -> Unit,
@@ -122,6 +131,7 @@ internal fun StarMapCornerControls(
     onConstellationBoundsChange: (Boolean) -> Unit,
     onStarHintsChange: (Boolean) -> Unit,
     onAtmosphereChange: (Boolean) -> Unit,
+    onLandscapeChange: (Boolean) -> Unit,
     onOnlineDssChange: (Boolean) -> Unit,
     onOverlaysLockedChange: (Boolean) -> Unit,
     onRefreshHipsCache: () -> Unit,
@@ -140,7 +150,7 @@ internal fun StarMapCornerControls(
             StarMapCornerPanel.OBSERVING -> Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 420.dp)
+                    .heightIn(max = maxPanelHeight)
                     .consumeStarMapPanelTouches()
             ) {
                 Column(
@@ -150,11 +160,17 @@ internal fun StarMapCornerControls(
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Text(
-                        stringResource(R.string.star_map_observing_panel),
-                        style = MaterialTheme.typography.titleSmall,
-                        modifier = Modifier.fillMaxWidth()
+                    StarMapPanelHeading(stringResource(R.string.star_map_observing_panel)) {
+                        onPanelChange(StarMapCornerPanel.NONE)
+                    }
+                    StarMapFlagSwitch(
+                        label = stringResource(R.string.sky_phone_follow),
+                        checked = followPhone,
+                        enabled = phoneFollowAvailable,
+                        switchModifier = Modifier.testTag("sky-phone-follow"),
+                        onCheckedChange = onFollowPhoneChange
                     )
+                    Text(phoneFollowCaption, style = MaterialTheme.typography.bodySmall)
                     if (mountConnected) {
                         if (canManualMove) {
                         Row(
@@ -169,7 +185,7 @@ internal fun StarMapCornerControls(
                                     onClick = { onSlewRateChange(rate) },
                                     enabled = moveEnabled,
                                     label = { Text(rate.label, fontSize = 10.sp) },
-                                    modifier = Modifier.height(28.dp)
+                                    modifier = Modifier.heightIn(min = 48.dp)
                                 )
                             }
                         }
@@ -228,7 +244,7 @@ internal fun StarMapCornerControls(
                         if (canHome) OutlinedButton(
                             onClick = onConfirmHome,
                             enabled = homeEnabled,
-                            modifier = Modifier.height(36.dp)
+                            modifier = Modifier.heightIn(min = 48.dp)
                         ) {
                             Text(stringResource(R.string.home), fontSize = 12.sp)
                         }
@@ -250,7 +266,7 @@ internal fun StarMapCornerControls(
                     OutlinedButton(
                         onClick = onCenterOnPointing,
                         enabled = followAvailable,
-                        modifier = Modifier.testTag("pointing-center").fillMaxWidth().height(36.dp)
+                        modifier = Modifier.testTag("pointing-center").fillMaxWidth().heightIn(min = 48.dp)
                     ) {
                         Text(stringResource(R.string.wf_center_pointing), fontSize = 12.sp)
                     }
@@ -292,13 +308,13 @@ internal fun StarMapCornerControls(
                     )
                     OutlinedButton(
                         onClick = onOpenFov,
-                        modifier = Modifier.fillMaxWidth().height(36.dp)
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
                     ) {
                         Text(stringResource(R.string.star_map_fov), fontSize = 12.sp)
                     }
                     OutlinedButton(
                         onClick = onOpenTimeSettings,
-                        modifier = Modifier.fillMaxWidth().height(36.dp)
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
                     ) {
                         Text(
                             stringResource(R.string.star_map_time_button, starMapTimeLabel),
@@ -325,7 +341,7 @@ internal fun StarMapCornerControls(
             StarMapCornerPanel.SKY -> Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 420.dp)
+                    .heightIn(max = maxPanelHeight)
                     .consumeStarMapPanelTouches()
             ) {
                 Column(
@@ -334,10 +350,9 @@ internal fun StarMapCornerControls(
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Text(
-                        stringResource(R.string.star_map_sky_panel),
-                        style = MaterialTheme.typography.titleSmall
-                    )
+                    StarMapPanelHeading(stringResource(R.string.star_map_sky_panel)) {
+                        onPanelChange(StarMapCornerPanel.NONE)
+                    }
                     Text(
                         stringResource(R.string.star_map_sky_section_grids),
                         style = MaterialTheme.typography.labelMedium,
@@ -394,6 +409,12 @@ internal fun StarMapCornerControls(
                         color = MaterialTheme.colorScheme.primary
                     )
                     StarMapFlagSwitch(
+                        label = stringResource(R.string.sky_simulated_landscape),
+                        checked = landscapeVisible,
+                        switchModifier = Modifier.testTag("sky-landscape"),
+                        onCheckedChange = onLandscapeChange
+                    )
+                    StarMapFlagSwitch(
                         label = stringResource(R.string.atmosphere),
                         checked = atmosphereVisible,
                         onCheckedChange = onAtmosphereChange
@@ -422,7 +443,7 @@ internal fun StarMapCornerControls(
                     }
                     OutlinedButton(
                         onClick = onReloadStarMap,
-                        modifier = Modifier.fillMaxWidth().height(36.dp)
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
                     ) {
                         Icon(Icons.Default.Refresh, contentDescription = null)
                         Text(stringResource(R.string.reload_star_map), fontSize = 12.sp)
@@ -446,6 +467,14 @@ internal fun StarMapCornerControls(
                 onClick = { toggle(StarMapCornerPanel.SKY) }
             )
         }
+    }
+}
+
+@Composable
+private fun StarMapPanelHeading(title: String, onClose: () -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(title, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+        IconButton(onClick = onClose) { Icon(Icons.Default.Close, stringResource(R.string.close)) }
     }
 }
 
@@ -483,7 +512,9 @@ private fun StarMapFlagSwitch(
     onCheckedChange: (Boolean) -> Unit
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().then(switchModifier)
+            .heightIn(min = 48.dp)
+            .toggleable(value = checked, enabled = enabled, role = Role.Switch, onValueChange = onCheckedChange),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
@@ -495,9 +526,8 @@ private fun StarMapFlagSwitch(
                 .padding(end = 8.dp)
         )
         Switch(
-            modifier = switchModifier,
             checked = checked,
-            onCheckedChange = onCheckedChange,
+            onCheckedChange = null,
             enabled = enabled
         )
     }

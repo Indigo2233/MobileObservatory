@@ -129,11 +129,15 @@ internal object PlanetarySampling {
 
     fun plane(image: LinearImage, checkCancelled: () -> Unit): FloatArray {
         val out = FloatArray(image.width * image.height)
+        fillPlane(image, out, checkCancelled)
+        return out
+    }
+    fun fillPlane(image: LinearImage, out: FloatArray, checkCancelled: () -> Unit) {
+        require(out.size == image.width * image.height)
         for (y in 0 until image.height) {
             checkCancelled()
             for (x in 0 until image.width) out[y * image.width + x] = luma(image, x, y)
         }
-        return out
     }
     fun bilinear(p: FloatArray, width: Int, height: Int, x: Double, y: Double): Double {
         if (x < 0 || y < 0 || x > width - 1 || y > height - 1) return Double.NaN

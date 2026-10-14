@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="camera_cfa_title">CFA / 色彩解释</string>
+    <string name="camera_cfa_auto">自动（相机）</string>
+    <string name="camera_cfa_mono">单色</string>
+    <string name="camera_cfa_apply">套用</string>
+    <string name="camera_cfa_reset_apply">重置叠加并套用</string>
+    <string name="camera_cfa_scope">用于当前相机输出：预览、新拍照片与录像、实时叠加。相机采样数据保持原样。</string>
+    <string name="camera_cfa_rgb">RGB 已是彩色图像。CFA 解释仅用于原始单色 / Bayer 输出。</string>
+    <string name="camera_cfa_busy_recording">先停止录制，再更改 CFA。</string>
+    <string name="camera_cfa_busy_calibration">先完成或取消校准帧采集。</string>
+    <string name="camera_cfa_busy_snapshot">等待照片或参考采集完成。</string>
+    <string name="camera_cfa_busy_settings">等待相机设置套用完成。</string>
+    <string name="camera_cfa_reset_stack">更改 CFA 需要重新叠加。套用会丢弃当前实时叠加。</string>
+    <string name="camera_cfa_device_changed">相机已改变，请重新打开 CFA 设置。</string>
+    <string name="camera_cfa_layout_changed">输出布局已改变，CFA 已恢复自动；需要时请重新选择。</string>
+</resources>

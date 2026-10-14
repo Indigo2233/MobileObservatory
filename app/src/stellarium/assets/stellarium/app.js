@@ -16,6 +16,11 @@
     let pendingMountCoordinates = null;
     let pendingPointingCoordinates = null;
     let pendingAtmosphereVisible = false;
+    // Android passes the saved choice with the document URL so a disabled backdrop
+    // does not flash on while WASM initializes, before the native Ready callback.
+    let pendingLandscapeVisible = new URL(window.location.href).searchParams.get("landscape") !== "0";
+    let followPhone = false;
+    let pendingPhoneOrientation = null;
     let pendingOnlineSurveyEnabled = false;
     let onlineSurveyAdded = false;
     let pendingFovDegrees = null;
@@ -122,9 +127,9 @@
     function applyObserver(observer) {
         if (!observer) {
             if (stel && stel.core) {
-                setChildVisible(stel.core, "landscapes", false);
                 if (stel.core.atmosphere) stel.core.atmosphere.visible = false;
             }
+            applyLandscapeVisibility();
             applySkyAppearance();
             stopInvalidPointingFollow();
             return;
@@ -133,7 +138,7 @@
         if (!stel) return;
         stel.observer.latitude = observer.latitudeDeg * stel.D2R;
         stel.observer.longitude = observer.longitudeDeg * stel.D2R;
-        setChildVisible(stel.core, "landscapes", true);
+        applyLandscapeVisibility();
         applyAtmosphereVisibility(pendingAtmosphereVisible);
         applySkyAppearance();
         applyTime(pendingTimeMillis);
@@ -189,6 +194,32 @@
     function applyAtmosphereVisibility(visible) {
         if (!stel) return;
         stel.core.atmosphere.visible = Boolean(visible && pendingObserver);
+    }
+
+    function applyLandscapeVisibility() {
+        // This is a simulated visual backdrop, independent of a real observing site.
+        // Local grids, atmosphere and optical pointing still require pendingObserver.
+        if (stel && stel.core) setChildVisible(stel.core, "landscapes", pendingLandscapeVisible);
+    }
+
+    function stopPhoneFollow() {
+        if (!followPhone) return;
+        followPhone = false;
+        pendingPhoneOrientation = null;
+        notifyAndroid("onPhoneFollowChanged", "false");
+    }
+
+    function applyPhoneOrientation() {
+        const value = pendingPhoneOrientation;
+        if (!followPhone || !value || !stel || userPointerActive) return false;
+        if (Date.now() - value.utcMs < 0 || Date.now() - value.utcMs > 1000) {
+            stopPhoneFollow();
+            return false;
+        }
+        // The upstream OBSERVED frame is north / east / up (frames.h).
+        // This updates the browsing camera only, never an optical-path observation.
+        stel.lookAt(stel.s2c(value.azimuthDeg * stel.D2R, value.altitudeDeg * stel.D2R), 0);
+        return true;
     }
 
     function applyOnlineSurveyEnabled(enabled) {
@@ -608,6 +639,7 @@
     }
 
     function pauseFollowAfterUserPan() {
+        stopPhoneFollow();
         if (!followMount) return;
         followMount = false;
         notifyAndroid("onFollowMountChanged", "false");
@@ -921,6 +953,7 @@
             // until the pointer is up and the toggle callback has landed.
             if (userPointerActive && enabled) return;
             const requested = Boolean(enabled);
+            if (requested) stopPhoneFollow();
             followMount = false;
             followMount = requested && Boolean(usablePointingCoordinates());
             if (requested && !followMount) notifyAndroid("onFollowMountChanged", "false");
@@ -943,6 +976,23 @@
         setAtmosphereVisible: function (visible) {
             pendingAtmosphereVisible = Boolean(visible);
             applyAtmosphereVisibility(pendingAtmosphereVisible);
+        },
+        setLandscapeVisible: function (visible) {
+            pendingLandscapeVisible = Boolean(visible);
+            applyLandscapeVisibility();
+        },
+        setPhoneFollow: function (enabled) {
+            if (userPointerActive && enabled) return;
+            followPhone = Boolean(enabled);
+            pendingPhoneOrientation = null;
+            if (followPhone) stopInvalidPointingFollow();
+        },
+        setPhoneOrientation: function (azimuthDeg, altitudeDeg, utcMs) {
+            const azimuth = Number(azimuthDeg), altitude = Number(altitudeDeg), timestamp = Number(utcMs);
+            if (!isFinite(azimuth) || !isFinite(altitude) || altitude < -90 || altitude > 90 ||
+                !isFinite(timestamp)) return false;
+            pendingPhoneOrientation = {azimuthDeg: azimuth, altitudeDeg: altitude, utcMs: timestamp};
+            return applyPhoneOrientation();
         },
         setNightVision: function (enabled) {
             document.documentElement.classList.toggle("night-vision", Boolean(enabled));
@@ -1131,7 +1181,11 @@
     installFollowPauseOnPan();
     if (typeof window.setInterval === "function") {
         // Do not retain a valid-looking source if Android updates stop arriving.
-        window.setInterval(function () { if (followMount) usablePointingCoordinates(); }, 1000);
+        window.setInterval(function () {
+            if (followMount) usablePointingCoordinates();
+            if (followPhone && pendingPhoneOrientation && Date.now() - pendingPhoneOrientation.utcMs > 1000)
+                stopPhoneFollow();
+        }, 1000);
     }
     window.addEventListener("resize", syncCanvasSize);
     if (window.visualViewport) {
