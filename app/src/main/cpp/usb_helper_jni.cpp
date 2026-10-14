@@ -13,6 +13,7 @@
 #include <android/log.h>
 #include <link.h>
 #include <mutex>
+#include "zwo_676mm_compat.h"
 
 #define TAG "UsbHelperJni"
 // Factory serial from the already-loaded official SDK; ASI_ID is writable.
@@ -134,7 +135,7 @@ static int hooked_open(const char *pathname, int flags, ...) {
 
     LOGI("OPEN: %s flags=0x%x", pathname, flags);
 
-    /* Redirect /dev/bus/usb/BBB/DDD â†?registered fd */
+    /* Redirect /dev/bus/usb/BBB/DDD ->registered fd */
     if (strncmp(pathname, USBFS_PREFIX "/", USBFS_PREFIX_LEN + 1) == 0) {
         int fd = find_registered_fd(pathname);
         if (fd >= 0) return fd;
@@ -469,6 +470,66 @@ static int hook_plt(const char *lib_name, struct plt_hook_entry *entries, int co
     return ctx.hooked;
 }
 
+// Only the MM constructor is interposed. Rewriting 0x676D globally would also
+// redirect genuine 676MC devices, including when both models are attached.
+static zwo676::Constructor g_zwo676_original_constructor = nullptr;
+static std::mutex g_zwo676_install_lock;
+static bool g_zwo676_installed = false;
+
+static void hooked_zwo676mm_constructor(void* camera) {
+    if (zwo676::construct(camera, g_zwo676_original_constructor)) {
+        LOGI("[ZWO676MM] Corrected constructor USB PID 0x676D -> 0x676C");
+    } else {
+        LOGE("[ZWO676MM] Unexpected constructor PID; left unchanged");
+    }
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_indigo_mobileobservatory_camera_UsbHelper_nativeInstallZwo676MmCompatibility(
+        JNIEnv*, jobject) {
+#if defined(__aarch64__)
+    std::lock_guard<std::mutex> install(g_zwo676_install_lock);
+    if (g_zwo676_installed) return JNI_TRUE;
+    void* sdk = dlopen("libASICamera2.so", RTLD_NOW | RTLD_NOLOAD);
+    if (!sdk) return JNI_FALSE;
+    void* constructor = dlsym(sdk, zwo676::kConstructor);
+    Dl_info symbol_info = {};
+    struct SdkCheck { std::uintptr_t base; bool matched; } check = {};
+    if (constructor && dladdr(constructor, &symbol_info)) {
+        check.base = reinterpret_cast<std::uintptr_t>(symbol_info.dli_fbase);
+        dl_iterate_phdr([](dl_phdr_info* info, size_t, void* data) -> int {
+            auto* check = static_cast<SdkCheck*>(data);
+            if (info->dlpi_addr != check->base) return 0;
+            for (int i = 0; i < info->dlpi_phnum; ++i) {
+                const auto& ph = info->dlpi_phdr[i];
+                if (ph.p_type == PT_NOTE && zwo676::matchesBuildId(
+                        reinterpret_cast<const void*>(check->base + ph.p_vaddr),
+                        ph.p_filesz)) {
+                    check->matched = true;
+                }
+            }
+            return 1;
+        }, &check);
+    }
+    // Check SDK identity before reading code or accessing its private layout.
+    const bool supported = check.matched &&
+            reinterpret_cast<std::uintptr_t>(constructor) == check.base + zwo676::kConstructorOffset &&
+            zwo676::matchesConstructor(constructor);
+    if (supported) {
+        g_zwo676_original_constructor = reinterpret_cast<zwo676::Constructor>(constructor);
+        plt_hook_entry entry = {
+            zwo676::kConstructor, reinterpret_cast<void*>(hooked_zwo676mm_constructor), nullptr
+        };
+        g_zwo676_installed = hook_plt("libASICamera2.so", &entry, 1) == 1;
+    }
+    LOGI("[ZWO676MM] SDK supported=%d constructor fix installed=%d", supported, g_zwo676_installed);
+    dlclose(sdk);
+    return g_zwo676_installed ? JNI_TRUE : JNI_FALSE;
+#else
+    return JNI_FALSE;
+#endif
+}
+
 /* --- Helper functions --- */
 
 static void mkdirs(const char *path) {
@@ -519,7 +580,7 @@ Java_com_indigo_mobileobservatory_camera_UsbHelper_nativeRegisterUsbFd(
         g_usb_fds[slot].valid = 1;
     }
 
-    /* Create fake usbfs structure: fake_usb/BBB/DDD â†?/proc/self/fd/N */
+    /* Create fake usbfs structure: fake_usb/BBB/DDD ->/proc/self/fd/N */
     snprintf(g_fake_usb_dir, sizeof(g_fake_usb_dir), "%s/fake_usb", cacheDir);
     char busDir[512], devLink[512], fdTarget[64];
     snprintf(busDir, sizeof(busDir), "%s/%03d", g_fake_usb_dir, busNum);
@@ -531,9 +592,9 @@ Java_com_indigo_mobileobservatory_camera_UsbHelper_nativeRegisterUsbFd(
     symlink(fdTarget, devLink);
 
     /* Create fake sysfs structure for libusb's sysfs scanning:
-     * fake_sysfs/<bus>-<dev>/busnum  â†?"<busnum>\n"
-     * fake_sysfs/<bus>-<dev>/devnum  â†?"<devnum>\n"
-     * fake_sysfs/<bus>-<dev>/speed   â†?"480\n"  (High-speed USB)
+     * fake_sysfs/<bus>-<dev>/busnum  ->"<busnum>\n"
+     * fake_sysfs/<bus>-<dev>/devnum  ->"<devnum>\n"
+     * fake_sysfs/<bus>-<dev>/speed   ->"480\n"  (High-speed USB)
      */
     snprintf(g_fake_sysfs_dir, sizeof(g_fake_sysfs_dir), "%s/fake_sysfs", cacheDir);
     char devDir[512], filePath[512], content[32];

@@ -1057,6 +1057,12 @@ class DahengCameraManager(
             val pid = usbDevice.productId
             Log.i(TAG, "Opening ZWO: VID=0x${vid.toString(16)} PID=0x${pid.toString(16)} dev=${usbDevice.deviceName}")
 
+            if (!UsbHelper.prepareZwoModel(pid)) {
+                abandonReservation()
+                _connectionState.value = ConnectionState.Error("Failed to prepare ASI676MM support. See app log.")
+                return
+            }
+
             val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
             val connection = usbManager.openDevice(usbDevice)
             if (connection == null) {

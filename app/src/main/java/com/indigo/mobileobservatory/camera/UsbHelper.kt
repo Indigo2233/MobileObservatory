@@ -3,6 +3,7 @@ package com.indigo.mobileobservatory.camera
 import android.content.Context
 import android.hardware.usb.UsbDevice
 import android.util.Log
+import com.indigo.mobileobservatory.util.FileLogger
 import java.io.File
 
 object UsbHelper {
@@ -92,6 +93,20 @@ object UsbHelper {
         }
     }
 
+    /** The frozen SDK's 676MM constructor uses the 676MC PID; other models use their original path. */
+    fun prepareZwoModel(productId: Int): Boolean {
+        if (productId != 0x676C) return true
+        val ready = available && runCatching { nativeInstallZwo676MmCompatibility() }
+            .onFailure { FileLogger.e(TAG, "[ZWO676MM] Compatibility setup failed", it) }
+            .getOrDefault(false)
+        if (ready) {
+            FileLogger.i(TAG, "[ZWO676MM] Constructor PID correction ready: 0x676D -> 0x676C")
+        } else {
+            FileLogger.e(TAG, "[ZWO676MM] Constructor PID correction unavailable; SDK identity or hook check failed")
+        }
+        return ready
+    }
+
     fun clearUsbFds() {
         if (!available) return
         try {
@@ -117,6 +132,7 @@ object UsbHelper {
     }
 
     private external fun nativeZwoFactorySerial(cameraId: Int): String
+    private external fun nativeInstallZwo676MmCompatibility(): Boolean
     private external fun nativeUnregisterUsbFd(busNum: Int, devAddr: Int)
     private external fun nativeHasUsbFd(busNum: Int, devAddr: Int): Boolean
     private external fun nativeRegisterUsbFd(cacheDir: String, busNum: Int, devAddr: Int, fd: Int): Boolean
