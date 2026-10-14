@@ -44,7 +44,9 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -1176,8 +1178,11 @@ fun StarMapScreen(
     }
 
     val latestOnBlankTap by rememberUpdatedState {
-        if (interaction.hasInformationLayer) interaction = interaction.dismissTopLayer()
-        overlaysVisible = true
+        // Explicit blank taps toggle the whole HUD, even when pinned. Keep the
+        // observing target but do not resurrect its dismissed card on wakeup.
+        interaction = interaction.dismissTopLayer()
+        overlaysVisible = !overlaysVisible
+        hudActivityRevision++
     }
 
     val bridge = remember(context, webViewSession) {
@@ -1657,10 +1662,25 @@ fun StarMapScreen(
                         Text(stringResource(R.string.wf_star_map_preparation))
                     }
                 }
-                Card { TextButton(onClick = onObserverSiteSettings) {
-                    Text(if (resolvedObserverSite == null && landscapeVisible) stringResource(R.string.sky_simulated_site_missing)
-                        else observerSiteLabel ?: stringResource(if (resolvedObserverSite == null) R.string.wf_observer_missing else R.string.wf_observer_site))
-                } }
+                Card(colors = if (resolvedObserverSite == null) {
+                    CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
+                } else CardDefaults.cardColors()) {
+                    TextButton(
+                        onClick = onObserverSiteSettings,
+                        modifier = Modifier.testTag("star-map-location"),
+                        colors = ButtonDefaults.textButtonColors(
+                            contentColor = if (resolvedObserverSite == null) MaterialTheme.colorScheme.onErrorContainer
+                                else MaterialTheme.colorScheme.primary
+                        )
+                    ) {
+                        Text(
+                            if (resolvedObserverSite == null) stringResource(R.string.sky_set_location)
+                                else observerSiteLabel ?: stringResource(R.string.wf_observer_site),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
                 if (showFovOverlay && activeComputation?.hasOverlay == true || followMount || followInterrupted) {
                     Card {
                         Column {
@@ -1894,7 +1914,8 @@ fun StarMapScreen(
                 onOnlineDssChange = ::setOnlineDssEnabled,
                 onOverlaysLockedChange = {
                     overlaysLocked = it
-                    if (it) overlaysVisible = true
+                    overlaysVisible = true
+                    hudActivityRevision++
                 },
                 onRefreshHipsCache = ::refreshHipsCacheLabel,
                 onClearHipsCache = {

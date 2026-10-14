@@ -83,10 +83,9 @@ class ObservatoryWorkflowInstrumentedTest {
         edit.commit()
     }
 
-    @Test fun fourWorkspacesReplaceMountAndToolsRootsAndCaptureHasNoUp() {
-        listOf("STAR_MAP", "CAPTURE", "MEDIA", "EQUIPMENT").forEach { workspace(it).assertIsDisplayed() }
+    @Test fun taskWorkspacesAndRestoredToolsHubKeepCaptureAsRootWithoutUp() {
+        listOf("STAR_MAP", "CAPTURE", "MEDIA", "EQUIPMENT", "TOOLS").forEach { workspace(it).assertIsDisplayed() }
         compose.onNodeWithContentDescription(app.getString(R.string.tab_mount)).assertDoesNotExist()
-        compose.onNodeWithContentDescription(app.getString(R.string.cockpit_tab_tools)).assertDoesNotExist()
         compose.onNodeWithContentDescription(app.getString(R.string.back)).assertDoesNotExist()
 
         selectWorkspace("MEDIA")
@@ -406,6 +405,73 @@ class ObservatoryWorkflowInstrumentedTest {
     }
 
     private fun workspace(key: String) = compose.onNodeWithTag("workspace-$key")
+
+    @Test fun offlineSolveAndDatabaseRemainReachableFromMediaAndSkyWithTheirOwnBackPath() {
+        selectWorkspace("MEDIA")
+        compose.onNodeWithTag("media-plate-solve").performScrollTo().performClick()
+        assertGradedDatabaseChoices()
+        compose.onNodeWithTag("solve-database-D50").performClick().assertIsSelected()
+        // Selecting a tier is local; these navigation tests do not download or delete data.
+        systemBack()
+        workspace("MEDIA").assertIsSelected()
+        compose.onNodeWithTag("media-import").assertIsDisplayed()
+
+        selectWorkspace("STAR_MAP")
+        compose.onNodeWithText(app.getString(if (BuildConfig.STELLARIUM_ENABLED)
+            R.string.wf_star_map_preparation else R.string.wf_preparation)).performClick()
+        compose.onNodeWithText(app.getString(R.string.solve_and_offline_database)).performClick()
+        assertGradedDatabaseChoices()
+        systemBack()
+        compose.onNodeWithText(app.getString(R.string.solve_and_offline_database)).assertIsDisplayed()
+        systemBack()
+        workspace("STAR_MAP").assertIsSelected()
+    }
+
+    @Test fun captureOverflowKeepsOfflineSolvingAvailableWithoutCamera() {
+        compose.onNodeWithContentDescription(app.getString(R.string.camera_preview_tools)).performClick()
+        compose.onNodeWithText(app.getString(R.string.plate_solve)).performClick()
+        assertGradedDatabaseChoices()
+        systemBack()
+        workspace("CAPTURE").assertIsSelected()
+        compose.onNodeWithContentDescription(app.getString(R.string.camera_preview_tools)).assertIsDisplayed()
+    }
+
+    private fun assertGradedDatabaseChoices() {
+        compose.onNodeWithText(app.getString(R.string.astap_database)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("solve-database-D20").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("solve-database-D50").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun restoredToolsHubOpensSharedTasksAndReturnsToTools() {
+        selectWorkspace("TOOLS")
+        compose.onNodeWithContentDescription(app.getString(R.string.back)).assertDoesNotExist()
+        captureWorkflowEvidence("tools-hub")
+        compose.onNodeWithTag("tool-plate_solve").performScrollTo().performClick()
+        assertGradedDatabaseChoices()
+        systemBack()
+        workspace("TOOLS").assertIsSelected()
+        compose.onNodeWithTag("tool-post_stack").performScrollTo().performClick()
+        compose.onNodeWithTag("stack-target-DEEP_SKY").performClick().assertIsSelected()
+        compose.runOnIdle { org.junit.Assert.assertEquals(StackTarget.DEEP_SKY, vm.stacking.offlineTarget.value) }
+        systemBack()
+        compose.onNodeWithTag("tool-live_stack").performScrollTo().performClick()
+        compose.onNodeWithTag("stack-target-PLANETARY").performClick().assertIsSelected()
+        systemBack()
+        compose.onNodeWithTag("tool-polar").performScrollTo().performClick()
+        compose.onNodeWithText(app.getString(R.string.three_point_polar_alignment)).assertIsDisplayed()
+        systemBack()
+        compose.onNodeWithTag("tool-player").performScrollTo().performClick()
+        systemBack()
+        workspace("TOOLS").assertIsSelected()
+        compose.onNodeWithTag("tool-guide").performScrollTo().assertIsDisplayed()
+        if (!com.indigo.mobileobservatory.sequence.SequenceFeature.ENABLED) {
+            compose.onNodeWithTag("tool-sequence").assertDoesNotExist()
+        }
+        restoration.emulateSavedInstanceStateRestore()
+        workspace("TOOLS").assertIsSelected()
+        systemBack()
+        workspace("CAPTURE").assertIsSelected()
+    }
 
     private fun captureWorkflowEvidence(name: String) {
         val bitmap = compose.onRoot().captureToImage().asAndroidBitmap()

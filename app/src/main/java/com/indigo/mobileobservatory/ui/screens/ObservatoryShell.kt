@@ -204,7 +204,8 @@ fun CameraScreen(viewModel: CameraViewModel, redNightMode: Boolean = false,
             ObservatoryNavEntry("STAR_MAP", stringResource(R.string.star_map), Icons.Default.Star),
             ObservatoryNavEntry("CAPTURE", stringResource(R.string.wf_capture), Icons.Default.CameraAlt),
             ObservatoryNavEntry("MEDIA", stringResource(R.string.wf_media), Icons.Default.PhotoLibrary),
-            ObservatoryNavEntry("EQUIPMENT", stringResource(R.string.wf_equipment), Icons.Default.Build))
+            ObservatoryNavEntry("EQUIPMENT", stringResource(R.string.wf_equipment), Icons.Default.Build),
+            ObservatoryNavEntry("TOOLS", stringResource(R.string.cockpit_tab_tools), Icons.Default.Widgets))
         val selectKey: (String) -> Unit = { select(ObservatoryWorkspace.valueOf(it)) }
         Row(Modifier.fillMaxSize()) {
             if (rail) ObservatoryNavRail(entries, navigation.workspace.name, selectKey, showLabels = railLabels)
@@ -411,9 +412,23 @@ private fun ObservatoryContent(
                 onStackFile = { file -> vm.openPlanetaryStack(file); open(ObservatoryDestination.STACK) },
                 initialCategory = MediaCategory.RECENT, excludeFile = vm.getActiveRecordingFile(),
                 isWorkspace = true, onCamera = { select(ObservatoryWorkspace.CAPTURE) },
-                onPostStack = { openStack(StackMode.PLANETARY) }, onBack = back)
+                onPostStack = { openStack(StackMode.PLANETARY) },
+                onPlateSolve = { open(ObservatoryDestination.PLATE_SOLVE) }, onBack = back)
             ObservatoryWorkspace.EQUIPMENT -> AccessoriesScreen(vm,
                 onOpenCamera = { select(ObservatoryWorkspace.CAPTURE) }, onOpenMount = {}, onBack = back)
+            ObservatoryWorkspace.TOOLS -> BoxWithConstraints(Modifier.fillMaxSize()) {
+                ToolsScreen(
+                    onOpenPlateSolve = { open(ObservatoryDestination.PLATE_SOLVE) },
+                    onOpenPolarAlignment = { open(ObservatoryDestination.POLAR_ALIGNMENT) },
+                    onOpenGuide = { open(ObservatoryDestination.GUIDE) },
+                    onOpenPlayer = { onPlayer(null, MediaCategory.RECENT) },
+                    showSequenceEntry = SequenceFeature.ENABLED,
+                    onOpenSequence = { open(ObservatoryDestination.SEQUENCE) },
+                    onOpenStacking = { openStack(StackMode.PLANETARY) },
+                    onOpenLiveStacking = { openStack(StackMode.LIVE) },
+                    wideLayout = maxWidth >= 600.dp
+                )
+            }
         }
     }
 }
@@ -436,6 +451,9 @@ private fun ObservingPreparationScreen(open: (ObservatoryDestination) -> Unit, o
     Scaffold(topBar = { TopAppBar(title = { Text(stringResource(R.string.wf_preparation)) },
         navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, stringResource(R.string.back)) } }) }) { padding ->
         Column(Modifier.padding(padding).padding(16.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            OutlinedButton(onClick = { open(ObservatoryDestination.PLATE_SOLVE) }, modifier = Modifier.fillMaxWidth()) {
+                Text(stringResource(R.string.solve_and_offline_database))
+            }
             OutlinedButton(onClick = { open(ObservatoryDestination.POLAR_ALIGNMENT) }, modifier = Modifier.fillMaxWidth()) {
                 Text(stringResource(R.string.polar_alignment))
             }

@@ -167,14 +167,6 @@ fun CameraPreviewTools(
                         }
                     )
                     DropdownMenuItem(
-                        text = { Text(stringResource(R.string.plate_solve)) },
-                        onClick = {
-                            menuOpen = false
-                            onPlateSolve()
-                        },
-                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) }
-                    )
-                    DropdownMenuItem(
                         text = { Text(stringResource(R.string.video_library)) },
                         onClick = {
                             menuOpen = false
@@ -188,6 +180,12 @@ fun CameraPreviewTools(
                         leadingIcon = { Icon(Icons.Default.Layers, contentDescription = null) }
                     )
                 }
+                // Offline image solving and database preparation need no live camera.
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.plate_solve)) },
+                    onClick = { menuOpen = false; onPlateSolve() },
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) }
+                )
             }
         }
     }

@@ -29,6 +29,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -38,9 +39,8 @@ import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.ui.theme.ObservatoryTheme
 
 /**
- * Tool bench: the low-frequency entries (plate solve, polar alignment, guiding,
- * playback, sequence) live here instead of competing with the four imaging
- * destinations for space in the primary navigation.
+ * User-requested tools hub. These are shortcuts into existing tasks, with the
+ * same navigation owner and ViewModels as the contextual workspace entries.
  */
 @Composable
 fun ToolsScreen(
@@ -74,15 +74,15 @@ fun ToolsScreen(
         )
 
         val entries = buildList {
-            add(ToolEntry("eaa_stack", stringResource(R.string.stack_eaa_title),
-                stringResource(R.string.stack_eaa_tool_hint), null, Icons.Default.Layers, onOpenLiveStacking))
-            add(ToolEntry("planetary_stack", stringResource(R.string.stack_planetary),
-                stringResource(R.string.stack_hint), null, Icons.Default.Layers, onOpenStacking))
+            add(ToolEntry("live_stack", stringResource(R.string.stack_live),
+                stringResource(R.string.tools_live_stack_hint), null, Icons.Default.Layers, onOpenLiveStacking))
+            add(ToolEntry("post_stack", stringResource(R.string.stack_offline_title),
+                stringResource(R.string.tools_post_stack_hint), null, Icons.Default.Layers, onOpenStacking))
             add(
                 ToolEntry(
                     key = "plate_solve",
                     title = stringResource(R.string.plate_solve),
-                    hint = stringResource(R.string.cockpit_tools_plate_solve_hint),
+                    hint = stringResource(R.string.tools_plate_database_hint),
                     status = plateSolveStatus,
                     icon = Icons.Default.Search,
                     onClick = onOpenPlateSolve
@@ -111,7 +111,7 @@ fun ToolsScreen(
             add(
                 ToolEntry(
                     key = "player",
-                    title = stringResource(R.string.video_library),
+                    title = stringResource(R.string.wf_media),
                     hint = stringResource(R.string.cockpit_tools_player_hint),
                     status = playerStatus,
                     icon = Icons.Default.Movie,
@@ -170,6 +170,7 @@ private fun ToolCard(
         modifier = modifier
             .fillMaxWidth()
             .heightIn(min = 84.dp)
+            .testTag("tool-${entry.key}")
             .clickable { entry.onClick() }
             .semantics { contentDescription = entry.title }
     ) {

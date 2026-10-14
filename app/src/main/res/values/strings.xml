@@ -360,7 +360,6 @@
     <string name="star_map_search_empty">No matching objects</string>
     <string name="star_map_use_center">Use map center</string>
     <string name="star_map_custom_target">Custom target</string>
-    <string name="lock_star_map_overlays">Lock overlays</string>
     <string name="show_star_map_controls">Show star map controls</string>
     <string name="expand_target_details">Expand or collapse target details</string>
     <string name="select_celestial_target">Tap a celestial object to select a target</string>

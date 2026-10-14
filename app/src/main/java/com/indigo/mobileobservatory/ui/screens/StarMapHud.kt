@@ -21,6 +21,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.GridOn
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
@@ -32,6 +34,8 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconToggleButton
+import androidx.compose.material3.PlainTooltipBox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.foundation.text.KeyboardOptions
@@ -49,6 +53,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -68,9 +73,9 @@ internal fun Modifier.consumeStarMapPanelTouches(): Modifier = pointerInput(Unit
 }
 
 /**
- * Stellarium Plus–style bottom-left chrome: two round buttons. One opens the
+ * Bottom-left chrome: two panel buttons and a compact HUD pin. One opens the
  * observing tools (mount pad, follow, FOV); the other opens sky drawing
- * (grids, constellations, labels, night mode). Both hide with the rest of the HUD.
+ * (grids, constellations, labels). All hide with the rest of the HUD.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -424,11 +429,6 @@ internal fun StarMapCornerControls(
                         checked = onlineDssEnabled,
                         onCheckedChange = onOnlineDssChange
                     )
-                    StarMapFlagSwitch(
-                        label = stringResource(R.string.lock_star_map_overlays),
-                        checked = overlaysLocked,
-                        onCheckedChange = onOverlaysLockedChange
-                    )
                     Text(
                         stringResource(R.string.hips_cache_size, hipsCacheSizeLabel),
                         style = MaterialTheme.typography.bodySmall
@@ -466,6 +466,33 @@ internal fun StarMapCornerControls(
                 contentDescription = stringResource(R.string.star_map_sky_panel),
                 onClick = { toggle(StarMapCornerPanel.SKY) }
             )
+            val lockAction = stringResource(
+                if (overlaysLocked) R.string.sky_controls_unpin else R.string.sky_controls_pin
+            )
+            val lockState = stringResource(
+                if (overlaysLocked) R.string.sky_controls_pinned else R.string.sky_controls_auto_hide
+            )
+            PlainTooltipBox(tooltip = { Text(lockAction) }) {
+                Card(shape = CircleShape) {
+                    IconToggleButton(
+                        checked = overlaysLocked,
+                        onCheckedChange = onOverlaysLockedChange,
+                        modifier = Modifier.size(48.dp).tooltipAnchor().testTag("star-map-controls-lock")
+                            .semantics {
+                                contentDescription = lockAction
+                                stateDescription = lockState
+                            }
+                    ) {
+                        Icon(
+                            if (overlaysLocked) Icons.Default.Lock else Icons.Default.LockOpen,
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp),
+                            tint = if (overlaysLocked) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+            }
         }
     }
 }

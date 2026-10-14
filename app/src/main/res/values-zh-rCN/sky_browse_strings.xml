@@ -1,7 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="sky_controls_pin">固定显示控件</string>
+    <string name="sky_controls_unpin">恢复自动隐藏</string>
+    <string name="sky_controls_pinned">控件已锁定</string>
+    <string name="sky_controls_auto_hide">自动隐藏已开启</string>
     <string name="sky_simulated_landscape">模拟地景</string>
-    <string name="sky_simulated_site_missing">模拟地景 · 地点未设置</string>
+    <string name="sky_set_location">设置地点</string>
     <string name="sky_phone_follow">罗盘/陀螺仪跟随</string>
     <string name="sky_phone_follow_hint">手机浏览方向为估计值，不能验证镜筒指向。拖动星图可暂停。</string>
     <string name="sky_phone_follow_magnetic">地点未设置，暂按磁北估计浏览方向；不能验证镜筒指向。拖动可暂停。</string>

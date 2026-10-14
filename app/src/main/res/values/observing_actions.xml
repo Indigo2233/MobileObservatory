@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="solve_and_offline_database">Plate solving &amp; offline database</string>
+    <string name="tools_live_stack_hint">Planetary / deep sky · live frames</string>
+    <string name="tools_post_stack_hint">Planetary / deep sky · SER / PSER</string>
+    <string name="tools_plate_database_hint">Solve images · D20 / D50 offline catalogs</string>
+</resources>

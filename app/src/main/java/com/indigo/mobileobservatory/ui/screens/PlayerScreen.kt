@@ -165,6 +165,7 @@ fun PlayerScreen(
     onCamera: (() -> Unit)? = null,
     onImport: (() -> Unit)? = null,
     onPostStack: (() -> Unit)? = null,
+    onPlateSolve: (() -> Unit)? = null,
     /** External file viewing has a platform Back boundary and a separate app-owned Up destination. */
     onNavigateUp: (() -> Unit)? = null
 ) {
@@ -251,7 +252,7 @@ fun PlayerScreen(
             onCategoryChange = { cat -> selectedCategory = cat },
             isWorkspace = isWorkspace, onCamera = onCamera,
             onImport = onImport ?: if (isWorkspace) ({ importPicker.launch(arrayOf("*/*")) }) else null,
-            onPostStack = onPostStack, importState = if (isWorkspace) importState else null,
+            onPostStack = onPostStack, onPlateSolve = onPlateSolve, importState = if (isWorkspace) importState else null,
             onCancelImport = importer::cancel, refreshVersion = refreshTrigger
         )
     } else {
@@ -314,6 +315,7 @@ private fun FilePickerView(
     onCamera: (() -> Unit)? = null,
     onImport: (() -> Unit)? = null,
     onPostStack: (() -> Unit)? = null,
+    onPlateSolve: (() -> Unit)? = null,
     importState: com.indigo.mobileobservatory.media.LibraryImportState? = null,
     onCancelImport: () -> Unit = {},
     refreshVersion: Int = 0
@@ -405,6 +407,8 @@ private fun FilePickerView(
                     modifier = Modifier.testTag("media-import")) { Text(stringResource(R.string.wf_import_video)) }
                 if (onPostStack != null) OutlinedButton(onClick = onPostStack,
                     modifier = Modifier.testTag("media-post-stack")) { Text(stringResource(R.string.stack_offline_title)) }
+                if (onPlateSolve != null) TextButton(onClick = onPlateSolve,
+                    modifier = Modifier.testTag("media-plate-solve")) { Text(stringResource(R.string.plate_solve)) }
             }
             if (importState?.busy == true) Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp),
                 verticalAlignment = Alignment.CenterVertically) {

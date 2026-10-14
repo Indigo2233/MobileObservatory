@@ -1,7 +1,7 @@
 package com.indigo.mobileobservatory.ui.screens
 
 /** Only workspaces are roots. Switching them never builds a history of tabs. */
-enum class ObservatoryWorkspace { STAR_MAP, CAPTURE, MEDIA, EQUIPMENT }
+enum class ObservatoryWorkspace { STAR_MAP, CAPTURE, MEDIA, EQUIPMENT, TOOLS }
 
 enum class ObservatoryDestination {
     SETTINGS, PREPARATION, POINTING_SETUP, AUXILIARY_CALIBRATION, TARGETS, PUSH_TO, PUSH_TO_AUXILIARY, PHONE_DEBUG,

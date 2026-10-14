@@ -7,14 +7,18 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.click
+import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onAllNodesWithText
@@ -34,6 +38,7 @@ import com.indigo.mobileobservatory.mount.MountMotionState
 import com.indigo.mobileobservatory.mount.MountMotionType
 import com.indigo.mobileobservatory.ui.screens.StarMapScreen
 import com.indigo.mobileobservatory.ui.screens.StarMapTarget
+import com.indigo.mobileobservatory.ui.theme.MobileObservatoryTheme
 import androidx.test.platform.app.InstrumentationRegistry
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.ui.screens.consumeStarMapPanelTouches
@@ -187,6 +192,95 @@ class StarMapPanelInteractionTest {
         compose.onNodeWithTag("star-map-target-card").assertDoesNotExist()
     }
 
+    @Test fun blankTapImmediatelyHidesAllControlsAndDismissesPanelWithoutLosingTarget() {
+        var selection: StarMapTarget? = null
+        compose.setContent {
+            MaterialTheme {
+                StarMapScreen(
+                    mountCoordinates = null, mountSite = null,
+                    mountConnected = false, mountBusy = false, onGoto = {}, onBack = {},
+                    onTargetSelected = { selection = it }
+                )
+            }
+        }
+        waitForEngine()
+        // Select an arbitrary point in the default empty horizon view. A catalog
+        // position can acquire a star under the tap as asynchronous tiles arrive;
+        // tapping that star would correctly select it instead of being a blank tap.
+        compose.onNodeWithText(context.getString(R.string.star_map_use_center)).performClick()
+        compose.waitUntil(10_000) { selection != null }
+        val originalSelection = compose.runOnIdle { requireNotNull(selection) }
+        compose.onNodeWithTag("star-map-target-card").assertIsDisplayed()
+        tapBlankAndWaitForControls(visible = false)
+        compose.onNodeWithTag("star-map-target-card").assertDoesNotExist()
+        compose.onNodeWithContentDescription(context.getString(R.string.star_map_search)).assertDoesNotExist()
+        compose.onNodeWithContentDescription(context.getString(R.string.star_map_observing_panel)).assertDoesNotExist()
+        compose.onNodeWithTag("star-map-controls-lock").assertDoesNotExist()
+        tapBlankAndWaitForControls(visible = true)
+        compose.onNodeWithTag("star-map-target-card").assertDoesNotExist()
+        compose.onNodeWithText(context.getString(R.string.wf_star_map_current_target)).performClick()
+        compose.onNodeWithTag("star-map-target-card").assertIsDisplayed()
+
+        compose.onNodeWithContentDescription(context.getString(R.string.star_map_sky_panel)).performClick()
+        compose.onNodeWithTag("sky-landscape").performScrollTo().assertIsDisplayed()
+        tapBlankAndWaitForControls(visible = false)
+        compose.onNodeWithTag("sky-landscape").assertDoesNotExist()
+        tapBlankAndWaitForControls(visible = true)
+        compose.onNodeWithTag("sky-landscape").assertDoesNotExist()
+        compose.onNodeWithTag("star-map-target-card").assertDoesNotExist()
+        // No remaining layer: this third tap must hide now, not restart a four-second timer.
+        tapBlankAndWaitForControls(visible = false)
+        compose.runOnIdle { assertEquals(originalSelection, selection) }
+    }
+
+    @Test fun quickLockPreventsTimeoutButAllowsBlankTapAndUnlockRestartsFullTimer() {
+        compose.setContent {
+            MobileObservatoryTheme {
+                Surface {
+                StarMapScreen(mountCoordinates = null, mountSite = null, mountConnected = false,
+                    mountBusy = false, onGoto = {}, onBack = {})
+                }
+            }
+        }
+        waitForEngine()
+        compose.onNodeWithTag("star-map-controls-lock").assertIsOff().performClick()
+        compose.onNodeWithContentDescription(context.getString(R.string.sky_controls_unpin)).assertIsOn()
+        compose.mainClock.advanceTimeBy(10_000)
+        compose.onNodeWithText(context.getString(R.string.target_library_title)).assertIsDisplayed()
+        compose.onNodeWithTag("star-map-location").assertTextEquals(context.getString(R.string.sky_set_location))
+        val screenshot = java.io.File(context.getExternalFilesDir(null), "sky-controls-evidence/pinned.png")
+        screenshot.parentFile?.mkdirs()
+        screenshot.outputStream().use { output ->
+            compose.onRoot().captureToImage().asAndroidBitmap().compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output)
+        }
+        tapBlankAndWaitForControls(visible = false)
+        tapBlankAndWaitForControls(visible = true)
+        compose.onNodeWithTag("star-map-controls-lock").assertIsOn()
+        compose.mainClock.advanceTimeBy(10_000)
+        compose.onNodeWithTag("star-map-controls-lock").assertIsDisplayed().performClick()
+        compose.onNodeWithContentDescription(context.getString(R.string.sky_controls_pin)).assertIsOff()
+        compose.mainClock.advanceTimeBy(2_000)
+        compose.onNodeWithTag("star-map-controls-lock").assertIsDisplayed()
+        compose.mainClock.advanceTimeBy(3_000)
+        compose.onNodeWithTag("star-map-controls-lock").assertDoesNotExist()
+    }
+
+    @Test fun quickLockSurvivesSavedStateRestoration() {
+        val restoration = StateRestorationTester(compose)
+        restoration.setContent {
+            MaterialTheme {
+                StarMapScreen(mountCoordinates = null, mountSite = null, mountConnected = false,
+                    mountBusy = false, onGoto = {}, onBack = {})
+            }
+        }
+        waitForEngine()
+        compose.onNodeWithTag("star-map-controls-lock").performClick()
+        restoration.emulateSavedInstanceStateRestore()
+        waitForEngine()
+        compose.mainClock.advanceTimeBy(6_000)
+        compose.onNodeWithTag("star-map-controls-lock").assertIsDisplayed().assertIsOn()
+    }
+
     @Test fun pressAcrossIdleDeadlineCancelsOldTimerAndReleaseGetsACompleteNewInterval() {
         compose.setContent {
             MaterialTheme {
@@ -272,5 +366,21 @@ class StarMapPanelInteractionTest {
             compose.onAllNodesWithText(readyControl).fetchSemanticsNodes().isNotEmpty()
         }
         compose.mainClock.advanceTimeBy(500)
+    }
+
+    private fun tapBlankAndWaitForControls(visible: Boolean) {
+        val before = compose.mainClock.currentTime
+        // Stay to the right of the expanded left panel and below the search tools.
+        compose.onNodeWithTag("star-map-canvas").performTouchInput { click(Offset(width * .95f, height * .4f)) }
+        // Wait for the actual WebView/JS/Android bridge, without advancing enough
+        // virtual time for the idle timeout to make an immediate-hide test pass.
+        compose.waitUntil(10_000) {
+            compose.mainClock.advanceTimeBy(16)
+            val shown = compose.onAllNodesWithText(context.getString(R.string.target_library_title))
+                .fetchSemanticsNodes().isNotEmpty()
+            shown == visible
+        }
+        compose.mainClock.advanceTimeBy(300)
+        assertTrue("Blank tap must act before the idle timeout", compose.mainClock.currentTime - before < 2_000)
     }
 }
