@@ -16,6 +16,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -357,9 +358,11 @@ fun StarMapFovSheet(
             }
 
             LiveFovSummary(computation.takeIf { telescopeDraftValid && endpointDraftValid })
-            TextButton(onClick = onConfirmConfiguration, enabled = computation?.hasOverlay == true && telescopeDraftValid && endpointDraftValid && !configurationConfirmed) {
-                Text(stringResource(if (configurationConfirmed) R.string.wf_optics_confirmed else R.string.wf_optics_use_setup))
-            }
+            val canConfirm = computation?.hasOverlay == true && telescopeDraftValid && endpointDraftValid && !configurationConfirmed
+            val confirmLabel = stringResource(if (configurationConfirmed) R.string.wf_optics_confirmed else R.string.wf_optics_use_setup)
+            if (!showFramingControls) Button(onClick = onConfirmConfiguration, enabled = canConfirm,
+                modifier = Modifier.fillMaxWidth()) { Text(confirmLabel) }
+            else TextButton(onClick = onConfirmConfiguration, enabled = canConfirm) { Text(confirmLabel) }
 
             if (showOverlaySwitch) Row(
                 verticalAlignment = Alignment.CenterVertically,

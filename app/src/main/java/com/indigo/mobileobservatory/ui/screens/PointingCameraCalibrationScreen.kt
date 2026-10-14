@@ -5,6 +5,7 @@ import android.os.SystemClock
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -39,6 +40,7 @@ fun CalibrationWizardScreen(viewModel: CameraViewModel, onBack: () -> Unit,
     onPlateSolve: () -> Unit = {}, onDeviceControl: (String) -> Unit = {}, onGuide: () -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val scroll = rememberScrollState()
     val repository = viewModel.pointingRepository
     val task: PointingCalibrationTask = androidx.lifecycle.viewmodel.compose.viewModel(key = "pointing-camera-calibration")
     val draft by task.draft.collectAsStateWithPageLifecycle()
@@ -119,11 +121,16 @@ fun CalibrationWizardScreen(viewModel: CameraViewModel, onBack: () -> Unit,
     val currentSourceId by rememberUpdatedState(if (phone) lensId else auxId)
     val currentMainId by rememberUpdatedState(mainId)
     val paths = listOf(sourcePath, "primary")
-    val sourceReady = if (phone) cameraPermission && lens != null else auxConnection is ConnectionState.Connected &&
-        auxReady && !guiding && !guideCalibrating && !settingBusy && exposureUs in 500_000f..5_000_000f && secondaryReady
     val centeringReady = centeringArcmin.toDoubleOrNull()?.let { it.isFinite() && it in .1..20.0 } == true
-    val ready = site != null && opticsReady && sourceReady &&
-        (if (mainCamera) mainConnection is ConnectionState.Connected && databaseReady else centeringReady) && (phone || databaseReady)
+    val readiness = PointingCalibrationReadiness(source = selectedSource, mainCamera = mainCamera,
+        mainOpticsReady = opticsReady, auxiliaryOpticsReady = secondaryReady, siteReady = site != null,
+        cameraPermission = cameraPermission, phoneLensReady = lens != null,
+        auxiliaryConnected = auxConnection is ConnectionState.Connected, auxiliaryCaptureReady = auxReady,
+        guiding = guiding || guideCalibrating, auxiliarySettingsBusy = settingBusy,
+        auxiliaryExposureReady = exposureUs in 500_000f..5_000_000f,
+        mainConnected = mainConnection is ConnectionState.Connected, databaseReady = databaseReady,
+        centeringReady = centeringReady, installation = installation, locked = locked)
+    val ready = readiness.canAcquire
     val currentReady by rememberUpdatedState(ready)
     val automaticReady = ready && setup.canCalibrate && mainCamera && capabilities.goto && !mountBusy
     val startDirection = coordinates?.let {
@@ -265,17 +272,40 @@ fun CalibrationWizardScreen(viewModel: CameraViewModel, onBack: () -> Unit,
             finally { planning = false }
         }
     }
+    fun resolve(issue: CalibrationBlocker) {
+        when (issue) {
+            CalibrationBlocker.UNFIXED, CalibrationBlocker.UNLOCKED -> scope.launch { scroll.animateScrollTo(0) }
+            CalibrationBlocker.SITE -> showSite = true
+            CalibrationBlocker.PHONE_PERMISSION -> permission.launch(arrayOf(Manifest.permission.CAMERA))
+            CalibrationBlocker.PHONE_LENS -> showSource = true
+            CalibrationBlocker.MAIN_OPTICS -> opticsTrain = OpticsTrainId.PRIMARY
+            CalibrationBlocker.AUXILIARY_OPTICS -> opticsTrain = OpticsTrainId.SECONDARY
+            CalibrationBlocker.MAIN_CAMERA -> onDeviceControl("camera")
+            CalibrationBlocker.AUXILIARY_CAMERA -> { viewModel.requestGuideConnect(); showDevices = true }
+            CalibrationBlocker.DATABASE -> onPlateSolve()
+            CalibrationBlocker.GUIDING -> onGuide()
+            CalibrationBlocker.AUXILIARY_SETTINGS -> Unit
+            CalibrationBlocker.AUXILIARY_FORMAT, CalibrationBlocker.AUXILIARY_EXPOSURE, CalibrationBlocker.CENTERING -> {
+                step = CalibrationStep.SETUP; options = true
+                scope.launch { withFrameNanos { }; scroll.animateScrollTo(scroll.maxValue) }
+            }
+        }
+    }
     // UI is split by task step; acquisition parameters and coordinate provenance stay collapsed.
     Scaffold(topBar = { TopAppBar(title = { Text(stringResource(R.string.wf_pointing_setup)) }, navigationIcon = {
         IconButton(onClick = ::back) { Icon(Icons.Default.ArrowBack, stringResource(R.string.back)) }
     }) }) { padding ->
-        Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        Column(Modifier.padding(padding).fillMaxSize().verticalScroll(scroll).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)) {
             MountMotionStopBanner(motion, viewModel::stopMountMotion)
             when {
                 step == CalibrationStep.SETUP -> {
                     Text(stringResource(R.string.wfc_source), style = MaterialTheme.typography.titleSmall)
-                    OutlinedButton(onClick = { showSource = true }, modifier = Modifier.fillMaxWidth().testTag("pointing-source")) { Text(sourceName) }
+                    val sourceBlocked = readiness.issues.any { it in setOf(CalibrationBlocker.PHONE_PERMISSION,
+                        CalibrationBlocker.PHONE_LENS, CalibrationBlocker.AUXILIARY_CAMERA) }
+                    OutlinedButton(onClick = { showSource = true }, modifier = Modifier.fillMaxWidth().testTag("pointing-source"),
+                        border = BorderStroke(1.dp, if (sourceBlocked) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outline),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = if (sourceBlocked) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)) { Text(sourceName) }
                     Text(stringResource(R.string.wfc_reference), style = MaterialTheme.typography.titleSmall)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilterChip(!mainCamera, { mainCamera = false }, label = { Text(stringResource(R.string.wfp_eyepiece)) })
@@ -285,16 +315,17 @@ fun CalibrationWizardScreen(viewModel: CameraViewModel, onBack: () -> Unit,
                     if (installation == PointingInstallation.UNFIXED) Text(stringResource(R.string.wfc_unfixed_hint), color = MaterialTheme.colorScheme.error)
                     else {
                         Text(stringResource(R.string.wfc_offset_ok), style = MaterialTheme.typography.bodySmall)
-                        Row { Checkbox(locked, { locked = it }, modifier = Modifier.testTag("pointing-locked")); Text(stringResource(R.string.wfc_locked)) }
+                        Row { Checkbox(locked, { locked = it }, modifier = Modifier.testTag("pointing-locked"),
+                            colors = CheckboxDefaults.colors(uncheckedColor = MaterialTheme.colorScheme.error))
+                            Text(stringResource(R.string.wfc_locked), color = if (locked) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error) }
                     }
                     if (relation != null) PointingRelationshipSummary(requireNotNull(relation), sourceName)
-                    if (!opticsReady && !options) OutlinedButton(onClick = { opticsTrain = OpticsTrainId.PRIMARY }) { Text(stringResource(R.string.wfc_main_optics)) }
-                    if (!phone && !secondaryReady && !options) OutlinedButton(onClick = { opticsTrain = OpticsTrainId.SECONDARY }) { Text(stringResource(R.string.wfc_source_optics)) }
+                    PointingCalibrationBlockers(readiness.issues, ::resolve)
                     if (setup.canAdjust) TextButton(onClick = ::beginAdjustment, enabled = ready,
                         modifier = Modifier.testTag("pointing-adjust")) { Text(stringResource(R.string.wfc_adjust)) }
-                    Button(onClick = ::beginCalibration, enabled = setup.canCalibrate && ready,
+                    Button(onClick = ::beginCalibration, enabled = readiness.canStart,
                         modifier = Modifier.fillMaxWidth().testTag("pointing-begin")) { Text(stringResource(R.string.wfp_begin)) }
-                    TextButton(onClick = { options = !options }, modifier = Modifier.testTag("pointing-options")) { Text(stringResource(R.string.wfc_advanced)) }
+                    PointingAdvancedToggle(options) { options = !options }
                     if (options) {
                         TextButton(onClick = { showSite = true }) { Text(stringResource(R.string.wf_observer_site)) }
                         OutlinedButton(onClick = { opticsTrain = OpticsTrainId.PRIMARY }) { Text(stringResource(R.string.wfc_main_optics)) }
@@ -363,6 +394,7 @@ fun CalibrationWizardScreen(viewModel: CameraViewModel, onBack: () -> Unit,
                         }
                         OutlinedButton(onClick = ::stop) { Text(stringResource(R.string.wfp_cancel)) }
                     } else {
+                        PointingCalibrationBlockers(readiness.acquisitionIssues, ::resolve)
                         Button(onClick = { if (step == CalibrationStep.ALIGN) locked = false; sample() },
                             enabled = ready && (mainCamera || star != null), modifier = Modifier.testTag("pointing-sample")) {
                             Text(stringResource(if (step == CalibrationStep.ALIGN) R.string.wfc_measure else if (mainCamera)
@@ -374,23 +406,6 @@ fun CalibrationWizardScreen(viewModel: CameraViewModel, onBack: () -> Unit,
                         } else if (automaticReady) TextButton(onClick = ::previewPlan) { Text(stringResource(R.string.wfp_auto_sampling)) }
                         TextButton(onClick = { task.reset(); step = CalibrationStep.SETUP }) { Text(stringResource(R.string.wfc_change_setup)) }
                     }
-                }
-            }
-            if (!draft.busy && !planning && draft.fitted == null) {
-                if (site == null) OutlinedButton(onClick = { showSite = true }) { Text(stringResource(R.string.wf_observer_site)) }
-                if (phone && !cameraPermission) OutlinedButton(onClick = { permission.launch(arrayOf(Manifest.permission.CAMERA)) }) {
-                    Text(stringResource(R.string.wfc_camera_permission))
-                }
-                AuxiliaryCalibrationRecovery(databaseReady = (!mainCamera && phone) || databaseReady,
-                    auxiliaryMissing = !phone && auxConnection !is ConnectionState.Connected,
-                    mainMissing = mainCamera && mainConnection !is ConnectionState.Connected,
-                    guiding = !phone && (guiding || guideCalibrating), onPlateSolve = onPlateSolve,
-                    onAuxiliaryConnect = { viewModel.requestGuideConnect(); showDevices = true },
-                    onMainConnect = { onDeviceControl("camera") }, onGuide = onGuide)
-                if (phone && cameraPermission && lens == null) Text(stringResource(R.string.wfc_missing_lens), color = MaterialTheme.colorScheme.error)
-                if (!phone && auxConnection is ConnectionState.Connected && (!auxReady || exposureUs !in 500_000f..5_000_000f || settingBusy)) {
-                    Text(stringResource(if (settingBusy) R.string.wfa_wait_settings else if (!auxReady) R.string.wfa_choose_raw else R.string.wfa_exposure_range))
-                    TextButton(onClick = { step = CalibrationStep.SETUP; options = true }) { Text(stringResource(R.string.wfa_adjust_capture)) }
                 }
             }
             (draft.error ?: error)?.let { Text(it, color = MaterialTheme.colorScheme.error) }

@@ -60,13 +60,20 @@ class AuxiliaryCalibrationInstrumentedTest {
         compose.onNodeWithText(app.getString(R.string.wfp_auto_sampling)).assertDoesNotExist()
     }
     @Test fun advancedAcquisitionOptionsExpandWithoutNestedScrollCrash() {
+        compose.onNodeWithTag("pointing-options").performScrollTo().assert(
+            SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, app.getString(R.string.wfc_collapsed)))
+        compose.onNodeWithTag("pointing-options-arrow", useUnmergedTree = true).assertExists()
         compose.onNodeWithText(app.getString(R.string.wfa_raw_format)).assertDoesNotExist()
         compose.onNodeWithText(app.getString(R.string.wfp_tracking)).assertDoesNotExist()
         compose.onNodeWithTag("pointing-options").performScrollTo().performClick()
+        compose.onNodeWithTag("pointing-options").assert(
+            SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, app.getString(R.string.wfc_expanded)))
         compose.onNodeWithText(app.getString(R.string.wfa_raw_format)).performScrollTo().assertExists()
         compose.onNodeWithText(app.getString(R.string.wfp_tracking)).performScrollTo().assertExists()
         compose.onNodeWithTag("pointing-begin").performScrollTo().assertIsNotEnabled()
         systemBack()
+        compose.onNodeWithTag("pointing-options").assert(
+            SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, app.getString(R.string.wfc_collapsed)))
         compose.onNodeWithText(app.getString(R.string.wfa_raw_format)).assertDoesNotExist()
         compose.runOnIdle { assertEquals(0, exits) }
         systemBack()

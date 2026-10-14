@@ -22,6 +22,15 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.indigo.mobileobservatory.BuildConfig
 import com.indigo.mobileobservatory.R
+import com.indigo.mobileobservatory.astro.AndroidOpticsPrefs
+import com.indigo.mobileobservatory.astro.FovInstrumentMode
+import com.indigo.mobileobservatory.astro.OpticsTrainConfig
+import com.indigo.mobileobservatory.astro.OpticsTrainId
+import com.indigo.mobileobservatory.astro.PointingOpticsConfiguration
+import com.indigo.mobileobservatory.astro.PointingOpticsEndpoint
+import com.indigo.mobileobservatory.astro.PointingOpticsSelection
+import com.indigo.mobileobservatory.astro.StarMapOpticsPrefs
+import com.indigo.mobileobservatory.astro.UserOpticsCatalog
 import com.indigo.mobileobservatory.camera.CameraInfo
 import com.indigo.mobileobservatory.camera.ConnectionState
 import com.indigo.mobileobservatory.camera.GainCapability
@@ -34,6 +43,8 @@ import com.indigo.mobileobservatory.ui.viewmodel.CameraViewModel
 import org.junit.After
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -50,6 +61,7 @@ class ObservatoryWorkflowInstrumentedTest {
     private lateinit var vm: CameraViewModel
     private lateinit var restoration: StateRestorationTester
     private var originalAutoCheck: Boolean? = null
+    private var savedPointingPreferences: Map<String, *>? = null
     private val fontScale = mutableStateOf(1f)
     private val redNight = mutableStateOf(false)
 
@@ -80,6 +92,19 @@ class ObservatoryWorkflowInstrumentedTest {
         instrumentation.runOnMainSync { store.clear() }
         val edit = app.getSharedPreferences("mobile_observatory", Context.MODE_PRIVATE).edit()
         originalAutoCheck?.let { edit.putBoolean("update_auto_check", it) } ?: edit.remove("update_auto_check")
+        savedPointingPreferences?.let { saved ->
+            val prefs = app.getSharedPreferences("mobile_observatory", Context.MODE_PRIVATE)
+            prefs.all.keys.filter(::isPointingPreference).forEach(edit::remove)
+            saved.forEach { (key, value) -> when (value) {
+                is String -> edit.putString(key, value)
+                is Boolean -> edit.putBoolean(key, value)
+                is Float -> edit.putFloat(key, value)
+                is Int -> edit.putInt(key, value)
+                is Long -> edit.putLong(key, value)
+                is Set<*> -> edit.putStringSet(key, value.filterIsInstance<String>().toSet())
+                else -> Unit
+            } }
+        }
         edit.commit()
     }
 
@@ -166,12 +191,13 @@ class ObservatoryWorkflowInstrumentedTest {
     }
 
     @Test fun pointingWizardConfiguresItsPrimaryTerminalInPlaceAndBackKeepsWizardContext() {
+        prepareUnconfirmedPhoneEyepiece()
         selectWorkspace("STAR_MAP")
         compose.onNodeWithText(app.getString(if (BuildConfig.STELLARIUM_ENABLED)
             R.string.wf_star_map_preparation else R.string.wf_preparation)).performClick()
         compose.onNodeWithText(app.getString(R.string.wf_pointing_setup)).performClick()
         compose.onNodeWithText(app.getString(R.string.wf_pointing_setup)).assertIsDisplayed()
-        val setup = compose.onNodeWithText(app.getString(R.string.wfc_main_optics))
+        val setup = compose.onNodeWithTag("pointing-blocker-MAIN_OPTICS")
         setup.performScrollTo().performClick()
         compose.onNodeWithText(app.getString(R.string.fov_simulator_title)).assertIsDisplayed()
         compose.onNode(hasText(app.getString(R.string.star_map_train_secondary)) and hasAnyAncestor(isDialog())).assertDoesNotExist()
@@ -180,6 +206,48 @@ class ObservatoryWorkflowInstrumentedTest {
         compose.onNodeWithText(app.getString(R.string.wf_pointing_setup)).assertIsDisplayed()
         compose.onNodeWithTag("pointing-source").performScrollTo().assertIsDisplayed()
         captureWorkflowEvidence("pointing-camera-setup")
+        systemBack()
+        compose.onNodeWithText(app.getString(R.string.wf_preparation)).assertIsDisplayed()
+    }
+
+    @Test fun phoneEyepieceOpticsConfirmationClearsItsBlockerThroughTheActualShellAndViewModel() {
+        prepareUnconfirmedPhoneEyepiece()
+        selectWorkspace("STAR_MAP")
+        compose.onNodeWithText(app.getString(if (BuildConfig.STELLARIUM_ENABLED)
+            R.string.wf_star_map_preparation else R.string.wf_preparation)).performClick()
+        compose.onNodeWithText(app.getString(R.string.wf_pointing_setup)).performClick()
+        compose.onNodeWithText(app.getString(R.string.wfp_eyepiece)).assertIsSelected()
+        compose.onNodeWithTag("pointing-locked").performScrollTo().performClick().assertIsOn()
+        compose.onNodeWithTag("pointing-blocker-MAIN_OPTICS").performScrollTo().assertIsDisplayed()
+        // This selected path does not need an external reference camera or ASTAP database.
+        compose.onNodeWithTag("pointing-blocker-MAIN_CAMERA").assertDoesNotExist()
+        compose.onNodeWithTag("pointing-blocker-DATABASE").assertDoesNotExist()
+        captureWorkflowEvidence("pointing-blockers")
+        compose.onNodeWithTag("pointing-options").performScrollTo().assert(
+            SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, app.getString(R.string.wfc_collapsed)))
+        compose.onNodeWithTag("pointing-options-arrow", useUnmergedTree = true).assertExists()
+        compose.onNodeWithTag("pointing-options").performClick().assert(
+            SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, app.getString(R.string.wfc_expanded)))
+        compose.onNodeWithTag("pointing-options-arrow", useUnmergedTree = true).assertIsDisplayed()
+        captureWorkflowEvidence("pointing-advanced-expanded")
+        compose.onNodeWithTag("pointing-options").performClick()
+        compose.onNodeWithTag("pointing-blocker-MAIN_OPTICS").performScrollTo().performClick()
+        compose.onNodeWithText(app.getString(R.string.fov_simulator_title)).assertIsDisplayed()
+        compose.onNodeWithText(app.getString(R.string.wf_optics_use_setup)).performScrollTo().assertIsEnabled().performClick()
+        compose.onNodeWithText(app.getString(R.string.fov_simulator_title)).assertDoesNotExist()
+        compose.onNodeWithText(app.getString(R.string.wf_pointing_setup)).assertIsDisplayed()
+        compose.onNodeWithTag("pointing-blocker-MAIN_OPTICS").assertDoesNotExist()
+        compose.onNodeWithTag("pointing-blocker-MAIN_CAMERA").assertDoesNotExist()
+        compose.onNodeWithTag("pointing-blocker-DATABASE").assertDoesNotExist()
+        compose.runOnIdle {
+            val optics = vm.pointingOpticsConfiguration()
+            assertTrue(OpticsTrainId.PRIMARY in optics.confirmedTrains)
+            assertNotNull(optics.verificationField(PointingOpticsSelection(OpticsTrainId.PRIMARY, PointingOpticsEndpoint.EYEPIECE)))
+            assertFalse(vm.connectionState.value is ConnectionState.Connected)
+            assertFalse(vm.mountPointingCapabilities.value.goto)
+        }
+        // The emulator has no guaranteed manual phone lens; do not invent camera capabilities
+        // or claim that clearing this optical blocker satisfies every acquisition prerequisite.
         systemBack()
         compose.onNodeWithText(app.getString(R.string.wf_preparation)).assertIsDisplayed()
     }
@@ -478,6 +546,26 @@ class ObservatoryWorkflowInstrumentedTest {
         val file = File(app.getExternalFilesDir(null), "workflow-ui-evidence/$name.png")
         file.parentFile!!.mkdirs()
         file.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+    }
+
+    private fun isPointingPreference(key: String) = key.startsWith("star_map_") ||
+        key.startsWith("pointing_") || key == StarMapOpticsPrefs.PLATE_FOCAL_LENGTH_MM
+
+    /** Only optical choices are seeded; hardware state remains that of the real emulator. */
+    private fun prepareUnconfirmedPhoneEyepiece() {
+        val prefs = app.getSharedPreferences("mobile_observatory", Context.MODE_PRIVATE)
+        savedPointingPreferences = prefs.all.filterKeys(::isPointingPreference)
+        val current = PointingOpticsConfiguration.load(AndroidOpticsPrefs(prefs))
+        val snapshot = StarMapOpticsPrefs.snapshot(OpticsTrainConfig(OpticsTrainId.PRIMARY, FovInstrumentMode.EYEPIECE),
+            current.secondary, StarMapOpticsPrefs.loadActive(AndroidOpticsPrefs(prefs)),
+            prefs.getBoolean(StarMapOpticsPrefs.SHOW_OVERLAY, true))
+        val edit = prefs.edit()
+        snapshot.strings.forEach { (key, value) -> edit.putString(key, value) }
+        snapshot.bools.forEach { (key, value) -> edit.putBoolean(key, value) }
+        edit.remove(UserOpticsCatalog.TELESCOPES_KEY).remove(UserOpticsCatalog.EYEPIECES_KEY)
+            .putBoolean(PointingOpticsConfiguration.confirmationKey(OpticsTrainId.PRIMARY), false)
+            .putString("pointing_camera_source", "PHONE").commit()
+        compose.waitForIdle()
     }
 
     @Suppress("UNCHECKED_CAST")
