@@ -12,7 +12,7 @@
     <string name="wf_go_capture">前往拍摄</string>
     <string name="wf_choose_target">选择观测目标</string>
     <string name="wf_preparation">观测准备</string>
-    <string name="wf_pointing_setup">校准手机与镜筒</string>
+    <string name="wf_pointing_setup">指向相机校准</string>
     <string name="wf_pointing_unavailable">手机与镜筒标定尚未接入。当前手机引导为实验功能，不能验证镜筒指向。</string>
     <string name="wf_start_push_to">推镜引导</string>
 </resources>

@@ -12,7 +12,7 @@
     <string name="wf_go_capture">Go to capture</string>
     <string name="wf_choose_target">Choose a target</string>
     <string name="wf_preparation">Prepare</string>
-    <string name="wf_pointing_setup">Phone–telescope alignment</string>
+    <string name="wf_pointing_setup">Align pointing camera</string>
     <string name="wf_pointing_unavailable">Phone–telescope alignment is not available yet. Phone guidance is experimental and does not verify the telescope’s direction.</string>
     <string name="wf_start_push_to">Push-to guidance</string>
 </resources>

@@ -33,7 +33,8 @@ import kotlin.math.abs
 @Composable
 fun AuxiliaryPushToScreen(viewModel: CameraViewModel, target: SkyDirection, targetName: String,
     onBack: () -> Unit, onCalibration: () -> Unit,
-    opticsConfiguration: PointingOpticsConfiguration? = null) {
+    opticsConfiguration: PointingOpticsConfiguration? = null,
+    onPhoneGuide: (() -> Unit)? = null) {
     require(target.epoch == SkyEpoch.J2000)
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -238,6 +239,11 @@ fun AuxiliaryPushToScreen(viewModel: CameraViewModel, target: SkyDirection, targ
             }
             TextButton(onClick = { options = !options }) { Text(stringResource(R.string.wfp_other_options), color = nightRed) }
             if (options) {
+                onPhoneGuide?.let { open ->
+                    TextButton(onClick = { cancelCapture(); open() }) {
+                        Text(stringResource(R.string.wfp_source_phone), color = nightRed)
+                    }
+                }
                 Text(stringResource(R.string.wfa_exposure), color = nightRed)
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     listOf(.5f, 1f, 2f).forEach { seconds -> FilterChip(

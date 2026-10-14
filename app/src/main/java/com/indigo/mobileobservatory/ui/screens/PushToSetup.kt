@@ -3,6 +3,21 @@ package com.indigo.mobileobservatory.ui.screens
 import com.indigo.mobileobservatory.camera.PhoneCameraCapability
 import com.indigo.mobileobservatory.camera.PhoneManualExposure
 
+/** Never replace a selected or calibrated lens with another camera merely because it disappeared. */
+internal fun selectPushToCameraId(
+    availableCameraIds: List<String>,
+    selectedCameraId: String?,
+    calibratedCameraId: String?,
+    savedCaptureCameraId: String?,
+    defaultCameraId: String?
+): String? {
+    val requested = selectedCameraId ?: calibratedCameraId
+    if (requested != null) return requested.takeIf { it in availableCameraIds }
+    return savedCaptureCameraId?.takeIf { it in availableCameraIds }
+        ?: defaultCameraId?.takeIf { it in availableCameraIds }
+        ?: availableCameraIds.firstOrNull()
+}
+
 internal data class PushToCaptureSettings(
     val cameraId: String,
     val exposureSeconds: Double,
