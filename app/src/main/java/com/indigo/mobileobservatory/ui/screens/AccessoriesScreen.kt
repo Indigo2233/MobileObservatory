@@ -120,7 +120,7 @@ fun DeviceQuickControlSheet(
     initialSettings: Boolean = false
 ) {
     val destination = DeviceControlDestination.fromKey(deviceKey) ?: return
-    val mountMotion by viewModel.mountMotionState.collectAsState()
+    val mountMotion by viewModel.mountMotionState.collectAsStateWithPageLifecycle()
     var editing by rememberSaveable(deviceKey) { mutableStateOf(initialSettings) }
     val exit = rememberSettingsExitState()
     SideEffect {
@@ -186,50 +186,50 @@ private data class DeviceSummary(val connected: Boolean, val identity: String, v
 private fun deviceSummary(viewModel: CameraViewModel, destination: DeviceControlDestination): DeviceSummary =
     when (destination) {
         DeviceControlDestination.CAMERA, DeviceControlDestination.COOLER -> {
-            val state by viewModel.connectionState.collectAsState()
+            val state by viewModel.connectionState.collectAsStateWithPageLifecycle()
             val info = (state as? ConnectionState.Connected)?.info
             DeviceSummary(info != null, info?.name.orEmpty())
         }
         DeviceControlDestination.MOUNT -> {
-            val state by viewModel.mountConnectionState.collectAsState()
-            val info by viewModel.mountDetectedInfo.collectAsState()
+            val state by viewModel.mountConnectionState.collectAsStateWithPageLifecycle()
+            val info by viewModel.mountDetectedInfo.collectAsStateWithPageLifecycle()
             DeviceSummary(state is MountConnectionState.Connected, info.orEmpty())
         }
         DeviceControlDestination.FILTER -> {
-            val connected by viewModel.filterWheelConnected.collectAsState()
-            val info by viewModel.filterWheelInfo.collectAsState()
-            val usbId by viewModel.activeFilterWheelDeviceId.collectAsState()
+            val connected by viewModel.filterWheelConnected.collectAsStateWithPageLifecycle()
+            val info by viewModel.filterWheelInfo.collectAsStateWithPageLifecycle()
+            val usbId by viewModel.activeFilterWheelDeviceId.collectAsStateWithPageLifecycle()
             DeviceSummary(connected, info?.name.orEmpty(), usbId)
         }
         DeviceControlDestination.FOCUSER -> {
-            val connected by viewModel.eafConnected.collectAsState()
-            val info by viewModel.eafInfo.collectAsState()
-            val usbId by viewModel.activeFocuserDeviceId.collectAsState()
+            val connected by viewModel.eafConnected.collectAsStateWithPageLifecycle()
+            val info by viewModel.eafInfo.collectAsStateWithPageLifecycle()
+            val usbId by viewModel.activeFocuserDeviceId.collectAsStateWithPageLifecycle()
             DeviceSummary(connected, info?.name.orEmpty(), usbId)
         }
         DeviceControlDestination.COVER -> {
-            val connected by viewModel.coverConnected.collectAsState()
-            val info by viewModel.coverDeviceInfo.collectAsState()
-            val usbId by viewModel.activeCoverDeviceId.collectAsState()
+            val connected by viewModel.coverConnected.collectAsStateWithPageLifecycle()
+            val info by viewModel.coverDeviceInfo.collectAsStateWithPageLifecycle()
+            val usbId by viewModel.activeCoverDeviceId.collectAsStateWithPageLifecycle()
             DeviceSummary(connected, info.orEmpty(), usbId)
         }
         DeviceControlDestination.ROTATOR -> {
-            val connected by viewModel.rotatorConnected.collectAsState()
-            val info by viewModel.rotatorDeviceInfo.collectAsState()
-            val usbId by viewModel.activeRotatorDeviceId.collectAsState()
+            val connected by viewModel.rotatorConnected.collectAsStateWithPageLifecycle()
+            val info by viewModel.rotatorDeviceInfo.collectAsStateWithPageLifecycle()
+            val usbId by viewModel.activeRotatorDeviceId.collectAsStateWithPageLifecycle()
             DeviceSummary(connected, info.orEmpty(), usbId)
         }
         DeviceControlDestination.POWER -> {
-            val connected by viewModel.powerBoxConnected.collectAsState()
-            val info by viewModel.powerBoxCapabilities.collectAsState()
-            val usbId by viewModel.activePowerBoxDeviceId.collectAsState()
+            val connected by viewModel.powerBoxConnected.collectAsStateWithPageLifecycle()
+            val info by viewModel.powerBoxCapabilities.collectAsStateWithPageLifecycle()
+            val usbId by viewModel.activePowerBoxDeviceId.collectAsStateWithPageLifecycle()
             DeviceSummary(connected, info?.identity.orEmpty(), usbId)
         }
     }
 
 @Composable
 private fun EquipmentList(viewModel: CameraViewModel, onOpen: (DeviceControlDestination) -> Unit) {
-    val scanError by viewModel.accessoryScanError.collectAsState()
+    val scanError by viewModel.accessoryScanError.collectAsStateWithPageLifecycle()
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -339,13 +339,13 @@ private fun DeviceIdentity(summary: DeviceSummary) {
 
 @Composable
 private fun TargetedAccessoryConnection(viewModel: CameraViewModel, destination: DeviceControlDestination) {
-    val devices by viewModel.accessoryDevices.collectAsState()
-    val scanError by viewModel.accessoryScanError.collectAsState()
-    val filterId by viewModel.activeFilterWheelDeviceId.collectAsState()
-    val focuserId by viewModel.activeFocuserDeviceId.collectAsState()
-    val coverId by viewModel.activeCoverDeviceId.collectAsState()
-    val rotatorId by viewModel.activeRotatorDeviceId.collectAsState()
-    val powerId by viewModel.activePowerBoxDeviceId.collectAsState()
+    val devices by viewModel.accessoryDevices.collectAsStateWithPageLifecycle()
+    val scanError by viewModel.accessoryScanError.collectAsStateWithPageLifecycle()
+    val filterId by viewModel.activeFilterWheelDeviceId.collectAsStateWithPageLifecycle()
+    val focuserId by viewModel.activeFocuserDeviceId.collectAsStateWithPageLifecycle()
+    val coverId by viewModel.activeCoverDeviceId.collectAsStateWithPageLifecycle()
+    val rotatorId by viewModel.activeRotatorDeviceId.collectAsStateWithPageLifecycle()
+    val powerId by viewModel.activePowerBoxDeviceId.collectAsStateWithPageLifecycle()
     val occupiedIds = listOfNotNull(filterId, focuserId, coverId, rotatorId, powerId).toSet()
     val candidates = devices.filter {
         it.usbDevice.deviceId !in occupiedIds &&
@@ -409,8 +409,8 @@ private fun TargetedConnectionCard(device: AccessoryDeviceEntry, onConnect: () -
 
 @Composable
 private fun CameraDeviceContent(viewModel: CameraViewModel, onOpenCamera: () -> Unit, onSettings: (() -> Unit)?) {
-    val state by viewModel.connectionState.collectAsState()
-    val allDevices by viewModel.devices.collectAsState()
+    val state by viewModel.connectionState.collectAsStateWithPageLifecycle()
+    val allDevices by viewModel.devices.collectAsStateWithPageLifecycle()
     LaunchedEffect(Unit) {
         if (state !is ConnectionState.Connected) viewModel.cameraManager.enumerateDevices()
     }
@@ -457,12 +457,12 @@ private fun CameraDeviceContent(viewModel: CameraViewModel, onOpenCamera: () -> 
 
 @Composable
 private fun CoolerControls(viewModel: CameraViewModel) {
-    val info by viewModel.coolingInfo.collectAsState()
-    val on by viewModel.coolerOn.collectAsState()
-    val sensor by viewModel.sensorTempTenths.collectAsState()
-    val target by viewModel.targetTempTenths.collectAsState()
-    val power by viewModel.coolingPowerPct.collectAsState()
-    val rampStatus by viewModel.rampStatus.collectAsState()
+    val info by viewModel.coolingInfo.collectAsStateWithPageLifecycle()
+    val on by viewModel.coolerOn.collectAsStateWithPageLifecycle()
+    val sensor by viewModel.sensorTempTenths.collectAsStateWithPageLifecycle()
+    val target by viewModel.targetTempTenths.collectAsStateWithPageLifecycle()
+    val power by viewModel.coolingPowerPct.collectAsStateWithPageLifecycle()
+    val rampStatus by viewModel.rampStatus.collectAsStateWithPageLifecycle()
     var draft by remember(target) { mutableStateOf((target / 10.0).toString()) }
     val capability = info
     if (capability == null || !capability.hasTec) {
@@ -493,12 +493,12 @@ private fun CoolerControls(viewModel: CameraViewModel) {
 /** Runtime environment controls remain immediate; defaults are edited in a separate draft. */
 @Composable
 private fun CameraEnvironmentControls(viewModel: CameraViewModel) {
-    val heaterSupported by viewModel.heaterSupported.collectAsState()
-    val heaterLevel by viewModel.heaterLevel.collectAsState()
-    val heaterMaximum by viewModel.heaterMaxLevel.collectAsState()
-    val fanSupported by viewModel.fanSupported.collectAsState()
-    val fanLevel by viewModel.fanLevel.collectAsState()
-    val fanMaximum by viewModel.fanMaxLevel.collectAsState()
+    val heaterSupported by viewModel.heaterSupported.collectAsStateWithPageLifecycle()
+    val heaterLevel by viewModel.heaterLevel.collectAsStateWithPageLifecycle()
+    val heaterMaximum by viewModel.heaterMaxLevel.collectAsStateWithPageLifecycle()
+    val fanSupported by viewModel.fanSupported.collectAsStateWithPageLifecycle()
+    val fanLevel by viewModel.fanLevel.collectAsStateWithPageLifecycle()
+    val fanMaximum by viewModel.fanMaxLevel.collectAsStateWithPageLifecycle()
     if (heaterSupported || fanSupported) {
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -523,11 +523,11 @@ private fun EnvironmentLevelControl(title: String, current: Int, maximum: Int, o
 
 @Composable
 private fun FocuserControls(viewModel: CameraViewModel) {
-    val position by viewModel.eafPosition.collectAsState()
-    val moving by viewModel.eafMoving.collectAsState()
-    val temperature by viewModel.eafTemperature.collectAsState()
-    val info by viewModel.eafInfo.collectAsState()
-    val deviceId by viewModel.activeFocuserDeviceId.collectAsState()
+    val position by viewModel.eafPosition.collectAsStateWithPageLifecycle()
+    val moving by viewModel.eafMoving.collectAsStateWithPageLifecycle()
+    val temperature by viewModel.eafTemperature.collectAsStateWithPageLifecycle()
+    val info by viewModel.eafInfo.collectAsStateWithPageLifecycle()
+    val deviceId by viewModel.activeFocuserDeviceId.collectAsStateWithPageLifecycle()
     val active = info
     if (active == null) {
         Text(stringResource(R.string.waiting_for_device_status))
@@ -573,10 +573,10 @@ private fun FocuserControls(viewModel: CameraViewModel) {
 
 @Composable
 private fun FilterWheelControls(viewModel: CameraViewModel) {
-    val position by viewModel.filterWheelPosition.collectAsState()
-    val moving by viewModel.filterWheelMoving.collectAsState()
-    val names by viewModel.filterWheelSlotNames.collectAsState()
-    val info by viewModel.filterWheelInfo.collectAsState()
+    val position by viewModel.filterWheelPosition.collectAsStateWithPageLifecycle()
+    val moving by viewModel.filterWheelMoving.collectAsStateWithPageLifecycle()
+    val names by viewModel.filterWheelSlotNames.collectAsStateWithPageLifecycle()
+    val info by viewModel.filterWheelInfo.collectAsStateWithPageLifecycle()
     val active = info
     if (active == null || active.slotCount <= 0) {
         Text(stringResource(R.string.waiting_for_device_status))
@@ -606,11 +606,11 @@ private fun FilterWheelControls(viewModel: CameraViewModel) {
 
 @Composable
 private fun CoverControls(viewModel: CameraViewModel) {
-    val coverState by viewModel.coverState.collectAsState()
-    val calibratorState by viewModel.calibratorState.collectAsState()
-    val brightness by viewModel.calibratorBrightness.collectAsState()
-    val maxBrightness by viewModel.calibratorMaxBrightness.collectAsState()
-    val info by viewModel.coverDeviceInfo.collectAsState()
+    val coverState by viewModel.coverState.collectAsStateWithPageLifecycle()
+    val calibratorState by viewModel.calibratorState.collectAsStateWithPageLifecycle()
+    val brightness by viewModel.calibratorBrightness.collectAsStateWithPageLifecycle()
+    val maxBrightness by viewModel.calibratorMaxBrightness.collectAsStateWithPageLifecycle()
+    val info by viewModel.coverDeviceInfo.collectAsStateWithPageLifecycle()
     var pendingBrightness by remember(brightness) { mutableStateOf(brightness.toFloat()) }
 
     Card(Modifier.fillMaxWidth()) {
@@ -635,9 +635,9 @@ private fun CoverControls(viewModel: CameraViewModel) {
 
 @Composable
 private fun PowerBoxControls(viewModel: CameraViewModel, onSettings: (() -> Unit)?) {
-    val capabilities by viewModel.powerBoxCapabilities.collectAsState()
-    val telemetry by viewModel.powerBoxTelemetry.collectAsState()
-    val customNames by viewModel.powerBoxInterfaceNames.collectAsState()
+    val capabilities by viewModel.powerBoxCapabilities.collectAsStateWithPageLifecycle()
+    val telemetry by viewModel.powerBoxTelemetry.collectAsStateWithPageLifecycle()
+    val customNames by viewModel.powerBoxInterfaceNames.collectAsStateWithPageLifecycle()
     PowerBoxPanel(
         capabilities = capabilities,
         telemetry = telemetry,
@@ -656,14 +656,14 @@ private fun PowerBoxControls(viewModel: CameraViewModel, onSettings: (() -> Unit
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun RotatorControls(viewModel: CameraViewModel) {
-    val angle by viewModel.rotatorAngle.collectAsState()
-    val moving by viewModel.rotatorMoving.collectAsState()
-    val position by viewModel.rotatorPositionSteps.collectAsState()
-    val scale by viewModel.rotatorStepsPerDegree.collectAsState()
-    val reversed by viewModel.rotatorReversed.collectAsState()
-    val hold by viewModel.rotatorHold.collectAsState()
-    val supportsHold by viewModel.rotatorSupportsHold.collectAsState()
-    val info by viewModel.rotatorDeviceInfo.collectAsState()
+    val angle by viewModel.rotatorAngle.collectAsStateWithPageLifecycle()
+    val moving by viewModel.rotatorMoving.collectAsStateWithPageLifecycle()
+    val position by viewModel.rotatorPositionSteps.collectAsStateWithPageLifecycle()
+    val scale by viewModel.rotatorStepsPerDegree.collectAsStateWithPageLifecycle()
+    val reversed by viewModel.rotatorReversed.collectAsStateWithPageLifecycle()
+    val hold by viewModel.rotatorHold.collectAsStateWithPageLifecycle()
+    val supportsHold by viewModel.rotatorSupportsHold.collectAsStateWithPageLifecycle()
+    val info by viewModel.rotatorDeviceInfo.collectAsStateWithPageLifecycle()
     var target by remember { mutableStateOf("0") }
 
     Card(Modifier.fillMaxWidth()) {

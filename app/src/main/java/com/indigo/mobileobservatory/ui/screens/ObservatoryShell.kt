@@ -67,9 +67,9 @@ fun CameraScreen(viewModel: CameraViewModel, redNightMode: Boolean = false,
     val savedScreens = rememberSaveableStateHolder()
     val settingsExits = remember { SettingsExitRegistry() }
     val immersion = remember { ObservatoryImmersion() }
-    val stackDestination by viewModel.stacking.destination.collectAsState()
-    val playerRequested by viewModel.showPlayer.collectAsState()
-    val motion by viewModel.mountMotionState.collectAsState()
+    val stackDestination by viewModel.stacking.destination.collectAsStateWithPageLifecycle()
+    val playerRequested by viewModel.showPlayer.collectAsStateWithPageLifecycle()
+    val motion by viewModel.mountMotionState.collectAsStateWithPageLifecycle()
     LaunchedEffect(motion.isActive) { if (motion.isActive) viewModel.pointingRepository.invalidateCurrentDirections() }
     val lifecycleOwner = LocalLifecycleOwner.current
     val context = LocalContext.current
@@ -191,7 +191,7 @@ fun CameraScreen(viewModel: CameraViewModel, redNightMode: Boolean = false,
     // Registered before child handlers: inner cards, modes, editors and drawers win first.
     BackHandler(enabled = navigation.canGoBack) { back() }
     val updateViewModel: UpdateViewModel = viewModel()
-    val updateState by updateViewModel.state.collectAsState()
+    val updateState by updateViewModel.state.collectAsStateWithPageLifecycle()
     UpdateAvailableDialog(updateState, updateViewModel::downloadAndInstall,
         updateViewModel::installOrRequestPermission, updateViewModel::dismissPrompt,
         updateViewModel::openInstallPermissionSettings)
@@ -271,15 +271,15 @@ private fun ObservatoryContent(
     onDeviceSettings: (String) -> Unit,
     onDeviceControl: (String) -> Unit
 ) {
-    val coordinates by vm.mountCoordinates.collectAsState()
-    val mountCapabilities by vm.mountPointingCapabilities.collectAsState()
-    val mountBusy by vm.mountBusy.collectAsState()
-    val connection by vm.connectionState.collectAsState()
-    val guideConnection by vm.guideConnectionState.collectAsState()
-    val guideGeometry by vm.guideCameraGeometry.collectAsState()
-    val opticsRevision by vm.pointingOpticsRevision.collectAsState()
-    val roi by vm.roi.collectAsState()
-    val binning by vm.binning.collectAsState()
+    val coordinates by vm.mountCoordinates.collectAsStateWithPageLifecycle()
+    val mountCapabilities by vm.mountPointingCapabilities.collectAsStateWithPageLifecycle()
+    val mountBusy by vm.mountBusy.collectAsStateWithPageLifecycle()
+    val connection by vm.connectionState.collectAsStateWithPageLifecycle()
+    val guideConnection by vm.guideConnectionState.collectAsStateWithPageLifecycle()
+    val guideGeometry by vm.guideCameraGeometry.collectAsStateWithPageLifecycle()
+    val opticsRevision by vm.pointingOpticsRevision.collectAsStateWithPageLifecycle()
+    val roi by vm.roi.collectAsStateWithPageLifecycle()
+    val binning by vm.binning.collectAsStateWithPageLifecycle()
     val opticsConfiguration = remember(opticsRevision, connection, guideConnection, guideGeometry, roi, binning) { vm.pointingOpticsConfiguration() }
     LaunchedEffect(connection, guideConnection) {
         if (connection is ConnectionState.Connected) vm.primaryReferenceCameraId()?.let { id ->
@@ -290,8 +290,8 @@ private fun ObservatoryContent(
         } else vm.pointingRepository.clearOpticalPathDirection("secondary")
     }
     val cameraPixelSize = (connection as? ConnectionState.Connected)?.info?.pixelSizeUm
-    val pointingEstimate by vm.pointingRepository.estimate.collectAsState()
-    val directObservations by vm.pointingRepository.directObservations.collectAsState()
+    val pointingEstimate by vm.pointingRepository.estimate.collectAsStateWithPageLifecycle()
+    val directObservations by vm.pointingRepository.directObservations.collectAsStateWithPageLifecycle()
     val pointingSources = remember(pointingEstimate, directObservations) { listOfNotNull(pointingEstimate?.let { value ->
         com.indigo.mobileobservatory.astro.FovPointingCandidate(value.opticalPathId,
             com.indigo.mobileobservatory.astro.FovSkyAnchor(value.direction.raDeg / 15.0, value.direction.decDeg, "J2000"),
@@ -328,9 +328,9 @@ private fun ObservatoryContent(
         ObservatoryDestination.PLATE_SOLVE -> PlateSolveScreen(mountCoordinates = coordinates,
             cameraPixelSizeUm = cameraPixelSize, onSolved = vm::recordPlateSolveResult, onBack = back)
         ObservatoryDestination.POLAR_ALIGNMENT -> {
-            val site by vm.mountSite.collectAsState()
-            val busy by vm.mountBusy.collectAsState()
-            val moveStatus by vm.mountMoveStatus.collectAsState()
+            val site by vm.mountSite.collectAsStateWithPageLifecycle()
+            val busy by vm.mountBusy.collectAsStateWithPageLifecycle()
+            val moveStatus by vm.mountMoveStatus.collectAsStateWithPageLifecycle()
             PolarAlignmentScreen(mountCoordinates = coordinates, mountSite = site, mountBusy = busy,
                 mountMoveStatus = moveStatus, cameraPixelSizeUm = cameraPixelSize,
                 onReadMountSite = vm::readMountSite, onSyncPhoneSiteToMount = vm::syncPhoneSiteToMount,
@@ -468,8 +468,8 @@ private fun ObservingPreparationScreen(open: (ObservatoryDestination) -> Unit, o
 private fun ObservatorySequenceSummary(vm: CameraViewModel, current: ObservatoryDestination?,
                                        open: (ObservatoryDestination) -> Unit) {
     if (!SequenceFeature.ENABLED) return
-    val state by vm.sequenceRuntime.state.collectAsState()
-    val draft by vm.sequenceRuntime.draft.collectAsState()
+    val state by vm.sequenceRuntime.state.collectAsStateWithPageLifecycle()
+    val draft by vm.sequenceRuntime.draft.collectAsStateWithPageLifecycle()
     val paused = state.phase == com.indigo.mobileobservatory.sequence.SequencePhase.Paused
     if (current != ObservatoryDestination.SEQUENCE && (paused || state.phase == com.indigo.mobileobservatory.sequence.SequencePhase.Running)) {
         SequenceProgressStrip(title = state.currentClassName ?: stringResource(R.string.tab_sequence),

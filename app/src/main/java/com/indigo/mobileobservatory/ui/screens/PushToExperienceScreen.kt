@@ -14,14 +14,17 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -35,7 +38,6 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
@@ -50,6 +52,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -73,10 +76,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.PopupProperties
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.astro.CoordinateTransform
 import com.indigo.mobileobservatory.astro.EquatorialCoordinates
@@ -141,9 +148,10 @@ fun PushToScreen(
     val view = LocalView.current
     val scope = rememberCoroutineScope()
     val source = remember { PhoneSkyAttitudeSource(context) }
+    val uiUpdateGate = remember(source) { PushToUiUpdateGate() }
     val repository = remember(pointingRepository, context) { pointingRepository ?: PointingRepository(context.applicationContext) }
-    val relationships by repository.relationships.collectAsState()
-    val handEyes by repository.handEyes.collectAsState()
+    val relationships by repository.relationships.collectAsStateWithPageLifecycle()
+    val handEyes by repository.handEyes.collectAsStateWithPageLifecycle()
     val opticalAxis = remember { OpticalIdentity("telescope", "axis", "primary") }
     val verification = remember { PushToVerificationSession() }
     var verificationState by remember { mutableStateOf(PushToVerificationState()) }
@@ -345,7 +353,12 @@ fun PushToScreen(
     val pageVisible = rememberPageForeground()
     val latestRefreshAxis by androidx.compose.runtime.rememberUpdatedState { refreshAxisEstimate() }
     DisposableEffect(source, pageVisible) {
-        source.onFix = { currentFix = it; latestRefreshAxis() }
+        source.onFix = { next ->
+            if (uiUpdateGate.shouldPublish(SystemClock.elapsedRealtime())) {
+                currentFix = next
+                latestRefreshAxis()
+            }
+        }
         source.onMotion = { phase ->
             if (phase != motionPhase) motionPhase = phase
             val due = source.motionGate.autoCaptureDue
@@ -353,6 +366,7 @@ fun PushToScreen(
             verification.observeMotion(source.motionGate.motionEpoch, phase, SystemClock.elapsedRealtime())
             verificationState = verification.state
         }
+        if (pageVisible) uiUpdateGate.reset()
         if (pageVisible && !source.start()) status = context.getString(R.string.push_to_sensor_unavailable)
         onDispose {
             source.onFix = null
@@ -373,7 +387,10 @@ fun PushToScreen(
             clockElapsedMs = SystemClock.elapsedRealtime()
             clockUtcMs = System.currentTimeMillis()
             source.refreshCurrentPose(clockUtcMs)
-            latestRefreshAxis()
+            if (uiUpdateGate.shouldPublish(clockElapsedMs)) {
+                source.latestFix()?.let { currentFix = it }
+                latestRefreshAxis()
+            }
             motionPhase = source.motionGate.tick(clockElapsedMs)
             verification.observeMotion(source.motionGate.motionEpoch, motionPhase, clockElapsedMs)
             verificationState = verification.tick(clockElapsedMs)
@@ -740,6 +757,245 @@ fun PushToScreen(
         }.joinToString("\n")
     }
 
+    val captureSettings: @Composable () -> Unit = {
+        CaptureSettingsCard(
+            cameras = cameras,
+            selectedCamera = selectedCamera,
+            cameraMenuOpen = cameraMenuOpen,
+            onCameraMenuChange = { cameraMenuOpen = it },
+            onCameraSelected = {
+                applyCameraDefaults(it)
+                persistCaptureSettings(it.cameraId)
+                cameraMenuOpen = false
+            },
+            exposureSeconds = exposureSeconds,
+            onExposureChanged = { exposureSeconds = it },
+            onContinuousChangeFinished = { persistCaptureSettings(selectedCameraId) },
+            iso = iso,
+            onIsoChanged = { iso = it },
+            autoIso = autoIso,
+            onAutoIsoChanged = {
+                autoIso = it
+                persistCaptureSettings(selectedCameraId)
+            },
+            preferRaw = preferRaw,
+            onPreferRawChanged = {
+                preferRaw = it
+                persistCaptureSettings(selectedCameraId)
+            },
+            burstFrameCount = burstFrameCount,
+            onBurstFrameCountChanged = {
+                burstFrameCount = it
+                persistCaptureSettings(selectedCameraId)
+            },
+            expanded = settingsExpanded,
+            collapsible = true,
+            onExpandedChanged = { settingsExpanded = it }
+        )
+    }
+    val mainContent: @Composable (Modifier, Boolean) -> Unit = { modifier, includeSettings ->
+        if (hasAxisEstimate && site != null) {
+            Column(modifier) {
+                PushToNightChart(
+                    currentAltDeg = axisHorizontal!!.altitudeDeg,
+                    currentAzDeg = axisHorizontal.azimuthDeg,
+                    targetAltDeg = targetAlt,
+                    targetAzDeg = targetAz,
+                    site = site!!,
+                    instant = now,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(0.52f)
+                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(0.35f)
+                        .padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    SseReticle(
+                        cmd = guidance,
+                        deltaAlt = animatedAlt.toDouble(),
+                        deltaAz = animatedAz.toDouble(),
+                        eyepieceFovDeg = eyepieceFov.toDouble(),
+                        color = guidanceColor(guidance.proximity),
+                        pulseAlpha = 0.85f,
+                        modifier = Modifier.weight(1f).fillMaxSize()
+                    )
+                    Column(
+                        modifier = Modifier.weight(0.8f).padding(8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            usagePrompt,
+                            color = guidanceColor(guidance.proximity),
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center
+                        )
+                        if (!onTarget) {
+                            Text(
+                                moveLabel,
+                                color = guidanceColor(guidance.proximity),
+                                style = MaterialTheme.typography.titleMedium,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                        Text(
+                            stringResource(
+                                R.string.push_to_distance_remaining,
+                                PushToGuidance.formatDegrees(guidance.separationDeg)
+                            ),
+                            color = Color(0xFFBCAAA4),
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+            }
+        } else {
+            Column(
+                modifier = modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    usagePrompt,
+                    color = Color(0xFFFFCC80),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                skySolution?.takeIf { it.success }?.let { solution ->
+                    Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF10201D))) {
+                        Text(
+                            stringResource(
+                                R.string.push_to_solution_summary,
+                                solution.raDeg ?: 0.0,
+                                solution.decDeg ?: 0.0,
+                                solution.rotationDeg ?: 0.0,
+                                solution.fovWidthDeg ?: 0.0,
+                                solution.fovHeightDeg ?: 0.0
+                            ),
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            color = Color(0xFFB2DFDB),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        if (!source.plateSolved) {
+                            Text(
+                                stringResource(R.string.push_to_photo_only),
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                color = Color(0xFFFFCC80),
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
+                    }
+                }
+                capturedFrame?.let { frame ->
+                    val starCount = extraction?.stars?.size ?: 0
+                    Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF120909))) {
+                        PhoneSkyPreview(frame, extraction, Modifier.padding(4.dp))
+                        Text(
+                            stringResource(
+                                if (starCount >= 15) R.string.push_to_star_count else R.string.push_to_star_count_low,
+                                starCount
+                            ),
+                            modifier = Modifier.padding(8.dp),
+                            color = if (starCount >= 15) Color(0xFF80CBC4) else Color(0xFFFFAB91),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        if (starCount < 15 && burstFrameCount.toInt() < 16 && !solving) {
+                            TextButton(onClick = {
+                                val next = PhoneManualExposure.BURST_PRESETS
+                                    .firstOrNull { it > burstFrameCount.toInt() } ?: 16
+                                burstFrameCount = next.toFloat()
+                                persistCaptureSettings(selectedCameraId)
+                            }) {
+                                Text(stringResource(R.string.push_to_bump_burst), color = NightRed)
+                            }
+                        }
+                    }
+                }
+                if (includeSettings) captureSettings()
+            }
+        }
+    }
+    val actions: @Composable () -> Unit = {
+        if (status.isNotBlank()) {
+            Text(
+                status,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 3.dp),
+                color = Color(0xFFBCAAA4),
+                style = MaterialTheme.typography.labelSmall,
+                textAlign = TextAlign.Center,
+                maxLines = 3
+            )
+        }
+        if (needsSingleFrameVerification && !solving) {
+            TextButton(onClick = { startSolve(auto = false, forceSingleFrame = true) }, enabled = readyToCapture) {
+                Text(stringResource(R.string.wfp_verify_single_frame))
+            }
+        }
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (matchingCalibration == null || calibrationMismatch) {
+                FilledTonalButton(onClick = onCalibration, modifier = Modifier.weight(1f)) {
+                    Text(stringResource(R.string.wf_push_calibrate))
+                }
+            } else TextButton(onClick = onCalibration, modifier = Modifier.weight(1f)) {
+                Text(stringResource(R.string.wf_push_calibrate))
+            }
+            TextButton(onClick = { opticsDialog = true }, enabled = verificationField == null, modifier = Modifier.weight(1f)) {
+                Text(stringResource(R.string.wf_optics_title))
+            }
+        }
+        TextButton(onClick = { fieldAdvanced = !fieldAdvanced }, modifier = Modifier.padding(horizontal = 16.dp)) {
+            Text(stringResource(R.string.wf_optics_advanced_field))
+        }
+        if (fieldAdvanced) Row(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            TextButton(onClick = { fieldDialog = true }, enabled = verificationField == null) {
+                Text(stringResource(R.string.wf_push_field))
+            }
+            if (fieldConfirmed) TextButton(onClick = { fieldConfirmed = false }) {
+                Text(stringResource(R.string.wf_optics_use_shared))
+            }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            FilledTonalButton(
+                enabled = readyToCapture && (motionPhase == MotionPhase.STILL || !source.available),
+                modifier = Modifier.weight(1f),
+                onClick = { startSolve(auto = false) }
+            ) {
+                Text(
+                    stringResource(
+                        when {
+                            solving -> R.string.push_to_solving
+                            matchingCalibration == null || calibrationMismatch -> R.string.wf_push_phone_debug
+                            else -> R.string.push_to_resolve
+                        }
+                    )
+                )
+            }
+            if (needsPermissions) {
+                TextButton(onClick = {
+                    permissionLauncher.launch(
+                        arrayOf(
+                            Manifest.permission.ACCESS_FINE_LOCATION,
+                            Manifest.permission.ACCESS_COARSE_LOCATION,
+                            Manifest.permission.CAMERA
+                        )
+                    )
+                }) {
+                    Text(stringResource(R.string.push_to_permissions), color = NightRed)
+                }
+            }
+        }
+    }
+
     Scaffold(
         containerColor = NightBlack,
         topBar = {
@@ -778,6 +1034,25 @@ fun PushToScreen(
             )
         }
     ) { padding ->
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+        val useWideLayout = maxWidth >= 520.dp && maxWidth > maxHeight
+        if (useWideLayout) {
+            PushToAdaptiveLayout(
+                modifier = Modifier.fillMaxSize().padding(padding).background(NightBlack),
+                settingsInMain = false,
+                workflow = {
+                    WorkflowStrip(
+                        targetReady = targetHorizontal != null,
+                        cameraReady = selectedCamera != null,
+                        solved = hasAxisEstimate,
+                        onTarget = onTarget
+                    )
+                },
+                main = mainContent,
+                settings = captureSettings,
+                actions = actions
+            )
+        } else {
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -921,17 +1196,17 @@ fun PushToScreen(
                         onCameraMenuChange = { cameraMenuOpen = it },
                         onCameraSelected = {
                             applyCameraDefaults(it)
+                            persistCaptureSettings(it.cameraId)
                             cameraMenuOpen = false
                         },
                         exposureSeconds = exposureSeconds,
                         onExposureChanged = {
                             exposureSeconds = it
-                            persistCaptureSettings(selectedCameraId)
                         },
+                        onContinuousChangeFinished = { persistCaptureSettings(selectedCameraId) },
                         iso = iso,
                         onIsoChanged = {
                             iso = it
-                            persistCaptureSettings(selectedCameraId)
                         },
                         autoIso = autoIso,
                         onAutoIsoChanged = {
@@ -963,17 +1238,17 @@ fun PushToScreen(
                     onCameraMenuChange = { cameraMenuOpen = it },
                     onCameraSelected = {
                         applyCameraDefaults(it)
+                        persistCaptureSettings(it.cameraId)
                         cameraMenuOpen = false
                     },
                     exposureSeconds = exposureSeconds,
                     onExposureChanged = {
                         exposureSeconds = it
-                        persistCaptureSettings(selectedCameraId)
                     },
+                    onContinuousChangeFinished = { persistCaptureSettings(selectedCameraId) },
                     iso = iso,
                     onIsoChanged = {
                         iso = it
-                        persistCaptureSettings(selectedCameraId)
                     },
                     autoIso = autoIso,
                     onAutoIsoChanged = {
@@ -1066,6 +1341,8 @@ fun PushToScreen(
                 }
             }
         }
+        }
+        }
     }
     if (opticsDialog) PointingOpticsConfigurationSheet(workingOptics.primaryGeometry, workingOptics.secondaryGeometry,
         onOpticalPathInvalidated = { train, reason -> repository.invalidateOpticalPath(train.prefValue(), reason.name) },
@@ -1130,6 +1407,45 @@ private fun WorkflowStrip(
     }
 }
 
+@Composable
+internal fun PushToAdaptiveLayout(
+    modifier: Modifier = Modifier,
+    settingsInMain: Boolean,
+    workflow: @Composable () -> Unit,
+    main: @Composable (Modifier, Boolean) -> Unit,
+    settings: @Composable () -> Unit,
+    actions: @Composable () -> Unit
+) {
+    BoxWithConstraints(modifier) {
+        val wide = maxWidth >= 520.dp && maxWidth > maxHeight
+        if (wide) {
+            Row(Modifier.fillMaxSize().testTag("push-layout-wide")) {
+                Column(Modifier.weight(0.58f).fillMaxHeight()) {
+                    workflow()
+                    main(Modifier.weight(1f), false)
+                }
+                Column(
+                    Modifier
+                        .weight(0.42f)
+                        .fillMaxHeight()
+                        .verticalScroll(rememberScrollState())
+                        .padding(bottom = 6.dp)
+                ) {
+                    settings()
+                    actions()
+                }
+            }
+        } else {
+            Column(Modifier.fillMaxSize().testTag("push-layout-standard")) {
+                workflow()
+                main(Modifier.weight(1f), settingsInMain)
+                if (!settingsInMain) settings()
+                actions()
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun WorkflowChip(number: String, label: String, complete: Boolean) {
@@ -1143,7 +1459,7 @@ private fun WorkflowChip(number: String, label: String, complete: Boolean) {
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-private fun CaptureSettingsCard(
+internal fun CaptureSettingsCard(
     cameras: List<PhoneCameraCapability>,
     selectedCamera: PhoneCameraCapability?,
     cameraMenuOpen: Boolean,
@@ -1151,6 +1467,7 @@ private fun CaptureSettingsCard(
     onCameraSelected: (PhoneCameraCapability) -> Unit,
     exposureSeconds: Float,
     onExposureChanged: (Float) -> Unit,
+    onContinuousChangeFinished: () -> Unit = {},
     iso: Float,
     onIsoChanged: (Float) -> Unit,
     autoIso: Boolean,
@@ -1193,26 +1510,42 @@ private fun CaptureSettingsCard(
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                ExposedDropdownMenuBox(
-                    expanded = cameraMenuOpen,
-                    onExpandedChange = onCameraMenuChange
-                ) {
+                val baseLabels = cameras.associateWith { localizedCameraLabel(it) }
+                fun labelFor(camera: PhoneCameraCapability): String {
+                    val base = baseLabels.getValue(camera)
+                    return if (baseLabels.values.count { it == base } > 1) "$base · #${camera.cameraId}" else base
+                }
+                val lensLabel = stringResource(R.string.phone_camera_lens)
+                val selectedLabel = selectedCamera?.let(::labelFor)
+                    ?: stringResource(R.string.phone_camera_lens_none)
+                Box(Modifier.fillMaxWidth()) {
                     OutlinedTextField(
-                        value = selectedCamera?.let { localizedCameraLabel(it) }
-                            ?: stringResource(R.string.phone_camera_lens_none),
+                        value = selectedLabel,
                         onValueChange = {},
                         readOnly = true,
-                        modifier = Modifier.menuAnchor().fillMaxWidth(),
-                        label = { Text(stringResource(R.string.phone_camera_lens)) },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(lensLabel) },
                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(cameraMenuOpen) }
                     )
-                    ExposedDropdownMenu(
+                    Box(
+                        Modifier
+                            .matchParentSize()
+                            .testTag("push-camera-menu-anchor")
+                            .semantics { contentDescription = "$lensLabel: $selectedLabel" }
+                            .clickable(role = Role.Button) { onCameraMenuChange(!cameraMenuOpen) }
+                    )
+                    DropdownMenu(
                         expanded = cameraMenuOpen,
-                        onDismissRequest = { onCameraMenuChange(false) }
+                        onDismissRequest = { onCameraMenuChange(false) },
+                        properties = PopupProperties(
+                            focusable = true,
+                            dismissOnBackPress = true,
+                            dismissOnClickOutside = true
+                        )
                     ) {
                         cameras.forEach { camera ->
                             DropdownMenuItem(
-                                text = { Text(localizedCameraLabel(camera)) },
+                                text = { Text(labelFor(camera)) },
                                 onClick = { onCameraSelected(camera) }
                             )
                         }
@@ -1236,8 +1569,9 @@ private fun CaptureSettingsCard(
                     onValueChange = {
                         onExposureChanged(PhoneManualExposure.fromSlider(it, exposureMin, exposureMax))
                     },
+                    onValueChangeFinished = onContinuousChangeFinished,
                     valueRange = 0f..1f,
-                    modifier = Modifier.height(32.dp)
+                    modifier = Modifier.height(32.dp).testTag("push-exposure-slider")
                 )
                 if (exposureMax <= 0.6f) {
                     Text(
@@ -1298,8 +1632,9 @@ private fun CaptureSettingsCard(
                     Slider(
                         value = iso.coerceIn(isoMin, isoMax),
                         onValueChange = onIsoChanged,
+                        onValueChangeFinished = onContinuousChangeFinished,
                         valueRange = isoMin..isoMax,
-                        modifier = Modifier.height(32.dp)
+                        modifier = Modifier.height(32.dp).testTag("push-iso-slider")
                     )
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1336,7 +1671,11 @@ private fun localizedCameraLabel(camera: PhoneCameraCapability): String {
             PhoneLensRole.UNKNOWN -> R.string.push_to_lens_other
         }
     )
-    val focal = camera.equivalentFocalLengthMm?.let { " · ${it.toInt()} mm" }.orEmpty()
+    val focal = camera.equivalentFocalLengthMm?.let { value ->
+        val formatted = if (value % 1f == 0f) value.toInt().toString()
+            else String.format(java.util.Locale.getDefault(), "%.1f", value)
+        " · $formatted mm"
+    }.orEmpty()
     val raw = if (camera.supportsRaw) " · RAW" else ""
     return role + focal + raw
 }

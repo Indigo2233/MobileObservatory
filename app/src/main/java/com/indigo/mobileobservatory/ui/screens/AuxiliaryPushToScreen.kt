@@ -38,14 +38,14 @@ fun AuxiliaryPushToScreen(viewModel: CameraViewModel, target: SkyDirection, targ
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val repository = viewModel.pointingRepository
-    val relationships by repository.relationships.collectAsState()
-    val connection by viewModel.guideConnectionState.collectAsState()
-    val guiding by viewModel.guideRunning.collectAsState()
-    val guideCalibration by viewModel.guideCalibrating.collectAsState()
-    val referenceReady by viewModel.guideReferenceReady.collectAsState()
-    val settingBusy by viewModel.guideGainWriteInProgress.collectAsState()
-    val exposureUs by viewModel.guideExposureUs.collectAsState()
-    val motion by viewModel.auxiliaryOpticalMotion.collectAsState()
+    val relationships by repository.relationships.collectAsStateWithPageLifecycle()
+    val connection by viewModel.guideConnectionState.collectAsStateWithPageLifecycle()
+    val guiding by viewModel.guideRunning.collectAsStateWithPageLifecycle()
+    val guideCalibration by viewModel.guideCalibrating.collectAsStateWithPageLifecycle()
+    val referenceReady by viewModel.guideReferenceReady.collectAsStateWithPageLifecycle()
+    val settingBusy by viewModel.guideGainWriteInProgress.collectAsStateWithPageLifecycle()
+    val exposureUs by viewModel.guideExposureUs.collectAsStateWithPageLifecycle()
+    val motion by viewModel.auxiliaryOpticalMotion.collectAsStateWithPageLifecycle()
     val foreground = rememberPageForeground()
     val primary = remember { OpticalIdentity("telescope", "axis", "primary") }
     val verification = remember { PushToVerificationSession(VerificationPolicy(maxClockUncertaintyMs = 15_000.0)) }

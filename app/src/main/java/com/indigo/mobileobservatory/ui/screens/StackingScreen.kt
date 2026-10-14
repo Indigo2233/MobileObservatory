@@ -57,18 +57,18 @@ import java.io.File
 fun StackingScreen(viewModel: CameraViewModel, mode: StackMode, onBack: () -> Unit,
     onCamera: () -> Unit = onBack, onOpenResult: (File?) -> Unit = {}) {
     val coordinator = viewModel.stacking
-    val task = coordinator.task.collectAsState().value
-    val rendering by coordinator.rendering.collectAsState()
-    val live = coordinator.live.state.collectAsState().value
-    val rendered by coordinator.preview.collectAsState()
-    val cameraFrame by viewModel.previewBitmap.collectAsState()
-    val showStack by coordinator.showLiveStack.collectAsState()
-    val parameters by coordinator.processing.collectAsState()
-    val backgroundWarning by coordinator.backgroundWarning.collectAsState()
-    val liveTarget by coordinator.liveTarget.collectAsState()
-    val offlineTarget by coordinator.offlineTarget.collectAsState()
+    val task = coordinator.task.collectAsStateWithPageLifecycle().value
+    val rendering by coordinator.rendering.collectAsStateWithPageLifecycle()
+    val live = coordinator.live.state.collectAsStateWithPageLifecycle().value
+    val rendered by coordinator.preview.collectAsStateWithPageLifecycle()
+    val cameraFrame by viewModel.previewBitmap.collectAsStateWithPageLifecycle()
+    val showStack by coordinator.showLiveStack.collectAsStateWithPageLifecycle()
+    val parameters by coordinator.processing.collectAsStateWithPageLifecycle()
+    val backgroundWarning by coordinator.backgroundWarning.collectAsStateWithPageLifecycle()
+    val liveTarget by coordinator.liveTarget.collectAsStateWithPageLifecycle()
+    val offlineTarget by coordinator.offlineTarget.collectAsStateWithPageLifecycle()
     val target = if (mode == StackMode.LIVE) liveTarget else offlineTarget
-    val calibrationState by coordinator.calibration.state.collectAsState()
+    val calibrationState by coordinator.calibration.state.collectAsStateWithPageLifecycle()
     val targetSelectionEnabled = !calibrationState.busy && task.phase != StackTaskPhase.EXPORTING &&
         !(mode == StackMode.LIVE && task.busy)
     var previousTarget by rememberSaveable(mode) { mutableStateOf(target) }
@@ -255,16 +255,16 @@ fun StackingScreen(viewModel: CameraViewModel, mode: StackMode, onBack: () -> Un
 @Composable
 private fun LiveStackControls(vm: CameraViewModel, state: LiveStackState, showStack: Boolean, target: StackTarget, onCamera: () -> Unit) {
     val c = vm.stacking
-    val calibration by c.calibration.state.collectAsState()
-    val task by c.task.collectAsState()
-    val algorithm by c.demosaicAlgorithm.collectAsState()
-    val captureFormat by vm.liveStackPixelFormat.collectAsState()
-    val scienceReady by vm.scienceCaptureReady.collectAsState()
-    val rendering by c.rendering.collectAsState()
+    val calibration by c.calibration.state.collectAsStateWithPageLifecycle()
+    val task by c.task.collectAsStateWithPageLifecycle()
+    val algorithm by c.demosaicAlgorithm.collectAsStateWithPageLifecycle()
+    val captureFormat by vm.liveStackPixelFormat.collectAsStateWithPageLifecycle()
+    val scienceReady by vm.scienceCaptureReady.collectAsStateWithPageLifecycle()
+    val rendering by c.rendering.collectAsStateWithPageLifecycle()
     var readiness by remember { mutableStateOf(vm.liveStackStartIssue()) }
     LaunchedEffect(vm, scienceReady) { while (true) { readiness = vm.liveStackStartIssue(); delay(500) } }
-    val recording by vm.isRecording.collectAsState()
-    val recordedFrames by vm.recordingFrameCount.collectAsState()
+    val recording by vm.isRecording.collectAsStateWithPageLifecycle()
+    val recordedFrames by vm.recordingFrameCount.collectAsStateWithPageLifecycle()
     var details by rememberSaveable { mutableStateOf(false) }
     Text(stringResource(if (target == StackTarget.PLANETARY) R.string.stack_live_planetary_intro else R.string.stack_eaa_intro), style = MaterialTheme.typography.bodySmall)
     if (state.phase == LiveStackPhase.EMPTY || state.phase == LiveStackPhase.PAUSED) {
@@ -318,11 +318,11 @@ private fun LiveStackControls(vm: CameraViewModel, state: LiveStackState, showSt
 @Composable
 private fun OfflineStackControls(c: StackingCoordinator, task: StackingTaskState, drawn: PixelRoi?, target: StackTarget,
     onChoose: () -> Unit, onBrowse: () -> Unit, onDrawRoi: () -> Unit) {
-    val live by c.live.state.collectAsState()
-    val algorithm by c.demosaicAlgorithm.collectAsState()
-    val interpretation by c.serCfaInterpretation.collectAsState()
-    val calibration by c.calibration.state.collectAsState()
-    val rendering by c.rendering.collectAsState()
+    val live by c.live.state.collectAsStateWithPageLifecycle()
+    val algorithm by c.demosaicAlgorithm.collectAsStateWithPageLifecycle()
+    val interpretation by c.serCfaInterpretation.collectAsStateWithPageLifecycle()
+    val calibration by c.calibration.state.collectAsStateWithPageLifecycle()
+    val rendering by c.rendering.collectAsStateWithPageLifecycle()
     val source = task.source
     var roiX by rememberSaveable(source?.identity) { mutableStateOf("0") }
     var roiY by rememberSaveable(source?.identity) { mutableStateOf("0") }
@@ -449,7 +449,7 @@ private fun OfflineStackControls(c: StackingCoordinator, task: StackingTaskState
 
 @Composable
 private fun ProcessingControls(c: StackingCoordinator, p: StackProcessingParameters, onBackground: () -> Unit) {
-    val task by c.task.collectAsState()
+    val task by c.task.collectAsStateWithPageLifecycle()
     var advanced by rememberSaveable { mutableStateOf(false) }
     Divider()
     Text(stringResource(R.string.stack_compare), style = MaterialTheme.typography.titleMedium)
@@ -499,7 +499,7 @@ private fun ProcessingControls(c: StackingCoordinator, p: StackProcessingParamet
 internal fun AppRecordingPicker(vm: CameraViewModel, onDismiss: () -> Unit,
     onSelect: (File) -> Unit, onCamera: () -> Unit) {
     var refresh by remember { mutableIntStateOf(0) }
-    val recording by vm.isRecording.collectAsState()
+    val recording by vm.isRecording.collectAsStateWithPageLifecycle()
     val recordings = vm.getRecordingsDir()
     val captures = vm.getCapturesDir()
     var loading by remember { mutableStateOf(true) }
@@ -539,8 +539,8 @@ internal fun AppRecordingPicker(vm: CameraViewModel, onDismiss: () -> Unit,
 /** Keep the camera controls honest when their preview is showing a retained EAA stack. */
 @Composable
 internal fun EaaSessionBar(vm: CameraViewModel, onOpen: () -> Unit = { vm.stacking.open(StackMode.LIVE) }) {
-    val state by vm.stacking.live.state.collectAsState()
-    val showStack by vm.stacking.showLiveStack.collectAsState()
+    val state by vm.stacking.live.state.collectAsStateWithPageLifecycle()
+    val showStack by vm.stacking.showLiveStack.collectAsStateWithPageLifecycle()
     if (state.phase == LiveStackPhase.EMPTY || state.phase == LiveStackPhase.CLOSED) return
     Surface(color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth()) {
         Row(Modifier.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically,

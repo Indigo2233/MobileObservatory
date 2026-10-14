@@ -94,8 +94,8 @@ fun SequenceAdvancedEditor(
     pointingDecDeg: Double? = null,
     modifier: Modifier = Modifier
 ) {
-    val generation by runtime.generation.collectAsState()
-    val document by runtime.document.collectAsState()
+    val generation by runtime.generation.collectAsStateWithPageLifecycle()
+    val document by runtime.document.collectAsStateWithPageLifecycle()
     val root = document
     val chinese = LocalConfiguration.current.locales[0].language.startsWith("zh")
     val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
@@ -108,10 +108,10 @@ fun SequenceAdvancedEditor(
     var adding by remember { mutableStateOf<AddRequest?>(null) }
     var editorOrigin by remember { mutableStateOf(Offset.Zero) }
     var viewport by remember { mutableStateOf(Rect.Zero) }
-    val canUndo by runtime.canUndo.collectAsState()
-    val canRedo by runtime.canRedo.collectAsState()
-    val locked by runtime.locked.collectAsState()
-    val runState by runtime.state.collectAsState()
+    val canUndo by runtime.canUndo.collectAsStateWithPageLifecycle()
+    val canRedo by runtime.canRedo.collectAsStateWithPageLifecycle()
+    val locked by runtime.locked.collectAsStateWithPageLifecycle()
+    val runState by runtime.state.collectAsStateWithPageLifecycle()
     val editing = enabled && !locked
     if (root == null || generation < 0) return
     drag.gapPx = with(density) { 8.dp.toPx() }

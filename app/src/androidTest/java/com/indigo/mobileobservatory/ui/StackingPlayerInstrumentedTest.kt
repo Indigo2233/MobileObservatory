@@ -194,6 +194,26 @@ class StackingPlayerInstrumentedTest {
         }
     }
 
+    @Test fun fitsLp750HelpExplainsDisplayScopeAndCreditsTheAuthor() {
+        val fitsDir = File(directory, "captures/FITS").apply { check(mkdirs()) }
+        val file = File(fitsDir, "lp750-help.fits")
+        StackFitsWriter.write(file, LinearImage(8, 8, 3, FloatArray(8 * 8 * 3) { .25f }))
+
+        showPlayer {}
+        compose.onNodeWithText(context.getString(R.string.media_category_fits)).performScrollTo().performClick()
+        compose.waitUntil(10_000) { compose.onAllNodesWithText(file.name).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText(file.name).performClick()
+        compose.onNodeWithContentDescription(context.getString(R.string.lp750_help_button))
+            .assertIsDisplayed()
+            .performClick()
+
+        compose.onNodeWithText(context.getString(R.string.lp750_help_title)).assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.lp750_help_description)).assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.lp750_credit)).assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.close)).performClick()
+        compose.onNodeWithText(context.getString(R.string.lp750_help_title)).assertDoesNotExist()
+    }
+
     private fun showPlayer(onStack: (File) -> Unit) {
         compose.setContent {
             MaterialTheme {

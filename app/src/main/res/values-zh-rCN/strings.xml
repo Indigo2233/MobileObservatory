@@ -230,7 +230,10 @@
     <string name="share_log">分享日志</string>
     <string name="about">关于</string>
     <string name="about_desc">靛空台 v%1$s（build %2$d）\n支持相机、赤道仪、导星和天文配件</string>
-    <string name="lp750_credit">LP750 红外转色算法鸣谢：红外LP750银河 UP 主\nhttps://space.bilibili.com/455218677</string>
+    <string name="lp750_credit">LP750 红外转色算法作者与来源：红外LP750银河 UP 主\nhttps://space.bilibili.com/455218677</string>
+    <string name="lp750_help_button">LP750 说明</string>
+    <string name="lp750_help_title">关于 LP750</string>
+    <string name="lp750_help_description">LP750 是用于 LP750 红外长通滤镜图像的显示转色功能。开启后，应用会在去马赛克或 RGB 解码后应用颜色矩阵和预览白平衡。该功能只改变当前预览，不会修改 FITS 文件、标定数据或科学叠加结果。普通可见光图像应保持关闭。</string>
 
     <!-- FilterWheelPanel / EAFPanel -->
     <string name="filter_wheel_title">滤镜轮</string>

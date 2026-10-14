@@ -62,7 +62,7 @@ fun DeviceSettingsScreen(
 ) {
     val requested = DeviceControlDestination.fromKey(deviceKey) ?: DeviceControlDestination.CAMERA
     val destination = if (requested == DeviceControlDestination.COOLER) DeviceControlDestination.CAMERA else requested
-    val motion by cameraViewModel.mountMotionState.collectAsState()
+    val motion by cameraViewModel.mountMotionState.collectAsStateWithPageLifecycle()
     val stop = stringResource(R.string.stop_mount)
     SideEffect { exitState.safetyAction = if (motion.showsGlobalStop) stop to cameraViewModel::stopMountMotion else null }
     val presentation = deviceSettingsPresentation(cameraViewModel, destination)
@@ -87,10 +87,10 @@ internal fun SettingsDraftEditor(
     extraControls: @Composable (Boolean) -> Unit = {},
     onSave: (SettingsDraft, (Map<String, String>) -> Unit, (String) -> Unit) -> Unit
 ) {
-    val draft by model.draft.collectAsState()
-    val saving by model.saving.collectAsState()
-    val error by model.error.collectAsState()
-    val saved by model.saved.collectAsState()
+    val draft by model.draft.collectAsStateWithPageLifecycle()
+    val saving by model.saving.collectAsStateWithPageLifecycle()
+    val error by model.error.collectAsStateWithPageLifecycle()
+    val saved by model.saved.collectAsStateWithPageLifecycle()
     com.indigo.mobileobservatory.ui.components.RegisterSettingsExitGuard(exit)
     DisposableEffect(model) {
         model.attachEditor()
@@ -182,8 +182,8 @@ internal fun SettingsDraftEditor(
 
 @Composable
 private fun FocuserZeroControl(vm: CameraViewModel, usable: Boolean) {
-    val moving by vm.eafMoving.collectAsState()
-    val mountMotion by vm.mountMotionState.collectAsState()
+    val moving by vm.eafMoving.collectAsStateWithPageLifecycle()
+    val mountMotion by vm.mountMotionState.collectAsStateWithPageLifecycle()
     var confirm by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
     TextButton(onClick = { confirm = true }, enabled = usable && !moving) { Text(stringResource(R.string.wf_focus_zero)) }
     if (confirm) AlertDialog(onDismissRequest = { confirm = false },
@@ -204,18 +204,18 @@ private fun floatField(key: String, label: String, min: Float, max: Float, optio
 @Composable
 private fun deviceSettingsPresentation(vm: CameraViewModel, destination: DeviceControlDestination): DeviceSettingsPresentation = when (destination) {
     DeviceControlDestination.CAMERA, DeviceControlDestination.COOLER -> {
-        val connection by vm.connectionState.collectAsState()
-        val formats by vm.supportedPixelFormats.collectAsState()
-        val modes by vm.supportedReadoutModes.collectAsState()
-        val nativeModes by vm.nativeReadoutModes.collectAsState()
-        val nativeCurrent by vm.nativeReadoutModeId.collectAsState()
-        val currentMode by vm.readoutMode.collectAsState()
-        val currentFormat by vm.pixelFormat.collectAsState()
-        val gain by vm.gain.collectAsState()
-        val gainCapability by vm.gainCapability.collectAsState()
-        val offset by vm.offset.collectAsState()
-        val offsetRange by vm.offsetRange.collectAsState()
-        val offsetLabel by vm.offsetLabel.collectAsState()
+        val connection by vm.connectionState.collectAsStateWithPageLifecycle()
+        val formats by vm.supportedPixelFormats.collectAsStateWithPageLifecycle()
+        val modes by vm.supportedReadoutModes.collectAsStateWithPageLifecycle()
+        val nativeModes by vm.nativeReadoutModes.collectAsStateWithPageLifecycle()
+        val nativeCurrent by vm.nativeReadoutModeId.collectAsStateWithPageLifecycle()
+        val currentMode by vm.readoutMode.collectAsStateWithPageLifecycle()
+        val currentFormat by vm.pixelFormat.collectAsStateWithPageLifecycle()
+        val gain by vm.gain.collectAsStateWithPageLifecycle()
+        val gainCapability by vm.gainCapability.collectAsStateWithPageLifecycle()
+        val offset by vm.offset.collectAsStateWithPageLifecycle()
+        val offsetRange by vm.offsetRange.collectAsStateWithPageLifecycle()
+        val offsetLabel by vm.offsetLabel.collectAsStateWithPageLifecycle()
         val info = (connection as? ConnectionState.Connected)?.info
         val defaults = vm.cameraDefaults()
         val fields = buildList {
@@ -235,9 +235,9 @@ private fun deviceSettingsPresentation(vm: CameraViewModel, destination: DeviceC
         DeviceSettingsPresentation(cameraSettingsDeviceKey(vm), info?.name ?: stringResource(R.string.camera), info != null, values, fields)
     }
     DeviceControlDestination.FOCUSER -> {
-        val info by vm.eafInfo.collectAsState()
-        val connected by vm.eafConnected.collectAsState()
-        val id by vm.activeFocuserDeviceId.collectAsState()
+        val info by vm.eafInfo.collectAsStateWithPageLifecycle()
+        val connected by vm.eafConnected.collectAsStateWithPageLifecycle()
+        val id by vm.activeFocuserDeviceId.collectAsStateWithPageLifecycle()
         val d = vm.focuserDefaults()
         DeviceSettingsPresentation("focuser:$id:${info?.name}", info?.name ?: stringResource(R.string.focuser), connected && info != null,
             focuserFields(d), listOf(
@@ -247,10 +247,10 @@ private fun deviceSettingsPresentation(vm: CameraViewModel, destination: DeviceC
                 SettingsField("backlashDirection", stringResource(R.string.backlash_direction), toggle = true)))
     }
     DeviceControlDestination.COVER -> {
-        val info by vm.coverDeviceInfo.collectAsState()
-        val connected by vm.coverConnected.collectAsState()
-        val id by vm.activeCoverDeviceId.collectAsState()
-        val maximum by vm.calibratorMaxBrightness.collectAsState()
+        val info by vm.coverDeviceInfo.collectAsStateWithPageLifecycle()
+        val connected by vm.coverConnected.collectAsStateWithPageLifecycle()
+        val id by vm.activeCoverDeviceId.collectAsStateWithPageLifecycle()
+        val maximum by vm.calibratorMaxBrightness.collectAsStateWithPageLifecycle()
         val d = vm.coverDefaults()
         DeviceSettingsPresentation("cover:$id:$info", info ?: stringResource(R.string.cover), connected,
             coverFields(d), listOf(integerField("open", stringResource(R.string.cover_open_angle), 0, 360),
@@ -259,34 +259,34 @@ private fun deviceSettingsPresentation(vm: CameraViewModel, destination: DeviceC
             hint = stringResource(R.string.cover_angle_capability_hint))
     }
     DeviceControlDestination.FILTER -> {
-        val info by vm.filterWheelInfo.collectAsState()
-        val connected by vm.filterWheelConnected.collectAsState()
-        val id by vm.activeFilterWheelDeviceId.collectAsState()
-        val names by vm.filterWheelSlotNames.collectAsState()
-        val bidirectional by vm.filterWheelBidirectional.collectAsState()
+        val info by vm.filterWheelInfo.collectAsStateWithPageLifecycle()
+        val connected by vm.filterWheelConnected.collectAsStateWithPageLifecycle()
+        val id by vm.activeFilterWheelDeviceId.collectAsStateWithPageLifecycle()
+        val names by vm.filterWheelSlotNames.collectAsStateWithPageLifecycle()
+        val bidirectional by vm.filterWheelBidirectional.collectAsStateWithPageLifecycle()
         val values = mapOf("count" to (info?.slotCount ?: names.size).toString(), "bidirectional" to if (bidirectional) "1" else "0") + names.mapIndexed { i, name -> "name$i" to name }
         DeviceSettingsPresentation("filter:$id:${info?.name}", info?.name ?: stringResource(R.string.filter_wheel), connected,
             values, listOf(integerField("count", stringResource(R.string.slot_count), 1, 16), SettingsField("bidirectional", stringResource(R.string.bidirectional), toggle = true)) +
                 names.mapIndexed { i, _ -> SettingsField("name$i", stringResource(R.string.slot_n, i + 1), valid = { it.length <= 64 }, numeric = false) })
     }
     DeviceControlDestination.ROTATOR -> {
-        val info by vm.rotatorDeviceInfo.collectAsState()
-        val connected by vm.rotatorConnected.collectAsState()
-        val id by vm.activeRotatorDeviceId.collectAsState()
-        val scale by vm.rotatorStepsPerDegree.collectAsState()
-        val reversed by vm.rotatorReversed.collectAsState()
-        val hold by vm.rotatorHold.collectAsState()
-        val supportsHold by vm.rotatorSupportsHold.collectAsState()
+        val info by vm.rotatorDeviceInfo.collectAsStateWithPageLifecycle()
+        val connected by vm.rotatorConnected.collectAsStateWithPageLifecycle()
+        val id by vm.activeRotatorDeviceId.collectAsStateWithPageLifecycle()
+        val scale by vm.rotatorStepsPerDegree.collectAsStateWithPageLifecycle()
+        val reversed by vm.rotatorReversed.collectAsStateWithPageLifecycle()
+        val hold by vm.rotatorHold.collectAsStateWithPageLifecycle()
+        val supportsHold by vm.rotatorSupportsHold.collectAsStateWithPageLifecycle()
         DeviceSettingsPresentation("rotator:$id:$info", info ?: stringResource(R.string.motorized_caa), connected,
             mapOf("scale" to scale.toString(), "reverse" to if (reversed) "1" else "0", "hold" to if (hold) "1" else "0"),
             listOf(integerField("scale", stringResource(R.string.steps_per_degree), 1), SettingsField("reverse", stringResource(R.string.reverse), toggle = true)) +
                 if (supportsHold) listOf(SettingsField("hold", stringResource(R.string.motor_hold), toggle = true)) else emptyList())
     }
     DeviceControlDestination.POWER -> {
-        val connected by vm.powerBoxConnected.collectAsState()
-        val info by vm.powerBoxCapabilities.collectAsState()
-        val names by vm.powerBoxInterfaceNames.collectAsState()
-        val id by vm.activePowerBoxDeviceId.collectAsState()
+        val connected by vm.powerBoxConnected.collectAsStateWithPageLifecycle()
+        val info by vm.powerBoxCapabilities.collectAsStateWithPageLifecycle()
+        val names by vm.powerBoxInterfaceNames.collectAsStateWithPageLifecycle()
+        val id by vm.activePowerBoxDeviceId.collectAsStateWithPageLifecycle()
         val targets = buildList {
             info?.dcOutputs?.forEach { add(PowerInterfaceNames.dc(it.commandAddress) to stringResource(R.string.dc_output_number, it.commandAddress)) }
             info?.usbMasterOutput?.let { add(PowerInterfaceNames.usbMaster(it.commandAddress) to stringResource(R.string.usb_master_output)) }

@@ -40,7 +40,7 @@ fun SettingsScreen(viewModel: CameraViewModel, onBack: () -> Unit) {
     val updates: UpdateViewModel = viewModel()
     val exit = rememberSettingsExitState()
     com.indigo.mobileobservatory.ui.components.RegisterSettingsExitGuard(exit)
-    val motion by viewModel.mountMotionState.collectAsState()
+    val motion by viewModel.mountMotionState.collectAsStateWithPageLifecycle()
     val stop = stringResource(R.string.stop_mount)
     val sections = listOf(SettingsSection.GENERAL, SettingsSection.DIAGNOSTICS) +
         if (SequenceFeature.ENABLED) listOf(SettingsSection.SEQUENCE) else emptyList()
@@ -93,7 +93,7 @@ private fun SettingsPage(content: @Composable () -> Unit) {
 
 @Composable
 private fun SequenceSettingsEditor(vm: CameraViewModel, exit: com.indigo.mobileobservatory.ui.components.SettingsExitState, onBack: () -> Unit) {
-    val settings by vm.sequenceSettings.collectAsState()
+    val settings by vm.sequenceSettings.collectAsStateWithPageLifecycle()
     val editor: SettingsDraftViewModel = viewModel(key = "sequence-settings-draft")
     val values = mapOf(
         "after" to settings.minutesAfterMeridian.toString(), "maximum" to settings.maxMinutesAfterMeridian.toString(),
@@ -136,7 +136,7 @@ private fun GeneralSettingsPage(updateViewModel: UpdateViewModel) = SettingsPage
 
 @Composable
 private fun UpdateSettingsSection(updateViewModel: UpdateViewModel) {
-    val updateState by updateViewModel.state.collectAsState()
+    val updateState by updateViewModel.state.collectAsStateWithPageLifecycle()
     Text(stringResource(R.string.settings_update), style = MaterialTheme.typography.titleSmall)
     Text(
         stringResource(

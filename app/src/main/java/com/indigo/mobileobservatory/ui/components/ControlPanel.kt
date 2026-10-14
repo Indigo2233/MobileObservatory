@@ -1,5 +1,7 @@
 package com.indigo.mobileobservatory.ui.components
 
+import com.indigo.mobileobservatory.ui.screens.collectAsStateWithPageLifecycle
+
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
@@ -167,8 +169,8 @@ fun ControlPanel(
     onEafSettings: (() -> Unit)? = null,
     showLegacyFilterSettings: Boolean = true
 ) {
-    val exposureMin by exposureMinFlow.collectAsState()
-    val exposureMax by exposureMaxFlow.collectAsState()
+    val exposureMin by exposureMinFlow.collectAsStateWithPageLifecycle()
+    val exposureMax by exposureMaxFlow.collectAsStateWithPageLifecycle()
     var activeSection by remember { mutableStateOf(ControlPanelSection.CAPTURE) }
     val availableSections = controlPanelSections(
         showHostRoi = showHostRoi,

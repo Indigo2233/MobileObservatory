@@ -1,0 +1,15 @@
+cmake_minimum_required(VERSION 3.22)
+project(indeconv_mnn_benchmark LANGUAGES CXX)
+
+if(NOT DEFINED MNN_SOURCE_DIR)
+    message(FATAL_ERROR "MNN_SOURCE_DIR is required")
+endif()
+if(NOT DEFINED MNN_LIBRARY)
+    message(FATAL_ERROR "MNN_LIBRARY is required")
+endif()
+
+add_executable(indeconv_bench main.cpp)
+target_compile_features(indeconv_bench PRIVATE cxx_std_17)
+target_compile_options(indeconv_bench PRIVATE -O3 -fno-fast-math)
+target_include_directories(indeconv_bench PRIVATE "${MNN_SOURCE_DIR}/include")
+target_link_libraries(indeconv_bench PRIVATE "${MNN_LIBRARY}" log android dl)

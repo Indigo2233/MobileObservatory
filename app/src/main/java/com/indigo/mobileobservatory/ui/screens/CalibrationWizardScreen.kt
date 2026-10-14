@@ -80,8 +80,8 @@ fun CalibrationWizardScreen(
     var pendingAutomaticPlan by remember { mutableStateOf<AutomaticCalibrationPlan?>(null) }
     var automaticProgress by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var planningAutomatic by remember { mutableStateOf(false) }
-    val stored by repository.relationships.collectAsState()
-    val storedHandEyes by repository.handEyes.collectAsState()
+    val stored by repository.relationships.collectAsStateWithPageLifecycle()
+    val storedHandEyes by repository.handEyes.collectAsStateWithPageLifecycle()
     val foreground = rememberPageForeground()
     val star = stars.firstOrNull { it.hip == starId }
     val lens = cameras.firstOrNull { it.cameraId == lensId }

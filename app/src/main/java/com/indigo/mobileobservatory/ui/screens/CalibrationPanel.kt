@@ -22,7 +22,7 @@ import com.indigo.mobileobservatory.ui.viewmodel.CameraViewModel
 
 @Composable
 internal fun CalibrationEntry(vm: CameraViewModel, onOpen: () -> Unit) {
-    val state by vm.stacking.calibration.state.collectAsState()
+    val state by vm.stacking.calibration.state.collectAsStateWithPageLifecycle()
     OutlinedButton(onClick = onOpen, modifier = Modifier.fillMaxWidth()) {
         Text(stringResource(R.string.stack_cal_entry, if (state.selectedIds.isEmpty())
             stringResource(R.string.stack_cal_none) else CalibrationType.values().filter { it in state.selectedIds }.joinToString(" + ") { it.name }))
@@ -34,9 +34,9 @@ internal fun CalibrationEntry(vm: CameraViewModel, onOpen: () -> Unit) {
 internal fun CalibrationPanel(vm: CameraViewModel, onDismiss: () -> Unit, onCamera: () -> Unit) {
     val coordinator = vm.stacking
     val library = coordinator.calibration
-    val state by library.state.collectAsState()
-    val task by coordinator.task.collectAsState()
-    val recording by vm.isRecording.collectAsState()
+    val state by library.state.collectAsStateWithPageLifecycle()
+    val task by coordinator.task.collectAsStateWithPageLifecycle()
+    val recording by vm.isRecording.collectAsStateWithPageLifecycle()
     var typeName by rememberSaveable { mutableStateOf<String?>(null) }
     val type = typeName?.let(CalibrationType::valueOf)
     var guideStep by rememberSaveable { mutableIntStateOf(-1) }

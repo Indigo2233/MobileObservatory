@@ -34,20 +34,20 @@ internal fun SkyWorkspaceScreen(viewModel: CameraViewModel, selectedTarget: Star
     pointingSources: List<FovPointingCandidate> = emptyList(),
     opticalPathIds: Map<OpticsTrainId, String> = emptyMap(),
     onOpticalPathInvalidated: (OpticsTrainId, PointingOpticsChange) -> Unit = { _, _ -> }) {
-    val mountCoordinates by viewModel.mountCoordinates.collectAsState()
-    val mountTime by viewModel.mountTime.collectAsState()
-    val mountSite by viewModel.mountSite.collectAsState()
-    val mountConnectionState by viewModel.mountConnectionState.collectAsState()
-    val mountBusy by viewModel.mountBusy.collectAsState()
-    val mountCapabilities by viewModel.mountPointingCapabilities.collectAsState()
-    val globalMountMotionState by viewModel.mountMotionState.collectAsState()
-    val mountSlewRate by viewModel.mountSlewRate.collectAsState()
-    val precisionGotoProgress by viewModel.precisionGotoProgress.collectAsState()
-    val connectionState by viewModel.connectionState.collectAsState()
-    val roi by viewModel.roi.collectAsState()
-    val appBinning by viewModel.binning.collectAsState()
-    val guideCameraGeometry by viewModel.guideCameraGeometry.collectAsState()
-    val opticsRevision by viewModel.pointingOpticsRevision.collectAsState()
+    val mountCoordinates by viewModel.mountCoordinates.collectAsStateWithPageLifecycle()
+    val mountTime by viewModel.mountTime.collectAsStateWithPageLifecycle()
+    val mountSite by viewModel.mountSite.collectAsStateWithPageLifecycle()
+    val mountConnectionState by viewModel.mountConnectionState.collectAsStateWithPageLifecycle()
+    val mountBusy by viewModel.mountBusy.collectAsStateWithPageLifecycle()
+    val mountCapabilities by viewModel.mountPointingCapabilities.collectAsStateWithPageLifecycle()
+    val globalMountMotionState by viewModel.mountMotionState.collectAsStateWithPageLifecycle()
+    val mountSlewRate by viewModel.mountSlewRate.collectAsStateWithPageLifecycle()
+    val precisionGotoProgress by viewModel.precisionGotoProgress.collectAsStateWithPageLifecycle()
+    val connectionState by viewModel.connectionState.collectAsStateWithPageLifecycle()
+    val roi by viewModel.roi.collectAsStateWithPageLifecycle()
+    val appBinning by viewModel.binning.collectAsStateWithPageLifecycle()
+    val guideCameraGeometry by viewModel.guideCameraGeometry.collectAsStateWithPageLifecycle()
+    val opticsRevision by viewModel.pointingOpticsRevision.collectAsStateWithPageLifecycle()
     val primaryCameraGeometry = remember(connectionState, roi, appBinning, opticsRevision) {
         viewModel.pointingOpticsConfiguration().primaryGeometry
     }
@@ -76,14 +76,14 @@ internal fun SkyWorkspaceScreen(viewModel: CameraViewModel, selectedTarget: Star
     }
     val sequenceEnabled = SequenceFeature.ENABLED
     if (BuildConfig.STELLARIUM_ENABLED) {
-                    val solvedPositionAngle by viewModel.lastPlateSolvePositionAngleDeg.collectAsState()
-                    val sequenceMosaicPlan by viewModel.sequenceMosaicPlan.collectAsState()
-                    val sequenceGeneration by viewModel.sequenceRuntime.generation.collectAsState()
+                    val solvedPositionAngle by viewModel.lastPlateSolvePositionAngleDeg.collectAsStateWithPageLifecycle()
+                    val sequenceMosaicPlan by viewModel.sequenceMosaicPlan.collectAsStateWithPageLifecycle()
+                    val sequenceGeneration by viewModel.sequenceRuntime.generation.collectAsStateWithPageLifecycle()
                     val restoredSequencePlan = remember(sequenceMosaicPlan, sequenceGeneration) {
                         viewModel.sequenceRuntime.mosaicPlan() ?: sequenceMosaicPlan
                     }
-                    val rotatorConnected by viewModel.rotatorConnected.collectAsState()
-                    val rotatorAngle by viewModel.rotatorAngle.collectAsState()
+                    val rotatorConnected by viewModel.rotatorConnected.collectAsStateWithPageLifecycle()
+                    val rotatorAngle by viewModel.rotatorAngle.collectAsStateWithPageLifecycle()
                     StarMapScreen(
                         mountCoordinates = mountCoordinates,
                         mountSite = mountSite,

@@ -181,7 +181,7 @@ fun PlayerScreen(
     com.indigo.mobileobservatory.ui.components.ReportObservatoryImmersion(selectedFile != null && !showFilePicker)
     var refreshTrigger by remember { mutableIntStateOf(0) }
     val importer: LibraryImportViewModel = androidx.lifecycle.viewmodel.compose.viewModel(key = "library-import")
-    val importState by importer.state.collectAsState()
+    val importState by importer.state.collectAsStateWithPageLifecycle()
     var lastImportCompletion by rememberSaveable { mutableStateOf<String?>(null) }
     val importPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) importer.importFile(uri)
@@ -995,6 +995,7 @@ private fun ImageViewScreen(
     var resultMetadata by remember(fileInfo) { mutableStateOf("") }
     var showMetadata by remember(fileInfo) { mutableStateOf(false) }
     var lp750Enabled by remember(fileInfo) { mutableStateOf(false) }
+    var showLp750Help by remember(fileInfo) { mutableStateOf(false) }
     val failedToDecodeImage = stringResource(R.string.failed_to_decode_image)
     val unknownError = stringResource(R.string.unknown_error)
 
@@ -1008,6 +1009,31 @@ private fun ImageViewScreen(
                 }
             },
             confirmButton = { TextButton(onClick = { showMetadata = false }) { Text(stringResource(R.string.close)) } }
+        )
+    }
+
+    if (showLp750Help) {
+        AlertDialog(
+            onDismissRequest = { showLp750Help = false },
+            title = { Text(stringResource(R.string.lp750_help_title)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        stringResource(R.string.lp750_help_description),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Text(
+                        stringResource(R.string.lp750_credit),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showLp750Help = false }) {
+                    Text(stringResource(R.string.close))
+                }
+            }
         )
     }
 
@@ -1094,6 +1120,13 @@ private fun ImageViewScreen(
                     label = { Text("LP750", fontSize = 11.sp) },
                     modifier = Modifier.padding(horizontal = 2.dp)
                 )
+                IconButton(onClick = { showLp750Help = true }) {
+                    Icon(
+                        Icons.Default.HelpOutline,
+                        contentDescription = stringResource(R.string.lp750_help_button),
+                        tint = Color.White
+                    )
+                }
             }
             IconButton(onClick = onSolve) {
                 Icon(Icons.Default.Search, stringResource(R.string.plate_solve), tint = Color.White)
