@@ -1,0 +1,12 @@
+regain ZWO accessory protocol implementation
+
+Project: https://github.com/pulsarfab/regain
+License: Apache License 2.0
+
+The ZWO EAF HID packet codec and safety rules are an independent Kotlin
+implementation derived from the protocol research and tests in regain-zwo.
+Android USB transport, application integration, state management, and UI
+behavior are project-specific.
+
+The full Apache License 2.0 text is included in this application package in
+THIRD_PARTY_OPENCV_VNG.txt.

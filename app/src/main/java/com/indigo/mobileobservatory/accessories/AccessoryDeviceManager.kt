@@ -22,7 +22,9 @@ import com.indigo.mobileobservatory.accessories.focuser.FocuserControllerRouter
 import com.indigo.mobileobservatory.accessories.focuser.GeminiEafSerialFocuserController
 import com.indigo.mobileobservatory.accessories.focuser.OasisHidFocuserController
 import com.indigo.mobileobservatory.accessories.focuser.ToupTekFocuserAdapter
+import com.indigo.mobileobservatory.accessories.focuser.ZwoEafFocuserController
 import com.indigo.mobileobservatory.accessories.oasis.OasisUsbIds
+import com.indigo.mobileobservatory.accessories.zwo.ZwoEafUsbIds
 import com.indigo.mobileobservatory.accessories.power.GeminiPowerBoxController
 import com.indigo.mobileobservatory.accessories.rotator.EcaaSerialRotatorAdapter
 import com.indigo.mobileobservatory.accessories.rotator.RotatorAdapterKind
@@ -90,12 +92,14 @@ class AccessoryDeviceManager(context: Context) {
     private val efucoserFocuser = EFucoserSerialFocuserController()
     private val geminiEafFocuser = GeminiEafSerialFocuserController()
     private val oasisFocuser = OasisHidFocuserController()
+    private val zwoEafFocuser = ZwoEafFocuserController()
     val focuserController = FocuserControllerRouter(
         scope = scope,
         toupTek = ToupTekFocuserAdapter(toupTekFocuser),
         efucoser = efucoserFocuser,
         geminiEaf = geminiEafFocuser,
-        oasis = oasisFocuser
+        oasis = oasisFocuser,
+        zwoEaf = zwoEafFocuser
     )
     private val dlcCover = DlcSerialCoverCalibratorAdapter()
     private val geminiFlat = GeminiFlatpanelSerialAdapter()
@@ -168,6 +172,7 @@ class AccessoryDeviceManager(context: Context) {
                                 efucoserFocuser.close()
                                 geminiEafFocuser.close()
                                 oasisFocuser.close()
+                                zwoEafFocuser.close()
                             }
                             if (_activeFocuserDeviceId.value == device.deviceId) {
                                 focuserController.close()
@@ -300,6 +305,10 @@ class AccessoryDeviceManager(context: Context) {
         try {
             usbManager.deviceList.values.forEach { device ->
                 if (device.deviceId in excluded) return@forEach
+                if (ZwoEafUsbIds.isEaf(device.vendorId, device.productId)) {
+                    discovered += AccessoryDeviceEntry("ZWO EAF", AccessoryType.FOCUSER, device)
+                    return@forEach
+                }
                 if (device.vendorId == OasisUsbIds.vendorId) {
                     val entry = when {
                         OasisUsbIds.isFilterWheel(device.productId) ->
@@ -337,6 +346,7 @@ class AccessoryDeviceManager(context: Context) {
                 val device = driver.device
                 if (device.deviceId in excluded ||
                     ToupTekDevices.isVendor(device.vendorId) ||
+                    ZwoEafUsbIds.isEaf(device.vendorId, device.productId) ||
                     device.vendorId == OasisUsbIds.vendorId ||
                     discovered.any { it.usbDevice.deviceId == device.deviceId }) {
                     return@forEach
@@ -490,6 +500,10 @@ class AccessoryDeviceManager(context: Context) {
     }
 
     private fun connectFocuserGranted(device: UsbDevice) {
+        if (ZwoEafUsbIds.isEaf(device.vendorId, device.productId)) {
+            connectZwoEaf(device)
+            return
+        }
         if (device.vendorId == OasisUsbIds.vendorId && OasisUsbIds.isFocuser(device.productId)) {
             connectOasisFocuser(device)
             return
@@ -501,6 +515,39 @@ class AccessoryDeviceManager(context: Context) {
             _activeFocuserDeviceId.value = device.deviceId
         } else {
             _scanError.value = "Failed to connect focuser"
+        }
+    }
+
+    private fun connectZwoEaf(device: UsbDevice) {
+        focuserConnectJob?.cancel()
+        val generation = ++focuserConnectGeneration
+        connectingFocuserDeviceId = device.deviceId
+        focuserConnectJob = scope.launch {
+            try {
+                val connected = try {
+                    zwoEafFocuser.open(appContext, device)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Throwable) {
+                    FileLogger.e(TAG, "ZWO EAF connection crashed", error)
+                    false
+                }
+                if (!isActive || focuserConnectGeneration != generation) {
+                    if (connected) zwoEafFocuser.close()
+                    return@launch
+                }
+                if (connected) {
+                    focuserController.useZwoEaf()
+                    _activeFocuserDeviceId.value = device.deviceId
+                } else {
+                    _scanError.value = "Failed to connect ZWO EAF"
+                }
+            } finally {
+                if (focuserConnectGeneration == generation) {
+                    connectingFocuserDeviceId = null
+                    focuserConnectJob = null
+                }
+            }
         }
     }
 
@@ -555,6 +602,7 @@ class AccessoryDeviceManager(context: Context) {
         efucoserFocuser.close()
         geminiEafFocuser.close()
         oasisFocuser.close()
+        zwoEafFocuser.close()
         _activeFocuserDeviceId.value = null
     }
 

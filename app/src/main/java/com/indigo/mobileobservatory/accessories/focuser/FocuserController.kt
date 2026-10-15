@@ -58,7 +58,8 @@ class FocuserControllerRouter(
     private val toupTek: ToupTekFocuserAdapter,
     private val efucoser: EFucoserSerialFocuserController,
     private val geminiEaf: GeminiEafSerialFocuserController,
-    private val oasis: OasisHidFocuserController
+    private val oasis: OasisHidFocuserController,
+    private val zwoEaf: ZwoEafFocuserController
 ) : FocuserController {
     private val active = MutableStateFlow<FocuserController?>(null)
 
@@ -115,6 +116,13 @@ class FocuserControllerRouter(
         }
     }
 
+    fun useZwoEaf() {
+        if (active.value !== zwoEaf) {
+            active.value?.close()
+            active.value = zwoEaf
+        }
+    }
+
     override fun moveTo(position: Int) = active.value?.moveTo(position) ?: Unit
     override fun moveRelative(steps: Int) = active.value?.moveRelative(steps) ?: Unit
     override fun halt() = active.value?.halt() ?: Unit
@@ -137,5 +145,6 @@ class FocuserControllerRouter(
         efucoser.destroy()
         geminiEaf.destroy()
         oasis.destroy()
+        zwoEaf.destroy()
     }
 }

@@ -170,17 +170,25 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
     private val rampRunning = AtomicBoolean(false)
     private var rampThread: Thread? = null
 
-    fun open(cameraIndex: Int): Boolean {
+    fun open(cameraIndex: Int, diagnosticTag: String? = null): Boolean {
         lastOpenError = null
         var opened: ZwoCamera? = null
+        fun diagnostic(message: String) {
+            diagnosticTag?.let { FileLogger.i(TAG, "$it $message") }
+        }
         try {
+            diagnostic("SDK step=getCameraProperty begin connectedIndex=$cameraIndex")
             val propRet = ZwoCamera.getCameraProperty(cameraIndex)
+            diagnostic(
+                "SDK step=getCameraProperty result errorCode=${asiCode(propRet)} " +
+                    "success=${asiOk(propRet)} objectType=${propRet?.obj?.javaClass?.name ?: "null"}"
+            )
             if (!asiOk(propRet)) {
-                return failOpen("getCameraProperty", asiCode(propRet))
+                return failOpen("getCameraProperty", asiCode(propRet), diagnosticTag)
             }
 
             val prop = propRet?.obj as? com.zwo.ASICameraProperty
-                ?: return failOpen("getCameraProperty", -1)
+                ?: return failOpen("getCameraProperty", -1, diagnosticTag)
             cameraID = ZwoSdk.openIndex(cameraIndex)
             val modelName = prop.name ?: "ZWO ASI Camera"
             sensorW = prop.maxWidth.toInt()
@@ -202,16 +210,23 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
             )
 
             val cam = ZwoCamera(cameraID)
+            diagnostic(
+                "SDK step=openCamera begin cameraId=$cameraID model=$modelName " +
+                    "propertyCameraId=${prop.cameraID} sensor=${sensorW}x$sensorH"
+            )
             val openRet = cam.openCamera()
+            diagnostic("SDK step=openCamera result code=${openRet?.intVal ?: -1}")
             if (openRet?.intVal != ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
-                return failOpen("openCamera", openRet?.intVal ?: -1)
+                return failOpen("openCamera", openRet?.intVal ?: -1, diagnosticTag)
             }
             opened = cam
 
+            diagnostic("SDK step=initCamera begin cameraId=$cameraID")
             val initRet = cam.initCamera()
+            diagnostic("SDK step=initCamera result code=${initRet?.intVal ?: -1}")
             if (initRet?.intVal != ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
                 cam.closeCamera()
-                return failOpen("initCamera", initRet?.intVal ?: -1)
+                return failOpen("initCamera", initRet?.intVal ?: -1, diagnosticTag)
             }
             zwoCamera = cam
             ignoreJni("refreshSensorSizeFromRoi") { refreshSensorSizeFromRoi(cam, modelName) }
@@ -252,9 +267,11 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
                 "Camera opened: $modelName (SN=$serialNumber) ${sensorW}x${sensorH} " +
                     "image=${currentRoi.width}x${currentRoi.height} bin=$currentBin maxBit=$maxBitDepth color=$isColor"
             )
+            diagnostic("SDK open complete cameraId=$cameraID model=$modelName")
             return true
         } catch (e: Throwable) {
             lastOpenError = e.message ?: e.javaClass.simpleName
+            diagnostic("SDK open exception=${e.javaClass.name}:${e.message}")
             FileLogger.e(TAG, "Failed to open ZWO camera: ${e.message}", e)
             try {
                 (opened ?: zwoCamera)?.closeCamera()
@@ -1036,7 +1053,7 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
         }
     }
 
-    private fun failOpen(step: String, code: Int): Boolean {
+    private fun failOpen(step: String, code: Int, diagnosticTag: String? = null): Boolean {
         val name = try {
             ASIConstants.ASI_ERROR_CODE.getErrorString(code)
         } catch (_: Throwable) {
@@ -1044,6 +1061,7 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
         }
         lastOpenError = "$step: $name ($code)"
         FileLogger.e(TAG, lastOpenError!!)
+        diagnosticTag?.let { FileLogger.e(TAG, "$it SDK failure step=$step code=$code name=$name") }
         return false
     }
 

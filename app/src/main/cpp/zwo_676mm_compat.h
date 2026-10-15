@@ -34,14 +34,20 @@ inline bool matchesConstructor(const void* constructor) {
     return load_pid == 0x528ceda8 && store_pid == 0xb902aa68;
 }
 
-inline bool construct(void* camera, Constructor original) {
+inline bool construct(
+        void* camera,
+        Constructor original,
+        std::uint32_t* pid_before = nullptr,
+        std::uint32_t* pid_after = nullptr) {
     original(camera);
     auto* pid_address = static_cast<unsigned char*>(camera) + kPidOffset;
     std::uint32_t pid = 0;
     std::memcpy(&pid, pid_address, sizeof(pid));
+    if (pid_before) *pid_before = pid;
     if (pid != kWrongPid) return false;
     const std::uint32_t corrected = kCorrectPid;
     std::memcpy(pid_address, &corrected, sizeof(corrected));
+    if (pid_after) *pid_after = corrected;
     return true;
 }
 }  // namespace zwo676

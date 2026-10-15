@@ -475,12 +475,38 @@ static int hook_plt(const char *lib_name, struct plt_hook_entry *entries, int co
 static zwo676::Constructor g_zwo676_original_constructor = nullptr;
 static std::mutex g_zwo676_install_lock;
 static bool g_zwo676_installed = false;
+static bool g_zwo676_install_attempted = false;
+static bool g_zwo676_sdk_loaded = false;
+static bool g_zwo676_symbol_found = false;
+static bool g_zwo676_dladdr_ok = false;
+static bool g_zwo676_build_id_matched = false;
+static bool g_zwo676_offset_matched = false;
+static bool g_zwo676_code_matched = false;
+static int g_zwo676_constructor_calls = 0;
+static int g_zwo676_corrections = 0;
+static int g_zwo676_pid_mismatches = 0;
+static int g_zwo676_constructor_hook_count = 0;
+static std::uint32_t g_zwo676_last_pid_before = 0;
+static std::uint32_t g_zwo676_last_pid_after = 0;
 
 static void hooked_zwo676mm_constructor(void* camera) {
-    if (zwo676::construct(camera, g_zwo676_original_constructor)) {
-        LOGI("[ZWO676MM] Corrected constructor USB PID 0x676D -> 0x676C");
+    std::lock_guard<std::mutex> diagnostic(g_zwo676_install_lock);
+    ++g_zwo676_constructor_calls;
+    std::uint32_t pid_before = 0;
+    std::uint32_t pid_after = 0;
+    if (zwo676::construct(
+            camera, g_zwo676_original_constructor, &pid_before, &pid_after)) {
+        ++g_zwo676_corrections;
+        g_zwo676_last_pid_before = pid_before;
+        g_zwo676_last_pid_after = pid_after;
+        LOGI("[ZWO676MM] Corrected constructor USB PID 0x%04X -> 0x%04X calls=%d",
+             pid_before, pid_after, g_zwo676_constructor_calls);
     } else {
-        LOGE("[ZWO676MM] Unexpected constructor PID; left unchanged");
+        ++g_zwo676_pid_mismatches;
+        g_zwo676_last_pid_before = pid_before;
+        g_zwo676_last_pid_after = pid_before;
+        LOGE("[ZWO676MM] Unexpected constructor PID 0x%04X; left unchanged calls=%d",
+             pid_before, g_zwo676_constructor_calls);
     }
 }
 
@@ -490,12 +516,19 @@ Java_com_indigo_mobileobservatory_camera_UsbHelper_nativeInstallZwo676MmCompatib
 #if defined(__aarch64__)
     std::lock_guard<std::mutex> install(g_zwo676_install_lock);
     if (g_zwo676_installed) return JNI_TRUE;
+    g_zwo676_install_attempted = true;
     void* sdk = dlopen("libASICamera2.so", RTLD_NOW | RTLD_NOLOAD);
-    if (!sdk) return JNI_FALSE;
+    g_zwo676_sdk_loaded = sdk != nullptr;
+    if (!sdk) {
+        LOGE("[ZWO676MM] libASICamera2.so is not loaded");
+        return JNI_FALSE;
+    }
     void* constructor = dlsym(sdk, zwo676::kConstructor);
+    g_zwo676_symbol_found = constructor != nullptr;
     Dl_info symbol_info = {};
     struct SdkCheck { std::uintptr_t base; bool matched; } check = {};
     if (constructor && dladdr(constructor, &symbol_info)) {
+        g_zwo676_dladdr_ok = true;
         check.base = reinterpret_cast<std::uintptr_t>(symbol_info.dli_fbase);
         dl_iterate_phdr([](dl_phdr_info* info, size_t, void* data) -> int {
             auto* check = static_cast<SdkCheck*>(data);
@@ -511,18 +544,29 @@ Java_com_indigo_mobileobservatory_camera_UsbHelper_nativeInstallZwo676MmCompatib
             return 1;
         }, &check);
     }
-    // Check SDK identity before reading code or accessing its private layout.
-    const bool supported = check.matched &&
-            reinterpret_cast<std::uintptr_t>(constructor) == check.base + zwo676::kConstructorOffset &&
+    g_zwo676_build_id_matched = check.matched;
+    g_zwo676_offset_matched = check.matched && constructor &&
+            reinterpret_cast<std::uintptr_t>(constructor) ==
+                    check.base + zwo676::kConstructorOffset;
+    g_zwo676_code_matched = g_zwo676_offset_matched &&
             zwo676::matchesConstructor(constructor);
+    // Check SDK identity before reading code or accessing its private layout.
+    const bool supported = g_zwo676_build_id_matched &&
+            g_zwo676_offset_matched && g_zwo676_code_matched;
     if (supported) {
         g_zwo676_original_constructor = reinterpret_cast<zwo676::Constructor>(constructor);
         plt_hook_entry entry = {
             zwo676::kConstructor, reinterpret_cast<void*>(hooked_zwo676mm_constructor), nullptr
         };
-        g_zwo676_installed = hook_plt("libASICamera2.so", &entry, 1) == 1;
+        g_zwo676_constructor_hook_count = hook_plt("libASICamera2.so", &entry, 1);
+        g_zwo676_installed = g_zwo676_constructor_hook_count == 1;
     }
-    LOGI("[ZWO676MM] SDK supported=%d constructor fix installed=%d", supported, g_zwo676_installed);
+    LOGI("[ZWO676MM] install attempted=1 sdkLoaded=%d symbol=%d dladdr=%d "
+         "buildId=%d offset=%d code=%d hookCount=%d installed=%d",
+         g_zwo676_sdk_loaded, g_zwo676_symbol_found, g_zwo676_dladdr_ok,
+         g_zwo676_build_id_matched, g_zwo676_offset_matched,
+         g_zwo676_code_matched, g_zwo676_constructor_hook_count,
+         g_zwo676_installed);
     dlclose(sdk);
     return g_zwo676_installed ? JNI_TRUE : JNI_FALSE;
 #else
@@ -737,6 +781,28 @@ static void ensure_originals() {
 }
 
 static int g_zwo_hooks_installed = 0;
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_indigo_mobileobservatory_camera_UsbHelper_nativeZwo676MmDiagnostics(
+        JNIEnv* env, jobject) {
+    std::lock_guard<std::mutex> install(g_zwo676_install_lock);
+    char text[512] = {};
+    snprintf(
+        text, sizeof(text),
+        "installAttempted=%d sdkLoaded=%d symbol=%d dladdr=%d buildId=%d "
+        "offset=%d code=%d constructorHookCount=%d installed=%d "
+        "usbHookCount=%d constructorCalls=%d corrections=%d pidMismatches=%d "
+        "lastPidBefore=0x%04X lastPidAfter=0x%04X",
+        g_zwo676_install_attempted, g_zwo676_sdk_loaded,
+        g_zwo676_symbol_found, g_zwo676_dladdr_ok,
+        g_zwo676_build_id_matched, g_zwo676_offset_matched,
+        g_zwo676_code_matched, g_zwo676_constructor_hook_count,
+        g_zwo676_installed, g_zwo_hooks_installed,
+        g_zwo676_constructor_calls, g_zwo676_corrections,
+        g_zwo676_pid_mismatches, g_zwo676_last_pid_before,
+        g_zwo676_last_pid_after);
+    return env->NewStringUTF(text);
+}
 
 extern "C"
 JNIEXPORT jint JNICALL

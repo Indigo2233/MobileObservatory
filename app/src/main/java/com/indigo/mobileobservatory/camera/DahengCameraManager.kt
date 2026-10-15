@@ -13,6 +13,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import androidx.core.content.ContextCompat
+import com.indigo.mobileobservatory.BuildConfig
 import com.indigo.mobileobservatory.camera.dslr.DslrCamera
 import com.indigo.mobileobservatory.camera.dslr.DslrUsb
 import com.indigo.mobileobservatory.camera.playerone.PlayerOneCamera
@@ -1045,27 +1046,48 @@ class DahengCameraManager(
     private var zwoUsbRegisteredDevice: UsbDevice? = null
 
     private fun openZwoDevice(usbDevice: UsbDevice) {
+        val vid = usbDevice.vendorId
+        val pid = usbDevice.productId
+        val diagnose676Mm = pid == 0x676C
+        fun diagnostic(stage: String, message: String) {
+            if (diagnose676Mm) {
+                FileLogger.i(TAG, "[$sessionName] [ZWO676MM] stage=$stage $message")
+            }
+        }
         try {
+            diagnostic(
+                "entry",
+                "version=${BuildConfig.VERSION_NAME}/${BuildConfig.VERSION_CODE} " +
+                    "sdkAvailable=${ZwoAsiCamera.sdkAvailable} permission=" +
+                    "${(context.getSystemService(Context.USB_SERVICE) as UsbManager).hasPermission(usbDevice)} " +
+                    "vid=0x${vid.toString(16).uppercase()} pid=0x${pid.toString(16).uppercase()} " +
+                    "device=${usbDevice.deviceName} product=${usbDevice.productName} " +
+                    "manufacturer=${usbDevice.manufacturerName} usbVersion=${usbDevice.version} " +
+                    "deviceId=${usbDevice.deviceId} interfaces=${usbDevice.interfaceCount}"
+            )
             if (!ZwoAsiCamera.sdkAvailable) ZwoAsiCamera.initSdk()
             if (!ZwoAsiCamera.sdkAvailable) {
+                diagnostic("sdk-init", "failed sdkAvailable=false")
                 abandonReservation()
                 _connectionState.value = ConnectionState.Error("ZWO SDK init failed")
                 return
             }
+            diagnostic("sdk-init", "complete sdkAvailable=true")
 
-            val vid = usbDevice.vendorId
-            val pid = usbDevice.productId
             Log.i(TAG, "Opening ZWO: VID=0x${vid.toString(16)} PID=0x${pid.toString(16)} dev=${usbDevice.deviceName}")
 
             if (!UsbHelper.prepareZwoModel(pid)) {
+                diagnostic("compatibility", "failed ${UsbHelper.zwo676MmDiagnostics()}")
                 abandonReservation()
                 _connectionState.value = ConnectionState.Error("Failed to prepare ASI676MM support. See app log.")
                 return
             }
+            diagnostic("compatibility", "ready ${UsbHelper.zwo676MmDiagnostics()}")
 
             val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
             val connection = usbManager.openDevice(usbDevice)
             if (connection == null) {
+                diagnostic("usb-open", "failed: UsbManager.openDevice returned null")
                 Log.e(TAG, "UsbManager.openDevice returned null for ZWO ${usbDevice.deviceName}")
                 abandonReservation()
                 _connectionState.value = ConnectionState.Error("Failed to open ZWO USB device")
@@ -1074,17 +1096,31 @@ class DahengCameraManager(
             zwoUsbConnection = connection
 
             val fd = connection.fileDescriptor
+            diagnostic("usb-open", "complete fd=$fd")
             Log.i(TAG, "ZWO USB fd=$fd, installing hooks for libusb redirection")
 
-            if (UsbHelper.registerUsbFd(context, usbDevice, fd)) zwoUsbRegisteredDevice = usbDevice
-            UsbHelper.installZwoHooks()
+            val fdRegistered = UsbHelper.registerUsbFd(context, usbDevice, fd)
+            if (fdRegistered) zwoUsbRegisteredDevice = usbDevice
+            diagnostic("fd-register", "result=$fdRegistered fd=$fd")
+            val usbHookCount = UsbHelper.installZwoHooks()
+            diagnostic(
+                "usb-hooks",
+                "installed=$usbHookCount ${UsbHelper.zwo676MmDiagnostics()}"
+            )
 
+            diagnostic("asi-context", "init begin")
             com.zwo.ASIUSBManager.initContext(context)
+            diagnostic("asi-context", "init complete")
 
             val numCameras: Int
             try {
+                diagnostic("enumerate", "getNumOfConnectedCameras begin")
                 numCameras = ZwoCamera.getNumOfConnectedCameras()
             } catch (e: Throwable) {
+                diagnostic(
+                    "enumerate",
+                    "exception=${e.javaClass.name}:${e.message} ${UsbHelper.zwo676MmDiagnostics()}"
+                )
                 Log.e(TAG, "ZWO getNumOfConnectedCameras crashed (SELinux/libusb?): ${e.message}", e)
                 abandonReservation()
                 closeZwoUsbConnection()
@@ -1097,6 +1133,10 @@ class DahengCameraManager(
 
             val pidHex = "0x${pid.toString(16).uppercase()}"
             Log.i(TAG, "ZWO connected cameras: $numCameras")
+            diagnostic(
+                "enumerate",
+                "result=$numCameras ${UsbHelper.zwo676MmDiagnostics()}"
+            )
             if (numCameras <= 0) {
                 abandonReservation()
                 closeZwoUsbConnection()
@@ -1108,12 +1148,21 @@ class DahengCameraManager(
             }
 
             val camera = ZwoAsiCamera()
-            if (camera.open(0)) {
+            diagnostic("camera-open", "begin connectedIndex=0")
+            if (camera.open(0, diagnosticTag = if (diagnose676Mm) "[ZWO676MM]" else null)) {
+                diagnostic(
+                    "camera-open",
+                    "success model=${camera.cameraInfo?.name} ${UsbHelper.zwo676MmDiagnostics()}"
+                )
                 activeCamera = camera
                 claimUsbDevice(usbDevice)
                 _connectionState.value = ConnectionState.Connected(camera.cameraInfo!!)
                 Log.i(TAG, "ZWO camera connected: ${camera.cameraInfo?.name}")
             } else {
+                diagnostic(
+                    "camera-open",
+                    "failed error=${camera.lastOpenError} ${UsbHelper.zwo676MmDiagnostics()}"
+                )
                 abandonReservation()
                 closeZwoUsbConnection()
                 _connectionState.value = ConnectionState.Error(
@@ -1121,6 +1170,10 @@ class DahengCameraManager(
                 )
             }
         } catch (e: Throwable) {
+            diagnostic(
+                "exception",
+                "${e.javaClass.name}:${e.message} ${UsbHelper.zwo676MmDiagnostics()}"
+            )
             Log.e(TAG, "openZwoDevice failed: ${e.message}", e)
             abandonReservation()
             closeZwoUsbConnection()

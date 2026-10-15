@@ -22,24 +22,40 @@ object UsbHelper {
     }
 
     fun registerUsbFd(context: Context, usbDevice: UsbDevice, fd: Int): Boolean {
-        if (!available) return false
+        val diagnosticTag = if (usbDevice.productId == 0x676C) "[ZWO676MM] " else ""
+        if (!available) {
+            if (diagnosticTag.isNotEmpty()) {
+                FileLogger.e(TAG, "${diagnosticTag}USB FD registration unavailable: helper library not loaded")
+            }
+            return false
+        }
         val devPath = usbDevice.deviceName
         val parts = devPath.removePrefix("/dev/bus/usb/").split("/")
         if (parts.size < 2) {
-            Log.e(TAG, "Cannot parse device path: $devPath")
+            FileLogger.e(TAG, "${diagnosticTag}Cannot parse USB device path: $devPath")
             return false
         }
-        val busNum = parts[0].toIntOrNull() ?: return false
-        val devAddr = parts[1].toIntOrNull() ?: return false
-        Log.i(TAG, "registerUsbFd: bus=$busNum dev=$devAddr fd=$fd path=$devPath")
+        val busNum = parts[0].toIntOrNull()
+        val devAddr = parts[1].toIntOrNull()
+        if (busNum == null || devAddr == null) {
+            FileLogger.e(TAG, "${diagnosticTag}Invalid USB bus/address path: $devPath")
+            return false
+        }
+        FileLogger.i(TAG, "${diagnosticTag}USB FD register begin: bus=$busNum dev=$devAddr fd=$fd path=$devPath")
         return try {
             val registered = nativeRegisterUsbFd(context.cacheDir.absolutePath, busNum, devAddr, fd)
             if (registered) {
                 updateUsbSpeed(context, usbDevice, busNum, devAddr)
             }
+            val present = registered && nativeHasUsbFd(busNum, devAddr)
+            FileLogger.i(
+                TAG,
+                "${diagnosticTag}USB FD register result: registered=$registered present=$present " +
+                    "bus=$busNum dev=$devAddr fd=$fd"
+            )
             registered
         } catch (e: Throwable) {
-            Log.e(TAG, "registerUsbFd failed: ${e.message}", e)
+            FileLogger.e(TAG, "${diagnosticTag}USB FD registration failed: ${e.message}", e)
             false
         }
     }
@@ -96,6 +112,10 @@ object UsbHelper {
     /** The frozen SDK's 676MM constructor uses the 676MC PID; other models use their original path. */
     fun prepareZwoModel(productId: Int): Boolean {
         if (productId != 0x676C) return true
+        FileLogger.i(
+            TAG,
+            "[ZWO676MM] Compatibility preparation begin: helperAvailable=$available productId=0x676C"
+        )
         val ready = available && runCatching { nativeInstallZwo676MmCompatibility() }
             .onFailure { FileLogger.e(TAG, "[ZWO676MM] Compatibility setup failed", it) }
             .getOrDefault(false)
@@ -104,7 +124,14 @@ object UsbHelper {
         } else {
             FileLogger.e(TAG, "[ZWO676MM] Constructor PID correction unavailable; SDK identity or hook check failed")
         }
+        FileLogger.i(TAG, "[ZWO676MM] Native status after preparation: ${zwo676MmDiagnostics()}")
         return ready
+    }
+
+    fun zwo676MmDiagnostics(): String {
+        if (!available) return "helperAvailable=false"
+        return runCatching { nativeZwo676MmDiagnostics() }
+            .getOrElse { error -> "diagnosticsUnavailable=${error.javaClass.simpleName}:${error.message}" }
     }
 
     fun clearUsbFds() {
@@ -133,6 +160,7 @@ object UsbHelper {
 
     private external fun nativeZwoFactorySerial(cameraId: Int): String
     private external fun nativeInstallZwo676MmCompatibility(): Boolean
+    private external fun nativeZwo676MmDiagnostics(): String
     private external fun nativeUnregisterUsbFd(busNum: Int, devAddr: Int)
     private external fun nativeHasUsbFd(busNum: Int, devAddr: Int): Boolean
     private external fun nativeRegisterUsbFd(cacheDir: String, busNum: Int, devAddr: Int, fd: Int): Boolean
