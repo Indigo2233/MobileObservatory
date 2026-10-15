@@ -10,7 +10,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.platform.LocalContext
 
 /**
- * Capture and guiding prefer landscape; browsing workspaces and child pages
+ * Guiding prefers landscape; capture, browsing workspaces and child pages
  * allow sensor rotation. The foreground shell is the only owner.
  */
 enum class AppOrientationMode {

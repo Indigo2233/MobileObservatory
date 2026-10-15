@@ -95,6 +95,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -1276,6 +1277,19 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _showDevicePicker.value = true
     }
 
+    /** Manual, session-only demo; never replaces an active or pending real connection. */
+    fun startSimulatedCamera() {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (!cameraManager.openSimulatedCamera(app.getString(R.string.sim_camera_name))) {
+                _statusMessage.value = app.getString(R.string.sim_camera_disconnect_first)
+            }
+        }
+    }
+
+    fun stopSimulatedCamera() {
+        if (cameraManager.activeCamera is SimulatedCamera) disconnectCamera()
+    }
+
     fun disconnectCamera() {
         previewEpoch.invalidate()
         stopRecording()
@@ -1936,7 +1950,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
                 // SER/PSER retain sensor samples and geometry. Copy before display binning
                 // can combine CFA colors or recycle the SDK-owned input buffer.
-                if (_isRecording.value && rawRecordingLayout != null) {
+                if (_isRecording.value && cam !is SimulatedCamera && rawRecordingLayout != null) {
                     if (scienceKey?.rawRecordingKey() != recordingCaptureKey || scienceKey == null) recordingCaptureChanged = true
                     val initialTemperature = recordingCaptureTemperature
                     val temperature = calibrationTemperature()
@@ -1969,7 +1983,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 updateSoftwareStackingProgress(cam)
 
                 val display = CameraCfaLayout.displayFrame(processed, traits)
-                if (_isRecording.value && rawRecordingLayout == null) enqueueRecordingFrame(display)
+                if (_isRecording.value && cam !is SimulatedCamera && rawRecordingLayout == null) enqueueRecordingFrame(display)
 
                 // Ownership transfers to the preview pipeline after all synchronous readers finish.
                 previewPipeline.submit(display, traits?.copy(bayerPatternAtOutput = true), previewRun, runRecycler)
@@ -3063,11 +3077,42 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         return now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd-HHmm")) + "_$tenthMinute"
     }
 
+    private var simulatedRecordingJob: Job? = null
+    private val simulatedRecordingEpoch = java.util.concurrent.atomic.AtomicLong()
+
+    private fun startSimulatedRecording(camera: SimulatedCamera) {
+        if (!camera.isCapturing.value) { _statusMessage.value = app.getString(R.string.sim_camera_resume); return }
+        val run = simulatedRecordingEpoch.incrementAndGet()
+        val started = android.os.SystemClock.elapsedRealtime()
+        val first = camera.framesEmitted
+        _recordingFrameCount.value = 0; _recordingDurationMs.value = 0; _recordingBytes.value = 0
+        _isRecording.value = true
+        _statusMessage.value = app.getString(R.string.sim_camera_recording)
+        simulatedRecordingJob = viewModelScope.launch {
+            try {
+                while (isActive && _isRecording.value && cameraManager.activeCamera === camera && simulatedRecordingEpoch.get() == run) {
+                    delay(100)
+                    _recordingDurationMs.value = android.os.SystemClock.elapsedRealtime() - started
+                    _recordingFrameCount.value = (camera.framesEmitted - first).coerceIn(0, Int.MAX_VALUE.toLong()).toInt()
+                    val limit = _recordLimit.value
+                    if (limit.type == RecordLimitType.TIME && _recordingDurationMs.value >= limit.value * 1000L ||
+                        limit.type == RecordLimitType.FRAMES && _recordingFrameCount.value >= limit.value) break
+                }
+            } finally {
+                if (simulatedRecordingEpoch.get() == run) {
+                    _isRecording.value = false; simulatedRecordingJob = null
+                    _statusMessage.value = app.getString(R.string.sim_camera_recording_done)
+                }
+            }
+        }
+    }
+
     fun startRecording(): Unit = synchronized(recordingLifecycleLock) {
         if (_cameraCfaApplying.value) { _statusMessage.value = app.getString(R.string.camera_cfa_busy_settings); return@synchronized }
         if (pointingCaptureOwned.get()) { _statusMessage.value = "Reference capture in progress"; return }
         // A timed-out old worker still owns its file and queue until final cleanup returns.
         if (_isRecording.value || recordingWriteSession != null || currentRecordingFile != null || hasOpenRecorder()) return
+        (cameraManager.activeCamera as? SimulatedCamera)?.let { startSimulatedRecording(it); return }
         if (!License.canRecord) {
             _statusMessage.value = app.getString(R.string.trial_recording_disabled)
             return
@@ -3197,11 +3242,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun stopRecording() {
+        val wasSimulated = simulatedRecordingJob != null
         val outcome = closeRecordingResources(saveToGallery = true)
-        if (outcome?.succeeded == true) _statusMessage.value = app.getString(R.string.recording_stopped)
+        if (wasSimulated) _statusMessage.value = app.getString(R.string.sim_camera_recording_done)
+        else if (outcome?.succeeded == true) _statusMessage.value = app.getString(R.string.recording_stopped)
     }
 
     private fun closeRecordingResources(saveToGallery: Boolean): RecordingWriteOutcome? {
+        simulatedRecordingEpoch.incrementAndGet()
+        simulatedRecordingJob?.cancel(); simulatedRecordingJob = null
         val session = synchronized(recordingLifecycleLock) {
             synchronized(recordingEnqueueLock) { _isRecording.value = false }
             recordingSaveToGallery = recordingSaveToGallery || saveToGallery
@@ -3317,6 +3366,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun capture() {
+        if (cameraManager.activeCamera is SimulatedCamera) {
+            _statusMessage.value = app.getString(R.string.sim_camera_capture_done)
+            return
+        }
         when (_captureFormat.value) {
             CaptureFormat.FITS -> captureFits()
             CaptureFormat.JPG -> captureJpg()

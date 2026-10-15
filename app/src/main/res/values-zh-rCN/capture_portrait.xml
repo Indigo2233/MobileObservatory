@@ -1,0 +1,17 @@
+<resources>
+    <string name="capture_settings">拍摄设置</string>
+    <string name="capture_stretch">拉伸</string>
+    <string name="capture_auto">自动</string>
+    <string name="capture_off">关</string>
+    <string name="capture_photo_label">拍照</string>
+    <string name="capture_video_label">录像</string>
+    <string name="sim_camera_name">模拟相机</string>
+    <string name="sim_camera_start">试用模拟相机</string>
+    <string name="sim_camera_stop">退出模拟</string>
+    <string name="sim_camera_badge">模拟画面 · 不保存文件</string>
+    <string name="sim_camera_disconnect_first">请先断开当前相机，再启用模拟相机。</string>
+    <string name="sim_camera_resume">请先恢复模拟预览。</string>
+    <string name="sim_camera_recording">正在模拟录像，不写入文件</string>
+    <string name="sim_camera_recording_done">模拟录像结束，未保存文件</string>
+    <string name="sim_camera_capture_done">模拟拍照完成，未保存文件</string>
+</resources>

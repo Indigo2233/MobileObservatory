@@ -14,6 +14,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.input.pointer.pointerInput
@@ -38,8 +39,6 @@ import com.indigo.mobileobservatory.stacking.StackMode
 @Composable
 internal fun CaptureWorkspaceScreen(
     viewModel: CameraViewModel,
-    redNightMode: Boolean,
-    onRedNightModeChange: (Boolean) -> Unit,
     onPlateSolve: () -> Unit,
     onTargets: () -> Unit,
     onGuide: () -> Unit,
@@ -49,6 +48,12 @@ internal fun CaptureWorkspaceScreen(
     onOpenLiveStack: () -> Unit = { viewModel.stacking.open(StackMode.LIVE) }
 ) {
     val connectionState by viewModel.connectionState.collectAsStateWithPageLifecycle()
+    val configuration = LocalConfiguration.current
+    val portrait = configuration.screenWidthDp < configuration.screenHeightDp
+    val simulated = connectionState is ConnectionState.Connected && viewModel.cameraManager.activeCamera is com.indigo.mobileobservatory.camera.SimulatedCamera
+    var portraitDetails by rememberSaveable { mutableStateOf(false) }
+    val exposureMin by viewModel.exposureUiMinUs.collectAsStateWithPageLifecycle()
+    val exposureMax by viewModel.exposureUiMaxUs.collectAsStateWithPageLifecycle()
 
     val exposureUs by viewModel.exposureUs.collectAsStateWithPageLifecycle()
     val gain by viewModel.gain.collectAsStateWithPageLifecycle()
@@ -121,6 +126,7 @@ internal fun CaptureWorkspaceScreen(
     val mountUsbDeviceId by viewModel.mountUsbDeviceId.collectAsStateWithPageLifecycle()
     val mountBaudRate by viewModel.mountBaudRate.collectAsStateWithPageLifecycle()
     val mountBusy by viewModel.mountBusy.collectAsStateWithPageLifecycle()
+    val mountMotionState by viewModel.mountMotionState.collectAsStateWithPageLifecycle()
     val mountMoveStatus by viewModel.mountMoveStatus.collectAsStateWithPageLifecycle()
     val mountSlewRate by viewModel.mountSlewRate.collectAsStateWithPageLifecycle()
     val mountTrackingEnabled by viewModel.mountTrackingEnabled.collectAsStateWithPageLifecycle()
@@ -192,13 +198,21 @@ internal fun CaptureWorkspaceScreen(
             if (SequenceFeature.ENABLED) TextButton(onClick = onSequence) { Text(stringResource(R.string.tab_sequence)) }
         }
         EaaSessionBar(viewModel, onOpenLiveStack)
+        if (simulated) Surface(color = MaterialTheme.colorScheme.tertiaryContainer) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(stringResource(R.string.sim_camera_badge), modifier = Modifier.weight(1f), style = MaterialTheme.typography.labelMedium)
+                TextButton(onClick = viewModel::stopSimulatedCamera) { Text(stringResource(R.string.sim_camera_stop)) }
+            }
+        }
         // Main content area
-        Row(modifier = Modifier.weight(1f)) {
+        CapturePreviewLayout(portrait = portrait, showControls = showPanel && connectionState is ConnectionState.Connected,
+            previewAspectRatio = if (connectionState is ConnectionState.Connected && roi.width > 0 && roi.height > 0)
+                if (rotation == 90 || rotation == 270) roi.height.toFloat() / roi.width else roi.width.toFloat() / roi.height else null,
+            modifier = Modifier.weight(1f), preview = {
             // Preview area
             Box(
                 modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
+                    .fillMaxSize()
                     .background(Color.Black)
             ) {
                 when (connectionState) {
@@ -210,7 +224,8 @@ internal fun CaptureWorkspaceScreen(
                             rotation = rotation,
                             resetTrigger = viewResetTrigger,
                             focusAssistEnabled = focusAssistEnabled,
-                            showCenterMarker = showCenterMarker
+                            showCenterMarker = showCenterMarker,
+                            preferFullWidth = portrait
                         )
 
                         if (showOverlayPanel) {
@@ -291,7 +306,7 @@ internal fun CaptureWorkspaceScreen(
                             }
                         }
 
-                        if (exposureCountdown > 0.5f) {
+                        if (!simulated && exposureCountdown > 0.5f) {
                             Box(
                                 modifier = Modifier
                                     .align(Alignment.Center)
@@ -318,6 +333,7 @@ internal fun CaptureWorkspaceScreen(
                         DisconnectedOverlay(
                             onConnect = { viewModel.requestConnect() },
                             onPlateSolve = onPlateSolve,
+                            onSimulate = viewModel::startSimulatedCamera,
                             modifier = Modifier.align(Alignment.Center)
                         )
                     }
@@ -378,13 +394,11 @@ internal fun CaptureWorkspaceScreen(
 
                 CameraPreviewTools(
                     connected = connectionState is ConnectionState.Connected,
-                    redNightMode = redNightMode,
                     showPanel = showPanel,
                     showOverlayPanel = showOverlayPanel,
                     focusAssistEnabled = focusAssistEnabled,
                     showCenterMarker = showCenterMarker,
                     onFitToView = { viewResetTrigger++ },
-                    onRedNightModeChange = onRedNightModeChange,
                     onTogglePanel = { showPanel = !showPanel },
                     onToggleOverlay = { showOverlayPanel = !showOverlayPanel },
                     onToggleFocusAssist = { viewModel.toggleFocusAssist() },
@@ -393,23 +407,34 @@ internal fun CaptureWorkspaceScreen(
                     onOpenLibrary = { viewModel.openPlayer() },
                     onOpenLiveStack = onOpenLiveStack,
                     onCfaSettings = viewModel::showCameraCfaSettings,
+                    simulated = simulated,
+                    canStartSimulation = connectionState is ConnectionState.Disconnected || connectionState is ConnectionState.Error,
+                    onStartSimulation = viewModel::startSimulatedCamera,
+                    onStopSimulation = viewModel::stopSimulatedCamera,
+                    portrait = portrait,
                     modifier = Modifier.align(Alignment.TopEnd)
                 )
 
             }
 
-            // Right control panel
-            if (showPanel && connectionState is ConnectionState.Connected) {
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    tonalElevation = 1.dp
-                ) {
+        }, quickControls = {
+            PortraitCaptureControls(exposureUs, exposureMin, exposureMax, gain, gainCapability, gainWriteInProgress,
+                autoExposureMode == com.indigo.mobileobservatory.camera.AutoExposureMode.OFF, autoStretch, portraitDetails,
+                viewModel::setExposure, viewModel::setGain, viewModel::setAutoStretch, { portraitDetails = true },
+                isRecording, viewModel::stopRecording,
+                safetyControls = { MountMotionStopBanner(mountMotionState, viewModel::stopMountMotion) })
+        }, fullControls = {
+            if (connectionState is ConnectionState.Connected) {
+                CaptureControlPanelHost(portrait, portraitDetails, isRecording, viewModel::stopRecording, { portraitDetails = false },
+                    safetyControls = { MountMotionStopBanner(mountMotionState, viewModel::stopMountMotion) }) {
                     val camInfo = when (val cs = connectionState) {
                         is ConnectionState.Connected -> cs.info
                         else -> null
                     }
                     val camName = camInfo?.name ?: "—"
                     ControlPanel(
+                        fillWidth = true,
+                        captureSettingsOnly = portrait,
                         onOpenLiveStack = onOpenLiveStack,
                         exposureUs = exposureUs,
                         gain = gain,
@@ -536,7 +561,7 @@ internal fun CaptureWorkspaceScreen(
                     )
                 }
             }
-        }
+        })
 
         // Bottom record bar
         if (connectionState is ConnectionState.Connected) {
@@ -555,7 +580,8 @@ internal fun CaptureWorkspaceScreen(
                 onCapture = { viewModel.capture() },
                 onSelectCaptureFormat = { viewModel.setCaptureFormat(it) },
                 onSelectRecordFormat = { viewModel.setRecordFormat(it) },
-                onSelectRecordLimit = { viewModel.setRecordLimit(it) }
+                onSelectRecordLimit = { viewModel.setRecordLimit(it) },
+                compact = portrait, onOpenLibrary = { viewModel.openPlayer() }
             )
         }
             }
@@ -583,6 +609,7 @@ internal fun MountMotionStopPopup(
 private fun DisconnectedOverlay(
     onConnect: () -> Unit,
     onPlateSolve: () -> Unit,
+    onSimulate: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -622,6 +649,7 @@ private fun DisconnectedOverlay(
             Spacer(Modifier.width(8.dp))
             Text(stringResource(R.string.plate_solve_image))
         }
+        TextButton(onClick = onSimulate) { Text(stringResource(R.string.sim_camera_start)) }
     }
 }
 
@@ -761,7 +789,8 @@ private fun MainPreviewImage(
     rotation: Int,
     resetTrigger: Int,
     focusAssistEnabled: Boolean,
-    showCenterMarker: Boolean
+    showCenterMarker: Boolean,
+    preferFullWidth: Boolean
 ) {
     val bitmap by viewModel.previewBitmap.collectAsStateWithPageLifecycle()
     val stackBitmap by viewModel.stacking.livePreview.collectAsStateWithPageLifecycle()
@@ -773,6 +802,7 @@ private fun MainPreviewImage(
         rotationDeg = rotation,
         resetTrigger = resetTrigger,
         showCenterMarker = showCenterMarker,
+        preferFullWidth = preferFullWidth,
         modifier = Modifier
             .fillMaxSize()
             .then(

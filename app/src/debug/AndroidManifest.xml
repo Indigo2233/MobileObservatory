@@ -4,7 +4,7 @@
         <activity
             android:name=".ui.WorkflowTestActivity"
             android:exported="false"
-            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|fontScale"
             android:screenOrientation="fullSensor"
             android:windowSoftInputMode="adjustResize" />
     </application>

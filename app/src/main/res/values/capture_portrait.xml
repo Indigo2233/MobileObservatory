@@ -1,0 +1,17 @@
+<resources>
+    <string name="capture_settings">Capture settings</string>
+    <string name="capture_stretch">Stretch</string>
+    <string name="capture_auto">Auto</string>
+    <string name="capture_off">Off</string>
+    <string name="capture_photo_label">Photo</string>
+    <string name="capture_video_label">Video</string>
+    <string name="sim_camera_name">Simulated camera</string>
+    <string name="sim_camera_start">Try simulated camera</string>
+    <string name="sim_camera_stop">Exit simulation</string>
+    <string name="sim_camera_badge">Simulation · no files saved</string>
+    <string name="sim_camera_disconnect_first">Disconnect the current camera before starting simulation.</string>
+    <string name="sim_camera_resume">Resume the simulated preview first.</string>
+    <string name="sim_camera_recording">Simulated recording · no file is being written</string>
+    <string name="sim_camera_recording_done">Simulated recording ended · no file saved</string>
+    <string name="sim_camera_capture_done">Simulated photo captured · no file saved</string>
+</resources>

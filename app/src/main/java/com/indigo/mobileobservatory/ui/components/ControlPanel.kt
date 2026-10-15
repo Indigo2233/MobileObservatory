@@ -14,6 +14,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -167,15 +168,17 @@ fun ControlPanel(
     onOpenLiveStack: () -> Unit = {},
     modifier: Modifier = Modifier,
     onEafSettings: (() -> Unit)? = null,
-    showLegacyFilterSettings: Boolean = true
+    showLegacyFilterSettings: Boolean = true,
+    fillWidth: Boolean = false,
+    captureSettingsOnly: Boolean = false
 ) {
     val exposureMin by exposureMinFlow.collectAsStateWithPageLifecycle()
     val exposureMax by exposureMaxFlow.collectAsStateWithPageLifecycle()
-    var activeSection by remember { mutableStateOf(ControlPanelSection.CAPTURE) }
+    var activeSection by rememberSaveable { mutableStateOf(ControlPanelSection.CAPTURE) }
     val availableSections = controlPanelSections(
         showHostRoi = showHostRoi,
         hasCameraInfo = cameraInfo != null
-    )
+    ).filter { !captureSettingsOnly || it in setOf(ControlPanelSection.CAPTURE, ControlPanelSection.IMAGE, ControlPanelSection.ROI) }
     LaunchedEffect(availableSections) {
         if (activeSection !in availableSections) {
             activeSection = ControlPanelSection.CAPTURE
@@ -197,14 +200,14 @@ fun ControlPanel(
 
     Column(
         modifier = modifier
-            .width(300.dp)
-            .fillMaxHeight()
+            .then(if (fillWidth) Modifier.fillMaxWidth() else Modifier.width(300.dp))
+            .then(if (captureSettingsOnly) Modifier else Modifier.fillMaxHeight())
             .verticalScroll(rememberScrollState())
             .padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         // ── Always-visible readouts: tap a value to jump to its section ───────
-        PanelQuickStrip(
+        if (!captureSettingsOnly) PanelQuickStrip(
             fps = fps,
             exposureUs = exposureUs,
             gain = gain,
@@ -928,12 +931,12 @@ fun ControlPanel(
         // ── Capture Settings ───────
         if (activeSection == ControlPanelSection.CAPTURE) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = onOpenLiveStack, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                if (!captureSettingsOnly) OutlinedButton(onClick = onOpenLiveStack, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
                     Icon(Icons.Default.Layers, null)
                     Spacer(Modifier.width(8.dp))
                     Text(stringResource(R.string.stack_live))
                 }
-                ExposureSlider(
+                if (!captureSettingsOnly) ExposureSlider(
                     exposureUs = exposureUs,
                     minUs = exposureMin,
                     maxUs = exposureMax,
@@ -978,7 +981,7 @@ fun ControlPanel(
                     }
                 }
 
-                GainControl(
+                if (!captureSettingsOnly) GainControl(
                     capability = gainCapability,
                     gain = gain,
                     onGainChange = onGainChange,
@@ -1047,7 +1050,7 @@ fun ControlPanel(
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    CaptureOptions(captureSettingsOnly, if (captureSettingsOnly) Modifier.weight(1f).padding(start = 8.dp) else Modifier) {
                         for (fmt in supportedPixelFormats) {
                             val chipLabel = if (!fmt.is8bit && !fmt.isRgb && pixelFormat == fmt && detectedBitDepth in 10..14 && detectedBitDepth != fmt.nativeBits) {
                                 val prefix = if (fmt.isMono) "MONO" else "BAYER RG"
@@ -1059,7 +1062,7 @@ fun ControlPanel(
                                 selected = pixelFormat == fmt,
                                 onClick = { onPixelFormatChange(fmt) },
                                 label = { Text(chipLabel, fontSize = 11.sp) },
-                                modifier = Modifier.height(28.dp)
+                                modifier = if (captureSettingsOnly) Modifier.heightIn(min = 32.dp) else Modifier.height(28.dp)
                             )
                         }
                     }
@@ -1077,13 +1080,13 @@ fun ControlPanel(
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        CaptureOptions(captureSettingsOnly, if (captureSettingsOnly) Modifier.weight(1f).padding(start = 8.dp) else Modifier) {
                             for (mode in supportedReadoutModes) {
                                 FilterChip(
                                     selected = readoutMode == mode,
                                     onClick = { onReadoutModeChange(mode) },
                                     label = { Text(mode.displayName, fontSize = 11.sp) },
-                                    modifier = Modifier.height(28.dp)
+                                    modifier = if (captureSettingsOnly) Modifier.heightIn(min = 32.dp) else Modifier.height(28.dp)
                                 )
                             }
                         }
@@ -1101,7 +1104,7 @@ fun ControlPanel(
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    CaptureOptions(captureSettingsOnly, if (captureSettingsOnly) Modifier.weight(1f).padding(start = 8.dp) else Modifier) {
                         for (mode in AutoExposureMode.entries) {
                             FilterChip(
                                 selected = autoExposureMode == mode,
@@ -1116,7 +1119,7 @@ fun ControlPanel(
                                         fontSize = 10.sp
                                     )
                                 },
-                                modifier = Modifier.height(28.dp)
+                                modifier = if (captureSettingsOnly) Modifier.heightIn(min = 32.dp) else Modifier.height(28.dp)
                             )
                         }
                     }
@@ -1133,14 +1136,14 @@ fun ControlPanel(
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        CaptureOptions(captureSettingsOnly, if (captureSettingsOnly) Modifier.weight(1f).padding(start = 8.dp) else Modifier) {
                             val awbOptions = listOf(0 to stringResource(R.string.awb_off), 2 to stringResource(R.string.awb_cont), 1 to stringResource(R.string.awb_once))
                             awbOptions.forEach { (modeOrdinal, label) ->
                                 FilterChip(
                                     selected = awbMode == modeOrdinal,
                                     onClick = { onAwbModeChange(modeOrdinal) },
                                     label = { Text(label, fontSize = 10.sp) },
-                                    modifier = Modifier.height(28.dp)
+                                    modifier = if (captureSettingsOnly) Modifier.heightIn(min = 32.dp) else Modifier.height(28.dp)
                                 )
                             }
                         }
@@ -1154,9 +1157,9 @@ fun ControlPanel(
         // ── Image Control ───────
         if (activeSection == ControlPanelSection.IMAGE) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                HistogramView(histogramData = histogram)
+                if (!captureSettingsOnly) HistogramView(histogramData = histogram)
 
-                Row(
+                if (!captureSettingsOnly) Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
@@ -1205,7 +1208,7 @@ fun ControlPanel(
 
         Divider(color = MaterialTheme.colorScheme.outlineVariant)
 
-        Row(
+        if (!captureSettingsOnly || activeSection == ControlPanelSection.ROI) Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -1707,11 +1710,14 @@ private fun MountDirectionButton(
     }
 }
 
-/**
- * Task-oriented sections of the camera control panel. Only one section is
- * visible at a time; the tabs replace the previous seven stacked collapsible
- * groups so a parameter is at most one tap away.
- */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun CaptureOptions(wrap: Boolean, modifier: Modifier, content: @Composable () -> Unit) {
+    if (wrap) FlowRow(modifier, horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.End)) { content() }
+    else Row(modifier, horizontalArrangement = Arrangement.spacedBy(4.dp)) { content() }
+}
+
+/** Only one focused section is visible at a time, with direct tab access. */
 enum class ControlPanelSection(val labelRes: Int) {
     CAPTURE(R.string.section_capture),
     DEVICE(R.string.section_device),
