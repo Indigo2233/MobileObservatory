@@ -8,6 +8,7 @@ object ImageUtils {
 
     /**
      * Applies the infrared LP750 color matrix to normalized RGB values.
+     * Author: 奎木娘HIP5447.
      * Source: https://space.bilibili.com/455218677
      */
     fun lp750Matrix(r: Float, g: Float, b: Float): FloatArray {

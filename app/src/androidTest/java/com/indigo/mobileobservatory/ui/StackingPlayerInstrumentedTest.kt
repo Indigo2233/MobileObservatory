@@ -5,12 +5,17 @@ import android.app.Application
 import androidx.compose.foundation.layout.Box
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.toPixelMap
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.UriHandler
+import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -199,10 +204,14 @@ class StackingPlayerInstrumentedTest {
         val file = File(fitsDir, "lp750-help.fits")
         StackFitsWriter.write(file, LinearImage(8, 8, 3, FloatArray(8 * 8 * 3) { .25f }))
 
-        showPlayer {}
+        val openedUrl = AtomicReference<String?>()
+        showPlayer(uriHandler = object : UriHandler {
+            override fun openUri(uri: String) { openedUrl.set(uri) }
+        }) {}
         compose.onNodeWithText(context.getString(R.string.media_category_fits)).performScrollTo().performClick()
         compose.waitUntil(10_000) { compose.onAllNodesWithText(file.name).fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText(file.name).performClick()
+        compose.onNodeWithText("LP750").assertIsNotSelected()
         compose.onNodeWithContentDescription(context.getString(R.string.lp750_help_button))
             .assertIsDisplayed()
             .performClick()
@@ -210,15 +219,22 @@ class StackingPlayerInstrumentedTest {
         compose.onNodeWithText(context.getString(R.string.lp750_help_title)).assertIsDisplayed()
         compose.onNodeWithText(context.getString(R.string.lp750_help_description)).assertIsDisplayed()
         compose.onNodeWithText(context.getString(R.string.lp750_credit)).assertIsDisplayed()
+        assertTrue(context.getString(R.string.lp750_credit).contains("奎木娘HIP5447"))
+        compose.onNodeWithText("https://space.bilibili.com/455218677")
+            .assertIsDisplayed().assertHasClickAction().performClick()
+        compose.runOnIdle { assertEquals("https://space.bilibili.com/455218677", openedUrl.get()) }
         compose.onNodeWithText(context.getString(R.string.close)).performClick()
         compose.onNodeWithText(context.getString(R.string.lp750_help_title)).assertDoesNotExist()
+        compose.onNodeWithText("LP750").assertIsNotSelected()
     }
 
-    private fun showPlayer(onStack: (File) -> Unit) {
+    private fun showPlayer(uriHandler: UriHandler? = null, onStack: (File) -> Unit) {
         compose.setContent {
-            MaterialTheme {
-                PlayerScreen(recordingsDir = File(directory, "recordings"), capturesDir = File(directory, "captures"),
-                    onStackFile = onStack, onBack = {})
+            CompositionLocalProvider(LocalUriHandler provides (uriHandler ?: LocalUriHandler.current)) {
+                MaterialTheme {
+                    PlayerScreen(recordingsDir = File(directory, "recordings"), capturesDir = File(directory, "captures"),
+                        onStackFile = onStack, onBack = {})
+                }
             }
         }
     }

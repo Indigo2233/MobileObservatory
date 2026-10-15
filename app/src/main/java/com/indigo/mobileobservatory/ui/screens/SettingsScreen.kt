@@ -21,6 +21,7 @@ import com.indigo.mobileobservatory.BuildConfig
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.sequence.SequenceFeature
 import com.indigo.mobileobservatory.ui.components.ObservatoryPill
+import com.indigo.mobileobservatory.ui.components.Lp750Credit
 import com.indigo.mobileobservatory.ui.components.ObservatoryPillRow
 import com.indigo.mobileobservatory.ui.components.rememberSettingsExitState
 import com.indigo.mobileobservatory.ui.settings.SettingsDraftViewModel
@@ -219,11 +220,7 @@ private fun DiagnosticsSettingsPage() = SettingsPage {
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )
     Spacer(Modifier.height(8.dp))
-    Text(
-        stringResource(R.string.lp750_credit),
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        style = MaterialTheme.typography.bodySmall
-    )
+    Lp750Credit()
 }
 
 @Composable

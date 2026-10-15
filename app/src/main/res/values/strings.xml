@@ -232,7 +232,10 @@
     <string name="share_log">Share Log</string>
     <string name="about">About</string>
     <string name="about_desc">Indigo Observatory v%1$s (build %2$d)\nCamera, mount, guiding and astronomy accessory control</string>
-    <string name="lp750_credit">LP750 infrared color conversion algorithm author and source: Infrared LP750 Galaxy\nhttps://space.bilibili.com/455218677</string>
+    <string name="lp750_credit">LP750 infrared color conversion algorithm author: 奎木娘HIP5447</string>
+    <string name="lp750_author_url" translatable="false">https://space.bilibili.com/455218677</string>
+    <string name="lp750_author_link">Open the author’s Bilibili profile</string>
+    <string name="lp750_link_failed">Unable to open the link. Check that a browser is available.</string>
     <string name="lp750_help_button">About LP750</string>
     <string name="lp750_help_title">About LP750</string>
     <string name="lp750_help_description">LP750 is a display color conversion for images captured through an LP750 infrared long-pass filter. When enabled, the app applies a color matrix and preview white balance after demosaicing or RGB decoding. It changes only the current preview; the FITS file, calibration data, and scientific stack remain unchanged. Leave it off for ordinary visible-light images.</string>

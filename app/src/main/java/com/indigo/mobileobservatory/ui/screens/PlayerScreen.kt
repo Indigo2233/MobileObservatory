@@ -10,6 +10,7 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.content.ActivityNotFoundException
 import android.graphics.Bitmap
+import android.os.SystemClock
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -44,6 +45,7 @@ import android.graphics.BitmapFactory
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.media.LibraryImportViewModel
 import com.indigo.mobileobservatory.media.ExternalMediaImportError
+import com.indigo.mobileobservatory.ui.components.Lp750Credit
 import com.indigo.mobileobservatory.mount.MountCoordinates
 import com.indigo.mobileobservatory.recording.SERReader
 import com.indigo.mobileobservatory.recording.MediaLibrary
@@ -52,15 +54,13 @@ import android.widget.Toast
 import com.indigo.mobileobservatory.stacking.StackBitmap
 import com.indigo.mobileobservatory.stacking.StackFitsReader
 import com.indigo.mobileobservatory.stacking.StackFitsPreview
+import com.indigo.mobileobservatory.util.FitsIntegerPreview
+import com.indigo.mobileobservatory.util.FitsIntegerPreviewDecoder
+import com.indigo.mobileobservatory.util.FileLogger
 import com.indigo.mobileobservatory.util.ImageUtils
-import com.indigo.mobileobservatory.util.BayerDemosaic
-import com.indigo.mobileobservatory.util.FitsDisplayStretch
 import kotlinx.coroutines.*
 import java.io.File
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import org.json.JSONObject
-import kotlin.math.roundToInt
 
 @Composable
 private fun RepeatableIconButton(
@@ -996,6 +996,7 @@ private fun ImageViewScreen(
     var showMetadata by remember(fileInfo) { mutableStateOf(false) }
     var lp750Enabled by remember(fileInfo) { mutableStateOf(false) }
     var showLp750Help by remember(fileInfo) { mutableStateOf(false) }
+    var fitsCache by remember(fileInfo) { mutableStateOf<FitsViewCache?>(null) }
     val failedToDecodeImage = stringResource(R.string.failed_to_decode_image)
     val unknownError = stringResource(R.string.unknown_error)
 
@@ -1017,16 +1018,15 @@ private fun ImageViewScreen(
             onDismissRequest = { showLp750Help = false },
             title = { Text(stringResource(R.string.lp750_help_title)) },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(
+                    Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
                     Text(
                         stringResource(R.string.lp750_help_description),
                         style = MaterialTheme.typography.bodyMedium
                     )
-                    Text(
-                        stringResource(R.string.lp750_credit),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Lp750Credit()
                 }
             },
             confirmButton = {
@@ -1043,9 +1043,53 @@ private fun ImageViewScreen(
                 val taskContext = currentCoroutineContext()
                 val isFits = fileInfo.format.equals("FIT", true) || fileInfo.format.equals("FITS", true)
                 if (isFits) {
+                    val startedAt = SystemClock.elapsedRealtime()
                     val source = firstFitsIn(fileInfo.file) ?: throw IllegalArgumentException("Empty FITS session")
-                    val result = decodeFits(source, applyLp750 = lp750Enabled, cancelled = { !taskContext.isActive })
-                    val metadata = if (StackFitsReader.isFloatingPoint(source)) StackFitsReader.readMetadata(source) else emptyMap()
+                    val sourceKey = "${source.absolutePath}:${source.length()}:${source.lastModified()}"
+                    var workingCache = fitsCache?.takeIf { it.sourceKey == sourceKey }
+                    val sourceCacheHit = workingCache != null
+                    if (workingCache == null) {
+                        val normalized = StackFitsReader.isNormalizedStack(source)
+                        val integerPreview = if (normalized) null else {
+                            FitsIntegerPreviewDecoder.read(source) { !taskContext.isActive }
+                        }
+                        val metadata = if (StackFitsReader.isFloatingPoint(source)) {
+                            StackFitsReader.readMetadata(source)
+                        } else {
+                            emptyMap()
+                        }
+                        workingCache = FitsViewCache(
+                            sourceKey = sourceKey,
+                            normalized = normalized,
+                            integerPreview = integerPreview,
+                            metadata = metadata
+                        )
+                    }
+                    val cached = workingCache.bitmaps[lp750Enabled]
+                    val decoded = if (cached != null) {
+                        cached to workingCache.infoByMode.getValue(lp750Enabled)
+                    } else if (workingCache.normalized) {
+                        decodeNormalizedFits(source, lp750Enabled) { !taskContext.isActive }
+                    } else {
+                        renderIntegerFits(
+                            requireNotNull(workingCache.integerPreview),
+                            lp750Enabled
+                        ) { !taskContext.isActive }
+                    }
+                    val updatedCache = if (cached != null) {
+                        workingCache
+                    } else {
+                        workingCache.copy(
+                            bitmaps = workingCache.bitmaps + (lp750Enabled to decoded.first),
+                            infoByMode = workingCache.infoByMode + (lp750Enabled to decoded.second)
+                        )
+                    }
+                    FileLogger.i(
+                        "FitsPreview",
+                        "file=${source.name} lp750=$lp750Enabled sourceCacheHit=$sourceCacheHit " +
+                            "bitmapCacheHit=${cached != null} size=${decoded.first.width}x${decoded.first.height} " +
+                            "elapsedMs=${SystemClock.elapsedRealtime() - startedAt}"
+                    )
                     val extra = if (fileInfo.file.isDirectory) {
                         val n = fileInfo.file.listFiles()?.count {
                             it.isFile && (it.extension.equals("fit", true) || it.extension.equals("fits", true))
@@ -1053,9 +1097,12 @@ private fun ImageViewScreen(
                         if (n > 1) "  $n frames" else ""
                     } else ""
                     withContext(Dispatchers.Main) {
-                        bitmap = result.first
-                        fitsInfo = result.second + extra
-                        resultMetadata = if (metadata.isEmpty()) "" else JSONObject(metadata).toString(2).take(20000)
+                        fitsCache = updatedCache
+                        bitmap = decoded.first
+                        fitsInfo = decoded.second + extra
+                        resultMetadata = if (updatedCache.metadata.isEmpty()) "" else {
+                            JSONObject(updatedCache.metadata).toString(2).take(20000)
+                        }
                         error = null
                     }
                 } else {
@@ -1164,263 +1211,35 @@ private fun ImageViewScreen(
     }
 }
 
-private fun decodeFits(file: File, applyLp750: Boolean = false, cancelled: () -> Boolean = { false }): Pair<Bitmap, String> {
-    if (StackFitsReader.isNormalizedStack(file)) {
-        val result = StackFitsPreview.read(file, applyLp750, cancelled)
-        val image = result.image
-        val bitmap = StackBitmap.create(image, 2048) {
-            if (cancelled()) throw CancellationException("FITS preview cancelled")
-        }
-        return bitmap to "${image.width}×${image.height} Float32 ${if (image.channels == 3) "RGB" else "Mono"}"
+private data class FitsViewCache(
+    val sourceKey: String,
+    val normalized: Boolean,
+    val integerPreview: FitsIntegerPreview?,
+    val metadata: Map<String, String>,
+    val bitmaps: Map<Boolean, Bitmap> = emptyMap(),
+    val infoByMode: Map<Boolean, String> = emptyMap()
+)
+
+private fun decodeNormalizedFits(
+    file: File,
+    applyLp750: Boolean,
+    cancelled: () -> Boolean
+): Pair<Bitmap, String> {
+    val result = StackFitsPreview.read(file, applyLp750, cancelled)
+    val image = result.image
+    val bitmap = StackBitmap.create(image, 2048) {
+        if (cancelled()) throw CancellationException("FITS preview cancelled")
     }
-    val bytes = file.readBytes()
-    var offset = 0
-    var width = 0; var height = 0; var bitpix = 16; var naxis = 2; var naxis3 = 1
-    var bscale = 1.0; var bzero = 0.0
-    var bayerPat: String? = null
-    var end = false
-
-    while (!end && offset < bytes.size) {
-        val blockEnd = (offset + 2880).coerceAtMost(bytes.size)
-        while (offset < blockEnd) {
-            if (offset + 80 > bytes.size) break
-            val card = String(bytes, offset, 80)
-            offset += 80
-            when {
-                card.startsWith("NAXIS1") -> width = card.substringAfter("=").substringBefore("/").trim().toIntOrNull() ?: 0
-                card.startsWith("NAXIS2") -> height = card.substringAfter("=").substringBefore("/").trim().toIntOrNull() ?: 0
-                card.startsWith("NAXIS3") -> naxis3 = card.substringAfter("=").substringBefore("/").trim().toIntOrNull() ?: 1
-                card.startsWith("BITPIX") -> bitpix = card.substringAfter("=").substringBefore("/").trim().toIntOrNull() ?: 16
-                card.startsWith("NAXIS ") -> naxis = card.substringAfter("=").substringBefore("/").trim().toIntOrNull() ?: 2
-                card.startsWith("BSCALE") -> bscale = card.substringAfter("=").substringBefore("/").trim().toDoubleOrNull() ?: 1.0
-                card.startsWith("BZERO") -> bzero = card.substringAfter("=").substringBefore("/").trim().toDoubleOrNull() ?: 0.0
-                card.startsWith("BAYERPAT") -> {
-                    val parsed = card.substringAfter("'").substringBefore("'").trim().uppercase()
-                    bayerPat = parsed.takeIf {
-                        it == "RGGB" || it == "GRBG" || it == "GBRG" || it == "BGGR"
-                    }
-                }
-                card.startsWith("END ") || card.trimEnd() == "END" -> end = true
-            }
-            if (end) break
-        }
-        if (!end) offset = blockEnd
-    }
-
-    val dataOffset = ((offset + 2879) / 2880) * 2880
-    if (width <= 0 || height <= 0) throw IllegalArgumentException("Invalid FITS: ${width}x${height}")
-
-    val channels = if (naxis >= 3) naxis3 else 1
-    val sourceWidth = width
-    val sourceHeight = height
-    // Keep Bayer phase stable while bounding the intermediate arrays on older devices.
-    val bayerScale = if (bayerPat != null) {
-        val initial = kotlin.math.ceil(maxOf(sourceWidth, sourceHeight) / 1600.0).toInt().coerceAtLeast(1)
-        if (initial > 1 && initial % 2 != 0) initial + 1 else initial
-    } else 1
-    if (bayerScale > 1) {
-        width = (sourceWidth / bayerScale).coerceAtLeast(2)
-        height = (sourceHeight / bayerScale).coerceAtLeast(2)
-    }
-    val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-    val pixels = IntArray(width * height)
-    val buf = ByteBuffer.wrap(bytes, dataOffset, bytes.size - dataOffset).order(ByteOrder.BIG_ENDIAN)
-    val lp750Display = applyLp750 && (bayerPat != null || channels > 1)
-    fun readSample(): Int {
-        val raw = when (bitpix) {
-            8 -> buf.get().toInt() and 0xFF
-            16 -> buf.short.toInt()
-            32 -> buf.int
-            -32 -> buf.float.toInt()
-            else -> buf.short.toInt()
-        }
-        return (raw.toDouble() * bscale + bzero).roundToInt()
-    }
-
-    if (channels == 1) {
-        val rawVals = IntArray(width * height)
-        val bayerSums = if (bayerScale > 1) LongArray(rawVals.size) else null
-        val bayerCounts = if (bayerScale > 1) IntArray(rawVals.size) else null
-        for (sourceY in 0 until sourceHeight) {
-            for (sourceX in 0 until sourceWidth) {
-                val v = readSample()
-                val x = sourceX / bayerScale
-                val y = sourceY / bayerScale
-                if (x < width && y < height &&
-                    sourceX % 2 == x % 2 && sourceY % 2 == y % 2
-                ) {
-                    val i = y * width + x
-                    if (bayerSums != null) {
-                        bayerSums[i] += v.toLong()
-                    } else {
-                        rawVals[i] = v
-                    }
-                    bayerCounts?.let { it[i]++ }
-                }
-            }
-        }
-        if (bayerCounts != null) {
-            for (i in rawVals.indices) {
-                rawVals[i] = (bayerSums!![i] / bayerCounts[i].coerceAtLeast(1)).toInt()
-            }
-        }
-        val displayWindow = FitsDisplayStretch.window(rawVals)
-
-        if (bayerPat != null) {
-            val lp750Gains = if (applyLp750) {
-                fitsLp750WhiteBalance(rawVals, width, height, bayerPat, displayWindow.black, displayWindow.range)
-            } else null
-            val raw8 = IntArray(rawVals.size) { i ->
-                displayWindow.to8(rawVals[i])
-            }
-            BayerDemosaic.demosaic8(
-                raw8, width, height, bayerPat, BayerDemosaic.Mode.DIRECTIONAL, pixels
-            )
-            for (y in 0 until height) {
-                for (x in 0 until width) {
-                    val index = y * width + x
-                    val p = pixels[index]
-                    val rn = ((p ushr 16) and 0xFF) / 255f
-                    val gn = ((p ushr 8) and 0xFF) / 255f
-                    val bn = (p and 0xFF) / 255f
-                    pixels[index] = lp750Gains?.let { gains ->
-                        ImageUtils.lp750Argb(rn, gn, bn, gains[0], gains[1], gains[2])
-                    } ?: p
-                }
-            }
-        } else {
-            for (i in rawVals.indices) {
-                val g = displayWindow.to8(rawVals[i])
-                pixels[i] = (0xFF shl 24) or (g shl 16) or (g shl 8) or g
-            }
-        }
-    } else {
-        val planeSize = width * height
-        val rPlane = IntArray(planeSize)
-        val gPlane = IntArray(planeSize)
-        val bPlane = IntArray(planeSize)
-        val planes = arrayOf(rPlane, gPlane, bPlane)
-
-        for (ch in 0 until channels.coerceAtMost(3)) {
-            for (i in 0 until planeSize) {
-                val v = readSample()
-                planes[ch][i] = v
-            }
-        }
-        val displayWindow = FitsDisplayStretch.window(planes.take(channels.coerceAtMost(3)))
-        val lp750Gains = if (applyLp750) {
-            ImageUtils.lp750WhiteBalanceGains(
-                rPlane.averageNormalized(displayWindow),
-                gPlane.averageNormalized(displayWindow),
-                bPlane.averageNormalized(displayWindow)
-            )
-        } else null
-        for (i in 0 until planeSize) {
-            val rn = displayWindow.normalize(rPlane[i])
-            val gn = displayWindow.normalize(gPlane[i])
-            val bn = displayWindow.normalize(bPlane[i])
-            pixels[i] = lp750Gains?.let { gains ->
-                ImageUtils.lp750Argb(rn, gn, bn, gains[0], gains[1], gains[2])
-            } ?: ((0xFF shl 24) or
-                ((rn * 255f).toInt().coerceIn(0, 255) shl 16) or
-                ((gn * 255f).toInt().coerceIn(0, 255) shl 8) or
-                (bn * 255f).toInt().coerceIn(0, 255))
-        }
-    }
-
-    if (lp750Display) ImageUtils.applyLp750BackgroundWhiteBalance(pixels)
-    FitsDisplayStretch.applyDisplayToneCurve(pixels)
-    bmp.setPixels(pixels, 0, width, 0, 0, width, height)
-    val typeStr = when {
-        channels > 1 -> " RGB"
-        bayerPat != null -> " Bayer($bayerPat)"
-        else -> " Mono"
-    }
-    val info = "${width}x${height} ${bitpix}bit$typeStr"
-    return Pair(bmp, info)
+    return bitmap to "${image.width}×${image.height} Float32 ${if (image.channels == 3) "RGB" else "Mono"}"
 }
 
-private fun IntArray.averageNormalized(window: FitsDisplayStretch.Window): Float {
-    if (isEmpty()) return 0f
-    var sum = 0.0
-    val step = (size / 10000).coerceAtLeast(1)
-    var count = 0
-    for (i in indices step step) {
-        sum += window.normalize(this[i]).toDouble()
-        count++
-    }
-    return if (count == 0) 0f else (sum / count).toFloat()
-}
-
-private fun fitsLp750WhiteBalance(
-    raw: IntArray,
-    width: Int,
-    height: Int,
-    bayerPat: String,
-    minValue: Int,
-    range: Int
-): FloatArray {
-    val rX: Int; val rY: Int
-    when (bayerPat) {
-        "RGGB" -> { rX = 0; rY = 0 }
-        "GRBG" -> { rX = 1; rY = 0 }
-        "GBRG" -> { rX = 0; rY = 1 }
-        else -> { rX = 1; rY = 1 }
-    }
-    var sumR = 0.0; var sumG = 0.0; var sumB = 0.0; var count = 0
-    val step = 4
-    for (y in 0 until height - 1 step step * 2) {
-        for (x in 0 until width - 1 step step * 2) {
-            val v00 = raw[y * width + x]
-            val v10 = raw[y * width + x + 1]
-            val v01 = raw[(y + 1) * width + x]
-            val v11 = raw[(y + 1) * width + x + 1]
-            val r: Int; val g1: Int; val g2: Int; val b: Int
-            when {
-                rX == 0 && rY == 0 -> { r = v00; g1 = v10; g2 = v01; b = v11 }
-                rX == 1 && rY == 0 -> { g1 = v00; r = v10; b = v01; g2 = v11 }
-                rX == 0 && rY == 1 -> { g1 = v00; b = v10; r = v01; g2 = v11 }
-                else -> { b = v00; g1 = v10; g2 = v01; r = v11 }
-            }
-            sumR += r; sumG += (g1 + g2) * 0.5; sumB += b; count++
-        }
-    }
-    if (count == 0) return floatArrayOf(1f, 1f, 1f)
-    return ImageUtils.lp750WhiteBalanceGains(
-        ((sumR / count - minValue) / range).toFloat(),
-        ((sumG / count - minValue) / range).toFloat(),
-        ((sumB / count - minValue) / range).toFloat()
-    )
-}
-
-private fun fitsBayerAvgN(vals: IntArray, x: Int, y: Int, w: Int, h: Int): Int {
-    var s = 0; var c = 0
-    if (x > 0) { s += vals[y * w + x - 1]; c++ }
-    if (x < w - 1) { s += vals[y * w + x + 1]; c++ }
-    if (y > 0) { s += vals[(y - 1) * w + x]; c++ }
-    if (y < h - 1) { s += vals[(y + 1) * w + x]; c++ }
-    return if (c > 0) s / c else 0
-}
-
-private fun fitsBayerAvgD(vals: IntArray, x: Int, y: Int, w: Int, h: Int): Int {
-    var s = 0; var c = 0
-    if (x > 0 && y > 0) { s += vals[(y - 1) * w + x - 1]; c++ }
-    if (x < w - 1 && y > 0) { s += vals[(y - 1) * w + x + 1]; c++ }
-    if (x > 0 && y < h - 1) { s += vals[(y + 1) * w + x - 1]; c++ }
-    if (x < w - 1 && y < h - 1) { s += vals[(y + 1) * w + x + 1]; c++ }
-    return if (c > 0) s / c else 0
-}
-
-private fun fitsBayerAvgH(vals: IntArray, x: Int, y: Int, w: Int): Int {
-    var s = 0; var c = 0
-    if (x > 0) { s += vals[y * w + x - 1]; c++ }
-    if (x < w - 1) { s += vals[y * w + x + 1]; c++ }
-    return if (c > 0) s / c else 0
-}
-
-private fun fitsBayerAvgV(vals: IntArray, x: Int, y: Int, w: Int, h: Int): Int {
-    var s = 0; var c = 0
-    if (y > 0) { s += vals[(y - 1) * w + x]; c++ }
-    if (y < h - 1) { s += vals[(y + 1) * w + x]; c++ }
-    return if (c > 0) s / c else 0
+private fun renderIntegerFits(
+    preview: FitsIntegerPreview,
+    applyLp750: Boolean,
+    cancelled: () -> Boolean
+): Pair<Bitmap, String> {
+    val pixels = preview.render(applyLp750, cancelled)
+    val bitmap = Bitmap.createBitmap(preview.width, preview.height, Bitmap.Config.ARGB_8888)
+    bitmap.setPixels(pixels, 0, preview.width, 0, 0, preview.width, preview.height)
+    return bitmap to preview.info
 }
