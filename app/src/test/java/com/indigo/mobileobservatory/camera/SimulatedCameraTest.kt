@@ -14,6 +14,14 @@ class SimulatedCameraTest {
             camera.startCapture(object : FrameCallback { override fun onFrame(frame: FrameData) { frames.add(frame) } })
         }
 
+    @Test fun defaultPreviewIsBayerSoLp750MappingCanBeEnabledImmediately() {
+        val camera = SimulatedCamera("Demo")
+        try {
+            assertTrue(camera.currentPixelFormat.isBayer)
+            assertEquals(PixelFormat.BAYER_RG8, camera.currentPixelFormat)
+        } finally { camera.close() }
+    }
+
     @Test fun heldFramesAreNeverOverwrittenAndThePoolRemainsBoundedAcrossRestarts() {
         val camera = SimulatedCamera("Demo")
         try {
@@ -56,6 +64,7 @@ class SimulatedCameraTest {
     @Test fun exposureAndGainChangeBrightnessAndInvalidRoisAreRejected() {
         val camera = SimulatedCamera("Demo")
         try {
+            camera.setPixelFormat(PixelFormat.RGB24)
             camera.setRoi(Roi(310, 230, 24, 24))
             camera.setExposureTime(100_000f)
             val dim = next(start(camera))

@@ -26,6 +26,7 @@ import com.indigo.mobileobservatory.camera.toupcam.ToupTekDevices
 import com.indigo.mobileobservatory.camera.toupcam.ToupcamCamera
 import com.indigo.mobileobservatory.camera.toupcam.ToupcamJni
 import com.indigo.mobileobservatory.camera.zwo.ZwoAsiCamera
+import com.indigo.mobileobservatory.camera.zwo.ZwoUsbDevices
 import com.indigo.mobileobservatory.util.FileLogger
 import com.zwo.ZwoCamera
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -63,7 +64,6 @@ class DahengCameraManager(
     companion object {
         private const val TAG = "CameraMgr"
         private const val QHY_VENDOR_ID = 0x1618    // 5656 decimal
-        private const val ZWO_VENDOR_ID = 0x03C3        // 963 decimal
         private const val PLAYERONE_VENDOR_ID = 0xA0A0  // 41120 decimal
     }
 
@@ -160,14 +160,16 @@ class DahengCameraManager(
                         if (isAccessory) return
                     }
                     if (ToupTekDevices.isVendor(usbDevice.vendorId) || usbDevice.vendorId == QHY_VENDOR_ID ||
-                        usbDevice.vendorId == ZWO_VENDOR_ID || usbDevice.vendorId == PLAYERONE_VENDOR_ID ||
+                        ZwoUsbDevices.isCameraCandidate(usbDevice.vendorId, usbDevice.productId) ||
+                        usbDevice.vendorId == PLAYERONE_VENDOR_ID ||
                         DslrUsb.brandForVendor(usbDevice.vendorId) == CameraBrand.NIKON)
                         enumerateDevices()
                 }
                 UsbManager.ACTION_USB_DEVICE_DETACHED -> {
                     val usbDevice = intent.getParcelableExtra<UsbDevice>("device") ?: return
                     if (ToupTekDevices.isVendor(usbDevice.vendorId) || usbDevice.vendorId == QHY_VENDOR_ID ||
-                        usbDevice.vendorId == ZWO_VENDOR_ID || usbDevice.vendorId == PLAYERONE_VENDOR_ID ||
+                        ZwoUsbDevices.isCameraCandidate(usbDevice.vendorId, usbDevice.productId) ||
+                        usbDevice.vendorId == PLAYERONE_VENDOR_ID ||
                         DslrUsb.brandForVendor(usbDevice.vendorId) == CameraBrand.NIKON) {
                         trace(
                             "USB detached ${ToupTekDevices.usbIdentity(usbDevice)} " +
@@ -445,7 +447,7 @@ class DahengCameraManager(
         try {
             val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
             for ((_, usbDev) in usbManager.deviceList) {
-                if (usbDev.vendorId == ZWO_VENDOR_ID) {
+                if (ZwoUsbDevices.isCameraCandidate(usbDev.vendorId, usbDev.productId)) {
                     val pid = usbDev.productId
                     val productName = usbDev.productName ?: "ZWO ASI Camera"
                     allDevices.add(DeviceEntry(
@@ -455,7 +457,11 @@ class DahengCameraManager(
                         brand = CameraBrand.ZWO,
                         usbDevice = usbDev
                     ))
-                    Log.i(TAG, "Found ZWO USB device: $productName VID=0x${ZWO_VENDOR_ID.toString(16)} PID=0x${pid.toString(16)}")
+                    Log.i(
+                        TAG,
+                        "Found ZWO USB device: $productName " +
+                            "VID=0x${ZwoUsbDevices.VENDOR_ID.toString(16)} PID=0x${pid.toString(16)}"
+                    )
                 }
             }
         } catch (e: Exception) {
@@ -1026,6 +1032,15 @@ class DahengCameraManager(
     }
 
     private fun requestZwoPermission(usbDevice: UsbDevice) {
+        if (!ZwoUsbDevices.isCameraCandidate(usbDevice.vendorId, usbDevice.productId)) {
+            abandonReservation()
+            _connectionState.value = ConnectionState.Error("Selected ZWO USB device is not a camera")
+            trace(
+                "Rejected non-camera ZWO USB device " +
+                    "VID=0x${usbDevice.vendorId.toString(16)} PID=0x${usbDevice.productId.toString(16)}"
+            )
+            return
+        }
         if (activeCamera != null) closeCamera()
         reserveUsbDevice(usbDevice)
         _connectionState.value = ConnectionState.Connecting
@@ -1048,6 +1063,15 @@ class DahengCameraManager(
     private fun openZwoDevice(usbDevice: UsbDevice) {
         val vid = usbDevice.vendorId
         val pid = usbDevice.productId
+        if (!ZwoUsbDevices.isCameraCandidate(vid, pid)) {
+            abandonReservation()
+            _connectionState.value = ConnectionState.Error("Selected ZWO USB device is not a camera")
+            trace(
+                "Rejected non-camera ZWO USB device " +
+                    "VID=0x${vid.toString(16)} PID=0x${pid.toString(16)}"
+            )
+            return
+        }
         val diagnose676Mm = pid == 0x676C
         fun diagnostic(stage: String, message: String) {
             if (diagnose676Mm) {

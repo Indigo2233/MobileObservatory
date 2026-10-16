@@ -236,6 +236,9 @@ fun CameraScreen(viewModel: CameraViewModel, redNightMode: Boolean = false,
                                         if (page?.destination == ObservatoryDestination.PLAYER) page.argument else null,
                                         if (page?.destination == ObservatoryDestination.PLAYER) page.category?.let(MediaCategory::valueOf) ?: MediaCategory.RECENT else MediaCategory.RECENT,
                                         redNightMode, onRedNightModeChange, open, back, select, chooseTarget, pushTo, openStack,
+                                        onCurrentFrameSolve = { file ->
+                                            performOpen(ObservatoryDestination.PLATE_SOLVE, file.absolutePath, "current-frame")
+                                        },
                                         onPlayer = { file, category -> playerFile = file?.absolutePath; playerCategory = category; open(ObservatoryDestination.PLAYER) },
                                         onDeviceSettings = { key -> quickSettings = true; quickDevice = key },
                                         onDeviceControl = { key -> quickSettings = false; quickDevice = key })
@@ -268,6 +271,7 @@ private fun ObservatoryContent(
     playerFile: String?, playerCategory: MediaCategory, redNightMode: Boolean, onRedNightModeChange: (Boolean) -> Unit,
     open: (ObservatoryDestination) -> Unit, back: () -> Unit, select: (ObservatoryWorkspace) -> Unit,
     chooseTarget: (StarMapTarget) -> Unit, pushTo: (StarMapTarget) -> Unit, openStack: (StackMode) -> Unit,
+    onCurrentFrameSolve: (File) -> Unit,
     onPlayer: (File?, MediaCategory) -> Unit,
     onDeviceSettings: (String) -> Unit,
     onDeviceControl: (String) -> Unit
@@ -335,8 +339,14 @@ private fun ObservatoryContent(
             opticsConfiguration = opticsConfiguration, initialSource = PointingCameraSource.AUXILIARY,
             onPlateSolve = { open(ObservatoryDestination.PLATE_SOLVE) }, onDeviceControl = onDeviceControl,
             onGuide = { open(ObservatoryDestination.GUIDE) })
-        ObservatoryDestination.PLATE_SOLVE -> PlateSolveScreen(mountCoordinates = coordinates,
-            cameraPixelSizeUm = cameraPixelSize, onSolved = vm::recordPlateSolveResult, onBack = back)
+        ObservatoryDestination.PLATE_SOLVE -> PlateSolveScreen(
+            initialFile = navigation.pages.lastOrNull()?.argument?.let(::File),
+            autoSolve = navigation.pages.lastOrNull()?.category == "current-frame",
+            mountCoordinates = coordinates,
+            cameraPixelSizeUm = cameraPixelSize,
+            onSolved = vm::recordPlateSolveResult,
+            onBack = back
+        )
         ObservatoryDestination.POLAR_ALIGNMENT -> {
             val site by vm.mountSite.collectAsStateWithPageLifecycle()
             val busy by vm.mountBusy.collectAsStateWithPageLifecycle()
@@ -425,8 +435,9 @@ private fun ObservatoryContent(
         null -> when (navigation.workspace) {
             ObservatoryWorkspace.CAPTURE -> CaptureWorkspaceScreen(vm,
                 onPlateSolve = { open(ObservatoryDestination.PLATE_SOLVE) },
-                onTargets = { open(ObservatoryDestination.TARGETS) }, onGuide = { open(ObservatoryDestination.GUIDE) },
+                onTargets = { open(ObservatoryDestination.TARGETS) },
                 onSequence = { open(ObservatoryDestination.SEQUENCE) }, selectedTarget = target?.name,
+                onCurrentFrameSolve = onCurrentFrameSolve,
                 onDeviceSettings = onDeviceSettings, onOpenLiveStack = { openStack(StackMode.LIVE) })
             ObservatoryWorkspace.STAR_MAP -> SkyWorkspaceScreen(vm, target, redNightMode, onRedNightModeChange,
                 onTargets = { open(ObservatoryDestination.TARGETS) },

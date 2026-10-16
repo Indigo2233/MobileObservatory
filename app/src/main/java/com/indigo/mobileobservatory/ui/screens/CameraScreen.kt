@@ -15,6 +15,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.input.pointer.pointerInput
@@ -35,15 +36,17 @@ import com.indigo.mobileobservatory.mount.MountMotionState
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.sequence.SequenceFeature
 import com.indigo.mobileobservatory.stacking.StackMode
+import java.io.File
+import kotlinx.coroutines.launch
 
 @Composable
 internal fun CaptureWorkspaceScreen(
     viewModel: CameraViewModel,
     onPlateSolve: () -> Unit,
     onTargets: () -> Unit,
-    onGuide: () -> Unit,
     onSequence: () -> Unit,
     selectedTarget: String?,
+    onCurrentFrameSolve: (File) -> Unit,
     onDeviceSettings: (String) -> Unit = {},
     onOpenLiveStack: () -> Unit = { viewModel.stacking.open(StackMode.LIVE) }
 ) {
@@ -94,6 +97,7 @@ internal fun CaptureWorkspaceScreen(
     val previewPaused by viewModel.previewPaused.collectAsStateWithPageLifecycle()
     val statusMessage by viewModel.statusMessage.collectAsStateWithPageLifecycle()
     val focusAssistEnabled by viewModel.focusAssistEnabled.collectAsStateWithPageLifecycle()
+    val lp750Enabled by viewModel.lp750PreviewEnabled.collectAsStateWithPageLifecycle()
     val focusScore by viewModel.focusScore.collectAsStateWithPageLifecycle()
     val focusHistory by viewModel.focusHistory.collectAsStateWithPageLifecycle()
     val focusZoomCenter by viewModel.focusZoomCenter.collectAsStateWithPageLifecycle()
@@ -152,6 +156,33 @@ internal fun CaptureWorkspaceScreen(
     androidx.activity.compose.BackHandler(enabled = !showPanel) { showPanel = true }
     var showCenterMarker by rememberSaveable { mutableStateOf(false) }
     var viewResetTrigger by rememberSaveable { mutableIntStateOf(0) }
+    var showFocalLengthDialog by rememberSaveable { mutableStateOf(false) }
+    var focalLengthText by rememberSaveable { mutableStateOf("") }
+    var currentFrameSolveBusy by remember { mutableStateOf(false) }
+    var currentFrameSolveError by rememberSaveable { mutableStateOf(false) }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val platePrefs = remember(context) {
+        context.applicationContext.getSharedPreferences("mobile_observatory", android.content.Context.MODE_PRIVATE)
+    }
+
+    fun captureCurrentFrameForSolve() {
+        if (currentFrameSolveBusy) return
+        currentFrameSolveBusy = true
+        scope.launch {
+            val file = runCatching { viewModel.captureTempFitsForPlateSolve() }.getOrNull()
+            currentFrameSolveBusy = false
+            if (file != null) onCurrentFrameSolve(file) else currentFrameSolveError = true
+        }
+    }
+
+    fun requestCurrentFrameSolve() {
+        val savedFocal = platePrefs.getFloat("plate_focal_length_mm", 0f)
+        if (savedFocal > 0f) captureCurrentFrameForSolve() else {
+            focalLengthText = ""
+            showFocalLengthDialog = true
+        }
+    }
 
     if (showDevicePicker && rememberPageForeground()) {
         val connectable = viewModel.camerasAvailableToMain(allDevices)
@@ -189,14 +220,6 @@ internal fun CaptureWorkspaceScreen(
                 modifier = Modifier
                     .fillMaxSize()
             ) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = onTargets, modifier = Modifier.weight(1f)) {
-                Text(selectedTarget ?: stringResource(R.string.wf_choose_target), maxLines = 1)
-            }
-            TextButton(onClick = onOpenLiveStack) { Text(stringResource(R.string.stack_live)) }
-            TextButton(onClick = onGuide) { Text(stringResource(R.string.guiding)) }
-            if (SequenceFeature.ENABLED) TextButton(onClick = onSequence) { Text(stringResource(R.string.tab_sequence)) }
-        }
         EaaSessionBar(viewModel, onOpenLiveStack)
         if (simulated) Surface(color = MaterialTheme.colorScheme.tertiaryContainer) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -398,13 +421,18 @@ internal fun CaptureWorkspaceScreen(
                     showOverlayPanel = showOverlayPanel,
                     focusAssistEnabled = focusAssistEnabled,
                     showCenterMarker = showCenterMarker,
+                    lp750Enabled = lp750Enabled,
+                    lp750Available = (interpretedFrameFormat ?: pixelFormat).isBayer,
+                    selectedTarget = selectedTarget,
+                    currentFrameSolveBusy = currentFrameSolveBusy,
                     onFitToView = { viewResetTrigger++ },
                     onTogglePanel = { showPanel = !showPanel },
                     onToggleOverlay = { showOverlayPanel = !showOverlayPanel },
                     onToggleFocusAssist = { viewModel.toggleFocusAssist() },
                     onToggleCenterMarker = { showCenterMarker = !showCenterMarker },
-                    onPlateSolve = onPlateSolve,
-                    onOpenLibrary = { viewModel.openPlayer() },
+                    onToggleLp750 = viewModel::setLp750PreviewEnabled,
+                    onSolveCurrentFrame = ::requestCurrentFrameSolve,
+                    onChooseTarget = onTargets,
                     onOpenLiveStack = onOpenLiveStack,
                     onCfaSettings = viewModel::showCameraCfaSettings,
                     simulated = simulated,
@@ -412,6 +440,8 @@ internal fun CaptureWorkspaceScreen(
                     onStartSimulation = viewModel::startSimulatedCamera,
                     onStopSimulation = viewModel::stopSimulatedCamera,
                     portrait = portrait,
+                    showSequence = SequenceFeature.ENABLED,
+                    onOpenSequence = onSequence,
                     modifier = Modifier.align(Alignment.TopEnd)
                 )
 
@@ -435,7 +465,6 @@ internal fun CaptureWorkspaceScreen(
                     ControlPanel(
                         fillWidth = true,
                         captureSettingsOnly = portrait,
-                        onOpenLiveStack = onOpenLiveStack,
                         exposureUs = exposureUs,
                         gain = gain,
                         gainWriteInProgress = gainWriteInProgress,
@@ -585,6 +614,49 @@ internal fun CaptureWorkspaceScreen(
             )
         }
             }
+
+    if (showFocalLengthDialog) AlertDialog(
+        onDismissRequest = { showFocalLengthDialog = false },
+        title = { Text(stringResource(R.string.plate_solve_current_frame)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(stringResource(R.string.plate_solve_current_frame_focal_prompt))
+                OutlinedTextField(
+                    value = focalLengthText,
+                    onValueChange = { focalLengthText = it.filter { char -> char.isDigit() || char == '.' } },
+                    label = { Text(stringResource(R.string.focal_length_mm)) },
+                    singleLine = true
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val focal = focalLengthText.toFloatOrNull()?.takeIf { it > 0f } ?: return@TextButton
+                    platePrefs.edit().putFloat("plate_focal_length_mm", focal).apply()
+                    showFocalLengthDialog = false
+                    captureCurrentFrameForSolve()
+                },
+                enabled = focalLengthText.toFloatOrNull()?.let { it > 0f } == true
+            ) { Text(stringResource(R.string.solve)) }
+        },
+        dismissButton = {
+            TextButton(onClick = { showFocalLengthDialog = false }) {
+                Text(stringResource(android.R.string.cancel))
+            }
+        }
+    )
+
+    if (currentFrameSolveError) AlertDialog(
+        onDismissRequest = { currentFrameSolveError = false },
+        title = { Text(stringResource(R.string.plate_solve_current_frame)) },
+        text = { Text(stringResource(R.string.plate_solve_current_frame_capture_failed)) },
+        confirmButton = {
+            TextButton(onClick = { currentFrameSolveError = false }) {
+                Text(stringResource(android.R.string.ok))
+            }
+        }
+    )
 
 }
 

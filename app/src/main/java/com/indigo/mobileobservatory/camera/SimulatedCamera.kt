@@ -22,7 +22,7 @@ class SimulatedCamera(displayName: String) : Camera {
         private set
     @Volatile override var currentGain = 100f
         private set
-    @Volatile override var currentPixelFormat = PixelFormat.RGB24
+    @Volatile override var currentPixelFormat = PixelFormat.BAYER_RG8
         private set
     override val supportedPixelFormats = listOf(PixelFormat.RGB24, PixelFormat.MONO8, PixelFormat.BAYER_RG8)
     @Volatile override var currentRoi = Roi(0, 0, WIDTH, HEIGHT)

@@ -1164,7 +1164,7 @@ private fun ImageViewScreen(
                 FilterChip(
                     selected = lp750Enabled,
                     onClick = { lp750Enabled = !lp750Enabled },
-                    label = { Text("LP750", fontSize = 11.sp) },
+                    label = { Text("LP700", fontSize = 11.sp) },
                     modifier = Modifier.padding(horizontal = 2.dp)
                 )
                 IconButton(onClick = { showLp750Help = true }) {

@@ -165,7 +165,6 @@ fun ControlPanel(
     onMountTracking: (Boolean) -> Unit = {},
     onMountHome: () -> Unit = {},
     onMountSetHome: () -> Unit = {},
-    onOpenLiveStack: () -> Unit = {},
     modifier: Modifier = Modifier,
     onEafSettings: (() -> Unit)? = null,
     showLegacyFilterSettings: Boolean = true,
@@ -200,7 +199,7 @@ fun ControlPanel(
 
     Column(
         modifier = modifier
-            .then(if (fillWidth) Modifier.fillMaxWidth() else Modifier.width(300.dp))
+            .then(if (fillWidth) Modifier.fillMaxWidth() else Modifier.width(280.dp))
             .then(if (captureSettingsOnly) Modifier else Modifier.fillMaxHeight())
             .verticalScroll(rememberScrollState())
             .padding(8.dp),
@@ -931,11 +930,6 @@ fun ControlPanel(
         // ── Capture Settings ───────
         if (activeSection == ControlPanelSection.CAPTURE) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (!captureSettingsOnly) OutlinedButton(onClick = onOpenLiveStack, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
-                    Icon(Icons.Default.Layers, null)
-                    Spacer(Modifier.width(8.dp))
-                    Text(stringResource(R.string.stack_live))
-                }
                 if (!captureSettingsOnly) ExposureSlider(
                     exposureUs = exposureUs,
                     minUs = exposureMin,
@@ -1206,47 +1200,6 @@ fun ControlPanel(
             }
         }
 
-        Divider(color = MaterialTheme.colorScheme.outlineVariant)
-
-        if (!captureSettingsOnly || activeSection == ControlPanelSection.ROI) Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                stringResource(R.string.bin_label),
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.width(50.dp)
-            )
-            Row(
-                modifier = Modifier.horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                AppBinning.OPTIONS.forEach { n ->
-                    FilterChip(
-                        selected = binning == n,
-                        onClick = { onBinningChange(n) },
-                        label = { Text("${n}×${n}", fontSize = 10.sp) },
-                        modifier = Modifier.height(28.dp)
-                    )
-                }
-                if (binning > 1) {
-                    val mode = when {
-                        binningUsesHardware && binningUsesSoftware -> R.string.bin_mixed
-                        binningUsesHardware -> R.string.bin_hardware
-                        else -> R.string.bin_software
-                    }
-                    Text(
-                        stringResource(mode),
-                        fontSize = 10.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-        }
-
         if (showHostRoi) {
         // ── ROI ───────
         if (activeSection == ControlPanelSection.ROI) {
@@ -1256,6 +1209,45 @@ fun ControlPanel(
                     style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        stringResource(R.string.bin_label),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.width(50.dp)
+                    )
+                    Row(
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        AppBinning.OPTIONS.forEach { n ->
+                            FilterChip(
+                                selected = binning == n,
+                                onClick = { onBinningChange(n) },
+                                label = { Text("${n}×${n}", fontSize = 10.sp) },
+                                modifier = Modifier.height(28.dp)
+                            )
+                        }
+                        if (binning > 1) {
+                            val mode = when {
+                                binningUsesHardware && binningUsesSoftware -> R.string.bin_mixed
+                                binningUsesHardware -> R.string.bin_hardware
+                                else -> R.string.bin_software
+                            }
+                            Text(
+                                stringResource(mode),
+                                fontSize = 10.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
 
                 val presets = buildList {
                     add(stringResource(R.string.roi_full) to Roi(0, 0, sensorWidth, sensorHeight))
@@ -1752,8 +1744,8 @@ private fun PanelQuickStrip(
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             QuickCell(
                 label = stringResource(R.string.exposure),
@@ -1796,33 +1788,32 @@ private fun QuickCell(
     detail: String? = null,
     onClick: (() -> Unit)? = null
 ) {
-    Column(
+    Row(
         modifier = modifier
-            .heightIn(min = 44.dp)
+            .heightIn(min = 32.dp)
             .then(if (onClick != null) Modifier.clickable { onClick() } else Modifier),
-        verticalArrangement = Arrangement.Center
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(3.dp)
     ) {
         Text(
             text = label,
-            style = MaterialTheme.typography.labelSmall,
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1
         )
-        Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+        Text(
+            text = value,
+            style = ObservatoryType.readoutMedium.copy(fontSize = 11.sp),
+            color = ObservatoryTheme.colors.readout,
+            maxLines = 1
+        )
+        if (detail != null) {
             Text(
-                text = value,
-                style = ObservatoryType.readoutMedium,
-                color = ObservatoryTheme.colors.readout,
+                text = detail,
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1
             )
-            if (detail != null) {
-                Text(
-                    text = detail,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1
-                )
-            }
         }
     }
 }

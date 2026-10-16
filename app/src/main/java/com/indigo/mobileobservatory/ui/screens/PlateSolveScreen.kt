@@ -53,6 +53,7 @@ import java.util.Locale
 @Composable
 fun PlateSolveScreen(
     initialFile: File? = null,
+    autoSolve: Boolean = false,
     mountCoordinates: MountCoordinates? = null,
     cameraPixelSizeUm: Float? = null,
     onSolved: (PlateSolveResult) -> Unit = {},
@@ -90,6 +91,7 @@ fun PlateSolveScreen(
     var error by remember { mutableStateOf<String?>(null) }
     var showLog by remember { mutableStateOf(false) }
     var useMountHint by remember(mountCoordinates) { mutableStateOf(mountCoordinates != null) }
+    var autoSolveAttempted by remember(initialFile, autoSolve) { mutableStateOf(false) }
 
     LaunchedEffect(result) {
         result?.takeIf { it.success }?.let(onSolved)
@@ -176,6 +178,75 @@ fun PlateSolveScreen(
         }.trim()
     }
 
+    fun solveSelectedFile() {
+        val file = selectedFile ?: return
+        val focal = focalLengthText.toFloatOrNull()?.takeIf { it > 0f }
+        val pixel = pixelSizeText.toFloatOrNull()?.takeIf { it > 0f }
+        prefs.edit().apply {
+            focal?.let { putFloat("plate_focal_length_mm", it) }
+            pixel?.let { putFloat("plate_pixel_size_um", it) }
+            putString("plate_sensor_id", selectedSensorId)
+        }.apply()
+        scope.launch {
+            solving = true
+            error = null
+            result = null
+            try {
+                val hints = withContext(Dispatchers.IO) { FitsSolveHintReader.read(file) }
+                val sensor = sensors.firstOrNull { it.id == selectedSensorId }
+                val catalogHeight = sensor?.heightPx?.takeIf {
+                    sensor.id != OpticsEquipment.CUSTOM_SENSOR_ID && it > 0
+                } ?: 0
+                val scalePixel = sensor?.let {
+                    pixelSizeForSensor(it, pixel?.toDouble())
+                } ?: pixel?.toDouble()
+                val fov = PlateSolveOptics.astapFovDeg(
+                    hints = hints,
+                    userFocalLengthMm = focal?.toDouble(),
+                    userPixelSizeUm = scalePixel,
+                    catalogHeightPx = catalogHeight
+                )?.coerceIn(0.2, 6.0)
+                if (fov == null) {
+                    result = PlateSolveResult(false, context.getString(R.string.plate_solve_need_optics))
+                    return@launch
+                }
+                computedFovDeg = fov
+                result = if (PlateSolveRouting.select(
+                        PlateSolveInputKind.EXTERNAL_CAMERA,
+                        focal?.toDouble()
+                    ) == PlateSolveEngine.ASTAP
+                ) {
+                    val solved = runner.solve(file, fov, if (useMountHint) mountCoordinates else null)
+                    solved.copy(
+                        measuredFocalLengthMm = PlateSolveOptics.impliedFocalLengthMm(
+                            scalePixel,
+                            solved.arcsecPerPixel,
+                            hints.binning
+                        )
+                    )
+                } else {
+                    PlateSolveResult(false, "ASTAP requires a confirmed external focal length of at least 200 mm.")
+                }
+            } catch (e: Throwable) {
+                result = PlateSolveResult(
+                    success = false,
+                    message = e.message ?: plateSolveFailedText,
+                    log = e.stackTraceToString()
+                )
+            } finally {
+                solving = false
+            }
+        }
+    }
+
+    val canSolve = selectedFile != null && d50Status.installed && !progress.active && !solving && computedFovDeg != null
+    LaunchedEffect(autoSolve, canSolve) {
+        if (autoSolve && canSolve && !autoSolveAttempted) {
+            autoSolveAttempted = true
+            solveSelectedFile()
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -191,7 +262,7 @@ fun PlateSolveScreen(
                 Icon(Icons.Default.ArrowBack, contentDescription = stringResource(R.string.back))
             }
             Text(
-                text = stringResource(R.string.plate_solve),
+                text = stringResource(if (autoSolve) R.string.plate_solve_current_frame else R.string.plate_solve),
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.weight(1f)
             )
@@ -285,66 +356,8 @@ fun PlateSolveScreen(
                         enabled = !progress.active && !solving
                     )
                     Button(
-                        onClick = {
-                            val file = selectedFile ?: return@Button
-                            val focal = focalLengthText.toFloatOrNull()?.takeIf { it > 0f }
-                            val pixel = pixelSizeText.toFloatOrNull()?.takeIf { it > 0f }
-                            prefs.edit().apply {
-                                focal?.let { putFloat("plate_focal_length_mm", it) }
-                                pixel?.let { putFloat("plate_pixel_size_um", it) }
-                                putString("plate_sensor_id", selectedSensorId)
-                            }.apply()
-                            scope.launch {
-                                solving = true
-                                error = null
-                                result = null
-                                try {
-                                    val hints = withContext(Dispatchers.IO) { FitsSolveHintReader.read(file) }
-                                    val sensor = sensors.firstOrNull { it.id == selectedSensorId }
-                                    val catalogHeight = sensor?.heightPx?.takeIf {
-                                        sensor.id != OpticsEquipment.CUSTOM_SENSOR_ID && it > 0
-                                    } ?: 0
-                                    val scalePixel = sensor?.let {
-                                        pixelSizeForSensor(it, pixel?.toDouble())
-                                    } ?: pixel?.toDouble()
-                                    val fov = PlateSolveOptics.astapFovDeg(
-                                        hints = hints,
-                                        userFocalLengthMm = focal?.toDouble(),
-                                        userPixelSizeUm = scalePixel,
-                                        catalogHeightPx = catalogHeight
-                                    )?.coerceIn(0.2, 6.0)
-                                    if (fov == null) {
-                                        result = PlateSolveResult(
-                                            false,
-                                            context.getString(R.string.plate_solve_need_optics)
-                                        )
-                                        return@launch
-                                    }
-                                    computedFovDeg = fov
-                                    result = if (PlateSolveRouting.select(PlateSolveInputKind.EXTERNAL_CAMERA, focal?.toDouble()) == PlateSolveEngine.ASTAP) {
-                                        val solved = runner.solve(file, fov, if (useMountHint) mountCoordinates else null)
-                                        solved.copy(
-                                            measuredFocalLengthMm = PlateSolveOptics.impliedFocalLengthMm(
-                                                scalePixel,
-                                                solved.arcsecPerPixel,
-                                                hints.binning
-                                            )
-                                        )
-                                    } else {
-                                        PlateSolveResult(false, "ASTAP requires a confirmed external focal length of at least 200 mm.")
-                                    }
-                                } catch (e: Throwable) {
-                                    result = PlateSolveResult(
-                                        success = false,
-                                        message = e.message ?: plateSolveFailedText,
-                                        log = e.stackTraceToString()
-                                    )
-                                } finally {
-                                    solving = false
-                                }
-                            }
-                        },
-                        enabled = selectedFile != null && d50Status.installed && !progress.active && !solving && computedFovDeg != null
+                        onClick = ::solveSelectedFile,
+                        enabled = canSolve
                     ) {
                         Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))

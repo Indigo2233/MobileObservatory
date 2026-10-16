@@ -6,6 +6,61 @@ import org.junit.Test
 
 class ObservingUiWiringTest {
     @Test
+    fun togglingLongExposureDoesNotPublishAStatusMessage() {
+        val viewModel = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/viewmodel/CameraViewModel.kt"
+        )
+        val toggle = viewModel.substring(
+            viewModel.indexOf("fun toggleLongExposure()"),
+            viewModel.indexOf("fun getExposureMax()")
+        )
+        assertTrue(!toggle.contains("_statusMessage"))
+        assertTrue(!toggle.contains("long_exposure_enabled"))
+        assertTrue(!toggle.contains("long_exposure_disabled"))
+    }
+
+    @Test
+    fun cameraControlPanelKeepsBinningInRoiAndUsesCompactInlineReadouts() {
+        val panel = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/components/ControlPanel.kt"
+        )
+        val roiIndex = panel.indexOf("if (activeSection == ControlPanelSection.ROI)")
+        val binIndex = panel.indexOf("R.string.bin_label")
+        assertTrue(roiIndex >= 0 && binIndex > roiIndex)
+        assertTrue(panel.indexOf("R.string.bin_label", binIndex + 1) < 0)
+        assertTrue(panel.contains(".width(280.dp)"))
+        assertTrue(panel.contains(".heightIn(min = 32.dp)"))
+        assertTrue(panel.contains("ObservatoryType.readoutMedium.copy(fontSize = 11.sp)"))
+    }
+
+    @Test
+    fun recordLimitFrameUsesTheSameFixedHeightAsFormatControls() {
+        val bar = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/components/RecordBar.kt"
+        )
+        val selector = bar.substring(
+            bar.indexOf("private fun RecordLimitSelector"),
+            bar.indexOf("private fun TargetSelector")
+        )
+        val height = selector.indexOf(".height(40.dp)")
+        val padding = selector.indexOf(".padding(horizontal = 12.dp)")
+        assertTrue(height >= 0 && padding > height)
+    }
+
+    @Test
+    fun successfulCameraConnectionDoesNotExposeIdentityInThePreviewMessage() {
+        val viewModel = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/viewmodel/CameraViewModel.kt"
+        )
+        val connected = viewModel.substring(
+            viewModel.indexOf("is ConnectionState.Connected ->"),
+            viewModel.indexOf("is ConnectionState.Error ->")
+        )
+        assertTrue(connected.contains("_statusMessage.value = \"\""))
+        assertTrue(!viewModel.contains("R.string.camera_connected_status"))
+    }
+
+    @Test
     fun mountScreensHideThePickerWhileConnected() {
         val mountScreen = read(
             "src/main/java/com/indigo/mobileobservatory/ui/screens/MountControlScreen.kt"
@@ -55,7 +110,11 @@ class ObservingUiWiringTest {
         assertTrue(tools.contains("R.string.fit_to_view"))
         assertTrue(tools.contains("R.string.focus_assist"))
         assertTrue(tools.contains("R.string.image_center_marker"))
-        assertTrue(tools.contains("R.string.plate_solve"))
+        assertTrue(tools.contains("R.string.plate_solve_current_frame"))
+        assertTrue(tools.contains("R.string.wf_choose_target"))
+        assertTrue(tools.contains("R.string.lp750_preview_mapping"))
+        assertTrue(!tools.contains("R.string.red_night_mode"))
+        assertTrue(!tools.contains("R.string.video_library"))
         assertTrue(tools.contains("if (focusAssistEnabled) menuOpen = false"))
         assertTrue(focus.contains(".width(220.dp)"))
         assertTrue(focus.contains(".height(160.dp)"))
@@ -496,14 +555,15 @@ class ObservingUiWiringTest {
             "src/main/java/com/indigo/mobileobservatory/ui/screens/CameraScreen.kt"
         )
         val shell = read("src/main/java/com/indigo/mobileobservatory/ui/screens/ObservatoryShell.kt")
+        val tools = read("src/main/java/com/indigo/mobileobservatory/ui/components/CameraPreviewTools.kt")
         val sequence = read(
             "src/main/java/com/indigo/mobileobservatory/ui/screens/SequenceScreen.kt"
         )
         assertTrue(shell.contains("ObservatoryDestination.SEQUENCE"))
-        assertTrue(camera.contains("R.string.tab_sequence"))
+        assertTrue(tools.contains("R.string.tab_sequence"))
         assertTrue(shell.contains("SequenceScreen("))
         assertTrue(shell.contains("SequenceProgressStrip("))
-        assertTrue(camera.contains("if (SequenceFeature.ENABLED) TextButton(onClick = onSequence)"))
+        assertTrue(camera.contains("showSequence = SequenceFeature.ENABLED"))
         assertTrue(shell.contains("ObservatoryDestination.SEQUENCE -> if (SequenceFeature.ENABLED)"))
         assertTrue(sequence.contains("R.string.sequence_edit"))
         assertTrue(sequence.contains("R.string.sequence_status"))
@@ -522,6 +582,9 @@ class ObservingUiWiringTest {
             "src/main/java/com/indigo/mobileobservatory/ui/screens/PlayerScreen.kt"
         )
         assertTrue(bar.contains("""listOf("SER", "PSER", "MP4", "FITS")"""))
+        assertTrue(bar.contains("TargetSelector(targetName, onTargetNameChange)"))
+        assertTrue(bar.contains("testTag(\"record-target-selector\")"))
+        assertTrue(bar.contains(".size(48.dp)"))
         assertTrue(viewModel.contains("enum class RecordFormat { SER, PSER, MP4, FITS }"))
         assertTrue(viewModel.contains("FitsSequenceWriter"))
         // Concrete FITS/session discovery is exercised by MediaLibraryTest.

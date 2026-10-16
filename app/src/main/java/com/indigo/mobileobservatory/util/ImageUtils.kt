@@ -173,7 +173,14 @@ object ImageUtils {
         return when {
             us >= 100_000_000f -> "%.0fs".format(us / 1_000_000f)
             us >= 1_000_000f -> "%.2fs".format(us / 1_000_000f)
-            us >= 1000f -> "%.1fms".format(us / 1000f)
+            us >= 1000f -> {
+                val milliseconds = us / 1000f
+                if (kotlin.math.abs(milliseconds - kotlin.math.round(milliseconds)) < 0.0001f) {
+                    "%.0fms".format(milliseconds)
+                } else {
+                    "%.1fms".format(milliseconds)
+                }
+            }
             else -> "%.0fμs".format(us)
         }
     }

@@ -212,6 +212,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _focusAssistEnabled = MutableStateFlow(false)
     val focusAssistEnabled: StateFlow<Boolean> = _focusAssistEnabled.asStateFlow()
 
+    private val _lp750PreviewEnabled = MutableStateFlow(false)
+    val lp750PreviewEnabled: StateFlow<Boolean> = _lp750PreviewEnabled.asStateFlow()
+
     private val _focusZoomCenter = MutableStateFlow(Pair(0.5f, 0.5f))
     val focusZoomCenter: StateFlow<Pair<Float, Float>> = _focusZoomCenter.asStateFlow()
 
@@ -932,7 +935,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         syncBinningState(cam, appBin = (cam as? CameraBinningCapable)?.currentHardwareBin ?: 1)
                         _longExposureEnabled.value = cam.longExposureEnabled
                         refreshExposureUiLimits()
-                        _statusMessage.value = app.getString(R.string.camera_connected_status, cam.cameraInfo?.name.orEmpty(), cam.cameraInfo?.serialNumber.orEmpty())
+                        _statusMessage.value = ""
                         bindCoolingFlows(cam)
                         bindEnvironmentFlows(cam)
                         _previewPaused.value = false
@@ -2400,9 +2403,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 if (cameraManager.activeCamera === cam) _exposureUs.value = cam.currentExposureUs
             }
         }
-        _statusMessage.value = app.getString(
-            if (newState) R.string.long_exposure_enabled else R.string.long_exposure_disabled
-        )
     }
 
     fun getExposureMax(): Float = _exposureUiMaxUs.value
@@ -2807,6 +2807,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setAutoStretch(enabled: Boolean) {
         frameProcessor.autoStretchEnabled = enabled
         _autoStretch.value = enabled
+    }
+
+    fun setLp750PreviewEnabled(enabled: Boolean) {
+        frameProcessor.lp750Enabled = enabled
+        _lp750PreviewEnabled.value = enabled
     }
 
     private val _awbMode = MutableStateFlow(FrameProcessor.AwbMode.OFF)

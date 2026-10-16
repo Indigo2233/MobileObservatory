@@ -211,7 +211,7 @@ class StackingPlayerInstrumentedTest {
         compose.onNodeWithText(context.getString(R.string.media_category_fits)).performScrollTo().performClick()
         compose.waitUntil(10_000) { compose.onAllNodesWithText(file.name).fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText(file.name).performClick()
-        compose.onNodeWithText("LP750").assertIsNotSelected()
+        compose.onNodeWithText("LP700").assertIsNotSelected()
         compose.onNodeWithContentDescription(context.getString(R.string.lp750_help_button))
             .assertIsDisplayed()
             .performClick()
@@ -225,7 +225,7 @@ class StackingPlayerInstrumentedTest {
         compose.runOnIdle { assertEquals("https://space.bilibili.com/455218677", openedUrl.get()) }
         compose.onNodeWithText(context.getString(R.string.close)).performClick()
         compose.onNodeWithText(context.getString(R.string.lp750_help_title)).assertDoesNotExist()
-        compose.onNodeWithText("LP750").assertIsNotSelected()
+        compose.onNodeWithText("LP700").assertIsNotSelected()
     }
 
     private fun showPlayer(uriHandler: UriHandler? = null, onStack: (File) -> Unit) {

@@ -164,6 +164,13 @@
     <!-- RecordBar -->
     <string name="recording_status">%1$s  |  %2$d frames  |  %3$s</string>
     <string name="target_label">Target:</string>
+    <string name="capture_target_jupiter">Jupiter</string>
+    <string name="capture_target_saturn">Saturn</string>
+    <string name="capture_target_mars">Mars</string>
+    <string name="capture_target_venus">Venus</string>
+    <string name="capture_target_mercury">Mercury</string>
+    <string name="capture_target_moon">Moon</string>
+    <string name="capture_target_sun">Sun</string>
     <string name="limit_label">Limit:</string>
     <string name="no_limit">No Limit</string>
     <string name="frames_header">Frames</string>
@@ -232,13 +239,17 @@
     <string name="share_log">Share Log</string>
     <string name="about">About</string>
     <string name="about_desc">Indigo Observatory v%1$s (build %2$d)\nCamera, mount, guiding and astronomy accessory control</string>
-    <string name="lp750_credit">LP750 infrared color conversion algorithm author: 奎木娘HIP5447</string>
+    <string name="lp750_credit">LP700 infrared color conversion algorithm author: 奎木娘HIP5447</string>
     <string name="lp750_author_url" translatable="false">https://space.bilibili.com/455218677</string>
     <string name="lp750_author_link">Open the author’s Bilibili profile</string>
     <string name="lp750_link_failed">Unable to open the link. Check that a browser is available.</string>
-    <string name="lp750_help_button">About LP750</string>
-    <string name="lp750_help_title">About LP750</string>
-    <string name="lp750_help_description">LP750 is a display color conversion for images captured through an LP750 infrared long-pass filter. When enabled, the app applies a color matrix and preview white balance after demosaicing or RGB decoding. It changes only the current preview; the FITS file, calibration data, and scientific stack remain unchanged. Leave it off for ordinary visible-light images.</string>
+    <string name="lp750_help_button">About LP700</string>
+    <string name="lp750_help_title">About LP700</string>
+    <string name="lp750_help_description">LP700 is a display color conversion for images captured through a 700 nm infrared long-pass filter. When enabled, the app applies a color matrix and preview white balance after demosaicing or RGB decoding. It changes only the current preview; the FITS file, calibration data, and scientific stack remain unchanged. Leave it off for ordinary visible-light images.</string>
+    <string name="lp750_preview_mapping">LP700 preview mapping</string>
+    <string name="plate_solve_current_frame">Solve current frame</string>
+    <string name="plate_solve_current_frame_focal_prompt">Enter the telescope focal length before capturing the current frame. The result page will show coordinates, field of view, image scale, rotation, measured focal length, and elapsed time.</string>
+    <string name="plate_solve_current_frame_capture_failed">The current frame could not be captured. Confirm that the camera is connected, live preview is running, and the selected format provides science data.</string>
 
     <!-- FilterWheelPanel / EAFPanel -->
     <string name="filter_wheel_title">Filter Wheel</string>
@@ -549,7 +560,6 @@
     <string name="increase_roi_x">Move ROI right</string>
     <string name="decrease_roi_y">Move ROI up</string>
     <string name="increase_roi_y">Move ROI down</string>
-    <string name="camera_connected_status">Connected: %1$s (%2$s)</string>
     <string name="guide_camera_connected_status">Guide camera connected: %s</string>
     <string name="guide_camera_disconnected">Guide camera disconnected</string>
     <string name="searching_guide_cameras">Searching for guide cameras…</string>
@@ -584,8 +594,6 @@
     <string name="recording_limit_reached">Recording limit reached</string>
     <string name="recording_error_detail">Recording error: %s</string>
     <string name="pixel_format_switch_failed">Camera rejected %s, kept the previous bit depth</string>
-    <string name="long_exposure_enabled">Long exposure enabled</string>
-    <string name="long_exposure_disabled">Long exposure disabled</string>
     <string name="trial_recording_disabled">Trial version — recording disabled</string>
     <string name="record_error_detail">Record error: %s</string>
     <string name="record_mp4_encoder_failed">MP4 encoder failed on this phone (%s). Try SER or FITS, or a smaller ROI.</string>

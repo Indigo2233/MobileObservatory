@@ -2,6 +2,8 @@ package com.indigo.mobileobservatory.ui.components
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
@@ -14,17 +16,21 @@ import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.FilterCenterFocus
 import androidx.compose.material.icons.filled.FitScreen
+import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.VideoLibrary
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -55,13 +61,18 @@ fun CameraPreviewTools(
     showOverlayPanel: Boolean,
     focusAssistEnabled: Boolean,
     showCenterMarker: Boolean,
+    lp750Enabled: Boolean,
+    lp750Available: Boolean,
+    selectedTarget: String?,
+    currentFrameSolveBusy: Boolean,
     onFitToView: () -> Unit,
     onTogglePanel: () -> Unit,
     onToggleOverlay: () -> Unit,
     onToggleFocusAssist: () -> Unit,
     onToggleCenterMarker: () -> Unit,
-    onPlateSolve: () -> Unit,
-    onOpenLibrary: () -> Unit,
+    onToggleLp750: (Boolean) -> Unit,
+    onSolveCurrentFrame: () -> Unit,
+    onChooseTarget: () -> Unit,
     onOpenLiveStack: () -> Unit = {},
     onCfaSettings: () -> Unit = {},
     simulated: Boolean = false,
@@ -69,9 +80,12 @@ fun CameraPreviewTools(
     onStartSimulation: () -> Unit = {},
     onStopSimulation: () -> Unit = {},
     portrait: Boolean = false,
+    showSequence: Boolean = false,
+    onOpenSequence: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var menuOpen by rememberSaveable { mutableStateOf(false) }
+    var showLp750Help by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(focusAssistEnabled) {
         if (focusAssistEnabled) menuOpen = false
     }
@@ -108,7 +122,7 @@ fun CameraPreviewTools(
             PreviewChromeButton(
                 onClick = { menuOpen = true },
                 description = stringResource(R.string.camera_preview_tools),
-                highlighted = focusAssistEnabled || showCenterMarker
+                highlighted = focusAssistEnabled || showCenterMarker || lp750Enabled
             ) {
                 Icon(
                     Icons.Default.MoreVert,
@@ -162,28 +176,67 @@ fun CameraPreviewTools(
                         }
                     )
                     DropdownMenuItem(
-                        text = { Text(stringResource(R.string.video_library)) },
-                        onClick = {
-                            menuOpen = false
-                            onOpenLibrary()
-                        },
-                        leadingIcon = { Icon(Icons.Default.VideoLibrary, contentDescription = null) }
-                    )
-                    if (connected) DropdownMenuItem(
                         text = { Text(stringResource(R.string.stack_live)) },
                         onClick = { menuOpen = false; onOpenLiveStack() },
                         leadingIcon = { Icon(Icons.Default.Layers, contentDescription = null) }
                     )
+                    DropdownMenuItem(
+                        text = { Text(selectedTarget ?: stringResource(R.string.wf_choose_target)) },
+                        onClick = { menuOpen = false; onChooseTarget() },
+                        leadingIcon = { Icon(Icons.Default.Star, contentDescription = null) }
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.plate_solve_current_frame)) },
+                        onClick = { menuOpen = false; onSolveCurrentFrame() },
+                        enabled = !currentFrameSolveBusy,
+                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) }
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(enabled = lp750Available) { onToggleLp750(!lp750Enabled) }
+                            .padding(start = 12.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            stringResource(R.string.lp750_preview_mapping),
+                            modifier = Modifier.weight(1f),
+                            color = if (lp750Available) MaterialTheme.colorScheme.onSurface
+                            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                        )
+                        IconButton(onClick = { showLp750Help = true }) {
+                            Icon(Icons.Default.HelpOutline, stringResource(R.string.lp750_help_button))
+                        }
+                        Switch(
+                            checked = lp750Enabled && lp750Available,
+                            onCheckedChange = if (lp750Available) onToggleLp750 else null,
+                            enabled = lp750Available
+                        )
+                    }
+                    if (showSequence) DropdownMenuItem(
+                        text = { Text(stringResource(R.string.tab_sequence)) },
+                        onClick = { menuOpen = false; onOpenSequence() }
+                    )
                 }
-                // Offline image solving and database preparation need no live camera.
-                DropdownMenuItem(
-                    text = { Text(stringResource(R.string.plate_solve)) },
-                    onClick = { menuOpen = false; onPlateSolve() },
-                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) }
-                )
             }
         }
     }
+
+    if (showLp750Help) AlertDialog(
+        onDismissRequest = { showLp750Help = false },
+        title = { Text(stringResource(R.string.lp750_help_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(stringResource(R.string.lp750_help_description))
+                Lp750Credit()
+            }
+        },
+        confirmButton = {
+            Button(onClick = { showLp750Help = false }) {
+                Text(stringResource(android.R.string.ok))
+            }
+        }
+    )
 }
 
 /**

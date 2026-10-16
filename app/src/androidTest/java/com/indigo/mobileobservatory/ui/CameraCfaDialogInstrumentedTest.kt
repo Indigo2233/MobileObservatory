@@ -30,9 +30,10 @@ class CameraCfaDialogInstrumentedTest {
             var open by rememberSaveable { mutableStateOf(false) }
             MaterialTheme {
                 CameraPreviewTools(connected=true, showPanel=false, showOverlayPanel=false,
-                    focusAssistEnabled=false, showCenterMarker=false, onFitToView={},
+                    focusAssistEnabled=false, showCenterMarker=false, lp750Enabled=false,
+                    lp750Available=true, selectedTarget=null, currentFrameSolveBusy=false, onFitToView={},
                     onTogglePanel={}, onToggleOverlay={}, onToggleFocusAssist={}, onToggleCenterMarker={},
-                    onPlateSolve={}, onOpenLibrary={}, onCfaSettings={ open=true })
+                    onToggleLp750={}, onSolveCurrentFrame={}, onChooseTarget={}, onCfaSettings={ open=true })
                 if (open) CameraCfaDialog(SerCfaInterpretation.AUTO, true, false, false, { null },
                     onApply={ value, _ -> applied=value; open=false }, onDismiss={ open=false })
             }
@@ -45,6 +46,36 @@ class CameraCfaDialogInstrumentedTest {
         compose.onNodeWithContentDescription(context.getString(R.string.camera_preview_tools)).performClick()
         compose.onNodeWithText(context.getString(R.string.camera_cfa_title)).performClick()
         compose.onNodeWithTag("camera-cfa-radio-AUTO", useUnmergedTree=true).assertIsSelected()
+    }
+
+    @Test fun previewOverflowOwnsCaptureTasksAndOmitsGlobalDestinations() {
+        var targetOpened = false
+        var solveOpened = false
+        var lp750 = false
+        compose.setContent {
+            MaterialTheme {
+                CameraPreviewTools(
+                    connected = true, showPanel = true, showOverlayPanel = true,
+                    focusAssistEnabled = false, showCenterMarker = false,
+                    lp750Enabled = lp750, lp750Available = true, selectedTarget = null,
+                    currentFrameSolveBusy = false, onFitToView = {}, onTogglePanel = {},
+                    onToggleOverlay = {}, onToggleFocusAssist = {}, onToggleCenterMarker = {},
+                    onToggleLp750 = { lp750 = it }, onSolveCurrentFrame = { solveOpened = true },
+                    onChooseTarget = { targetOpened = true }
+                )
+            }
+        }
+        compose.onNodeWithContentDescription(context.getString(R.string.camera_preview_tools)).performClick()
+        compose.onNodeWithText(context.getString(R.string.wf_choose_target)).assertIsDisplayed().performClick()
+        assertTrue(targetOpened)
+        compose.onNodeWithContentDescription(context.getString(R.string.camera_preview_tools)).performClick()
+        compose.onNodeWithText(context.getString(R.string.plate_solve_current_frame)).assertIsDisplayed().performClick()
+        assertTrue(solveOpened)
+        compose.onNodeWithContentDescription(context.getString(R.string.camera_preview_tools)).performClick()
+        compose.onNodeWithText(context.getString(R.string.lp750_preview_mapping)).assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.red_night_mode)).assertDoesNotExist()
+        compose.onNodeWithText(context.getString(R.string.video_library)).assertDoesNotExist()
+        compose.onNodeWithText(context.getString(R.string.plate_solve)).assertDoesNotExist()
     }
 
     @Test fun largeFontCanScrollToTheLastPatternAndExplicitlyResetAndApply() {

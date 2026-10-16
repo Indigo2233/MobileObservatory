@@ -16,6 +16,7 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -27,6 +28,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.indigo.mobileobservatory.R
@@ -106,8 +108,8 @@ private fun RecordLimitSelector(
                 .clip(shape)
                 .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f), shape)
                 .clickable { expanded = true }
-                .padding(horizontal = 12.dp, vertical = 4.dp)
-                .height(40.dp),
+                .height(40.dp)
+                .padding(horizontal = 12.dp),
             contentAlignment = Alignment.Center
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -168,6 +170,61 @@ private fun RecordLimitSelector(
 }
 
 @Composable
+private fun TargetSelector(targetName: String, onTargetNameChange: (String) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    val normalizedTarget = canonicalTargetName(targetName)
+    val targets = listOf("Jupiter", "Saturn", "Mars", "Venus", "Mercury", "Moon", "Sun")
+    val choices = if (normalizedTarget.isNotBlank() && normalizedTarget !in targets) {
+        listOf(normalizedTarget) + targets
+    } else targets
+    LaunchedEffect(targetName, normalizedTarget) {
+        if (targetName != normalizedTarget) onTargetNameChange(normalizedTarget)
+    }
+    Box {
+        OutlinedButton(
+            onClick = { expanded = true },
+            modifier = Modifier.height(34.dp).testTag("record-target-selector"),
+            contentPadding = PaddingValues(horizontal = 9.dp, vertical = 0.dp)
+        ) {
+            Text("${stringResource(R.string.target_label)} ${targetDisplayName(normalizedTarget)}", maxLines = 1, fontSize = 12.sp)
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            PopupWindowBackHandler(enabled = expanded) { expanded = false }
+            choices.forEach { target ->
+                DropdownMenuItem(text = { Text(targetDisplayName(target)) }, onClick = {
+                    onTargetNameChange(target)
+                    expanded = false
+                })
+            }
+        }
+    }
+}
+
+@Composable
+private fun targetDisplayName(code: String): String = when (code) {
+    "Jupiter" -> stringResource(R.string.capture_target_jupiter)
+    "Saturn" -> stringResource(R.string.capture_target_saturn)
+    "Mars" -> stringResource(R.string.capture_target_mars)
+    "Venus" -> stringResource(R.string.capture_target_venus)
+    "Mercury" -> stringResource(R.string.capture_target_mercury)
+    "Moon" -> stringResource(R.string.capture_target_moon)
+    "Sun" -> stringResource(R.string.capture_target_sun)
+    "" -> "—"
+    else -> code
+}
+
+private fun canonicalTargetName(value: String): String = when (value) {
+    "Ju" -> "Jupiter"
+    "Sa" -> "Saturn"
+    "Ma" -> "Mars"
+    "Ve" -> "Venus"
+    "Me" -> "Mercury"
+    "Mo" -> "Moon"
+    "Su" -> "Sun"
+    else -> value
+}
+
+@Composable
 @OptIn(ExperimentalMaterial3Api::class)
 fun RecordBar(
     isRecording: Boolean,
@@ -194,6 +251,7 @@ fun RecordBar(
             if (isRecording) Text(stringResource(R.string.recording_status, ImageUtils.formatDuration(durationMs), frameCount,
                 ImageUtils.formatFileSize(bytesWritten)), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.error)
             else Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                TargetSelector(targetName, onTargetNameChange)
                 CompactFormatMenu(stringResource(R.string.capture_photo_label), listOf("JPG", "FITS"), captureFormatLabel, onSelectCaptureFormat)
                 CompactFormatMenu(stringResource(R.string.capture_video_label), listOf("SER", "PSER", "MP4", "FITS"), recordFormatLabel, onSelectRecordFormat)
                 RecordLimitSelector(recordLimit, onSelectRecordLimit)
@@ -202,10 +260,10 @@ fun RecordBar(
                 IconButton(onClick = onOpenLibrary, modifier = Modifier.size(48.dp)) {
                     Icon(Icons.Default.PhotoLibrary, stringResource(R.string.wf_media))
                 }
-                OutlinedIconButton(onClick = onCapture, modifier = Modifier.size(60.dp)) {
-                    Icon(Icons.Default.Camera, stringResource(R.string.capture_desc), Modifier.size(28.dp))
+                OutlinedIconButton(onClick = onCapture, modifier = Modifier.size(48.dp)) {
+                    Icon(Icons.Default.Camera, stringResource(R.string.capture_desc), Modifier.size(22.dp))
                 }
-                OutlinedIconButton(onClick = if (isRecording) onStopRecord else onStartRecord, modifier = Modifier.size(60.dp)) {
+                OutlinedIconButton(onClick = if (isRecording) onStopRecord else onStartRecord, modifier = Modifier.size(48.dp)) {
                     Icon(if (isRecording) Icons.Default.Stop else Icons.Default.FiberManualRecord,
                         stringResource(if (isRecording) R.string.stop_recording else R.string.start_recording),
                         Modifier.size(30.dp), tint = MaterialTheme.colorScheme.error)
@@ -218,7 +276,7 @@ fun RecordBar(
         modifier = modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surface)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .padding(horizontal = 10.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -239,52 +297,15 @@ fun RecordBar(
                 )
             }
         } else {
-            Column(
-                verticalArrangement = Arrangement.spacedBy(4.dp)
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Text(stringResource(R.string.target_label), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    val targets = listOf("Ju", "Sa", "Ma", "Ve", "Me", "Mo", "Su")
-                    targets.forEach { t ->
-                        Text(
-                            t,
-                            fontSize = 12.sp,
-                            color = if (targetName == t) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(4.dp))
-                                .clickable { onTargetNameChange(t) }
-                                .background(
-                                    if (targetName == t) MaterialTheme.colorScheme.primaryContainer
-                                    else Color.Transparent
-                                )
-                                .padding(horizontal = 8.dp, vertical = 6.dp)
-                        )
-                    }
-                }
-                Row(
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    FormatToggle(
-                        options = listOf("JPG", "FITS"),
-                        selected = captureFormatLabel,
-                        onSelect = onSelectCaptureFormat
-                    )
-                    FormatToggle(
-                        options = listOf("SER", "PSER", "MP4", "FITS"),
-                        selected = recordFormatLabel,
-                        onSelect = onSelectRecordFormat
-                    )
-                    RecordLimitSelector(
-                        limit = recordLimit,
-                        onSelect = onSelectRecordLimit
-                    )
-                }
+                TargetSelector(targetName, onTargetNameChange)
+                FormatToggle(listOf("JPG", "FITS"), captureFormatLabel, onSelectCaptureFormat)
+                FormatToggle(listOf("SER", "PSER", "MP4", "FITS"), recordFormatLabel, onSelectRecordFormat)
+                RecordLimitSelector(recordLimit, onSelectRecordLimit)
             }
         }
 
@@ -294,7 +315,7 @@ fun RecordBar(
         ) {
             Box(
                 modifier = Modifier
-                    .size(60.dp)
+                    .size(48.dp)
                     .clip(CircleShape)
                     .border(2.dp, MaterialTheme.colorScheme.onSurfaceVariant, CircleShape)
                     .clickable { onCapture() },
@@ -304,13 +325,13 @@ fun RecordBar(
                     Icons.Default.Camera,
                     contentDescription = stringResource(R.string.capture_desc),
                     tint = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.size(28.dp)
+                    modifier = Modifier.size(22.dp)
                 )
             }
 
             Box(
                 modifier = Modifier
-                    .size(60.dp)
+                    .size(48.dp)
                     .clip(CircleShape)
                     .border(
                         2.dp,

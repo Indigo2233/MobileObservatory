@@ -162,6 +162,13 @@
     <!-- RecordBar -->
     <string name="recording_status">%1$s  |  %2$d 帧  |  %3$s</string>
     <string name="target_label">目标:</string>
+    <string name="capture_target_jupiter">木星</string>
+    <string name="capture_target_saturn">土星</string>
+    <string name="capture_target_mars">火星</string>
+    <string name="capture_target_venus">金星</string>
+    <string name="capture_target_mercury">水星</string>
+    <string name="capture_target_moon">月球</string>
+    <string name="capture_target_sun">太阳</string>
     <string name="limit_label">限制:</string>
     <string name="no_limit">无限制</string>
     <string name="frames_header">帧数</string>
@@ -230,13 +237,17 @@
     <string name="share_log">分享日志</string>
     <string name="about">关于</string>
     <string name="about_desc">靛空台 v%1$s（build %2$d）\n支持相机、赤道仪、导星和天文配件</string>
-    <string name="lp750_credit">LP750 红外转色算法作者：奎木娘HIP5447</string>
+    <string name="lp750_credit">LP700 红外转色算法作者：奎木娘HIP5447</string>
     <string name="lp750_author_url" translatable="false">https://space.bilibili.com/455218677</string>
     <string name="lp750_author_link">打开作者的 B 站主页</string>
     <string name="lp750_link_failed">无法打开链接，请检查浏览器是否可用。</string>
-    <string name="lp750_help_button">LP750 说明</string>
-    <string name="lp750_help_title">关于 LP750</string>
-    <string name="lp750_help_description">LP750 是用于 LP750 红外长通滤镜图像的显示转色功能。开启后，应用会在去马赛克或 RGB 解码后应用颜色矩阵和预览白平衡。该功能只改变当前预览，不会修改 FITS 文件、标定数据或科学叠加结果。普通可见光图像应保持关闭。</string>
+    <string name="lp750_help_button">LP700 说明</string>
+    <string name="lp750_help_title">关于 LP700</string>
+    <string name="lp750_help_description">LP700 是用于 700 nm 红外长通滤镜图像的显示转色功能。开启后，应用会在去马赛克或 RGB 解码后应用颜色矩阵和预览白平衡。该功能只改变当前预览，不会修改 FITS 文件、标定数据或科学叠加结果。普通可见光图像应保持关闭。</string>
+    <string name="lp750_preview_mapping">LP700 预览映射</string>
+    <string name="plate_solve_current_frame">解析当前帧</string>
+    <string name="plate_solve_current_frame_focal_prompt">请先填写望远镜焦距。截取当前帧后将自动进入解析，结果页会显示坐标、视场、像素比例、旋转角、解算焦距和耗时。</string>
+    <string name="plate_solve_current_frame_capture_failed">无法截取当前帧。请确认相机已连接、实时预览正在运行，且当前格式能够提供科学图像数据。</string>
 
     <!-- FilterWheelPanel / EAFPanel -->
     <string name="filter_wheel_title">滤镜轮</string>
@@ -549,7 +560,6 @@
     <string name="increase_roi_x">向右移动裁切区域</string>
     <string name="decrease_roi_y">向上移动裁切区域</string>
     <string name="increase_roi_y">向下移动裁切区域</string>
-    <string name="camera_connected_status">已连接：%1$s（%2$s）</string>
     <string name="guide_camera_connected_status">导星相机已连接：%s</string>
     <string name="guide_camera_disconnected">导星相机已断开</string>
     <string name="searching_guide_cameras">正在搜索导星相机…</string>
@@ -584,8 +594,6 @@
     <string name="recording_limit_reached">已达到录制限制</string>
     <string name="recording_error_detail">录制错误：%s</string>
     <string name="pixel_format_switch_failed">相机不支持切换到 %s，已保持原位深</string>
-    <string name="long_exposure_enabled">长曝光已启用</string>
-    <string name="long_exposure_disabled">长曝光已禁用</string>
     <string name="trial_recording_disabled">试用版已禁用录制</string>
     <string name="record_error_detail">录制错误：%s</string>
     <string name="record_mp4_encoder_failed">此手机无法录制 MP4（%s）。请改用 SER 或 FITS，或缩小 ROI。</string>

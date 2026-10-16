@@ -92,8 +92,8 @@ fun ObservatoryStatusBar(
             val deviceStatusDescription = stringResource(R.string.cockpit_device_status)
             Row(
                 modifier = Modifier
-                    .height(48.dp)
-                    .padding(horizontal = 8.dp),
+                    .height(40.dp)
+                    .padding(horizontal = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(
@@ -101,7 +101,7 @@ fun ObservatoryStatusBar(
                         .weight(1f)
                         .horizontalScroll(rememberScrollState())
                         .semantics { contentDescription = deviceStatusDescription },
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     devices.forEach { status ->
@@ -120,7 +120,7 @@ fun ObservatoryStatusBar(
                     tint = if (redNightMode) MaterialTheme.colorScheme.primary
                     else MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier
-                        .size(44.dp)
+                        .size(40.dp)
                         .clickable { onToggleRedNight(!redNightMode) }
                         .padding(10.dp)
                 )
@@ -130,7 +130,7 @@ fun ObservatoryStatusBar(
                     contentDescription = settingsDescription,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier
-                        .size(44.dp)
+                        .size(40.dp)
                         .clickable { onOpenSettings() }
                         .padding(10.dp)
                 )
@@ -157,7 +157,7 @@ private fun StatusPill(
         color = surfaceColor,
         shape = RoundedCornerShape(50),
         modifier = Modifier
-            .height(40.dp)
+            .height(32.dp)
             .then(
                 if (onClick != null) {
                     Modifier
@@ -172,14 +172,14 @@ private fun StatusPill(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .fillMaxHeight()
-                .padding(horizontal = 12.dp)
+                .padding(horizontal = 9.dp)
         ) {
             Box(
                 modifier = Modifier
-                    .size(8.dp)
+                    .size(7.dp)
                     .background(accent, CircleShape)
             )
-            Spacer(Modifier.width(6.dp))
+            Spacer(Modifier.width(5.dp))
             Text(
                 text = status.label,
                 style = MaterialTheme.typography.labelMedium,

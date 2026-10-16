@@ -153,7 +153,7 @@ Stellarium 构建中的 11 项壳行为已通过；无 Stellarium 构建以相�
 
 本批追加的 [相机色彩与 SER CFA](CAMERA_COLOR_AND_SER_CFA.md) 已合入同一工作树。最终运行全量 JVM **753 项通过、0 失败/错误**；含 Stellarium、`sequenceEnabled=false` 的相关 Android 回归 **42 项通过，80.787 秒**。42 项覆盖上面的 WF 入口/返回、真实布局/状态恢复、星图面板和 STOP、预览缩放、SER 播放→后处理→返回继续播放，以及新增 3536² 色彩数值、AWB、预览工作线程生命周期、CFA/算法/导出/校准兼容性。无 Stellarium 的 11 项壳回归是单独构建验证，不与 42 项混为一个构建。
 
-JavaScript 星图交互 **9 项通过**；离线原型实际 DOM **18 项通过**。新加的未知 CFA 外部 URI 恢复、负标记拒绝与显式 LP750 两阶段数值参考也在最终回归内。旧 LP750 测试漏算既有背景白平衡，已补完整参考，保留逐通道误差≤1，未放宽阈值。
+JavaScript 星图交互 **9 项通过**；离线原型实际 DOM **18 项通过**。新加的未知 CFA 外部 URI 恢复、负标记拒绝与显式 LP700 两阶段数值参考也在最终回归内。旧 LP700 测试漏算既有背景白平衡，已补完整参考，保留逐通道误差≤1，未放宽阈值。
 
 标准 ARM64 测试 APK 已按 `./Build.ps1 -NonCommercial` 构建成功：`bin/Installer/IndigoObservatory_android.apk`，包含 Stellarium，`sequenceEnabled=false`、`emulatorTest=false`。签名/构建信息与 SHA-256 随包由脚本生成；本轮未发布 GitHub Release。
 

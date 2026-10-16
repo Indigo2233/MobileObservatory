@@ -7,6 +7,13 @@ import org.junit.Test
 
 class ImageUtilsTest {
     @Test
+    fun `integer millisecond exposure omits decimal while fractional value remains visible`() {
+        assertEquals("1ms", ImageUtils.formatExposure(1_000f))
+        assertEquals("10ms", ImageUtils.formatExposure(10_000f))
+        assertEquals("1.5ms", ImageUtils.formatExposure(1_500f))
+    }
+
+    @Test
     fun `LP750 matrix maps normalized white and clips output`() {
         assertArrayEquals(intArrayOf(255, 234, 0), ImageUtils.applyLp750Matrix(1f, 1f, 1f))
     }
