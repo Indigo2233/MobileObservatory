@@ -186,7 +186,7 @@ fun CameraScreen(viewModel: CameraViewModel, redNightMode: Boolean = false,
     RememberAppOrientation(when {
         navigation.current in listOf(ObservatoryDestination.PLAYER, ObservatoryDestination.STACK) -> AppOrientationMode.SENSOR
         navigation.current == ObservatoryDestination.GUIDE -> AppOrientationMode.LANDSCAPE
-        showRoot && navigation.workspace == ObservatoryWorkspace.CAPTURE -> AppOrientationMode.LANDSCAPE
+        showRoot && navigation.workspace == ObservatoryWorkspace.CAPTURE -> AppOrientationMode.SENSOR
         else -> AppOrientationMode.SENSOR
     })
     // Registered before child handlers: inner cards, modes, editors and drawers win first.
@@ -423,7 +423,7 @@ private fun ObservatoryContent(
             initialFile = playerFile?.let(::File), initialCategory = playerCategory,
             excludeFile = vm.getActiveRecordingFile(), onBack = back)
         null -> when (navigation.workspace) {
-            ObservatoryWorkspace.CAPTURE -> CaptureWorkspaceScreen(vm, redNightMode, onRedNightModeChange,
+            ObservatoryWorkspace.CAPTURE -> CaptureWorkspaceScreen(vm,
                 onPlateSolve = { open(ObservatoryDestination.PLATE_SOLVE) },
                 onTargets = { open(ObservatoryDestination.TARGETS) }, onGuide = { open(ObservatoryDestination.GUIDE) },
                 onSequence = { open(ObservatoryDestination.SEQUENCE) }, selectedTarget = target?.name,

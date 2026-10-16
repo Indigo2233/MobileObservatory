@@ -1321,6 +1321,15 @@ class DahengCameraManager(
         }, "PlayerOne-Open").start()
     }
 
+    @Synchronized fun openSimulatedCamera(displayName: String): Boolean {
+        if (sessionName != "main" || activeCamera != null || reservedUsbDevice != null ||
+            _connectionState.value !is ConnectionState.Disconnected && _connectionState.value !is ConnectionState.Error) return false
+        val camera = SimulatedCamera(displayName)
+        activeCamera = camera
+        _connectionState.value = ConnectionState.Connected(camera.cameraInfo)
+        return true
+    }
+
     fun closeCamera() {
         activeCamera?.close()
         activeCamera = null

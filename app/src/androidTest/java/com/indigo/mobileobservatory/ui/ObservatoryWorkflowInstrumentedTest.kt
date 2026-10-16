@@ -153,7 +153,7 @@ class ObservatoryWorkflowInstrumentedTest {
         compose.onNodeWithTag("stack-target-DEEP_SKY").assertIsSelected()
     }
 
-    @Test fun browsingWorkspacesAllowBothOrientationsAndCaptureKeepsItsLandscapePreference() {
+    @Test fun browsingAndCaptureWorkspacesAllowBothOrientations() {
         listOf("MEDIA", "EQUIPMENT", "STAR_MAP").forEach { key ->
             selectWorkspace(key)
             compose.runOnIdle {
@@ -162,7 +162,7 @@ class ObservatoryWorkflowInstrumentedTest {
         }
         selectWorkspace("CAPTURE")
         compose.runOnIdle {
-            org.junit.Assert.assertEquals(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE, compose.activity.requestedOrientation)
+            org.junit.Assert.assertEquals(ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR, compose.activity.requestedOrientation)
         }
     }
 

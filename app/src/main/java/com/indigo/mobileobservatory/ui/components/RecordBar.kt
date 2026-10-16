@@ -12,6 +12,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Camera
 import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -126,6 +128,7 @@ private fun RecordLimitSelector(
             expanded = expanded,
             onDismissRequest = { expanded = false }
         ) {
+            PopupWindowBackHandler(enabled = expanded) { expanded = false }
             DropdownMenuItem(
                 text = { Text(stringResource(R.string.no_limit)) },
                 onClick = {
@@ -165,6 +168,7 @@ private fun RecordLimitSelector(
 }
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 fun RecordBar(
     isRecording: Boolean,
     frameCount: Int,
@@ -181,8 +185,35 @@ fun RecordBar(
     onSelectCaptureFormat: (String) -> Unit,
     onSelectRecordFormat: (String) -> Unit,
     onSelectRecordLimit: (RecordLimit) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    compact: Boolean = false,
+    onOpenLibrary: () -> Unit = {}
 ) {
+    if (compact) {
+        Column(modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(horizontal = 12.dp, vertical = 4.dp)) {
+            if (isRecording) Text(stringResource(R.string.recording_status, ImageUtils.formatDuration(durationMs), frameCount,
+                ImageUtils.formatFileSize(bytesWritten)), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.error)
+            else Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                CompactFormatMenu(stringResource(R.string.capture_photo_label), listOf("JPG", "FITS"), captureFormatLabel, onSelectCaptureFormat)
+                CompactFormatMenu(stringResource(R.string.capture_video_label), listOf("SER", "PSER", "MP4", "FITS"), recordFormatLabel, onSelectRecordFormat)
+                RecordLimitSelector(recordLimit, onSelectRecordLimit)
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onOpenLibrary, modifier = Modifier.size(48.dp)) {
+                    Icon(Icons.Default.PhotoLibrary, stringResource(R.string.wf_media))
+                }
+                OutlinedIconButton(onClick = onCapture, modifier = Modifier.size(60.dp)) {
+                    Icon(Icons.Default.Camera, stringResource(R.string.capture_desc), Modifier.size(28.dp))
+                }
+                OutlinedIconButton(onClick = if (isRecording) onStopRecord else onStartRecord, modifier = Modifier.size(60.dp)) {
+                    Icon(if (isRecording) Icons.Default.Stop else Icons.Default.FiberManualRecord,
+                        stringResource(if (isRecording) R.string.stop_recording else R.string.start_recording),
+                        Modifier.size(30.dp), tint = MaterialTheme.colorScheme.error)
+                }
+            }
+        }
+        return
+    }
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -305,6 +336,21 @@ fun RecordBar(
                     )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun CompactFormatMenu(label: String, formats: List<String>, selected: String, onSelect: (String) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        TextButton(onClick = { open = true }, contentPadding = PaddingValues(horizontal = 4.dp)) {
+            Text("$label $selected", style = MaterialTheme.typography.labelMedium)
+            Icon(Icons.Default.ExpandMore, null, Modifier.size(16.dp))
+        }
+        DropdownMenu(open, onDismissRequest = { open = false }) {
+            PopupWindowBackHandler(enabled = open) { open = false }
+            formats.forEach { format -> DropdownMenuItem(text = { Text(format) }, onClick = { onSelect(format); open = false }) }
         }
     }
 }

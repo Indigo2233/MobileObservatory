@@ -16,8 +16,8 @@ import androidx.compose.material.icons.filled.FilterCenterFocus
 import androidx.compose.material.icons.filled.FitScreen
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Layers
-import androidx.compose.material.icons.filled.Nightlight
-import androidx.compose.material.icons.filled.NightlightRound
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material.icons.filled.Visibility
@@ -45,19 +45,17 @@ import androidx.compose.ui.unit.dp
 import com.indigo.mobileobservatory.R
 
 /**
- * Landscape preview chrome: panel toggle, fit-to-view, and one overflow.
+ * Shared preview chrome: panel toggle, fit-to-view, and one overflow.
  * Do not restack these as a vertical FAB column — it covers focus assist.
  */
 @Composable
 fun CameraPreviewTools(
     connected: Boolean,
-    redNightMode: Boolean,
     showPanel: Boolean,
     showOverlayPanel: Boolean,
     focusAssistEnabled: Boolean,
     showCenterMarker: Boolean,
     onFitToView: () -> Unit,
-    onRedNightModeChange: (Boolean) -> Unit,
     onTogglePanel: () -> Unit,
     onToggleOverlay: () -> Unit,
     onToggleFocusAssist: () -> Unit,
@@ -66,6 +64,11 @@ fun CameraPreviewTools(
     onOpenLibrary: () -> Unit,
     onOpenLiveStack: () -> Unit = {},
     onCfaSettings: () -> Unit = {},
+    simulated: Boolean = false,
+    canStartSimulation: Boolean = false,
+    onStartSimulation: () -> Unit = {},
+    onStopSimulation: () -> Unit = {},
+    portrait: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     var menuOpen by rememberSaveable { mutableStateOf(false) }
@@ -84,7 +87,8 @@ fun CameraPreviewTools(
                 description = stringResource(R.string.toggle_panel)
             ) {
                 Icon(
-                    if (showPanel) Icons.Default.ChevronRight else Icons.Default.ChevronLeft,
+                    if (portrait) { if (showPanel) Icons.Default.ExpandMore else Icons.Default.ExpandLess }
+                    else if (showPanel) Icons.Default.ChevronRight else Icons.Default.ChevronLeft,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onSurface
                 )
@@ -104,7 +108,7 @@ fun CameraPreviewTools(
             PreviewChromeButton(
                 onClick = { menuOpen = true },
                 description = stringResource(R.string.camera_preview_tools),
-                highlighted = focusAssistEnabled || showCenterMarker || redNightMode
+                highlighted = focusAssistEnabled || showCenterMarker
             ) {
                 Icon(
                     Icons.Default.MoreVert,
@@ -116,19 +120,10 @@ fun CameraPreviewTools(
                 expanded = menuOpen,
                 onDismissRequest = { menuOpen = false }
             ) {
-                DropdownMenuItem(
-                    text = { Text(stringResource(R.string.red_night_mode)) },
-                    onClick = { onRedNightModeChange(!redNightMode) },
-                    leadingIcon = {
-                        Icon(
-                            if (redNightMode) Icons.Default.Nightlight else Icons.Default.NightlightRound,
-                            contentDescription = null
-                        )
-                    },
-                    trailingIcon = {
-                        Switch(checked = redNightMode, onCheckedChange = null)
-                    }
-                )
+                PopupWindowBackHandler(enabled = menuOpen) { menuOpen = false }
+                if (simulated || canStartSimulation) DropdownMenuItem(
+                    text = { Text(stringResource(if (simulated) R.string.sim_camera_stop else R.string.sim_camera_start)) },
+                    onClick = { menuOpen = false; if (simulated) onStopSimulation() else onStartSimulation() })
                 if (connected) {
                     DropdownMenuItem(text = { Text(stringResource(R.string.camera_cfa_title)) },
                         onClick = { menuOpen = false; onCfaSettings() })

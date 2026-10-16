@@ -29,8 +29,8 @@ class CameraCfaDialogInstrumentedTest {
         compose.setContent {
             var open by rememberSaveable { mutableStateOf(false) }
             MaterialTheme {
-                CameraPreviewTools(connected=true, redNightMode=false, showPanel=false, showOverlayPanel=false,
-                    focusAssistEnabled=false, showCenterMarker=false, onFitToView={}, onRedNightModeChange={},
+                CameraPreviewTools(connected=true, showPanel=false, showOverlayPanel=false,
+                    focusAssistEnabled=false, showCenterMarker=false, onFitToView={},
                     onTogglePanel={}, onToggleOverlay={}, onToggleFocusAssist={}, onToggleCenterMarker={},
                     onPlateSolve={}, onOpenLibrary={}, onCfaSettings={ open=true })
                 if (open) CameraCfaDialog(SerCfaInterpretation.AUTO, true, false, false, { null },

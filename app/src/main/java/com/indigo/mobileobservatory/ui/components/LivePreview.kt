@@ -45,7 +45,8 @@ fun LivePreview(
     rotationDeg: Int = 0,
     resetTrigger: Int = 0,
     showCenterMarker: Boolean = false,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    preferFullWidth: Boolean = false
 ) {
     val offsetSaver = remember {
         Saver<Offset, List<Float>>(save = { listOf(it.x, it.y) }, restore = { Offset(it[0], it[1]) })
@@ -117,7 +118,7 @@ fun LivePreview(
         val swapped = rotationDeg == 90 || rotationDeg == 270
         val effectiveW = if (swapped) imgH else imgW
         val effectiveH = if (swapped) imgW else imgH
-        val fitScale = minOf(canvasW / effectiveW, canvasH / effectiveH)
+        val fitScale = if (preferFullWidth) canvasW / effectiveW else minOf(canvasW / effectiveW, canvasH / effectiveH)
 
         val centerX = canvasW / 2f + offset.x
         val centerY = canvasH / 2f + offset.y
