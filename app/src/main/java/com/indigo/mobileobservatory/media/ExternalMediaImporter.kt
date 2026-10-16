@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Build
 import android.provider.OpenableColumns
 import com.indigo.mobileobservatory.recording.SERReader
+import com.indigo.mobileobservatory.util.FitsHeaderParser
 import java.io.File
 import java.io.FileOutputStream
 import java.io.RandomAccessFile
@@ -126,25 +127,26 @@ object ExternalMediaImporter {
     }
 
     /** The legacy integer FITS preview materializes its input, so impose an explicit preview budget. */
-    private fun validateFits(file: File) = RandomAccessFile(file, "r").use { input ->
-        val cards = mutableMapOf<String, String>(); var ended = false
-        val card = ByteArray(80)
-        while (!ended && input.filePointer + 80 <= input.length() && input.filePointer < 1_048_576) {
-            input.readFully(card)
-            val text = String(card, Charsets.US_ASCII); val key = text.take(8).trim()
-            if (key == "END") ended = true
-            else if (text.getOrNull(8) == '=') cards[key] = text.substring(10).substringBefore('/').trim()
-        }
-        val width = cards["NAXIS1"]?.toLongOrNull() ?: 0
-        val height = cards["NAXIS2"]?.toLongOrNull() ?: 0
-        val axes = cards["NAXIS"]?.toIntOrNull() ?: 0
-        val channels = if (axes == 3) cards["NAXIS3"]?.toLongOrNull() ?: 0 else 1
-        val bitpix = cards["BITPIX"]?.toIntOrNull() ?: 0
-        if (!ended || cards["SIMPLE"] != "T" || axes !in 2..3 || width <= 0 || height <= 0 ||
-            channels !in setOf(1L, 3L) || bitpix !in setOf(8, 16, 32, -32) || width > 8_000_000L / height)
+    private fun validateFits(file: File) {
+        try {
+            RandomAccessFile(file, "r").use { input ->
+                val header = FitsHeaderParser.read(input)
+                val width = header.longValue("NAXIS1") ?: 0
+                val height = header.longValue("NAXIS2") ?: 0
+                val axes = header.intValue("NAXIS") ?: 0
+                val channels = if (axes == 3) header.longValue("NAXIS3") ?: 0 else 1
+                val bitpix = header.intValue("BITPIX") ?: 0
+                if (header["SIMPLE"] != "T" || axes !in 2..3 || width <= 0 || height <= 0 ||
+                    channels !in setOf(1L, 3L) || bitpix !in setOf(8, 16, 32, -32) || width > 8_000_000L / height)
+                    throw ExternalMediaImportException(ExternalMediaImportError.INVALID_FILE)
+                val bytes = width * height * channels * kotlin.math.abs(bitpix) / 8
+                if (bytes > MAX_FITS_BYTES || header.dataOffset + bytes > input.length())
+                    throw ExternalMediaImportException(ExternalMediaImportError.INVALID_FILE)
+            }
+        } catch (invalid: ExternalMediaImportException) {
+            throw invalid
+        } catch (_: Exception) {
             throw ExternalMediaImportException(ExternalMediaImportError.INVALID_FILE)
-        val bytes = width * height * channels * kotlin.math.abs(bitpix) / 8
-        val offset = ((input.filePointer + 2879) / 2880) * 2880
-        if (bytes > MAX_FITS_BYTES || offset + bytes > input.length()) throw ExternalMediaImportException(ExternalMediaImportError.INVALID_FILE)
+        }
     }
 }

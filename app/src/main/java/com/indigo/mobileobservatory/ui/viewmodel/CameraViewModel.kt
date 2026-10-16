@@ -132,7 +132,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     companion object {
         private const val TAG = "CameraVM"
-        private const val ACTION_MOUNT_USB_PERMISSION = "com.indigo.mobileobservatory.MOUNT_USB_PERMISSION"
         private const val GOTO_TOLERANCE_DEG = 0.05
         private const val GOTO_STABLE_SAMPLES = 2
         private const val MOTION_STABLE_TOLERANCE_DEG = 0.01
@@ -584,7 +583,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _recordLimit = MutableStateFlow(RecordLimit(RecordLimitType.NONE, 0))
     val recordLimit: StateFlow<RecordLimit> = _recordLimit.asStateFlow()
 
-    private val _targetName = MutableStateFlow("Pla")
+    private val _targetName = MutableStateFlow(CaptureTargetNames.DEFAULT)
     val targetName: StateFlow<String> = _targetName.asStateFlow()
 
     private val _showDevicePicker = MutableStateFlow(false)
@@ -761,7 +760,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private var fpsTimestamp = System.nanoTime()
     private var autoExpFrameSkip = 0
     fun setTargetName(name: String) {
-        _targetName.value = name
+        _targetName.value = CaptureTargetNames.canonical(name)
     }
 
     fun toggleCaptureFormat() {
@@ -1924,7 +1923,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         startExposureTimer()
         cam.startCapture(object : FrameCallback {
-            override fun onFrame(input: FrameData) {
+            override fun onFrame(frame: FrameData) {
+                val input = frame
                 if (!previewEpoch.isCurrent(runEpoch) || cameraManager.activeCamera !== cam) { cam.recycleBuffer(input.data); return }
                 val verifiedRun = cam.scienceCaptureGeneration
                 if (verifiedRun != null && input.captureGeneration != null && input.captureGeneration != verifiedRun) {
@@ -1934,21 +1934,21 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     return
                 }
                 val actualSelection = if (input.pixelFormat.isRgb) SerCfaInterpretation.AUTO else selection
-                val frame = CameraCfaLayout.interpret(input, actualSelection)
+                val interpretedFrame = CameraCfaLayout.interpret(input, actualSelection)
                 val traits = runTraits.get()
                 onFrameArrived()
                 updateFps()
 
                 // Science receives private raw bytes before display/capture binning and before
                 // PreviewPipeline takes ownership. Recording keeps its separate bounded copy.
-                stackFrameGeometry = Triple(frame.width, frame.height, frame.pixelFormat)
-                if (_liveStackPixelFormat.value != frame.pixelFormat) _liveStackPixelFormat.value = frame.pixelFormat
-                val scienceKey = currentStackKey(frame)
+                stackFrameGeometry = Triple(interpretedFrame.width, interpretedFrame.height, interpretedFrame.pixelFormat)
+                if (_liveStackPixelFormat.value != interpretedFrame.pixelFormat) _liveStackPixelFormat.value = interpretedFrame.pixelFormat
+                val scienceKey = currentStackKey(interpretedFrame)
                 _scienceCaptureReady.value = scienceKey != null
                 if (stacking.live.state.value.phase == LiveStackPhase.RUNNING) {
                     if (filterWheelMoving.value) stacking.live.invalidate("filter_moving")
                     else if (scienceKey == null) stacking.live.invalidate("settings_changed")
-                    else stacking.acceptFrame(frame, scienceKey)
+                    else stacking.acceptFrame(interpretedFrame, scienceKey)
                 }
 
                 // SER/PSER retain sensor samples and geometry. Copy before display binning
@@ -1958,11 +1958,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     val initialTemperature = recordingCaptureTemperature
                     val temperature = calibrationTemperature()
                     if (initialTemperature != null && (temperature == null || kotlin.math.abs(temperature - initialTemperature) > 2.0)) recordingCaptureChanged = true
-                    enqueueRecordingFrame(frame)
+                    enqueueRecordingFrame(interpretedFrame)
                 }
 
-                val processed = softwareBinning.apply(frame, traits)
-                if (processed.data !== frame.data) cam.recycleBuffer(frame.data)
+                val processed = softwareBinning.apply(interpretedFrame, traits)
+                if (processed.data !== interpretedFrame.data) cam.recycleBuffer(interpretedFrame.data)
                 if (!previewEpoch.isCurrent(runEpoch)) {
                     runRecycler(processed.data)
                     return
@@ -3130,7 +3130,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
             val roi = cam.currentRoi
             val ts = winJuposTimestamp()
-            val target = _targetName.value.ifBlank { "Pla" }
+            val target = CaptureTargetNames.canonical(_targetName.value)
             val info = cam.cameraInfo
             val cameraShort = (info?.sensorName ?: info?.name)?.replace(" ", "")?.take(20) ?: "Camera"
             val filterName = currentFilterName()
@@ -3608,7 +3608,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 evidence.validate(); frameEvidence += evidence; raw
             }
             val referenceTask = async { captureReference { stamp -> referenceStamp.set(stamp) } }
-            var previous = first
+            lateinit var previous: com.indigo.mobileobservatory.pointing.AuxiliaryRawSample
             var latest = first
             withTimeout(30_000) {
                 do {
@@ -3914,7 +3914,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
         val filterName = currentFilterName()
-        val target = _targetName.value.ifBlank { "Pla" } // Snapshot the capture task before awaiting a frame.
+        val target = CaptureTargetNames.canonical(_targetName.value) // Snapshot the capture task before awaiting a frame.
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val frame = awaitFrameSnapshot() ?: return@launch
@@ -3964,7 +3964,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
         val cam = cameraManager.activeCamera ?: return
         val filterName = currentFilterName()
-        val target = _targetName.value.ifBlank { "Pla" } // Snapshot the capture task before awaiting a frame.
+        val target = CaptureTargetNames.canonical(_targetName.value) // Snapshot the capture task before awaiting a frame.
         val still = cam as? CameraStillCaptureCapable
         if (still != null && still.stillCaptureSupported) {
             viewModelScope.launch(Dispatchers.IO) {

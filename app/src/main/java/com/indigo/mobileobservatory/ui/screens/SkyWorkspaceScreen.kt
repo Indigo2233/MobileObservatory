@@ -28,7 +28,7 @@ import kotlinx.coroutines.CancellationException
 @Composable
 @OptIn(ExperimentalLayoutApi::class)
 internal fun SkyWorkspaceScreen(viewModel: CameraViewModel, selectedTarget: StarMapTarget?,
-    redNightMode: Boolean, onRedNightModeChange: (Boolean) -> Unit,
+    redNightMode: Boolean,
     onTargets: () -> Unit, onPreparation: () -> Unit, onPushTo: (StarMapTarget) -> Unit,
     onTargetSelected: (StarMapTarget) -> Unit, onBack: () -> Unit,
     pointingSources: List<FovPointingCandidate> = emptyList(),
@@ -147,7 +147,6 @@ internal fun SkyWorkspaceScreen(viewModel: CameraViewModel, selectedTarget: Star
                         onStopMount = viewModel::stopMountMotion,
                         onGoHome = viewModel::goMountHome,
                         redNightMode = redNightMode,
-                        onRedNightModeChange = onRedNightModeChange,
                         onOpenTargets = onTargets,
                         onOpenPreparation = onPreparation,
                         onPushTo = onPushTo,

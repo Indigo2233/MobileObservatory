@@ -16,7 +16,6 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -32,6 +31,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.indigo.mobileobservatory.R
+import com.indigo.mobileobservatory.camera.CaptureTargetNames
 import com.indigo.mobileobservatory.util.ImageUtils
 
 @Composable
@@ -172,14 +172,9 @@ private fun RecordLimitSelector(
 @Composable
 private fun TargetSelector(targetName: String, onTargetNameChange: (String) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
-    val normalizedTarget = canonicalTargetName(targetName)
-    val targets = listOf("Jupiter", "Saturn", "Mars", "Venus", "Mercury", "Moon", "Sun")
-    val choices = if (normalizedTarget.isNotBlank() && normalizedTarget !in targets) {
-        listOf(normalizedTarget) + targets
-    } else targets
-    LaunchedEffect(targetName, normalizedTarget) {
-        if (targetName != normalizedTarget) onTargetNameChange(normalizedTarget)
-    }
+    val normalizedTarget = CaptureTargetNames.canonical(targetName)
+    val targets = CaptureTargetNames.solarSystemTargets
+    val choices = if (normalizedTarget !in targets) listOf(normalizedTarget) + targets else targets
     Box {
         OutlinedButton(
             onClick = { expanded = true },
@@ -211,17 +206,6 @@ private fun targetDisplayName(code: String): String = when (code) {
     "Sun" -> stringResource(R.string.capture_target_sun)
     "" -> "—"
     else -> code
-}
-
-private fun canonicalTargetName(value: String): String = when (value) {
-    "Ju" -> "Jupiter"
-    "Sa" -> "Saturn"
-    "Ma" -> "Mars"
-    "Ve" -> "Venus"
-    "Me" -> "Mercury"
-    "Mo" -> "Moon"
-    "Su" -> "Sun"
-    else -> value
 }
 
 @Composable

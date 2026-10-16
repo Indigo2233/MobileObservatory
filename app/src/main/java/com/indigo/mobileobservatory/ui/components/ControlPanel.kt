@@ -27,7 +27,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.gestures.detectTapGestures
 import com.indigo.mobileobservatory.camera.*
-import com.indigo.mobileobservatory.camera.toupcam.EAFInfo
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -71,21 +70,7 @@ fun ControlPanel(
     // Device section params
     cameraInfo: CameraInfo?,
     cameraName: String,
-    showAccessoryControls: Boolean = false,
     showMountControls: Boolean = false,
-    fwConnected: Boolean,
-    fwPosition: Int,
-    fwMoving: Boolean,
-    fwSlotNames: List<String>,
-    fwSlotCount: Int,
-    fwBidirectional: Boolean,
-    onFwBidirectionalToggle: (Boolean) -> Unit,
-    onFwEditNames: () -> Unit,
-    eafConnected: Boolean,
-    eafPosition: Int,
-    eafMoving: Boolean,
-    eafTemperature: Float?,
-    eafInfo: EAFInfo?,
     mountConnectionState: MountConnectionState,
     mountCoordinates: MountCoordinates?,
     mountHost: String,
@@ -139,16 +124,6 @@ fun ControlPanel(
     onStopRamp: () -> Unit,
     onSwitchCamera: () -> Unit,
     onScanDevices: () -> Unit,
-    onFwSetPosition: (Int) -> Unit,
-    onFwReset: () -> Unit,
-    onEafMoveTo: (Int) -> Unit,
-    onEafMoveRelative: (Int) -> Unit,
-    onEafHalt: () -> Unit,
-    onEafSetZero: () -> Unit,
-    onEafSetDirection: (Int) -> Unit = {},
-    onEafSetFineStep: (Int) -> Unit = {},
-    onEafSetMaxStep: (Int) -> Unit = {},
-    onEafSetBacklash: (Int, Int) -> Unit = { _, _ -> },
     onMountHostChange: (String) -> Unit,
     onMountPortChange: (String) -> Unit,
     onMountTransportChange: (MountTransportType) -> Unit,
@@ -166,8 +141,6 @@ fun ControlPanel(
     onMountHome: () -> Unit = {},
     onMountSetHome: () -> Unit = {},
     modifier: Modifier = Modifier,
-    onEafSettings: (() -> Unit)? = null,
-    showLegacyFilterSettings: Boolean = true,
     fillWidth: Boolean = false,
     captureSettingsOnly: Boolean = false
 ) {
@@ -184,10 +157,6 @@ fun ControlPanel(
         }
     }
     var mountExpanded by remember { mutableStateOf(true) }
-    val decreaseCoarseFocusDescription = stringResource(R.string.decrease_coarse_focus)
-    val decreaseFineFocusDescription = stringResource(R.string.decrease_fine_focus)
-    val increaseFineFocusDescription = stringResource(R.string.increase_fine_focus)
-    val increaseCoarseFocusDescription = stringResource(R.string.increase_coarse_focus)
     val decreaseCoolingDurationDescription = stringResource(R.string.decrease_cooling_duration)
     val increaseCoolingDurationDescription = stringResource(R.string.increase_cooling_duration)
     val decreaseWarmingDurationDescription = stringResource(R.string.decrease_warming_duration)
@@ -249,230 +218,6 @@ fun ControlPanel(
                 }
 
                 Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-
-                if (showAccessoryControls) {
-                // Filter Wheel
-                Text(stringResource(R.string.filter_wheel), style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                var fwDropdownExpanded by remember { mutableStateOf(false) }
-                Box {
-                    OutlinedButton(
-                        onClick = { fwDropdownExpanded = true },
-                        modifier = Modifier.fillMaxWidth().height(32.dp),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-                    ) {
-                        Text(
-                            if (fwConnected) stringResource(R.string.connected) else stringResource(R.string.not_connected),
-                            fontSize = 10.sp, modifier = Modifier.weight(1f)
-                        )
-                        Icon(Icons.Default.ArrowDropDown, null, modifier = Modifier.size(16.dp))
-                    }
-                    DropdownMenu(
-                        expanded = fwDropdownExpanded,
-                        onDismissRequest = { fwDropdownExpanded = false }
-                    ) {
-                        if (fwConnected) {
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.connected), fontSize = 11.sp) },
-                                onClick = { fwDropdownExpanded = false },
-                                leadingIcon = { Icon(Icons.Default.Check, null, modifier = Modifier.size(14.dp)) }
-                            )
-                        } else {
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.no_device_found), fontSize = 11.sp, color = MaterialTheme.colorScheme.outline) },
-                                onClick = { fwDropdownExpanded = false },
-                                enabled = false
-                            )
-                        }
-                    }
-                }
-                if (fwConnected && fwSlotCount > 0) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        if (showLegacyFilterSettings) Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(stringResource(R.string.bidirectional), fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Switch(
-                                checked = fwBidirectional,
-                                onCheckedChange = onFwBidirectionalToggle,
-                                modifier = Modifier.height(20.dp).padding(start = 4.dp)
-                            )
-                        }
-                        Row {
-                            if (fwMoving) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(14.dp), strokeWidth = 1.5.dp)
-                            }
-                            IconButton(onClick = onFwEditNames, modifier = Modifier.size(20.dp)) {
-                                Icon(Icons.Default.Edit, stringResource(R.string.edit_names), modifier = Modifier.size(14.dp))
-                            }
-                            IconButton(onClick = onFwReset, modifier = Modifier.size(20.dp)) {
-                                Icon(Icons.Default.Refresh, stringResource(R.string.reset), modifier = Modifier.size(14.dp))
-                            }
-                        }
-                    }
-                    val cols = if (fwSlotCount <= 5) fwSlotCount else (fwSlotCount + 1) / 2
-                    val rows = if (fwSlotCount <= 5) 1 else 2
-                    for (row in 0 until rows) {
-                        Row(modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            for (col in 0 until cols) {
-                                val idx = row * cols + col
-                                if (idx < fwSlotCount) {
-                                    val name = fwSlotNames.getOrElse(idx) { "${idx + 1}" }
-                                    FilterChip(
-                                        selected = idx == fwPosition,
-                                        onClick = { onFwSetPosition(idx) },
-                                        label = { Text(name, fontSize = 9.sp) },
-                                        modifier = Modifier.height(26.dp).weight(1f),
-                                        enabled = !fwMoving
-                                    )
-                                } else {
-                                    Spacer(modifier = Modifier.weight(1f))
-                                }
-                            }
-                        }
-                    }
-                }
-
-                Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-
-                // EAF
-                Text(stringResource(R.string.focuser), style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                var eafDropdownExpanded by remember { mutableStateOf(false) }
-                Box {
-                    OutlinedButton(
-                        onClick = { eafDropdownExpanded = true },
-                        modifier = Modifier.fillMaxWidth().height(32.dp),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-                    ) {
-                        Row(modifier = Modifier.weight(1f),
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                if (eafConnected) stringResource(R.string.connected) else stringResource(R.string.not_connected),
-                                fontSize = 10.sp
-                            )
-                            if (eafConnected && eafTemperature != null) {
-                                Text("%.1f°C".format(eafTemperature), fontSize = 9.sp,
-                                    color = MaterialTheme.colorScheme.outline)
-                            }
-                            if (eafMoving) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(12.dp), strokeWidth = 1.5.dp)
-                            }
-                        }
-                        Icon(Icons.Default.ArrowDropDown, null, modifier = Modifier.size(16.dp))
-                    }
-                    DropdownMenu(
-                        expanded = eafDropdownExpanded,
-                        onDismissRequest = { eafDropdownExpanded = false }
-                    ) {
-                        if (eafConnected) {
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.connected), fontSize = 11.sp) },
-                                onClick = { eafDropdownExpanded = false },
-                                leadingIcon = { Icon(Icons.Default.Check, null, modifier = Modifier.size(14.dp)) }
-                            )
-                        } else {
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.no_device_found), fontSize = 11.sp, color = MaterialTheme.colorScheme.outline) },
-                                onClick = { eafDropdownExpanded = false },
-                                enabled = false
-                            )
-                        }
-                    }
-                }
-                if (eafConnected && eafInfo != null) {
-                    var showEafEditDialog by remember { mutableStateOf(false) }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(stringResource(R.string.pos_format, eafPosition, eafInfo.maxPosition),
-                            fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        IconButton(
-                            onClick = onEafSettings ?: { showEafEditDialog = true },
-                            modifier = Modifier.size(24.dp)
-                        ) {
-                            Icon(Icons.Default.Edit, stringResource(R.string.eaf_settings),
-                                modifier = Modifier.size(14.dp))
-                        }
-                    }
-
-                    var targetText by remember(eafPosition) { mutableStateOf(eafPosition.toString()) }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        OutlinedTextField(
-                            value = targetText,
-                            onValueChange = { targetText = it.filter { c -> c.isDigit() || c == '-' } },
-                            modifier = Modifier.weight(1f).height(40.dp),
-                            singleLine = true,
-                            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 11.sp),
-                            label = { Text(stringResource(R.string.target), fontSize = 9.sp) }
-                        )
-                        FilledTonalButton(
-                            onClick = {
-                                targetText.toIntOrNull()?.let { onEafMoveTo(it) }
-                            },
-                            modifier = Modifier.height(40.dp),
-                            contentPadding = PaddingValues(horizontal = 8.dp)
-                        ) { Text(stringResource(R.string.go), fontSize = 10.sp) }
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceEvenly
-                    ) {
-                        FilledTonalButton(
-                            onClick = { onEafMoveRelative(-eafInfo.coarseStep) },
-                            modifier = Modifier.size(32.dp).semantics { contentDescription = decreaseCoarseFocusDescription },
-                            contentPadding = PaddingValues(0.dp)
-                        ) { Text("<<", fontSize = 10.sp) }
-                        FilledTonalButton(
-                            onClick = { onEafMoveRelative(-eafInfo.fineStep) },
-                            modifier = Modifier.size(32.dp).semantics { contentDescription = decreaseFineFocusDescription },
-                            contentPadding = PaddingValues(0.dp)
-                        ) { Text("<", fontSize = 10.sp) }
-                        FocuserStopButton(eafMoving, onEafHalt, Modifier.size(32.dp))
-                        FilledTonalButton(
-                            onClick = { onEafMoveRelative(eafInfo.fineStep) },
-                            modifier = Modifier.size(32.dp).semantics { contentDescription = increaseFineFocusDescription },
-                            contentPadding = PaddingValues(0.dp)
-                        ) { Text(">", fontSize = 10.sp) }
-                        FilledTonalButton(
-                            onClick = { onEafMoveRelative(eafInfo.coarseStep) },
-                            modifier = Modifier.size(32.dp).semantics { contentDescription = increaseCoarseFocusDescription },
-                            contentPadding = PaddingValues(0.dp)
-                        ) { Text(">>", fontSize = 10.sp) }
-                    }
-
-                    if (showEafEditDialog) {
-                        EAFEditDialog(
-                            eafInfo = eafInfo,
-                            onSave = { dir, fine, maxSt, blSteps, blDir ->
-                                onEafSetDirection(dir)
-                                onEafSetFineStep(fine)
-                                onEafSetMaxStep(maxSt)
-                                onEafSetBacklash(blSteps, blDir)
-                                showEafEditDialog = false
-                            },
-                            onDismiss = { showEafEditDialog = false }
-                        )
-                    }
-                }
-
-                Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-
-                }
 
                 if (showMountControls) {
                 SectionHeader(stringResource(R.string.telescope), mountExpanded) {
@@ -1424,127 +1169,6 @@ private fun SectionHeader(title: String, expanded: Boolean, onClick: () -> Unit)
             modifier = Modifier.size(20.dp)
         )
     }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun EAFEditDialog(
-    eafInfo: EAFInfo,
-    onSave: (direction: Int, fineStep: Int, maxStep: Int, backlashSteps: Int, backlashDir: Int) -> Unit,
-    onDismiss: () -> Unit
-) {
-    var direction by remember { mutableIntStateOf(eafInfo.direction) }
-    var fineStepText by remember { mutableStateOf(eafInfo.fineStep.toString()) }
-    var maxStepText by remember { mutableStateOf(eafInfo.maxStep.toString()) }
-    var backlashText by remember { mutableStateOf(eafInfo.backlashSteps.toString()) }
-    var backlashDir by remember { mutableIntStateOf(eafInfo.backlashDirection) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.focuser_settings)) },
-        text = {
-            Column(
-                modifier = Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(stringResource(R.string.direction), fontSize = 13.sp)
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        FilterChip(
-                            selected = direction == 0,
-                            onClick = { direction = 0 },
-                            label = { Text(stringResource(R.string.dir_normal), fontSize = 11.sp) },
-                            modifier = Modifier.height(28.dp)
-                        )
-                        FilterChip(
-                            selected = direction == 1,
-                            onClick = { direction = 1 },
-                            label = { Text(stringResource(R.string.dir_reverse), fontSize = 11.sp) },
-                            modifier = Modifier.height(28.dp)
-                        )
-                    }
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    OutlinedTextField(
-                        value = fineStepText,
-                        onValueChange = { fineStepText = it.filter { c -> c.isDigit() } },
-                        label = { Text(stringResource(R.string.fine_step), fontSize = 11.sp) },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f),
-                        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp)
-                    )
-                    OutlinedTextField(
-                        value = maxStepText,
-                        onValueChange = { maxStepText = it.filter { c -> c.isDigit() } },
-                        label = { Text(stringResource(R.string.max_step), fontSize = 11.sp) },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f),
-                        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp)
-                    )
-                }
-                Text(stringResource(R.string.coarse_formula), fontSize = 10.sp,
-                    color = MaterialTheme.colorScheme.outline)
-
-                Divider()
-
-                Text(stringResource(R.string.backlash_compensation), fontSize = 13.sp)
-
-                OutlinedTextField(
-                    value = backlashText,
-                    onValueChange = { backlashText = it.filter { c -> c.isDigit() } },
-                    label = { Text(stringResource(R.string.overshoot_steps), fontSize = 11.sp) },
-                    placeholder = { Text(stringResource(R.string.zero_off), fontSize = 11.sp) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp)
-                )
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(stringResource(R.string.direction), fontSize = 12.sp)
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        FilterChip(
-                            selected = backlashDir == 0,
-                            onClick = { backlashDir = 0 },
-                            label = { Text(stringResource(R.string.dir_inward), fontSize = 11.sp) },
-                            modifier = Modifier.height(28.dp)
-                        )
-                        FilterChip(
-                            selected = backlashDir == 1,
-                            onClick = { backlashDir = 1 },
-                            label = { Text(stringResource(R.string.dir_outward), fontSize = 11.sp) },
-                            modifier = Modifier.height(28.dp)
-                        )
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = {
-                onSave(
-                    direction,
-                    fineStepText.toIntOrNull()?.coerceAtLeast(1) ?: eafInfo.fineStep,
-                    maxStepText.toIntOrNull()?.coerceAtLeast(100) ?: eafInfo.maxStep,
-                    backlashText.toIntOrNull()?.coerceAtLeast(0) ?: 0,
-                    backlashDir
-                )
-            }) { Text(stringResource(R.string.save)) }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
-        }
-    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

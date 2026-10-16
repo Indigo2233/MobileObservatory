@@ -14,19 +14,19 @@ class ImageUtilsTest {
     }
 
     @Test
-    fun `LP750 matrix maps normalized white and clips output`() {
-        assertArrayEquals(intArrayOf(255, 234, 0), ImageUtils.applyLp750Matrix(1f, 1f, 1f))
+    fun `LP700 matrix maps normalized white and clips output`() {
+        assertArrayEquals(intArrayOf(255, 234, 0), Lp700PreviewMapping.to8Bit(1f, 1f, 1f))
     }
 
     @Test
-    fun `LP750 matrix clips negative and above-range channels`() {
-        assertArrayEquals(intArrayOf(0, 18, 255), ImageUtils.applyLp750Matrix(1f, 0f, 0f))
+    fun `LP700 matrix clips negative and above-range channels`() {
+        assertArrayEquals(intArrayOf(0, 18, 255), Lp700PreviewMapping.to8Bit(1f, 0f, 0f))
     }
 
     @Test
-    fun `packed LP750 conversion matches matrix conversion`() {
-        val expected = ImageUtils.applyLp750Matrix(0.25f, 0.5f, 0.75f)
-        val packed = ImageUtils.lp750Argb(0.25f, 0.5f, 0.75f)
+    fun `packed LP700 conversion matches matrix conversion`() {
+        val expected = Lp700PreviewMapping.to8Bit(0.25f, 0.5f, 0.75f)
+        val packed = Lp700PreviewMapping.argb(0.25f, 0.5f, 0.75f)
 
         assertEquals(expected[0], (packed ushr 16) and 0xFF)
         assertEquals(expected[1], (packed ushr 8) and 0xFF)
@@ -34,8 +34,8 @@ class ImageUtilsTest {
     }
 
     @Test
-    fun `LP750 background correction reduces blue residual`() {
-        val gains = ImageUtils.lp750BackgroundWhiteBalanceGains(0.30f, 0.32f, 0.33f)
+    fun `LP700 background correction reduces blue residual`() {
+        val gains = Lp700PreviewMapping.backgroundWhiteBalanceGains(0.30f, 0.32f, 0.33f)
 
         assertEquals(1.055f, gains[0], 0.01f)
         assertEquals(0.99f, gains[1], 0.01f)
@@ -43,11 +43,11 @@ class ImageUtilsTest {
     }
 
     @Test
-    fun `LP750 background correction ignores bright star range`() {
+    fun `LP700 background correction ignores bright star range`() {
         val pixels = IntArray(100) { 0xFF3C5054.toInt() }
         pixels[0] = 0xFFF04020.toInt()
 
-        ImageUtils.applyLp750BackgroundWhiteBalance(pixels)
+        Lp700PreviewMapping.applyBackgroundWhiteBalance(pixels)
 
         val background = pixels[50]
         assertTrue(kotlin.math.abs(((background ushr 16) and 0xFF) - (background and 0xFF)) <= 3)

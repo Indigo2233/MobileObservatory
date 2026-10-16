@@ -47,7 +47,6 @@ internal fun CaptureWorkspaceScreen(
     onSequence: () -> Unit,
     selectedTarget: String?,
     onCurrentFrameSolve: (File) -> Unit,
-    onDeviceSettings: (String) -> Unit = {},
     onOpenLiveStack: () -> Unit = { viewModel.stacking.open(StackMode.LIVE) }
 ) {
     val connectionState by viewModel.connectionState.collectAsStateWithPageLifecycle()
@@ -109,18 +108,6 @@ internal fun CaptureWorkspaceScreen(
     val cfaCalibrationState by viewModel.stacking.calibration.state.collectAsStateWithPageLifecycle()
     val cfaCalibrationMessage = stringResource(R.string.camera_cfa_busy_calibration)
 
-    val fwConnected by viewModel.filterWheelConnected.collectAsStateWithPageLifecycle()
-    val fwPosition by viewModel.filterWheelPosition.collectAsStateWithPageLifecycle()
-    val fwMoving by viewModel.filterWheelMoving.collectAsStateWithPageLifecycle()
-    val fwSlotNames by viewModel.filterWheelSlotNames.collectAsStateWithPageLifecycle()
-    val fwInfo by viewModel.filterWheelInfo.collectAsStateWithPageLifecycle()
-    val fwBidirectional by viewModel.filterWheelBidirectional.collectAsStateWithPageLifecycle()
-
-    val eafConnected by viewModel.eafConnected.collectAsStateWithPageLifecycle()
-    val eafPosition by viewModel.eafPosition.collectAsStateWithPageLifecycle()
-    val eafMoving by viewModel.eafMoving.collectAsStateWithPageLifecycle()
-    val eafTemperature by viewModel.eafTemperature.collectAsStateWithPageLifecycle()
-    val eafInfoState by viewModel.eafInfo.collectAsStateWithPageLifecycle()
     val mountConnectionState by viewModel.mountConnectionState.collectAsStateWithPageLifecycle()
     val mountCoordinates by viewModel.mountCoordinates.collectAsStateWithPageLifecycle()
     val mountHost by viewModel.mountHost.collectAsStateWithPageLifecycle()
@@ -494,21 +481,6 @@ internal fun CaptureWorkspaceScreen(
                         cameraInfo = camInfo,
                         cameraName = camName,
                         showMountControls = true,
-                        fwConnected = fwConnected,
-                        fwPosition = fwPosition,
-                        fwMoving = fwMoving,
-                        fwSlotNames = fwSlotNames,
-                        fwSlotCount = fwInfo?.slotCount ?: 0,
-                        fwBidirectional = fwBidirectional,
-                        onFwBidirectionalToggle = { viewModel.setFilterWheelBidirectional(it) },
-                        onFwEditNames = { onDeviceSettings("filter") },
-                        onEafSettings = { onDeviceSettings("focuser") },
-                        showLegacyFilterSettings = false,
-                        eafConnected = eafConnected,
-                        eafPosition = eafPosition,
-                        eafMoving = eafMoving,
-                        eafTemperature = eafTemperature,
-                        eafInfo = eafInfoState,
                         mountConnectionState = mountConnectionState,
                         mountCoordinates = mountCoordinates,
                         mountHost = mountHost,
@@ -561,16 +533,6 @@ internal fun CaptureWorkspaceScreen(
                         onStopRamp = { viewModel.stopRamp() },
                         onSwitchCamera = { viewModel.requestConnect() },
                         onScanDevices = { viewModel.requestConnect() },
-                        onFwSetPosition = { viewModel.setFilterWheelPosition(it) },
-                        onFwReset = { viewModel.resetFilterWheel() },
-                        onEafMoveTo = { viewModel.eafMoveTo(it) },
-                        onEafMoveRelative = { viewModel.eafMoveRelative(it) },
-                        onEafHalt = { viewModel.eafHalt() },
-                        onEafSetZero = { viewModel.eafSetZero() },
-                        onEafSetDirection = { viewModel.eafSetDirection(it) },
-                        onEafSetFineStep = { viewModel.eafSetFineStep(it) },
-                        onEafSetMaxStep = { viewModel.eafSetMaxStep(it) },
-                        onEafSetBacklash = { steps, dir -> viewModel.eafSetBacklash(steps, dir) },
                         onMountHostChange = { viewModel.setMountHost(it) },
                         onMountPortChange = { viewModel.setMountPort(it) },
                         onMountTransportChange = { viewModel.setMountTransport(it) },

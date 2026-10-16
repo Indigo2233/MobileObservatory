@@ -75,7 +75,6 @@ fun AccessoriesScreen(
     viewModel: CameraViewModel,
     modifier: Modifier = Modifier,
     onOpenCamera: () -> Unit = {},
-    onOpenMount: () -> Unit = {},
     onBack: (() -> Unit)? = null
 ) {
     var selectedDeviceKey by rememberSaveable { mutableStateOf<String?>(null) }
@@ -102,7 +101,7 @@ fun AccessoriesScreen(
                 Text(deviceTitle(selected), style = MaterialTheme.typography.titleLarge)
             }
             Box(Modifier.weight(1f)) {
-                DeviceDetailContent(viewModel, selected, onOpenCamera, onOpenMount, onSettings = { editingSettings = true })
+                DeviceDetailContent(viewModel, selected, onOpenCamera, onSettings = { editingSettings = true })
             }
         }
     }
@@ -115,13 +114,11 @@ fun DeviceQuickControlSheet(
     viewModel: CameraViewModel,
     deviceKey: String,
     onDismiss: () -> Unit,
-    onOpenCamera: () -> Unit = {},
-    onOpenMount: () -> Unit = {},
-    initialSettings: Boolean = false
+    onOpenCamera: () -> Unit = {}
 ) {
     val destination = DeviceControlDestination.fromKey(deviceKey) ?: return
     val mountMotion by viewModel.mountMotionState.collectAsStateWithPageLifecycle()
-    var editing by rememberSaveable(deviceKey) { mutableStateOf(initialSettings) }
+    var editing by rememberSaveable(deviceKey) { mutableStateOf(false) }
     val exit = rememberSettingsExitState()
     SideEffect {
         exit.register("close", onDismiss)
@@ -158,7 +155,6 @@ fun DeviceQuickControlSheet(
                 else DeviceDetailContent(
                     viewModel, destination,
                     onOpenCamera = { onDismiss(); onOpenCamera() },
-                    onOpenMount = { onDismiss(); onOpenMount() },
                     onSettings = { editing = true }
                 )
             }
@@ -274,7 +270,6 @@ private fun DeviceDetailContent(
     viewModel: CameraViewModel,
     destination: DeviceControlDestination,
     onOpenCamera: () -> Unit,
-    onOpenMount: () -> Unit,
     onSettings: (() -> Unit)? = null
 ) {
     if (destination == DeviceControlDestination.MOUNT) {
@@ -659,10 +654,6 @@ private fun RotatorControls(viewModel: CameraViewModel) {
     val angle by viewModel.rotatorAngle.collectAsStateWithPageLifecycle()
     val moving by viewModel.rotatorMoving.collectAsStateWithPageLifecycle()
     val position by viewModel.rotatorPositionSteps.collectAsStateWithPageLifecycle()
-    val scale by viewModel.rotatorStepsPerDegree.collectAsStateWithPageLifecycle()
-    val reversed by viewModel.rotatorReversed.collectAsStateWithPageLifecycle()
-    val hold by viewModel.rotatorHold.collectAsStateWithPageLifecycle()
-    val supportsHold by viewModel.rotatorSupportsHold.collectAsStateWithPageLifecycle()
     val info by viewModel.rotatorDeviceInfo.collectAsStateWithPageLifecycle()
     var target by remember { mutableStateOf("0") }
 

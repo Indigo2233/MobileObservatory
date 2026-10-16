@@ -948,7 +948,7 @@ class DahengCameraManager(
                 Log.i(TAG, "QHY firmware init: $fwRet")
 
                 // Retry scan instead of a fixed 500ms sleep + single attempt
-                var numCams = 0
+                var numCams: Int
                 val scanDeadline = System.currentTimeMillis() + 5000
                 while (true) {
                     numCams = QhyccdJni.scan()

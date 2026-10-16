@@ -2,7 +2,7 @@ package com.indigo.mobileobservatory.recording
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import com.indigo.mobileobservatory.util.ImageUtils
+import com.indigo.mobileobservatory.util.Lp700PreviewMapping
 import java.io.File
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
@@ -51,7 +51,7 @@ class SERPreviewInstrumentedTest {
         } finally { file.delete() }
     }
 
-    @Test fun faintBayerColourIsStretchedAfterHighBitInterpolationAndLp750RemainsApplied() {
+    @Test fun faintBayerColourIsStretchedAfterHighBitInterpolationAndLp700RemainsApplied() {
         val file = file(); val w = 32; val h = 32
         try {
             val pixels = ByteBuffer.allocate(w*h*2).order(ByteOrder.LITTLE_ENDIAN)
@@ -68,8 +68,8 @@ class SERPreviewInstrumentedTest {
                 val green = ((rgb ushr 8) and 255)/255f
                 val blue = (rgb and 255)/255f
                 assertEquals(0f,red,0f); assertEquals(.5f,green,1f/255); assertEquals(1f,blue,0f)
-                val gain = ImageUtils.lp750WhiteBalanceGains(red,green,blue)
-                val expected = ImageUtils.lp750Matrix(red,green,blue)
+                val gain = Lp700PreviewMapping.whiteBalanceGains(red,green,blue)
+                val expected = Lp700PreviewMapping.matrix(red,green,blue)
                 // This constant CFA fixture produces a constant decoded image. Its
                 // converted 10th..60th percentile background is therefore the whole
                 // image, so the existing background WB applies with full weight.
@@ -84,7 +84,7 @@ class SERPreviewInstrumentedTest {
                 val converted = reader.readPreviewBitmap(0)!!
                 val lp = converted.getPixel(10,10)
                 val actualRgb = IntArray(3) { c -> (lp ushr (16-c*8)) and 255 }
-                android.util.Log.i("SERPreviewLP750", "matrix=${matrixRgb.contentToString()} background=${completeRgb.contentToString()} actual=${actualRgb.contentToString()}")
+                android.util.Log.i("SERPreviewLP700", "matrix=${matrixRgb.contentToString()} background=${completeRgb.contentToString()} actual=${actualRgb.contentToString()}")
                 for (c in 0..2) assertTrue("channel $c matrix=${matrixRgb.contentToString()} complete=${completeRgb.contentToString()} actual=${actualRgb.contentToString()}",
                     kotlin.math.abs(completeRgb[c]-actualRgb[c]) <= 1)
                 plain.recycle(); converted.recycle()

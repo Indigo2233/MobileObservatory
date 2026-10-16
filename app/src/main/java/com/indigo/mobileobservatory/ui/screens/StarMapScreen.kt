@@ -376,7 +376,6 @@ fun StarMapScreen(
     onStopMount: () -> Unit = {},
     onGoHome: () -> Unit = {},
     redNightMode: Boolean = false,
-    onRedNightModeChange: (Boolean) -> Unit = {},
     onBack: () -> Unit
 ) {
     var webView by remember { mutableStateOf<WebView?>(null) }

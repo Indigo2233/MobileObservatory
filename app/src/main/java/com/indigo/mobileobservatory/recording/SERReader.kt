@@ -2,7 +2,7 @@ package com.indigo.mobileobservatory.recording
 
 import android.graphics.Bitmap
 import android.util.Log
-import com.indigo.mobileobservatory.util.ImageUtils
+import com.indigo.mobileobservatory.util.Lp700PreviewMapping
 import com.indigo.mobileobservatory.camera.FrameData
 import com.indigo.mobileobservatory.camera.PixelFormat
 import com.indigo.mobileobservatory.stacking.ChannelOrder
@@ -244,7 +244,9 @@ class SERReader(private val file: File,
             val blue = if (image.channels == 3) display(image.pixels[p+2]) else red
             pixels[i] = -0x1000000 or (red shl 16) or (green shl 8) or blue
         }
-        if (lp750Enabled && sensorFormat.isBayer) applyLp750ToPixels(pixels,cancelCheck)
+        if (lp750Enabled && sensorFormat.isBayer) {
+            Lp700PreviewMapping.applyToArgb(pixels, cancellationCheck = cancelCheck)
+        }
         cancelCheck()
         return Bitmap.createBitmap(pixels,image.width,image.height,Bitmap.Config.ARGB_8888)
     }
@@ -397,39 +399,13 @@ class SERReader(private val file: File,
                 }
             }
             if (lp750Enabled && sensorFormat.isBayer) {
-                applyLp750ToPixels(pixels)
+                Lp700PreviewMapping.applyToArgb(pixels)
             }
             Bitmap.createBitmap(pixels, w, ht, Bitmap.Config.ARGB_8888)
         } catch (e: OutOfMemoryError) {
             Log.e(TAG, "OOM in frameToBitmap: ${w}x${ht}")
             null
         }
-    }
-
-    private fun applyLp750ToPixels(pixels: IntArray, cancelCheck: () -> Unit = {}) {
-        if (pixels.isEmpty()) return
-        val step = (pixels.size / 10000).coerceAtLeast(1)
-        var sumR = 0f; var sumG = 0f; var sumB = 0f; var count = 0
-        for (i in pixels.indices step step) {
-            val p = pixels[i]
-            sumR += ((p ushr 16) and 0xFF) / 255f
-            sumG += ((p ushr 8) and 0xFF) / 255f
-            sumB += (p and 0xFF) / 255f
-            count++
-        }
-        if (count == 0) return
-        val gains = ImageUtils.lp750WhiteBalanceGains(sumR / count, sumG / count, sumB / count)
-        for (i in pixels.indices) {
-            if (i % 16384 == 0) cancelCheck()
-            val p = pixels[i]
-            pixels[i] = ImageUtils.lp750Argb(
-                ((p ushr 16) and 0xFF) / 255f,
-                ((p ushr 8) and 0xFF) / 255f,
-                (p and 0xFF) / 255f,
-                gains[0], gains[1], gains[2]
-            )
-        }
-        ImageUtils.applyLp750BackgroundWhiteBalance(pixels)
     }
 
     private fun debayer8ToPixels(gray: ByteArray, pixels: IntArray, w: Int, h: Int, colorId: Int) {

@@ -15,7 +15,6 @@
     <string name="wf_edit_failed">设置未能保存，草稿已保留。</string>
     <string name="wf_edit_valid_range">可用范围：%1$s</string>
     <string name="wf_edit_use_current_device">将草稿用于 %1$s</string>
-    <string name="wf_focus_stop">停止调焦</string>
     <string name="wf_focus_zero">重设调焦位置为零</string>
     <string name="wf_focus_zero_confirm">将调焦器当前位置设为零？之后的位置移动将使用新的零点。</string>
 </resources>

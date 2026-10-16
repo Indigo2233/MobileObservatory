@@ -26,19 +26,9 @@ class FitsIntegerPreview(
         val pixels = basePixels.copyOf()
         val gains = lp750Gains
         if (applyLp750 && gains != null) {
-            for (i in pixels.indices) {
-                if (i % width == 0 && cancelled()) throw CancellationException("FITS preview cancelled")
-                val pixel = pixels[i]
-                pixels[i] = ImageUtils.lp750Argb(
-                    ((pixel ushr 16) and 0xFF) / 255f,
-                    ((pixel ushr 8) and 0xFF) / 255f,
-                    (pixel and 0xFF) / 255f,
-                    gains[0],
-                    gains[1],
-                    gains[2]
-                )
+            Lp700PreviewMapping.applyToArgb(pixels, gains) {
+                if (cancelled()) throw CancellationException("FITS preview cancelled")
             }
-            ImageUtils.applyLp750BackgroundWhiteBalance(pixels)
         }
         FitsDisplayStretch.applyDisplayToneCurve(pixels)
         return pixels
@@ -47,8 +37,6 @@ class FitsIntegerPreview(
 
 /** Decoder for conventional integer FITS files used by camera captures. */
 object FitsIntegerPreviewDecoder {
-    private const val FITS_BLOCK_SIZE = 2880
-    private const val FITS_CARD_SIZE = 80
     private const val MAX_BAYER_SIDE = 1600
 
     fun read(file: File, cancelled: () -> Boolean = { false }): FitsIntegerPreview {
@@ -191,7 +179,7 @@ object FitsIntegerPreviewDecoder {
                 }
             }
             val displayWindow = FitsDisplayStretch.window(planes.take(channels.coerceAtMost(3)))
-            lp750Gains = ImageUtils.lp750WhiteBalanceGains(
+            lp750Gains = Lp700PreviewMapping.whiteBalanceGains(
                 planes[0].averageNormalized(displayWindow),
                 planes[1].averageNormalized(displayWindow),
                 planes[2].averageNormalized(displayWindow)
@@ -219,53 +207,24 @@ object FitsIntegerPreviewDecoder {
     }
 
     private fun readHeader(input: RandomAccessFile): Header {
-        var width = 0
-        var height = 0
-        var bitpix = 16
-        var naxis = 2
-        var naxis3 = 1
-        var bscale = 1.0
-        var bzero = 0.0
-        var bayerPattern: String? = null
-        var endFound = false
-        var bytesRead = 0L
-        val block = ByteArray(FITS_BLOCK_SIZE)
-
-        while (!endFound) {
-            val count = input.read(block)
-            if (count <= 0) break
-            bytesRead += count
-            var offset = 0
-            while (offset + FITS_CARD_SIZE <= count) {
-                val card = String(block, offset, FITS_CARD_SIZE, Charsets.US_ASCII)
-                offset += FITS_CARD_SIZE
-                when {
-                    card.startsWith("NAXIS1") -> width = card.value().toIntOrNull() ?: 0
-                    card.startsWith("NAXIS2") -> height = card.value().toIntOrNull() ?: 0
-                    card.startsWith("NAXIS3") -> naxis3 = card.value().toIntOrNull() ?: 1
-                    card.startsWith("BITPIX") -> bitpix = card.value().toIntOrNull() ?: 16
-                    card.startsWith("NAXIS ") -> naxis = card.value().toIntOrNull() ?: 2
-                    card.startsWith("BSCALE") -> bscale = card.value().toDoubleOrNull() ?: 1.0
-                    card.startsWith("BZERO") -> bzero = card.value().toDoubleOrNull() ?: 0.0
-                    card.startsWith("BAYERPAT") -> {
-                        val parsed = card.substringAfter("'").substringBefore("'").trim().uppercase()
-                        bayerPattern = parsed.takeIf { it in setOf("RGGB", "GRBG", "GBRG", "BGGR") }
-                    }
-                    card.startsWith("END ") || card.trimEnd() == "END" -> endFound = true
-                }
-                if (endFound) break
-            }
-            if (count < FITS_BLOCK_SIZE) break
-        }
-        require(endFound) { "Invalid FITS header: END card is missing" }
-        val dataOffset = ((bytesRead + FITS_BLOCK_SIZE - 1) / FITS_BLOCK_SIZE) * FITS_BLOCK_SIZE
-        return Header(width, height, bitpix, naxis, naxis3, bscale, bzero, bayerPattern, dataOffset)
+        val header = FitsHeaderParser.read(input)
+        val bayerPattern = header["BAYERPAT"]?.trim()?.uppercase()
+            ?.takeIf { it in setOf("RGGB", "GRBG", "GBRG", "BGGR") }
+        return Header(
+            width = header.intValue("NAXIS1") ?: 0,
+            height = header.intValue("NAXIS2") ?: 0,
+            bitpix = header.intValue("BITPIX") ?: 16,
+            naxis = header.intValue("NAXIS") ?: 2,
+            naxis3 = header.intValue("NAXIS3") ?: 1,
+            bscale = header.doubleValue("BSCALE") ?: 1.0,
+            bzero = header.doubleValue("BZERO") ?: 0.0,
+            bayerPattern = bayerPattern,
+            dataOffset = header.dataOffset
+        )
     }
 
     private fun firstWithParity(start: Int, paritySource: Int): Int =
         if ((start and 1) == (paritySource and 1)) start else start + 1
-
-    private fun String.value(): String = substringAfter("=").substringBefore("/").trim()
 
     private fun IntArray.averageNormalized(window: FitsDisplayStretch.Window): Float {
         if (isEmpty()) return 0f
@@ -323,7 +282,7 @@ object FitsIntegerPreviewDecoder {
             }
         }
         if (count == 0) return floatArrayOf(1f, 1f, 1f)
-        return ImageUtils.lp750WhiteBalanceGains(
+        return Lp700PreviewMapping.whiteBalanceGains(
             ((sumR / count - minimum) / range).toFloat(),
             ((sumG / count - minimum) / range).toFloat(),
             ((sumB / count - minimum) / range).toFloat()

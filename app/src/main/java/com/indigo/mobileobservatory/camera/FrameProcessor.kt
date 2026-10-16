@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import com.indigo.mobileobservatory.util.FileLogger
 import com.indigo.mobileobservatory.util.BayerDemosaic
 import com.indigo.mobileobservatory.util.ImageUtils
+import com.indigo.mobileobservatory.util.Lp700PreviewMapping
 import com.indigo.mobileobservatory.stacking.PixelTraits
 import com.indigo.mobileobservatory.stacking.SampleAlignment
 import java.nio.ByteOrder
@@ -199,7 +200,7 @@ class FrameProcessor {
         }
 
         if (lp750Enabled && preview.pixelFormat.isBayer) {
-            applyLp750ToPreviewPixels(pixels)
+            Lp700PreviewMapping.applyToArgb(pixels)
         }
 
         bitmap.setPixels(pixels, 0, w, 0, 0, w, h)
@@ -213,33 +214,6 @@ class FrameProcessor {
         }
 
         return bitmap
-    }
-
-    private fun applyLp750ToPreviewPixels(pixels: IntArray) {
-        if (pixels.isEmpty()) return
-        val step = (pixels.size / 10000).coerceAtLeast(1)
-        var sumR = 0f; var sumG = 0f; var sumB = 0f; var count = 0
-        for (i in pixels.indices step step) {
-            val p = pixels[i]
-            sumR += ((p ushr 16) and 0xFF) / 255f
-            sumG += ((p ushr 8) and 0xFF) / 255f
-            sumB += (p and 0xFF) / 255f
-            count++
-        }
-        if (count == 0) return
-        val gains = ImageUtils.lp750WhiteBalanceGains(
-            sumR / count, sumG / count, sumB / count
-        )
-        for (i in pixels.indices) {
-            val p = pixels[i]
-            pixels[i] = ImageUtils.lp750Argb(
-                ((p ushr 16) and 0xFF) / 255f,
-                ((p ushr 8) and 0xFF) / 255f,
-                (p and 0xFF) / 255f,
-                gains[0], gains[1], gains[2]
-            )
-        }
-        ImageUtils.applyLp750BackgroundWhiteBalance(pixels)
     }
 
     private fun downsampleForPreview(frame: FrameData): FrameData {
@@ -395,7 +369,6 @@ class FrameProcessor {
         val data = frame.data
         val totalPixels = w * h
 
-        var bp = 0; var wp = 65535
         val sampleCount = totalPixels.coerceAtMost(20000)
         val step = (totalPixels / sampleCount).coerceAtLeast(1)
         var si = 0
@@ -415,12 +388,10 @@ class FrameProcessor {
         val hist = computeStretchPoints(bins, numBins, maxCount, si)
         publishHistogram(hist)
 
-        if (autoStretchEnabled) {
-            bp = hist.blackPoint shl 6
-            wp = hist.whitePoint shl 6
+        val (bp, wp) = if (autoStretchEnabled) {
+            (hist.blackPoint shl 6) to (hist.whitePoint shl 6)
         } else {
-            bp = manualBlackPoint * 65535 / 255
-            wp = manualWhitePoint * 65535 / 255
+            (manualBlackPoint * 65535 / 255) to (manualWhitePoint * 65535 / 255)
         }
         val range = (wp - bp).coerceAtLeast(1)
 

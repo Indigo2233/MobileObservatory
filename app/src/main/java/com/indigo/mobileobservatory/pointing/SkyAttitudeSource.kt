@@ -30,24 +30,3 @@ data class SkyAttitudeFix(
     val opticalPathId: String = sourceId,
     val propagated: Boolean = true
 )
-
-/** Demo source: UI sliders write [setFix]; no camera. */
-class MockSkyAttitudeSource(
-    override val id: String = "mock",
-    override val displayName: String = "Mock (demo)"
-) : SkyAttitudeSource {
-    @Volatile
-    private var fix: SkyAttitudeFix? = null
-
-    fun setFix(altDeg: Double, azDeg: Double, uncertaintyDeg: Double = 0.25) {
-        fix = SkyAttitudeFix(
-            altDeg = altDeg,
-            azDeg = azDeg,
-            timestampMs = System.currentTimeMillis(),
-            uncertaintyDeg = uncertaintyDeg,
-            sourceId = id
-        )
-    }
-
-    override fun latestFix(): SkyAttitudeFix? = fix
-}

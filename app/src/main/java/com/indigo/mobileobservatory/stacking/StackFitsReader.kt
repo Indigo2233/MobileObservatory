@@ -1,5 +1,6 @@
 package com.indigo.mobileobservatory.stacking
 
+import com.indigo.mobileobservatory.util.FitsHeaderParser
 import java.io.File
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
@@ -10,20 +11,22 @@ import org.json.JSONObject
  * remains in the camera/player pipeline. RGB planes are converted to our interleaved model.
  */
 object StackFitsReader {
-    fun isFloatingPoint(file: File): Boolean = RandomAccessFile(file, "r").use { header(it)["BITPIX"] == "-32" }
+    fun isFloatingPoint(file: File): Boolean = RandomAccessFile(file, "r").use {
+        FitsHeaderParser.read(it)["BITPIX"] == "-32"
+    }
 
     /** Only our normalized, already-demosaiced products use the stack display recipe. Ordinary
      * floating FITS may contain ADU counts or a CFA mosaic and need the legacy display path. */
     fun isNormalizedStack(file: File): Boolean {
-        val h = RandomAccessFile(file, "r").use { header(it) }
+        val h = RandomAccessFile(file, "r").use { FitsHeaderParser.read(it) }
         if (h["BITPIX"] != "-32" || "BAYERPAT" in h) return false
-        if (h["BUNIT"]?.trim('\'')?.trim() == "normalized linear") return true
+        if (h["BUNIT"]?.trim() == "normalized linear") return true
         return readMetadata(file)["schema"] == "indigo-stack-1"
     }
 
     /** Reads the optional lossless recipe extension without loading image pixels. */
     fun readMetadata(file: File): Map<String, String> = RandomAccessFile(file, "r").use { reader ->
-        val h = header(reader)
+        val h = FitsHeaderParser.read(reader)
         if (h["BITPIX"] != "-32") return@use emptyMap()
         val axes = h["NAXIS"]?.toIntOrNull() ?: return@use emptyMap()
         require(axes in 2..3)
@@ -38,8 +41,8 @@ object StackFitsReader {
         val extensionOffset = Math.multiplyExact(Math.addExact(primaryEnd, 2879L) / 2880L, 2880L)
         if (extensionOffset >= reader.length()) return@use emptyMap()
         reader.seek(extensionOffset)
-        val extension = header(reader)
-        if (extension["EXTNAME"]?.trim('\'') != "STACKMETA") return@use emptyMap()
+        val extension = FitsHeaderParser.read(reader)
+        if (extension["EXTNAME"] != "STACKMETA") return@use emptyMap()
         require(extension["BITPIX"] == "8" && extension["NAXIS"] == "1") { "Invalid stack metadata extension" }
         val size = extension["NAXIS1"]?.toIntOrNull() ?: error("Missing metadata length")
         require(size in 0..16 * 1024 * 1024 && reader.length() - reader.filePointer >= size) { "Invalid metadata length" }
@@ -50,7 +53,7 @@ object StackFitsReader {
 
     fun read(file: File, maxPixels: Long = LinearImage.MAX_PIXELS): LinearImage =
         RandomAccessFile(file, "r").use { reader ->
-            val h = header(reader)
+            val h = FitsHeaderParser.read(reader)
             require(h["SIMPLE"] == "T" && h["BITPIX"] == "-32") { "Not a 32-bit floating FITS image" }
             val axes = h["NAXIS"]?.toIntOrNull()
             require(axes == 2 || axes == 3) { "Unsupported FITS axes" }
@@ -81,20 +84,4 @@ object StackFitsReader {
             LinearImage(w, height, channels, pixels)
         }
 
-    private fun header(reader: RandomAccessFile): Map<String, String> {
-        val result = mutableMapOf<String, String>()
-        val bytes = ByteArray(80)
-        repeat(12_000) {
-            require(reader.length() - reader.filePointer >= 80L) { "Truncated FITS header" }
-            reader.readFully(bytes)
-            val text = String(bytes, Charsets.US_ASCII)
-            val key = text.substring(0, 8).trim()
-            if (key == "END") {
-                reader.seek(((reader.filePointer + 2879L) / 2880L) * 2880L)
-                return result
-            }
-            if (text[8] == '=') result[key] = text.substring(10).substringBefore('/').trim()
-        }
-        error("FITS header exceeds safe card limit")
-    }
 }

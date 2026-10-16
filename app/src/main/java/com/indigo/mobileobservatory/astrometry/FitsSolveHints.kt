@@ -1,7 +1,7 @@
 package com.indigo.mobileobservatory.astrometry
 
+import com.indigo.mobileobservatory.util.FitsHeaderParser
 import java.io.File
-import java.nio.charset.StandardCharsets
 
 data class FitsSolveHints(
     val width: Int = 0,
@@ -24,7 +24,7 @@ object FitsSolveHintReader {
     }
 
     private fun readFits(file: File): FitsSolveHints {
-        val header = readHeader(file)
+        val header = FitsHeaderParser.read(file)
         val width = header.intValue("NAXIS1") ?: 0
         val height = header.intValue("NAXIS2") ?: 0
         val binning = header.intValue("YBINNING") ?: header.intValue("XBINNING") ?: 1
@@ -38,35 +38,5 @@ object FitsSolveHintReader {
                 null
             }
         return FitsSolveHints(width, height, pixelSize, focal, binning.coerceAtLeast(1), fovHeight)
-    }
-
-    private fun readHeader(file: File): Map<String, String> {
-        val bytes = file.inputStream().use { input ->
-            val buffer = ByteArray(2880 * 64)
-            val count = input.read(buffer)
-            if (count <= 0) return emptyMap()
-            buffer.copyOf(count)
-        }
-        val cards = mutableMapOf<String, String>()
-        var offset = 0
-        while (offset + 80 <= bytes.size) {
-            val card = String(bytes, offset, 80, StandardCharsets.US_ASCII)
-            offset += 80
-            val key = card.take(8).trim()
-            if (key == "END") break
-            val eq = card.indexOf('=')
-            if (key.isNotEmpty() && eq >= 0) {
-                cards[key] = card.substring(eq + 1).substringBefore('/').trim().trim('\'')
-            }
-        }
-        return cards
-    }
-
-    private fun Map<String, String>.doubleValue(key: String): Double? {
-        return this[key]?.replace("D", "E", ignoreCase = true)?.toDoubleOrNull()
-    }
-
-    private fun Map<String, String>.intValue(key: String): Int? {
-        return this[key]?.toIntOrNull()
     }
 }

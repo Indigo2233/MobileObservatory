@@ -133,7 +133,6 @@ private val NightRed = Color(0xFFFF8A80)
 @Composable
 fun PushToScreen(
     onBack: () -> Unit,
-    onOpenTargets: () -> Unit = {},
     initialTargetName: String? = null,
     targetRaHours: Double = 5.588,
     targetDecDeg: Double = -5.391,
@@ -641,7 +640,7 @@ fun PushToScreen(
                             }
                         )
                     },
-                    onCapture = { frame, stars, count ->
+                    onCapture = { frame, stars, _ ->
                         capturedFrame = frame
                         extraction = stars
                     },

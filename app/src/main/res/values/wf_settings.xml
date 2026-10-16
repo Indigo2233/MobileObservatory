@@ -15,7 +15,6 @@
     <string name="wf_edit_failed">Could not save settings. Your draft is kept.</string>
     <string name="wf_edit_valid_range">Allowed: %1$s</string>
     <string name="wf_edit_use_current_device">Use this draft for %1$s</string>
-    <string name="wf_focus_stop">Stop focuser</string>
     <string name="wf_focus_zero">Reset focus position to zero</string>
     <string name="wf_focus_zero_confirm">Set the current focuser position to zero? This changes the reference for future position moves.</string>
 </resources>

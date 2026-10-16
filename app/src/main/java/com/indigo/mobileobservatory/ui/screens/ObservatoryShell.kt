@@ -60,7 +60,6 @@ fun CameraScreen(viewModel: CameraViewModel, redNightMode: Boolean = false,
     var navigation by rememberSaveable(stateSaver = NavigationSaver) { mutableStateOf(ObservatoryNavigation()) }
     var target by rememberSaveable(stateSaver = TargetSaver) { mutableStateOf<StarMapTarget?>(null) }
     var quickDevice by rememberSaveable { mutableStateOf<String?>(null) }
-    var quickSettings by rememberSaveable { mutableStateOf(false) }
     var playerFile by rememberSaveable { mutableStateOf<String?>(null) }
     var playerCategory by rememberSaveable { mutableStateOf(MediaCategory.RECENT) }
     var stackMode by rememberSaveable { mutableStateOf(StackMode.LIVE) }
@@ -213,7 +212,7 @@ fun CameraScreen(viewModel: CameraViewModel, redNightMode: Boolean = false,
             Column(Modifier.weight(1f).fillMaxSize()) {
                 ObservatoryDeviceBar(viewModel, redNightMode, onRedNightModeChange,
                     onSettings = { open(ObservatoryDestination.SETTINGS) },
-                    onDevice = { key -> if (key == "guide") open(ObservatoryDestination.GUIDE) else { quickSettings = false; quickDevice = key } })
+                    onDevice = { key -> if (key == "guide") open(ObservatoryDestination.GUIDE) else quickDevice = key })
                 if (showRoot && navigation.workspace != ObservatoryWorkspace.CAPTURE) EaaSessionBar(viewModel) { openStack(StackMode.LIVE) }
                 ObservatorySequenceSummary(viewModel, navigation.current, open)
                 Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -235,13 +234,12 @@ fun CameraScreen(viewModel: CameraViewModel, redNightMode: Boolean = false,
                                         if (page?.destination == ObservatoryDestination.STACK) page.argument?.let(StackMode::valueOf) ?: stackMode else stackMode,
                                         if (page?.destination == ObservatoryDestination.PLAYER) page.argument else null,
                                         if (page?.destination == ObservatoryDestination.PLAYER) page.category?.let(MediaCategory::valueOf) ?: MediaCategory.RECENT else MediaCategory.RECENT,
-                                        redNightMode, onRedNightModeChange, open, back, select, chooseTarget, pushTo, openStack,
+                                        redNightMode, open, back, select, chooseTarget, pushTo, openStack,
                                         onCurrentFrameSolve = { file ->
                                             performOpen(ObservatoryDestination.PLATE_SOLVE, file.absolutePath, "current-frame")
                                         },
                                         onPlayer = { file, category -> playerFile = file?.absolutePath; playerCategory = category; open(ObservatoryDestination.PLAYER) },
-                                        onDeviceSettings = { key -> quickSettings = true; quickDevice = key },
-                                        onDeviceControl = { key -> quickSettings = false; quickDevice = key })
+                                        onDeviceControl = { key -> quickDevice = key })
                                 }
                             }
                         }
@@ -259,8 +257,7 @@ fun CameraScreen(viewModel: CameraViewModel, redNightMode: Boolean = false,
     }
     quickDevice?.let { key ->
         DeviceQuickControlSheet(viewModel, key, onDismiss = { quickDevice = null },
-            onOpenCamera = { quickDevice = null; select(ObservatoryWorkspace.CAPTURE) },
-            onOpenMount = { quickDevice = null; select(ObservatoryWorkspace.EQUIPMENT) }, initialSettings = quickSettings)
+            onOpenCamera = { quickDevice = null; select(ObservatoryWorkspace.CAPTURE) })
     }
     }
 }
@@ -268,12 +265,11 @@ fun CameraScreen(viewModel: CameraViewModel, redNightMode: Boolean = false,
 @Composable
 private fun ObservatoryContent(
     vm: CameraViewModel, navigation: ObservatoryNavigation, target: StarMapTarget?, stackMode: StackMode,
-    playerFile: String?, playerCategory: MediaCategory, redNightMode: Boolean, onRedNightModeChange: (Boolean) -> Unit,
+    playerFile: String?, playerCategory: MediaCategory, redNightMode: Boolean,
     open: (ObservatoryDestination) -> Unit, back: () -> Unit, select: (ObservatoryWorkspace) -> Unit,
     chooseTarget: (StarMapTarget) -> Unit, pushTo: (StarMapTarget) -> Unit, openStack: (StackMode) -> Unit,
     onCurrentFrameSolve: (File) -> Unit,
     onPlayer: (File?, MediaCategory) -> Unit,
-    onDeviceSettings: (String) -> Unit,
     onDeviceControl: (String) -> Unit
 ) {
     val context = LocalContext.current
@@ -393,7 +389,6 @@ private fun ObservatoryContent(
                 opticsConfiguration = opticsConfiguration,
                 onCalibration = { open(ObservatoryDestination.POINTING_SETUP) },
                 onAuxiliaryGuide = { chooseSource(PointingCameraSource.AUXILIARY) },
-                onOpenTargets = { open(ObservatoryDestination.TARGETS) },
                 initialTargetName = taskTarget?.name, targetRaHours = direction.raDeg / 15.0, targetDecDeg = direction.decDeg,
                 onTargetChanged = { obj ->
                     taskTarget = StarMapTarget("${obj.id} · ${obj.name}", obj.raHours, obj.decDeg, "J2000")
@@ -438,8 +433,8 @@ private fun ObservatoryContent(
                 onTargets = { open(ObservatoryDestination.TARGETS) },
                 onSequence = { open(ObservatoryDestination.SEQUENCE) }, selectedTarget = target?.name,
                 onCurrentFrameSolve = onCurrentFrameSolve,
-                onDeviceSettings = onDeviceSettings, onOpenLiveStack = { openStack(StackMode.LIVE) })
-            ObservatoryWorkspace.STAR_MAP -> SkyWorkspaceScreen(vm, target, redNightMode, onRedNightModeChange,
+                onOpenLiveStack = { openStack(StackMode.LIVE) })
+            ObservatoryWorkspace.STAR_MAP -> SkyWorkspaceScreen(vm, target, redNightMode,
                 onTargets = { open(ObservatoryDestination.TARGETS) },
                 onPreparation = { open(ObservatoryDestination.PREPARATION) }, onPushTo = pushTo,
                 onTargetSelected = chooseTarget, onBack = back, pointingSources = pointingSources,
@@ -453,7 +448,7 @@ private fun ObservatoryContent(
                 onPostStack = { openStack(StackMode.PLANETARY) },
                 onPlateSolve = { open(ObservatoryDestination.PLATE_SOLVE) }, onBack = back)
             ObservatoryWorkspace.EQUIPMENT -> AccessoriesScreen(vm,
-                onOpenCamera = { select(ObservatoryWorkspace.CAPTURE) }, onOpenMount = {}, onBack = back)
+                onOpenCamera = { select(ObservatoryWorkspace.CAPTURE) }, onBack = back)
             ObservatoryWorkspace.TOOLS -> BoxWithConstraints(Modifier.fillMaxSize()) {
                 ToolsScreen(
                     onOpenPlateSolve = { open(ObservatoryDestination.PLATE_SOLVE) },

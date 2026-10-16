@@ -85,10 +85,8 @@
     <string name="not_connected">Not connected</string>
     <string name="no_device_found">No device found</string>
     <string name="bidirectional">Bidirectional</string>
-    <string name="edit_names">Edit Names</string>
     <string name="reset">Reset</string>
     <string name="focuser">Focuser</string>
-    <string name="eaf_settings">EAF settings</string>
     <string name="pos_format">Pos: %1$d / %2$d</string>
     <string name="target">Target</string>
     <string name="go">Go</string>
@@ -215,19 +213,9 @@
     <string name="failed_to_decode_image">Failed to decode image</string>
     <string name="unknown_error">Unknown error</string>
 
-    <!-- EAFEditDialog -->
-    <string name="focuser_settings">Focuser Settings</string>
-    <string name="direction">Direction</string>
-    <string name="dir_normal">Normal</string>
-    <string name="dir_reverse">Reverse</string>
     <string name="fine_step">Fine Step</string>
     <string name="max_step">Max Step</string>
-    <string name="coarse_formula">Coarse = Fine × 5</string>
-    <string name="backlash_compensation">Backlash Compensation</string>
     <string name="overshoot_steps">Overshoot Steps</string>
-    <string name="zero_off">0 = off</string>
-    <string name="dir_inward">Inward</string>
-    <string name="dir_outward">Outward</string>
 
     <!-- SettingsScreen -->
     <string name="settings">Settings</string>
@@ -547,10 +535,6 @@
     <string name="toggle_atmosphere">Toggle atmosphere</string>
     <string name="select_file">Select file</string>
     <string name="solve_image">Solve image</string>
-    <string name="decrease_coarse_focus">Move focuser inward (coarse)</string>
-    <string name="decrease_fine_focus">Move focuser inward (fine)</string>
-    <string name="increase_fine_focus">Move focuser outward (fine)</string>
-    <string name="increase_coarse_focus">Move focuser outward (coarse)</string>
     <string name="halt_or_zero_focus">Stop focuser or set zero</string>
     <string name="decrease_cooling_duration">Decrease cooling duration</string>
     <string name="increase_cooling_duration">Increase cooling duration</string>

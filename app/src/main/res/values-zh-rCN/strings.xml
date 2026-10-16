@@ -83,10 +83,8 @@
     <string name="not_connected">未连接</string>
     <string name="no_device_found">未找到设备</string>
     <string name="bidirectional">双向旋转</string>
-    <string name="edit_names">编辑名称</string>
     <string name="reset">重置</string>
     <string name="focuser">调焦器</string>
-    <string name="eaf_settings">调焦器设置</string>
     <string name="pos_format">位置: %1$d / %2$d</string>
     <string name="target">目标</string>
     <string name="go">移动</string>
@@ -213,19 +211,9 @@
     <string name="failed_to_decode_image">无法解码图片</string>
     <string name="unknown_error">未知错误</string>
 
-    <!-- EAFEditDialog -->
-    <string name="focuser_settings">调焦器设置</string>
-    <string name="direction">方向</string>
-    <string name="dir_normal">正常</string>
-    <string name="dir_reverse">反向</string>
     <string name="fine_step">精细步进</string>
     <string name="max_step">最大步数</string>
-    <string name="coarse_formula">粗步进 = 精细步进 × 5</string>
-    <string name="backlash_compensation">反向间隙补偿</string>
     <string name="overshoot_steps">过冲步数</string>
-    <string name="zero_off">0 = 关闭</string>
-    <string name="dir_inward">向内</string>
-    <string name="dir_outward">向外</string>
 
     <!-- SettingsScreen -->
     <string name="settings">设置</string>
@@ -547,10 +535,6 @@
     <string name="toggle_atmosphere">切换大气显示</string>
     <string name="select_file">选择文件</string>
     <string name="solve_image">解析图像</string>
-    <string name="decrease_coarse_focus">调焦器粗调向内</string>
-    <string name="decrease_fine_focus">调焦器微调向内</string>
-    <string name="increase_fine_focus">调焦器微调向外</string>
-    <string name="increase_coarse_focus">调焦器粗调向外</string>
     <string name="halt_or_zero_focus">停止调焦器或设置零位</string>
     <string name="decrease_cooling_duration">减少制冷时长</string>
     <string name="increase_cooling_duration">增加制冷时长</string>
