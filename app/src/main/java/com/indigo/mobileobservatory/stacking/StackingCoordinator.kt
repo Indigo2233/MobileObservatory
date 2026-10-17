@@ -295,12 +295,16 @@ class StackingCoordinator(
     fun hasResult(mode: StackMode = activeMode) = product(mode) != null
     private fun product(mode: StackMode) = if (mode == StackMode.LIVE) liveProduct else planetaryProduct
 
+    fun liveInputIssue(key: StackSessionKey): String? =
+        LiveStackAdmission.issue(key, memoryBudgetBytes, calibration.memoryBytes, calibration.memoryBytes > 0)
+
     fun startLive(key: StackSessionKey) = synchronized(stateLock) {
         if (closed) return
         // Button recomposition can lag a rapid second tap; starting is idempotent here.
         if (live.state.value.phase != LiveStackPhase.EMPTY) return
         if (key.target != _liveTarget.value) { report("stack_target_changed"); return }
         if (key.demosaicAlgorithm != _demosaicAlgorithm.value) { report("demosaic_changed"); return }
+        liveInputIssue(key)?.let { report(it); return }
         if (taskRunning || planetaryProduct != null) {
             report("finish_offline_first")
             return
@@ -314,24 +318,7 @@ class StackingCoordinator(
         val capture = liveCapture(key)
         try { selectedCalibration.validate(geometry, capture) }
         catch (error: Exception) { report(error.message ?: "calibration_settings_mismatch"); return }
-        if (key.softwareBin < 1 || key.width < key.softwareBin || key.height < key.softwareBin) { report("memory_budget"); return }
-        val channels = if (key.format.isMono) 1 else 3
-        val pixels = key.width.toLong() * key.height
-        val width = key.width / key.softwareBin
-        val height = key.height / key.softwareBin
-        val inputExpansionBytes = (pixels - width.toLong() * height).coerceAtLeast(0) *
-            (key.format.bytesPerPixel * 3L + (channels + 1) * 4L)
         val demosaicScratch = LinearPixelDecoder.demosaicExtraBytes(key.width, key.height, key.format, key.demosaicAlgorithm)
-        val engineBytes = if (key.target == StackTarget.PLANETARY)
-            LivePlanetaryEngine.estimateWorkingBytes(width, height, channels)
-        else DeepSkyStacker.estimateWorkingBytes(width, height, channels)
-        if (pixels > LinearImage.DEFAULT_STACK_PIXELS ||
-            engineBytes + inputExpansionBytes +
-                selectedCalibration.memoryBytes + demosaicScratch + (if (selectedCalibration.enabled) geometry.sampleCount * 4L else 0L) > memoryBudgetBytes) {
-            report("memory_budget")
-            return
-        }
-        if (key.format.isBayer && key.hardwareBin % 2 == 0 && !key.pixelTraits.bayerPatternAtOutput) { report("bayer_hardware_bin"); return }
         activateModeLocked(StackMode.LIVE)
         liveCalibration = selectedCalibration
         liveCalibrationWarnings = selectedCalibration.unknownWarnings(geometry, capture)

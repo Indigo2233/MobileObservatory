@@ -83,7 +83,7 @@ class Mp4Writer(private val file: File) {
             val videoCaps = caps.videoCapabilities ?: continue
             val size = Mp4EncoderSupport.fitSize(w, h) { tw, th ->
                 try {
-                    videoCaps.isSizeSupported(tw, th)
+                    videoCaps.areSizeAndRateSupported(tw, th, fps.toDouble())
                 } catch (_: Throwable) {
                     false
                 }
@@ -135,21 +135,20 @@ class Mp4Writer(private val file: File) {
                 return
             }
             val nv12 = converter.convert(frame, codecW, codecH, sampleTraits)
+            // Query capacity first. getInputBuffer AFTER getInputImage invalidates that image.
+            val inputCapacity = codec.getInputBuffer(inputIdx)?.capacity()
             val image = try {
                 codec.getInputImage(inputIdx)
             } catch (_: Throwable) {
                 null
             }
-            val inputBuf = codec.getInputBuffer(inputIdx)
             val dataSize = if (image != null) {
                 writeNv12ToImage(image, nv12)
-                inputBuf?.capacity()?.coerceAtLeast(1)
+                inputCapacity?.coerceAtLeast(1)
                     ?: (codecW * codecH + codecW * ((codecH + 1) / 2))
             } else {
-                if (inputBuf == null) {
-                    codec.queueInputBuffer(inputIdx, 0, 0, 0, 0)
-                    return
-                }
+                // getInputImage may also invalidate the previous ByteBuffer; reacquire it.
+                val inputBuf = checkNotNull(codec.getInputBuffer(inputIdx)) { "Encoder input unavailable" }
                 fillCodecBuffer(inputBuf, nv12)
             }
             if (dataSize <= 0) {
@@ -163,30 +162,34 @@ class Mp4Writer(private val file: File) {
             currentFrameCount++
         } catch (e: Throwable) {
             Log.e(TAG, "writeFrame error (frame $frameIndex)", e)
+            throw e
         }
     }
 
     fun close() {
         if (!isOpen && encoder == null && muxer == null) return
+        var failure: Throwable? = null
         try {
             val codec = encoder
             if (codec != null) {
-                try {
-                    val idx = codec.dequeueInputBuffer(10_000)
-                    if (idx >= 0) {
-                        codec.queueInputBuffer(idx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-                    }
-                    drainEncoder(true)
-                } catch (e: Throwable) {
-                    Log.w(TAG, "EOS drain failed", e)
+                val deadline = System.nanoTime() + DRAIN_TIMEOUT_US * 1000
+                var idx = codec.dequeueInputBuffer(10_000)
+                while (idx < 0 && System.nanoTime() < deadline) {
+                    drainEncoder(false)
+                    idx = codec.dequeueInputBuffer(10_000)
                 }
+                check(idx >= 0) { "MP4 encoder could not finish its input" }
+                codec.queueInputBuffer(idx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                drainEncoder(true)
+                check(currentFrameCount > 0 && muxerStarted && totalBytesWritten > 0) { "MP4 contains no encoded frames" }
             }
         } catch (e: Throwable) {
-            Log.e(TAG, "close error", e)
+            failure = e
         } finally {
-            releaseQuietly()
+            releaseResources()?.let { error -> if (failure == null) failure = error else failure!!.addSuppressed(error) }
             Log.i(TAG, "Closed, $currentFrameCount frames, ${totalBytesWritten} bytes")
         }
+        failure?.let { throw it }
     }
 
     private fun tryOpen(
@@ -236,11 +239,11 @@ class Mp4Writer(private val file: File) {
         } else {
             packNv12(nv12, stride, sliceHeight)
         }
-        val n = packedSize.coerceAtMost(remaining)
-        buf.put(nv12Scratch, 0, n)
+        check(packedSize <= remaining) { "Encoder input buffer is too small" }
+        buf.put(nv12Scratch, 0, packedSize)
         buf.position(0)
-        buf.limit(n)
-        return n
+        buf.limit(packedSize)
+        return packedSize
     }
 
     private fun packNv12(nv12: Nv12Frame, rowStride: Int, slice: Int): Int {
@@ -309,162 +312,51 @@ class Mp4Writer(private val file: File) {
         return needed
     }
 
-    private fun writeNv12ToImage(image: Image, nv12: Nv12Frame): Int {
+    private fun writeNv12ToImage(image: Image, nv12: Nv12Frame) {
         val planes = image.planes
-        if (planes.size < 3) return 0
-        copyY(planes[0], nv12)
-        val u = planes[1]
-        val v = planes[2]
-        if (u.pixelStride == 2 && v.pixelStride == 2) {
-            if (isNv12(u, v)) {
-                copyInterleavedUv(u, nv12, swapVu = false)
-            } else {
-                copyInterleavedUv(u, nv12, swapVu = true)
-            }
-        } else {
-            copyPlanarChroma(u, nv12, uPlane = true)
-            copyPlanarChroma(v, nv12, uPlane = false)
-        }
-        return 1
-    }
-
-    private fun copyY(plane: Image.Plane, nv12: Nv12Frame) {
-        val buf = plane.buffer.duplicate()
-        val rowStride = plane.rowStride
-        val pixelStride = plane.pixelStride.coerceAtLeast(1)
-        val row = if (pixelStride == 1 && rowStride == nv12.width) null else ByteArray(rowStride)
-        for (y in 0 until nv12.height) {
-            val srcOff = y * nv12.width
-            if (row == null) {
-                val limit = buf.remaining().coerceAtMost(nv12.width)
-                if (limit > 0) buf.put(nv12.y, srcOff, limit)
-            } else {
-                if (pixelStride == 1) {
-                    System.arraycopy(nv12.y, srcOff, row, 0, nv12.width.coerceAtMost(row.size))
-                    if (row.size > nv12.width) row.fill(0, nv12.width, row.size)
-                } else {
-                    row.fill(0)
-                    var x = 0
-                    while (x < nv12.width && x * pixelStride < row.size) {
-                        row[x * pixelStride] = nv12.y[srcOff + x]
-                        x++
-                    }
-                }
-                val limit = buf.remaining().coerceAtMost(row.size)
-                if (limit > 0) buf.put(row, 0, limit)
-            }
-        }
-    }
-
-    private fun copyInterleavedUv(plane: Image.Plane, nv12: Nv12Frame, swapVu: Boolean) {
-        val buf = plane.buffer.duplicate()
-        val rowStride = plane.rowStride
-        val uvH = (nv12.height + 1) / 2
-        val row = ByteArray(rowStride)
-        for (y in 0 until uvH) {
-            row.fill(128.toByte())
-            val srcOff = y * nv12.width
-            var x = 0
-            while (x + 1 < nv12.width && x + 1 < row.size) {
-                val u = nv12.uv[srcOff + x]
-                val v = nv12.uv[srcOff + x + 1]
-                if (swapVu) {
-                    row[x] = v
-                    row[x + 1] = u
-                } else {
-                    row[x] = u
-                    row[x + 1] = v
-                }
-                x += 2
-            }
-            val limit = buf.remaining().coerceAtMost(row.size)
-            if (limit > 0) buf.put(row, 0, limit)
-        }
-    }
-
-    private fun copyPlanarChroma(plane: Image.Plane, nv12: Nv12Frame, uPlane: Boolean) {
-        val buf = plane.buffer.duplicate()
-        val rowStride = plane.rowStride
-        val pixelStride = plane.pixelStride.coerceAtLeast(1)
-        val uvH = (nv12.height + 1) / 2
-        val chromaW = (nv12.width + 1) / 2
-        val row = ByteArray(rowStride)
-        val chromaOffset = if (uPlane) 0 else 1
-        for (y in 0 until uvH) {
-            row.fill(128.toByte())
-            val srcOff = y * nv12.width
-            for (x in 0 until chromaW) {
-                val dst = x * pixelStride
-                if (dst < row.size) {
-                    row[dst] = nv12.uv[srcOff + x * 2 + chromaOffset]
-                }
-            }
-            val limit = buf.remaining().coerceAtMost(row.size)
-            if (limit > 0) buf.put(row, 0, limit)
-        }
-    }
-
-    private fun isNv12(u: Image.Plane, v: Image.Plane): Boolean {
-        return try {
-            val uBuf = u.buffer.duplicate()
-            val vBuf = v.buffer.duplicate()
-            if (uBuf.capacity() <= 1 || vBuf.capacity() <= 0) return true
-            uBuf.position() <= vBuf.position()
-        } catch (_: Throwable) {
-            true
+        check(planes.size == 3) { "Encoder did not provide three YUV planes" }
+        Mp4InputPlanes.copy(nv12.y, 0, nv12.width, 1, planes[0].buffer,
+            planes[0].rowStride, planes[0].pixelStride, nv12.width, nv12.height)
+        // U and V can overlap with either UV or VU ordering. Write each logical plane
+        // through its own stride/offset; relative ByteBuffer positions cannot identify NV12.
+        for (channel in 0..1) {
+            val plane = planes[channel + 1]
+            Mp4InputPlanes.copy(nv12.uv, channel, nv12.width, 2, plane.buffer,
+                plane.rowStride, plane.pixelStride, nv12.width / 2, nv12.height / 2)
         }
     }
 
     private fun drainEncoder(endOfStream: Boolean) {
-        val codec = encoder ?: return
-        val mx = muxer ?: return
-        val bufInfo = MediaCodec.BufferInfo()
-        val deadlineNs = if (endOfStream) System.nanoTime() + DRAIN_TIMEOUT_US * 1000 else 0L
-
+        val codec = checkNotNull(encoder)
+        val mx = checkNotNull(muxer)
+        val info = MediaCodec.BufferInfo()
+        val deadline = System.nanoTime() + DRAIN_TIMEOUT_US * 1000
         while (true) {
-            val outIdx = try {
-                codec.dequeueOutputBuffer(bufInfo, if (endOfStream) 10_000 else 0)
-            } catch (t: Throwable) {
-                Log.e(TAG, "dequeueOutputBuffer failed", t)
-                return
-            }
+            val index = codec.dequeueOutputBuffer(info, if (endOfStream) 10_000 else 0)
             when {
-                outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                    if (!muxerStarted) {
-                        trackIndex = mx.addTrack(codec.outputFormat)
-                        mx.start()
-                        muxerStarted = true
-                        Log.i(TAG, "Muxer started, format: ${codec.outputFormat}")
-                    }
+                index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                    check(!muxerStarted) { "MP4 output format changed during recording" }
+                    trackIndex = mx.addTrack(codec.outputFormat)
+                    mx.start()
+                    muxerStarted = true
                 }
-                outIdx >= 0 -> {
-                    val outBuf = codec.getOutputBuffer(outIdx)
-                    if (outBuf == null) {
-                        codec.releaseOutputBuffer(outIdx, false)
-                    } else {
-                        if (bufInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
-                            bufInfo.size = 0
+                index >= 0 -> {
+                    try {
+                        if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) info.size = 0
+                        if (info.size > 0) {
+                            check(muxerStarted) { "MP4 output arrived before its track" }
+                            val output = checkNotNull(codec.getOutputBuffer(index))
+                            output.position(info.offset)
+                            output.limit(info.offset + info.size)
+                            mx.writeSampleData(trackIndex, output, info)
+                            totalBytesWritten += info.size
                         }
-                        if (bufInfo.size > 0 && muxerStarted) {
-                            outBuf.position(bufInfo.offset)
-                            outBuf.limit(bufInfo.offset + bufInfo.size)
-                            try {
-                                mx.writeSampleData(trackIndex, outBuf, bufInfo)
-                                totalBytesWritten += bufInfo.size
-                            } catch (t: Throwable) {
-                                Log.e(TAG, "muxer write failed", t)
-                            }
-                        }
-                        codec.releaseOutputBuffer(outIdx, false)
-                        if (bufInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) return
-                    }
+                        if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) return
+                    } finally { codec.releaseOutputBuffer(index, false) }
                 }
                 else -> {
                     if (!endOfStream) return
-                    if (System.nanoTime() > deadlineNs) {
-                        Log.w(TAG, "Drain timeout reached, stopping")
-                        return
-                    }
+                    check(System.nanoTime() < deadline) { "MP4 encoder drain timed out" }
                 }
             }
         }
@@ -516,27 +408,24 @@ class Mp4Writer(private val file: File) {
         return color == MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Planar
     }
 
-    private fun releaseQuietly() {
-        try {
-            encoder?.stop()
-        } catch (_: Throwable) {
+    /** Failed configuration attempts are disposable; completed recordings propagate cleanup failures. */
+    private fun releaseQuietly() { releaseResources() }
+
+    private fun releaseResources(): Throwable? {
+        var failure: Throwable? = null
+        fun release(action: () -> Unit) {
+            try { action() }
+            catch (error: Throwable) { if (failure == null) failure = error else failure!!.addSuppressed(error) }
         }
-        try {
-            encoder?.release()
-        } catch (_: Throwable) {
-        }
+        release { encoder?.stop() }
+        release { encoder?.release() }
         encoder = null
-        try {
-            if (muxerStarted) muxer?.stop()
-        } catch (_: Throwable) {
-        }
-        try {
-            muxer?.release()
-        } catch (_: Throwable) {
-        }
+        release { if (muxerStarted) muxer?.stop() }
+        release { muxer?.release() }
         muxer = null
         muxerStarted = false
         isOpen = false
+        return failure
     }
 
     private fun MediaFormat.getIntegerSafe(key: String, default: Int): Int {

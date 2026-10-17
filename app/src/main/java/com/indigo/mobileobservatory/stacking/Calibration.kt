@@ -10,7 +10,9 @@ enum class CalibrationType { BIAS, DARK, FLAT }
 /** Layout describes the *output* sensor mosaic, independent of container endian/alignment. */
 data class CalibrationGeometry(val width: Int, val height: Int, val layout: String, val validBits: Int) {
     init {
-        require(width > 0 && height > 0 && width.toLong() * height <= LinearImage.DEFAULT_STACK_PIXELS) { "calibration_dimensions" }
+        // Geometry is metadata, also used while inspecting large SER headers. Allocation
+        // budgets belong at processing/master-loading entry points, not in this value object.
+        require(width > 0 && height > 0 && width.toLong() * height <= Int.MAX_VALUE / channels) { "calibration_dimensions" }
         require(layout in setOf("MONO", "RGB", "RGGB", "GRBG", "GBRG", "BGGR")) { "calibration_layout" }
         require(validBits in 1..16) { "calibration_depth" }
         if (isBayer) require(width >= 2 && height >= 2) { "calibration_dimensions" }
@@ -220,6 +222,7 @@ object CalibrationBuilder {
               frameCount: Long, readFrame: (Long) -> LinearImage, name: String = "", sourceIdentity: String = "",
               bias: CalibrationMaster? = null, allowUnknownCapture: Boolean = false,
               cancelCheck: () -> Unit = {}, progress: (Long, Long) -> Unit = { _, _ -> }): CalibrationMaster {
+        require(geometry.width.toLong() * geometry.height <= LinearImage.DEFAULT_STACK_PIXELS) { "memory_budget" }
         require(frameCount in 1..10_000_000L) { "calibration_frame_count" }
         require(type == CalibrationType.FLAT || bias == null) { "Dark and bias masters are uncalibrated sensor means" }
         require(allowUnknownCapture || captureIssues(type, capture, capture).second.isEmpty()) { "calibration_unknown_settings" }

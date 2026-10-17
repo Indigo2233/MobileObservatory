@@ -72,6 +72,7 @@ import com.indigo.mobileobservatory.recording.RawRecordingNormalizer
 import com.indigo.mobileobservatory.recording.RecordingWriteOutcome
 import com.indigo.mobileobservatory.recording.RecordingWriteSession
 import com.indigo.mobileobservatory.stacking.LiveStackPhase
+import com.indigo.mobileobservatory.stacking.LiveStackAdmission
 import com.indigo.mobileobservatory.stacking.PixelTraits
 import com.indigo.mobileobservatory.stacking.StackSessionKey
 import com.indigo.mobileobservatory.stacking.StackMode
@@ -2148,9 +2149,25 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             return "disable_auto_exposure"
         }
         if (_previewPaused.value || !cam.isCapturing.value) return "capture_paused"
-        if (currentStackKey() == null) return "wait_frame"
-        return null
+        val key = currentStackKey() ?: return "wait_frame"
+        return stacking.liveInputIssue(key)
     }
+
+    /** Explicit recovery, using actual device bins. Never silently crop or discard calibration. */
+    fun recommendedLiveStackBin(): Int? {
+        val calibration = stacking.calibration.state.value
+        if (_isRecording.value || recordingWriteSession != null || currentRecordingFile != null ||
+            !calibration.initialized || calibration.busy || calibration.selectedIds.isNotEmpty() ||
+            stacking.live.state.value.phase != LiveStackPhase.EMPTY ||
+            liveStackStartIssue() !in setOf("processing_size", "memory_budget")) return null
+        val cam = cameraManager.activeCamera as? CameraBinningCapable ?: return null
+        val info = cameraManager.activeCamera?.cameraInfo ?: return null
+        val key = currentStackKey() ?: return null
+        return LiveStackAdmission.recommendHardwareBin(key, info.sensorWidth, info.sensorHeight,
+            cam.supportedHardwareBins, stacking.memoryBudgetBytes)
+    }
+
+    fun useRecommendedLiveStackBin() { recommendedLiveStackBin()?.let(::setBinning) }
 
     fun startLiveStack() {
         liveStackStartIssue()?.let { stacking.report(it); return }
@@ -3124,7 +3141,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
         try {
             val cam = cameraManager.activeCamera ?: return
-            if (!cam.recordsLiveViewAsScience || cam.currentPixelFormat == PixelFormat.RGB24) {
+            if (_recordFormat.value != RecordFormat.MP4 &&
+                (!cam.recordsLiveViewAsScience || cam.currentPixelFormat == PixelFormat.RGB24)) {
                 _statusMessage.value = app.getString(R.string.dslr_live_view_not_science)
                 return
             }

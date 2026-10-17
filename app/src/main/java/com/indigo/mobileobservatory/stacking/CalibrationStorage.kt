@@ -102,6 +102,7 @@ class CalibrationLibrary(private val directory: File) {
             val input = DataInputStream(hashing)
             val descriptor = readHeader(input, source.length())
             require(descriptor.id == id) { "calibration_id_mismatch" }
+            require(descriptor.geometry.width.toLong() * descriptor.geometry.height <= LinearImage.DEFAULT_STACK_PIXELS) { "memory_budget" }
             cancelCheck()
             val samples = FloatArray(descriptor.geometry.sampleCount)
             val bytes = ByteArray(64 * 1024)
