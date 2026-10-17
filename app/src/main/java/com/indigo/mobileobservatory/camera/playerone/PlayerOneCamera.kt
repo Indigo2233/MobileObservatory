@@ -109,6 +109,8 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
     override var hwExposureMaxUs: Float = 2_000_000_000f; private set
     override var roiMinWidth = PoaMapping.ROI_MIN; private set
     override var roiMinHeight = PoaMapping.ROI_MIN; private set
+    override val roiWidthStep = PoaMapping.ROI_WIDTH_ALIGN
+    override val roiHeightStep = PoaMapping.ROI_HEIGHT_ALIGN
     @Volatile override var longExposureEnabled: Boolean = false
 
     private var sensorW = 0

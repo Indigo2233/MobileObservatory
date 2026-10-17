@@ -21,8 +21,8 @@ class LiveStackAdmissionTest {
 
     @Test fun fullSensorAdmissionExplainsSizeBeforeAnyCalibrationAndDisplayBinningCannotBypassIt() {
         val input = key()
-        assertEquals("processing_size", LiveStackAdmission.issue(input, 256L shl 20))
-        assertEquals("processing_size", LiveStackAdmission.issue(input.copy(softwareBin = 4), 256L shl 20))
+        assertEquals("memory_budget", LiveStackAdmission.issue(input, 256L shl 20))
+        assertEquals("memory_budget", LiveStackAdmission.issue(input.copy(softwareBin = 4), 256L shl 20))
     }
 
     @Test fun adviceOnlyUsesAdvertisedHardwareBinsAndChecksTheirFullFrameBudget() {
@@ -45,7 +45,7 @@ class LiveStackAdmissionTest {
     @Test fun loggedUranusFrameNeedsMoreThanTwoTimesBinningUnderTheCurrentBudget() {
         val traits = requireNotNull(CameraScienceLayouts.fullContainer(PixelFormat.BAYER_RG16))
         val input = key(3856, 2180).copy(pixelTraits = traits)
-        assertEquals("processing_size", LiveStackAdmission.issue(input, 256L shl 20))
+        assertEquals("memory_budget", LiveStackAdmission.issue(input, 256L shl 20))
         val bin2 = key(1928, 1090).copy(hardwareBin = 2, pixelTraits = traits)
         assertEquals("bayer_hardware_bin", LiveStackAdmission.issue(bin2, 256L shl 20))
         assertTrue(LiveStackAdmission.workingBytes(bin2, 0, false) > 256L shl 20)

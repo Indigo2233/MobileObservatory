@@ -37,6 +37,9 @@ interface Camera {
     val hwExposureMaxUs: Float
     val roiMinWidth: Int get() = 8
     val roiMinHeight: Int get() = 8
+    /** Safe UI/planner steps; adapters override when their SDK defines finer alignment. */
+    val roiWidthStep: Int get() = 8
+    val roiHeightStep: Int get() = 8
     var longExposureEnabled: Boolean
     /** Industrial cameras only: multi-frame average beyond hardware exposure max. */
     val supportsSoftwareStacking: Boolean get() = false

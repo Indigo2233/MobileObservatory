@@ -221,8 +221,10 @@ object CalibrationBuilder {
     fun build(type: CalibrationType, geometry: CalibrationGeometry, capture: CalibrationCapture,
               frameCount: Long, readFrame: (Long) -> LinearImage, name: String = "", sourceIdentity: String = "",
               bias: CalibrationMaster? = null, allowUnknownCapture: Boolean = false,
+              memoryBudgetBytes: Long = 256L * 1024 * 1024,
               cancelCheck: () -> Unit = {}, progress: (Long, Long) -> Unit = { _, _ -> }): CalibrationMaster {
-        require(geometry.width.toLong() * geometry.height <= LinearImage.DEFAULT_STACK_PIXELS) { "memory_budget" }
+        require(geometry.width.toLong() * geometry.height <= LinearImage.MAX_PIXELS &&
+            estimatedBuildBytes(geometry, bias != null) <= memoryBudgetBytes) { "memory_budget" }
         require(frameCount in 1..10_000_000L) { "calibration_frame_count" }
         require(type == CalibrationType.FLAT || bias == null) { "Dark and bias masters are uncalibrated sensor means" }
         require(allowUnknownCapture || captureIssues(type, capture, capture).second.isEmpty()) { "calibration_unknown_settings" }

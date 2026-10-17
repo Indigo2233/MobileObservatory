@@ -129,6 +129,7 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
     override var hwExposureMaxUs: Float = 2_000_000_000f; private set
     override var roiMinWidth = 8; private set
     override var roiMinHeight = 2; private set
+    override val roiHeightStep = 2
     @Volatile override var longExposureEnabled: Boolean = false
 
     private var frameCallback: FrameCallback? = null

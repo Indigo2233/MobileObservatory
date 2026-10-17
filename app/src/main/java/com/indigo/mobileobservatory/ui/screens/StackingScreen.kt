@@ -254,6 +254,8 @@ fun StackingScreen(viewModel: CameraViewModel, mode: StackMode, onBack: () -> Un
 
 @Composable
 private fun LiveStackControls(vm: CameraViewModel, state: LiveStackState, showStack: Boolean, target: StackTarget, onCamera: () -> Unit) {
+    var roiPlanner by rememberSaveable { mutableStateOf(false) }
+    if (roiPlanner) com.indigo.mobileobservatory.ui.components.StackRoiDialog(vm) { roiPlanner = false }
     val c = vm.stacking
     val calibration by c.calibration.state.collectAsStateWithPageLifecycle()
     val task by c.task.collectAsStateWithPageLifecycle()
@@ -284,6 +286,9 @@ private fun LiveStackControls(vm: CameraViewModel, state: LiveStackState, showSt
             "disable_auto_exposure" -> OutlinedButton(onClick = { vm.setAutoExposureMode(AutoExposureMode.OFF) }) { Text(stringResource(R.string.stack_disable_ae)) }
             "capture_paused" -> OutlinedButton(onClick = vm::resumeCaptureForStacking) { Text(stringResource(R.string.stack_resume_capture)) }
         }
+    }
+    OutlinedButton(onClick = { roiPlanner = true }, modifier = Modifier.fillMaxWidth().testTag("stack-roi-open")) {
+        Text(stringResource(R.string.stack_roi_title))
     }
     TextButton(onClick = onCamera) { Text(stringResource(R.string.stack_camera_settings)) }
     if ((state.key?.format ?: captureFormat)?.isBayer == true) {

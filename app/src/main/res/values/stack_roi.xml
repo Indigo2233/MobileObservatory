@@ -1,0 +1,20 @@
+<resources>
+    <string name="stack_roi_title">Stacking range</string>
+    <string name="stack_roi_need_camera">Connect a camera with raw output to calculate the range.</string>
+    <string name="stack_roi_bins">Hardware Bin %1$d× · Software Bin %2$d×</string>
+    <string name="stack_roi_current">Input %1$d×%2$d → stack %3$d×%4$d</string>
+    <string name="stack_roi_fits">Current dimensions fit the budget</string>
+    <string name="stack_roi_sensor_ratio">Sensor ratio</string>
+    <string name="stack_roi_frame_hint">Solid: current ROI · Dashed: suggested maximum. Tap to move.</string>
+    <string name="stack_roi_maximum">Suggested maximum ROI: %1$d×%2$d</string>
+    <string name="stack_roi_apply">Use this range</string>
+    <string name="stack_roi_unavailable">No usable range for this format and Bin setting.</string>
+    <string name="stack_roi_calibration_locked">Deselect calibration frames before changing the capture range.</string>
+    <string name="stack_roi_why">Why this limit?</string>
+    <string name="stack_roi_memory">Current estimate: %1$d MiB / budget: %2$d MiB</string>
+    <string name="stack_roi_estimated_max">Suggested range estimate: %1$d MiB</string>
+    <string name="stack_roi_explanation" formatted="false">The estimate includes accumulation, registration, snapshots, demosaicing and calibration. Software Bin runs after sensor calibration and demosaicing, so those buffers stay at input resolution. The budget is capped at 40% of the app heap and 256 MiB. Processing also retains a 16.78 MP image ceiling and a 32 MiB live input-frame limit. These are estimates, not measured peak memory. ROI alignment follows the camera controls.</string>
+    <string name="stack_roi_manual">Manual crop</string>
+    <string name="stack_roi_changed">Settings changed. Review the range and try again.</string>
+    <string name="stack_roi_capture_busy">Wait for the photo or reference capture to finish before applying the range.</string>
+</resources>

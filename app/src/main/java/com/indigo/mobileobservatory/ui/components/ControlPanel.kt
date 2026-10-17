@@ -142,7 +142,8 @@ fun ControlPanel(
     onMountSetHome: () -> Unit = {},
     modifier: Modifier = Modifier,
     fillWidth: Boolean = false,
-    captureSettingsOnly: Boolean = false
+    captureSettingsOnly: Boolean = false,
+    roiBudgetControls: (@Composable () -> Unit)? = null
 ) {
     val exposureMin by exposureMinFlow.collectAsStateWithPageLifecycle()
     val exposureMax by exposureMaxFlow.collectAsStateWithPageLifecycle()
@@ -949,7 +950,7 @@ fun ControlPanel(
         // ── ROI ───────
         if (activeSection == ControlPanelSection.ROI) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
+                if (roiBudgetControls == null) Text(
                     "${roi.width} x ${roi.height}  @  (${roi.x}, ${roi.y})",
                     style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -994,6 +995,13 @@ fun ControlPanel(
                     }
                 }
 
+                roiBudgetControls?.invoke()
+                var manualRoi by rememberSaveable { mutableStateOf(false) }
+                if (roiBudgetControls != null) TextButton(onClick = { manualRoi = !manualRoi }) {
+                    Text(stringResource(R.string.stack_roi_manual))
+                    Icon(if (manualRoi) Icons.Default.ExpandLess else Icons.Default.ExpandMore, null)
+                }
+                if (roiBudgetControls == null || manualRoi) {
                 val presets = buildList {
                     add(stringResource(R.string.roi_full) to Roi(0, 0, sensorWidth, sensorHeight))
                     fun centered(w: Int, h: Int): Roi {
@@ -1104,6 +1112,7 @@ fun ControlPanel(
 
                 TextButton(onClick = onResetRoi) {
                     Text(stringResource(R.string.reset_roi), fontSize = 11.sp)
+                }
                 }
             }
         }
