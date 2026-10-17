@@ -144,7 +144,7 @@ class StackingCoordinator(
                 roiX = key.roi.x, roiY = key.roi.y, binning = key.hardwareBin
             )
             val sensor = LinearPixelDecoder.decodeSensorBorrowed(frame, traits,
-                workspace = liveSensorWorkspace, cancelCheck = cancelCheck)
+                maxPixels = LinearImage.MAX_PIXELS, workspace = liveSensorWorkspace, cancelCheck = cancelCheck)
             val geometry = CalibrationGeometry.from(frame.width, frame.height, frame.pixelFormat, traits)
             val calibrated = fixedCalibration.applyBorrowed(sensor, geometry, liveCapture(key),
                 liveCalibrationWorkspace, cancelCheck)
@@ -993,7 +993,8 @@ class StackingCoordinator(
         override fun readFrame(index: Long): LinearImage {
             require(index in 0 until frameCount && index <= Int.MAX_VALUE)
             cancelCheck()
-            val sensor = reader.readSensorFrame(index.toInt(), cancelCheck = cancelCheck) ?: error(reader.lastError ?: "read_failed")
+            val sensor = reader.readSensorFrame(index.toInt(), maxPixels = LinearImage.MAX_PIXELS, cancelCheck = cancelCheck)
+                ?: error(reader.lastError ?: "read_failed")
             return LinearPixelDecoder.demosaicSensor(calibration.apply(sensor, geometry, capture, cancelCheck),
                 reader.sensorFormat, reader.sensorTraits, algorithm, demosaicWorkspace, cancelCheck)
         }

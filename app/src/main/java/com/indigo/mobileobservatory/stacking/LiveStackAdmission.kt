@@ -8,7 +8,8 @@ internal object LiveStackAdmission {
         val pixels = key.width.toLong() * key.height
         // Software binning happens AFTER native sensor calibration and demosaicing. It cannot
         // make an oversized native input safe by itself.
-        if (pixels > LinearImage.DEFAULT_STACK_PIXELS) return "processing_size"
+        if (pixels > LinearImage.MAX_PIXELS) return "processing_size"
+        if (pixels * key.format.bytesPerPixel > LiveStackSession.MAX_INPUT_BYTES) return "input_budget"
         if (key.format.isBayer && key.hardwareBin % 2 == 0 && !key.pixelTraits.bayerPatternAtOutput) return "bayer_hardware_bin"
         return if (workingBytes(key, calibrationBytes, calibrated) > budget) "memory_budget" else null
     }

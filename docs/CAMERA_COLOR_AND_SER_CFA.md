@@ -48,7 +48,7 @@ FITS 图像查看器在 LP700 开关右侧提供说明入口。说明对话框�
 
 - MP4 编码输入先读取 ByteBuffer 容量，再取得并填写 Image；取得 Image 后不再调用同索引的 `getInputBuffer`，避免图像失效。无 Image 时重新取得 ByteBuffer。依据 [Android MediaCodec 输入缓冲契约](https://developer.android.com/reference/android/media/MediaCodec#getInputBuffer(int))。
 - 按每个 Y/U/V 平面的实际 position、rowStride、pixelStride 写入，兼容 UV/VU 共享存储，不靠各自 ByteBuffer 的相对位置猜色度顺序。截断缓冲、写入、EOS 排空和 muxer 收尾异常向录制会话传播；空视频不记成功。编码尺寸选择同时核对帧率。MP4 可录制 RGB/Live View 显示帧；SER/PSER/FITS 的科学来源限制保持，测试模拟相机仍只演示、不保存。
-- `CalibrationGeometry` 只校验元数据有效性，不能在读取大 SER 头或未启用校准场时提前抛出 `calibration_dimensions`。主帧构建/加载、实时和后期处理入口继续在分配像素前检查尺寸和内存预算；419 万像素上限及实际算法预算没有取消。
+- `CalibrationGeometry` 只校验元数据有效性，不能在读取大 SER 头或未启用校准场时提前抛出 `calibration_dimensions`。主帧构建/加载、实时和后期处理入口继续在分配像素前检查尺寸和内存预算；该次修复保留了 419 万像素上限及实际算法预算；2026-10-18 后统一 4 MP 门槛已由工作集预算取代，见 `STACKING_CALIBRATION.md` 的 Adaptive ROI planning。
 - 实时叠加的开始按钮与实际启动复用尺寸/内存预检。超限标红；无选中校准场且未录制时，按相机声明的硬件合并倍率、完整传感器尺寸和当前算法预算推荐“全幅 N× 像素合并”。用户点击才更改采集设置，随后等待新帧再启动；不自动裁切、忽略校准场或拿显示端软件合并绕过原始帧预算。后期大 SER 保留文件信息与 CFA/算法选项，并明确提示降低采集分辨率。
 - 验证覆盖实际 MediaCodec/MediaMuxer 写入、MP4 解码色度/时长、3536² Bayer 视频、空录像失败、大图读取/启动预检和既有 BIAS/DARK/FLAT 流程。模拟器通过不代替 S23 Ultra 的实际编码器及相机硬件合并验收。
 

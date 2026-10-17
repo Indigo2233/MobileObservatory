@@ -22,6 +22,7 @@ data class LinearImage(val width: Int, val height: Int, val channels: Int, val p
 
     companion object {
         const val MAX_PIXELS = 16_777_216L
+        /** Conservative standalone-reader default. Budget-admitted stacking passes MAX_PIXELS explicitly. */
         const val DEFAULT_STACK_PIXELS = 4_194_304L
     }
 }

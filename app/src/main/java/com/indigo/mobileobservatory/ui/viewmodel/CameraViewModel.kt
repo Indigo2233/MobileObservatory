@@ -73,6 +73,7 @@ import com.indigo.mobileobservatory.recording.RecordingWriteOutcome
 import com.indigo.mobileobservatory.recording.RecordingWriteSession
 import com.indigo.mobileobservatory.stacking.LiveStackPhase
 import com.indigo.mobileobservatory.stacking.LiveStackAdmission
+import com.indigo.mobileobservatory.stacking.StackRoiContext
 import com.indigo.mobileobservatory.stacking.PixelTraits
 import com.indigo.mobileobservatory.stacking.StackSessionKey
 import com.indigo.mobileobservatory.stacking.StackMode
@@ -2168,6 +2169,47 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun useRecommendedLiveStackBin() { recommendedLiveStackBin()?.let(::setBinning) }
+
+    fun stackRoiContext(): StackRoiContext? {
+        val cam = cameraManager.activeCamera ?: return null
+        if (!cam.recordsLiveViewAsScience || !cam.supportsHostRoi) return null
+        val key = captureSettingsSnapshot(cam)?.copy(target = stacking.liveTarget.value,
+            demosaicAlgorithm = stacking.demosaicAlgorithm.value) ?: return null
+        if (key.width < 1 || key.height < 1 || key.softwareBin < 1) return null
+        val calibration = stacking.calibration.state.value
+        val blocked = when {
+            _isRecording.value || recordingWriteSession != null || currentRecordingFile != null -> "recording_active"
+            pointingCaptureOwned.get() || pendingFrameSnapshot.get() != null || frameSnapshotMutex.isLocked -> "roi_capture_busy"
+            pendingCaptureChanges.get() != 0 || binningSwitching || _cameraCfaApplying.value || _gainWriteInProgress.value -> "settings_busy"
+            stacking.live.state.value.phase != LiveStackPhase.EMPTY -> "reset_live_first"
+            stacking.hasPlanetaryWork() -> "finish_offline_first"
+            !calibration.initialized || calibration.busy -> "calibration_busy"
+            calibration.selectedIds.isNotEmpty() -> "roi_calibration_selected"
+            else -> null
+        }
+        return StackRoiContext(key, _imagingWidth.value, _imagingHeight.value, stacking.memoryBudgetBytes,
+            stacking.calibration.memoryBytes, calibration.selectedIds.isNotEmpty(), cam.roiMinWidth, cam.roiMinHeight,
+            cam.roiWidthStep, cam.roiHeightStep, blocked)
+    }
+
+    /** Revalidate the proposed bounds against the current camera and budget at the action boundary. */
+    fun applyStackRoi(expected: StackRoiContext, roi: Roi): Boolean {
+        val camera = cameraManager.activeCamera ?: return false
+        val current = stackRoiContext() ?: return false
+        if (current.layoutIdentity != expected.layoutIdentity || current.blockedReason != null) return false
+        if (roi.x < 0 || roi.y < 0 || roi.width < current.minWidth || roi.height < current.minHeight ||
+            roi.x.toLong() + roi.width > current.sensorWidth || roi.y.toLong() + roi.height > current.sensorHeight ||
+            roi.width % current.widthStep != 0 || roi.height % current.heightStep != 0 || current.issue(roi) != null) return false
+        if (cameraManager.activeCamera !== camera) return false
+        invalidateStackSettings(layoutChanged = true)
+        changeCaptureSettings(camera) { camera.setRoi(roi); _roi.value = camera.currentRoi }
+        return true
+    }
+
+    fun setStackPlanningBin(bin: Int) {
+        val context = stackRoiContext() ?: return
+        if (context.blockedReason == null) setBinning(bin)
+    }
 
     fun startLiveStack() {
         FileLogger.i(TAG, "Live stack requested camera=${cameraManager.activeCamera?.cameraInfo?.name} " +

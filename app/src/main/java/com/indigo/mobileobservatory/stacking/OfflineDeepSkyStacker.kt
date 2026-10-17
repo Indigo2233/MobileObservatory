@@ -25,7 +25,7 @@ class OfflineDeepSkyStacker {
     ): OfflineDeepSkyResult {
         require(source.frameCount in 1..MAX_FRAMES) { "deep_sky_frame_count" }
         require(source.width > 0 && source.height > 0 && source.channels in listOf(1, 3)) { "source_geometry_changed" }
-        require(source.width.toLong() * source.height <= LinearImage.DEFAULT_STACK_PIXELS &&
+        require(source.width.toLong() * source.height <= LinearImage.MAX_PIXELS &&
             DeepSkyStacker.estimateWorkingBytes(source.width, source.height, source.channels) <= config.memoryBudgetBytes) { "memory_budget" }
         val start = System.nanoTime()
         val algorithm = DeepSkyStacker(config)

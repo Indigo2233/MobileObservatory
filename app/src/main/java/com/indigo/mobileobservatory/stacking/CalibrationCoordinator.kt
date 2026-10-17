@@ -201,17 +201,17 @@ class CalibrationCoordinator(
             val geometry = CalibrationGeometry.from(header.width, header.height, reader.sensorFormat, reader.sensorTraits)
             val capture = recordingCapture(file)
             val bias = if (type == CalibrationType.FLAT) selection.bias else null
-            require(geometry.width.toLong() * geometry.height <= LinearImage.DEFAULT_STACK_PIXELS &&
+            require(geometry.width.toLong() * geometry.height <= LinearImage.MAX_PIXELS &&
                 CalibrationBuilder.estimatedBuildBytes(geometry, bias != null) + selection.memoryBytes <= memoryBudgetBytes) { "memory_budget" }
             val master = CalibrationBuilder.build(type, geometry, capture, header.frameCount.toLong(),
                 readFrame = { index ->
                     ensureActive()
-                    reader.readSensorFrame(index.toInt()) ?: error(reader.lastError ?: "read_failed")
+                    reader.readSensorFrame(index.toInt(), maxPixels = LinearImage.MAX_PIXELS) ?: error(reader.lastError ?: "read_failed")
                 }, name = name, sourceIdentity = cfaInterpretation.decodingIdentity(identity,
                     reader.endianConvention.name, reader.sampleAlignment.name, "SENSOR"), bias = bias, allowUnknownCapture = confirmed,
                 cancelCheck = { ensureActive() }, progress = { done, total ->
                     _state.update { it.copy(completed = done, total = total) }
-                })
+                }, memoryBudgetBytes = memoryBudgetBytes - selection.memoryBytes)
             check(sourceIdentity(file) { ensureActive() } == identity) { "source_changed" }
             val saved = library.save(master) { ensureActive() }
             try {
@@ -233,7 +233,10 @@ class CalibrationCoordinator(
         // During a selection change, old immutable masters remain reachable until the worker
         // commits. Include both selections rather than relying on prompt garbage collection.
         require(bytes + previous.memoryBytes <= memoryBudgetBytes) { "memory_budget" }
-        fun load(type: CalibrationType) = ids[type]?.let { reusable[it] ?: library.load(it, checkCancelled) }
+        var remaining = memoryBudgetBytes - previous.memoryBytes
+        fun load(type: CalibrationType) = ids[type]?.let {
+            reusable[it] ?: library.load(it, maxBytes = remaining, cancelCheck = checkCancelled).also { master -> remaining -= master.memoryBytes }
+        }
         return CalibrationSelection(load(CalibrationType.BIAS), load(CalibrationType.DARK), load(CalibrationType.FLAT),
             allowUnknownCapture = ids.isNotEmpty() && ids.values.all { it in confirmed })
     }

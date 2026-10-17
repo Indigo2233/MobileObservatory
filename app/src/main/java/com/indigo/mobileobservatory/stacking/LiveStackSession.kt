@@ -97,9 +97,10 @@ class LiveStackSession(
     private val nativeHeapBytes: () -> Long = { 0L },
     private val nowNanos: () -> Long = System::nanoTime,
     private val queueCapacity: Int = 2,
-    private val maxInputBytes: Long = 32L * 1024 * 1024,
+    private val maxInputBytes: Long = MAX_INPUT_BYTES,
     private val onWorkerReset: () -> Unit = {}
 ) : Closeable {
+    companion object { const val MAX_INPUT_BYTES = 32L * 1024 * 1024 }
     private data class Packet(val frame: FrameData, val key: StackSessionKey, val generation: Long)
     private val lock = Any()
     private val queue = ArrayDeque<Packet>()

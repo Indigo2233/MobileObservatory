@@ -189,8 +189,11 @@ case of a renderer holding snapshot A while B is current and C is being created,
 automatic-background output, and simultaneous sharpening/local-contrast scratch.
 Calibration masters and pre-binning input expansion are added separately.
 The coordinator caps the working budget at the smaller of 256 MiB and 40% of the
-Java maximum heap. The 4 MP pixel ceiling alone does not guarantee admission;
-reduce camera ROI/binning when the byte budget rejects a configuration.
+Java maximum heap. Since 2026-10-18 the coordinated processing paths no longer
+use a universal 4 MP gate: byte admission decides usable dimensions, within the
+16,777,216-pixel image representation ceiling and 32 MiB live raw-frame bound.
+The conservative 4 MP defaults on standalone reader helpers remain; admitted
+stacking/master paths pass their higher ceiling explicitly before allocating.
 
 An independent Java 17 desktop benchmark on the deterministic gradient fixture
 gave the following indicative timings. These are JIT/host-dependent runs while
@@ -253,3 +256,70 @@ Those results do not establish the root cause or prove the exception eliminated;
 the isolated player does not itself use the stacking layout. This remains an
 explicit regression risk for device testing. No physical-camera or real-sky
 acceptance was performed for this record.
+
+## Adaptive ROI planning (2026-10-18)
+
+The old 4,194,304-pixel constant (2^22) originated in the initial stacking
+implementation, commit `65d8dea`. It was an engineering safeguard, not a camera,
+SER, or Android pixel-format rule. Android limits an app's heap separately from
+the phone's total RAM; see the [Android memory overview](https://developer.android.com/topic/performance/memory-overview).
+Our 256 MiB / 40% policy is an additional conservative application budget.
+
+The byte estimate reserves simultaneous input, accumulation, registration,
+snapshots, render/filter workspace, and selected calibration masters. For RGB
+deep-sky output the engine estimate is 152 bytes per pixel plus 8 MiB; DDFAPD
+adds four Double planes and a direction plane (33 bytes per native input pixel,
+plus overhead). A 3856×2180 Bayer source without software binning is therefore
+estimated at about 1.46 GiB. This is a conservative working-set estimate, not a
+measured S23 Ultra peak or a promise of a particular frame rate.
+
+`LiveStackAdmission` is shared by the actual start boundary and `StackRoiPlanner`.
+The latter finds the largest aligned rectangle for Sensor, 1:1, 4:3, or 16:9
+aspect at the current hardware/software Bin, algorithm, target, and calibration
+budget. The native sensor domain is retained for calibration and demosaicing;
+software Bin only reduces their downstream output. Choosing software Bin must
+not divide all native working arrays by Bin². Unknown post-bin CFA layouts
+continue to block admission rather than drawing a misleading usable box.
+
+The same component is available in **Capture → capture settings → ROI** and
+**Live stacking → Stacking range**. A solid outline shows the current camera
+ROI, a dashed outline shows the suggested maximum, and tapping the sensor
+diagram moves the proposal. It is a sensor-coordinate diagram, not a reticle
+drawn over a potentially cropped/flipped/rotated live image. Input and stacked
+output dimensions and actual hardware/software Bin are shown separately.
+Memory estimates and the remaining ceilings live under “Why this limit?”.
+Manual crop presets/sliders are expandable in the capture panel.
+
+The SDK/UI width/height steps are honored (Player One 4×2, ZWO 8×2, conservative
+8×8 default); positions snap to an eight-pixel grid to preserve CFA parity.
+“Use this range” changes capture only on explicit click. Before writing, the
+ViewModel rechecks camera/layout identity, bounds, alignment, budget, recording,
+reference capture, stacking and calibration state. SDK read-back then updates
+the displayed actual ROI. Switching camera/Bin/format while a proposal is open
+cannot apply stale coordinates to the new configuration. Selected calibration
+frames must be deselected before the guided crop action; no master is silently
+removed or geometrically reinterpreted.
+
+The old 4 MP gate is removed consistently from coordinated live/offline
+stacking, sensor decoding, and master building/loading. Masters carry explicit
+byte budgets before allocation, including old/new selection overlap. A tested
+2056×2056 MONO8 input with software Bin 4 now passes admission and reaches the
+live accumulator at 514×514; a master above 4 MP can also be built if its byte
+budget fits. The 585 full-frame colour/DDFAPD case can still exceed the budget.
+An offline planetary tracking ROI does not shrink full-frame decode buffers;
+this change does not implement arbitrary-large-SER tiling or resampling.
+
+Validation covers maximum-boundary search, each aspect/alignment, moving the
+box at sensor edges, actual CFA contracts, software versus hardware Bin,
+algorithm/calibration budget changes, admission beyond 4 MP, and rejection at
+byte/representation bounds. Android tests exercise the real planner component,
+capture/live entry points, a synthetic adapter's ROI write/read-back, stale-plan
+rejection, and live accumulation beyond the former ceiling. Physical SDK ROI
+rounding, device heap/RSS peaks and full-frame colour performance still require
+on-device validation. Future memory reductions should measure actual overlap
+and pursue tiled demosaicing/calibration without changing scientific ordering.
+
+Local verification for this change: 1,041 JVM tests and 13 API 34 Android tests
+passed with no skips; Android Lint reported no errors. The UI evidence uses the
+real Compose component with synthetic 585 geometry and a simulated ROI adapter,
+not a physical 585C or an S23 Ultra memory measurement.
