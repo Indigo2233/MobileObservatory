@@ -32,4 +32,17 @@ class Mp4EncoderSupportTest {
     fun `returns null when even the minimum size is rejected`() {
         assertNull(Mp4EncoderSupport.fitSize(640, 480) { _, _ -> false })
     }
+
+    @Test fun `uranus dimensions just above 4K negotiate a supported video size`() {
+        val size = requireNotNull(Mp4EncoderSupport.fitSize(3856, 2180) { w, h -> w <= 3840 && h <= 2160 })
+        org.junit.Assert.assertTrue(size.first <= 3840 && size.second <= 2160)
+        assertEquals(0, size.first % 16); assertEquals(0, size.second % 16)
+        assertEquals(3856.0 / 2180, size.first.toDouble() / size.second, .02)
+    }
+
+    @Test fun `repeated encoder downscaling does not accumulate aspect ratio error`() {
+        val size = requireNotNull(Mp4EncoderSupport.fitSize(3856, 2180) { w, h -> w <= 1920 && h <= 1080 })
+        assertEquals(1632 to 928, size)
+        assertEquals(3856.0 / 2180, size.first.toDouble() / size.second, .02)
+    }
 }

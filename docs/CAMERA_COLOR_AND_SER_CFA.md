@@ -52,6 +52,14 @@ FITS 图像查看器在 LP700 开关右侧提供说明入口。说明对话框�
 - 实时叠加的开始按钮与实际启动复用尺寸/内存预检。超限标红；无选中校准场且未录制时，按相机声明的硬件合并倍率、完整传感器尺寸和当前算法预算推荐“全幅 N× 像素合并”。用户点击才更改采集设置，随后等待新帧再启动；不自动裁切、忽略校准场或拿显示端软件合并绕过原始帧预算。后期大 SER 保留文件信息与 CFA/算法选项，并明确提示降低采集分辨率。
 - 验证覆盖实际 MediaCodec/MediaMuxer 写入、MP4 解码色度/时长、3536² Bayer 视频、空录像失败、大图读取/启动预检和既有 BIAS/DARK/FLAT 流程。模拟器通过不代替 S23 Ultra 的实际编码器及相机硬件合并验收。
 
+2026-10-17 收到的现场日志补充：Player One **Uranus-C PRO** 实际输出 3856×2180（8,406,080 像素），先 RAW8、后 RAW16；该会话运行 build 47，尚无修复版 build 48 记录。全幅超过现有处理像素上限；2× 后约 210 万像素也可能超过算法内存预算，不能只按像素数宣告可叠加。推荐倍率继续由 SDK 实际能力和内存预算决定，未声明支持的倍率不显示。现场链路明确为 `HIGH_SPEED` / `usb3=false`，RAW8 约 4.9 fps、RAW16 约 2.4 fps，与 USB 2.0 传输瓶颈一致；这不是 MP4 失败的独立证据。
+
+原 `app.log` 没有 MP4、叠加失败堆栈：这些路径只写 Android Logcat。已补入可导出的文件日志，包括录制请求/阻断状态、候选编码器配置失败、实际编码尺寸、首帧平面布局、写入/收尾失败、叠加请求尺寸/预算/失败原因、Player One 的 SDK 合并倍率及实际合并结果。首帧布局只记录一次，避免逐帧磁盘日志；时间戳格式化与文件写入串行化。日志缺失不能证明现场没有点击录制，也不能据此确认具体编码器错误。新增 3856×2180 RAW16 编码回读及 585 尺寸预算回归；不提交用户的原始日志或设备序列号。
+
+实际尺寸回归还发现编码器多次降尺寸时，反复对已对齐尺寸缩放会积累宽高比误差；改为始终从原始传感器宽高计算每级缩放，再执行 16 像素对齐。例如只支持 1920×1080 范围的编码器由 3856×2180 选取 1632×928，而非比例偏差更大的 1632×944。
+
+Player One 当前 Auto 布局声明来自传感器 CFA，尚未声明偶数硬件合并后的输出 CFA 已验证；不能因 4× 尺寸较小就强行放行彩色叠加或假定每台设备支持该倍率。该路径无可验证合并建议时，可先保持 Bin 1、使用较小采集 ROI 验证叠加；1024×576 的 Bayer DDFAPD 预检在 128 MiB 科学预算内通过。它是缩小视野的诊断配置，不代表全幅 585C 彩色叠加已完成适配。
+
 相关自动化：`PreviewScaleTest`、`PreviewRawLayoutTest`、`SoftwareBayerBinningTest`、`Mp4ColorLayoutTest`、`VisibleLightPreviewInstrumentedTest`、`PreviewPipelineLifecycleInstrumentedTest`、`SerCfaInterpretationTest`、`SerCfaCoordinatorInstrumentedTest`、`SerCfaSelectorInstrumentedTest`、`SERPreviewInstrumentedTest`。
 
 覆盖四种 CFA × SER/PSER × 三种算法、单色/RGB 边界、左右对齐及字节序、原字节不变、元数据/校准兼容性、改排列重分析、3536² 实际 Android Bitmap 色值、单次 AWB 与预览队列生命周期。最终执行结果与构建产物汇总到 [批次验收记录](WF_PHASE_0_1_ACCEPTANCE.md)。

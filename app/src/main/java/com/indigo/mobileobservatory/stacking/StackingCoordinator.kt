@@ -1,6 +1,7 @@
 package com.indigo.mobileobservatory.stacking
 
 import android.app.Application
+import com.indigo.mobileobservatory.util.FileLogger
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Debug
@@ -300,6 +301,9 @@ class StackingCoordinator(
 
     fun startLive(key: StackSessionKey) = synchronized(stateLock) {
         if (closed) return
+        FileLogger.i("Stacking", "Live requested input=${key.width}x${key.height} format=${key.format} " +
+            "hardwareBin=${key.hardwareBin} softwareBin=${key.softwareBin} target=${key.target} " +
+            "demosaic=${key.demosaicAlgorithm} budget=$memoryBudgetBytes calibrationBytes=${calibration.memoryBytes}")
         // Button recomposition can lag a rapid second tap; starting is idempotent here.
         if (live.state.value.phase != LiveStackPhase.EMPTY) return
         if (key.target != _liveTarget.value) { report("stack_target_changed"); return }
@@ -767,7 +771,10 @@ class StackingCoordinator(
         if (!closed) scheduleRender(activeMode)
     }
 
-    fun report(reason: String) { _task.update { it.copy(message = reason) } }
+    fun report(reason: String) {
+        if (reason.isNotBlank() && _task.value.message != reason) FileLogger.i("Stacking", "Message mode=$activeMode: $reason")
+        _task.update { it.copy(message = reason) }
+    }
 
     private fun publishPlanetaryPreview(bitmap: Bitmap) = synchronized(stateLock) {
         if (closed) bitmap.recycle() else {
@@ -894,8 +901,14 @@ class StackingCoordinator(
                 action()
             }
             catch (error: CancellationException) { failed(StackTaskPhase.CANCELLED, error.message ?: "cancelled") }
-            catch (error: Exception) { failed(StackTaskPhase.FAILED, error.message ?: "processing_failed") }
-            catch (_: OutOfMemoryError) { failed(StackTaskPhase.FAILED, "memory_budget") }
+            catch (error: Exception) {
+                FileLogger.e("Stacking", "Task failed phase=$phase source=${_task.value.source?.width}x${_task.value.source?.height}", error)
+                failed(StackTaskPhase.FAILED, error.message ?: "processing_failed")
+            }
+            catch (error: OutOfMemoryError) {
+                FileLogger.e("Stacking", "Task exhausted memory phase=$phase budget=$memoryBudgetBytes", error)
+                failed(StackTaskPhase.FAILED, "memory_budget")
+            }
             finally { recordMemory() }
         }
         taskJob = job

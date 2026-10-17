@@ -33,7 +33,7 @@ object FileLogger {
         }
     }
 
-    private fun writeLog(level: String, tag: String, message: String) {
+    @Synchronized private fun writeLog(level: String, tag: String, message: String) {
         val timestamp = dateFormat.format(Date())
         val logMessage = "$timestamp $level/$tag: $message"
         
@@ -77,7 +77,7 @@ object FileLogger {
         Log.e(tag, message, throwable)
         writeLog("E", tag, message)
         throwable?.let {
-            writeLog("E", tag, "  Exception: ${it.message}")
+            writeLog("E", tag, "  Exception: ${it.javaClass.name}: ${it.message}")
             it.stackTrace.take(5).forEach { frame ->
                 writeLog("E", tag, "    at $frame")
             }

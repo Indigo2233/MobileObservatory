@@ -8,14 +8,19 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.indigo.mobileobservatory.camera.FrameData
 import com.indigo.mobileobservatory.camera.PixelFormat
+import com.indigo.mobileobservatory.util.FileLogger
 import java.io.File
 import org.junit.Assert.*
 import org.junit.Test
+import org.junit.Before
 import org.junit.runner.RunWith
 
 /** Exercise the phone/emulator's real MediaCodec and MediaMuxer, then read the saved MP4. */
 @RunWith(AndroidJUnit4::class)
 class Mp4WriterInstrumentedTest {
+    @Before fun initializeExportableDiagnostics() {
+        FileLogger.init(InstrumentationRegistry.getInstrumentation().targetContext)
+    }
     private fun file() = File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir,
         "mp4-regression-${System.nanoTime()}.mp4")
 
@@ -46,13 +51,20 @@ class Mp4WriterInstrumentedTest {
     }
 
     @Test fun squareFullSensorRawFramesProduceReadableVideoAtAnEncoderSupportedSize() {
+        verifyRawVideo(3536, 3536)
+    }
+
+    @Test fun loggedPlayerOne585Raw16SizeProducesReadableVideo() {
+        verifyRawVideo(3856, 2180)
+    }
+
+    private fun verifyRawVideo(width: Int, height: Int) {
         val file = file()
         val writer = Mp4Writer(file)
-        val side = 3536
-        val pixels = ByteArray(side * side * 2) { if (it % 2 == 0) 0 else 96 }
+        val pixels = ByteArray(width * height * 2) { if (it % 2 == 0) 0 else 96 }
         try {
-            writer.open(side, side, 10)
-            repeat(3) { i -> writer.writeFrame(FrameData(pixels, side, side, PixelFormat.BAYER_RG16, i.toLong(), i * 100L)) }
+            writer.open(width, height, 10)
+            repeat(3) { i -> writer.writeFrame(FrameData(pixels, width, height, PixelFormat.BAYER_RG16, i.toLong(), i * 100L)) }
             writer.close()
             assertEquals(3, writer.currentFrameCount)
             val reader = MediaExtractor()
@@ -61,7 +73,8 @@ class Mp4WriterInstrumentedTest {
                 assertEquals(1, reader.trackCount)
                 val format = reader.getTrackFormat(0)
                 assertEquals(MediaFormat.MIMETYPE_VIDEO_AVC, format.getString(MediaFormat.KEY_MIME))
-                assertTrue(format.getInteger(MediaFormat.KEY_WIDTH) in 16..side)
+                assertTrue(format.getInteger(MediaFormat.KEY_WIDTH) in 16..Mp4EncoderSupport.align16(width))
+                assertTrue(format.getInteger(MediaFormat.KEY_HEIGHT) in 16..Mp4EncoderSupport.align16(height))
                 reader.selectTrack(0)
                 var count = 0
                 while (reader.sampleTime >= 0) { count++; reader.advance() }

@@ -1,6 +1,7 @@
 package com.indigo.mobileobservatory.stacking
 
 import com.indigo.mobileobservatory.camera.PixelFormat
+import com.indigo.mobileobservatory.camera.CameraScienceLayouts
 import com.indigo.mobileobservatory.camera.Roi
 import org.junit.Assert.*
 import org.junit.Test
@@ -39,6 +40,22 @@ class LiveStackAdmissionTest {
         assertNull(LiveStackAdmission.issue(input, needed, 1234, true))
         assertEquals("memory_budget", LiveStackAdmission.issue(input, needed - 1, 1234, true))
         assertTrue(needed > LiveStackAdmission.workingBytes(input.copy(demosaicAlgorithm = DemosaicAlgorithm.BILINEAR), 0, false))
+    }
+
+    @Test fun loggedUranusFrameNeedsMoreThanTwoTimesBinningUnderTheCurrentBudget() {
+        val traits = requireNotNull(CameraScienceLayouts.fullContainer(PixelFormat.BAYER_RG16))
+        val input = key(3856, 2180).copy(pixelTraits = traits)
+        assertEquals("processing_size", LiveStackAdmission.issue(input, 256L shl 20))
+        val bin2 = key(1928, 1090).copy(hardwareBin = 2, pixelTraits = traits)
+        assertEquals("bayer_hardware_bin", LiveStackAdmission.issue(bin2, 256L shl 20))
+        assertTrue(LiveStackAdmission.workingBytes(bin2, 0, false) > 256L shl 20)
+        // Actual Player One Auto reports a sensor CFA, not a verified post-bin CFA.
+        // Do not invent a safe even-bin colour layout merely because its dimensions fit.
+        assertNull(LiveStackAdmission.recommendHardwareBin(input, 3856, 2180, listOf(1, 2), 256L shl 20))
+        assertNull(LiveStackAdmission.recommendHardwareBin(input, 3856, 2180, listOf(1, 2, 4), 256L shl 20))
+        val verifiedOutput = input.copy(pixelTraits = traits.copy(bayerPatternAtOutput = true))
+        assertEquals(4, LiveStackAdmission.recommendHardwareBin(verifiedOutput, 3856, 2180, listOf(1, 2, 4), 256L shl 20))
+        assertNull(LiveStackAdmission.issue(key(1024, 576).copy(pixelTraits = traits), 128L shl 20))
     }
 
     @Test fun oversizedMasterBuildRejectsBeforeReadingOrAllocatingPixels() {

@@ -10,6 +10,7 @@ import android.os.Build
 import android.util.Log
 import com.indigo.mobileobservatory.camera.FrameData
 import com.indigo.mobileobservatory.stacking.PixelTraits
+import com.indigo.mobileobservatory.util.FileLogger
 import java.io.File
 import java.nio.ByteBuffer
 
@@ -66,6 +67,7 @@ class Mp4Writer(private val file: File) {
         currentFrameCount = 0
         muxerStarted = false
         trackIndex = -1
+        FileLogger.i(TAG, "Opening source=${w}x${h} fps=$fps file=${file.name}")
 
         val errors = mutableListOf<String>()
         val candidates = listAvcEncoders()
@@ -109,7 +111,7 @@ class Mp4Writer(private val file: File) {
                 try {
                     if (tryOpen(info.name, size.first, size.second, color, bitrate)) {
                         isOpen = true
-                        Log.i(
+                        FileLogger.i(
                             TAG,
                             "Opened ${w}x${h} as ${codecW}x${codecH} via ${info.name} " +
                                 "color=0x${color.toString(16)} bitrate=$bitrate @ ${fps}fps -> ${file.name}"
@@ -118,6 +120,8 @@ class Mp4Writer(private val file: File) {
                     }
                 } catch (t: Throwable) {
                     errors += "${info.name}/0x${color.toString(16)}: ${t.message}"
+                    FileLogger.w(TAG, "Configure failed codec=${info.name} size=${size.first}x${size.second} " +
+                        "color=0x${color.toString(16)} fps=$fps: ${t.javaClass.simpleName}: ${t.message}")
                     releaseQuietly()
                 }
             }
@@ -143,12 +147,18 @@ class Mp4Writer(private val file: File) {
                 null
             }
             val dataSize = if (image != null) {
+                if (frameIndex == 0L) FileLogger.i(TAG, "Input image=${image.width}x${image.height} " +
+                    "capacity=$inputCapacity planes=" + image.planes.joinToString { plane ->
+                        "row=${plane.rowStride},pixel=${plane.pixelStride},bytes=${plane.buffer.remaining()}"
+                    })
                 writeNv12ToImage(image, nv12)
                 inputCapacity?.coerceAtLeast(1)
                     ?: (codecW * codecH + codecW * ((codecH + 1) / 2))
             } else {
                 // getInputImage may also invalidate the previous ByteBuffer; reacquire it.
                 val inputBuf = checkNotNull(codec.getInputBuffer(inputIdx)) { "Encoder input unavailable" }
+                if (frameIndex == 0L) FileLogger.i(TAG, "Input buffer capacity=${inputBuf.capacity()} " +
+                    "stride=$stride slice=$sliceHeight color=0x${colorFormat.toString(16)}")
                 fillCodecBuffer(inputBuf, nv12)
             }
             if (dataSize <= 0) {
@@ -161,7 +171,8 @@ class Mp4Writer(private val file: File) {
             drainEncoder(false)
             currentFrameCount++
         } catch (e: Throwable) {
-            Log.e(TAG, "writeFrame error (frame $frameIndex)", e)
+            FileLogger.e(TAG, "writeFrame failed at frame=$frameIndex source=${frame.width}x${frame.height} " +
+                "format=${frame.pixelFormat} output=${codecW}x${codecH}", e)
             throw e
         }
     }
@@ -187,9 +198,9 @@ class Mp4Writer(private val file: File) {
             failure = e
         } finally {
             releaseResources()?.let { error -> if (failure == null) failure = error else failure!!.addSuppressed(error) }
-            Log.i(TAG, "Closed, $currentFrameCount frames, ${totalBytesWritten} bytes")
+            FileLogger.i(TAG, "Closed success=${failure == null}, $currentFrameCount frames, ${totalBytesWritten} bytes")
         }
-        failure?.let { throw it }
+        failure?.let { FileLogger.e(TAG, "Recording finalization failed", it); throw it }
     }
 
     private fun tryOpen(

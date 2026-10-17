@@ -2170,6 +2170,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun useRecommendedLiveStackBin() { recommendedLiveStackBin()?.let(::setBinning) }
 
     fun startLiveStack() {
+        FileLogger.i(TAG, "Live stack requested camera=${cameraManager.activeCamera?.cameraInfo?.name} " +
+            "input=$stackFrameGeometry appBin=${_binning.value} target=${stacking.liveTarget.value} " +
+            "demosaic=${stacking.demosaicAlgorithm.value} budget=${stacking.memoryBudgetBytes}")
         liveStackStartIssue()?.let { stacking.report(it); return }
         val key = currentStackKey() ?: run { stacking.report("wait_frame"); return }
         if (stacking.live.state.value.phase == LiveStackPhase.PAUSED) stacking.live.resume(key)
@@ -2346,7 +2349,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             closeWriter = ::closeRecorders,
             onFailure = { outcome ->
                 synchronized(recordingEnqueueLock) { _isRecording.value = false }
-                Log.e(TAG, outcome.failure.orEmpty(), outcome.cause)
+                FileLogger.e(TAG, outcome.failure.orEmpty(), outcome.cause)
                 _statusMessage.value = app.getString(R.string.recording_error_detail,
                     outcome.cause?.message ?: outcome.failure.orEmpty())
             },
@@ -2795,6 +2798,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun publishBinPlan(cam: Camera, plan: AppBinPlan) {
+        FileLogger.i(TAG, "Binning applied app=${plan.appBin} hardware=${plan.hardwareBin} " +
+            "software=${plan.softwareBin} output=${cam.currentRoi.width}x${cam.currentRoi.height}")
         softwareBinning.factor = plan.softwareBin
         _binning.value = plan.appBin
         _binningUsesHardware.value = plan.usesHardware
@@ -3130,6 +3135,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun startRecording(): Unit = synchronized(recordingLifecycleLock) {
+        val source = cameraManager.activeCamera
+        FileLogger.i(TAG, "Recording requested format=${_recordFormat.value} camera=${source?.cameraInfo?.name} " +
+            "roi=${source?.currentRoi} pixels=${source?.currentPixelFormat} capturing=${source?.isCapturing?.value} " +
+            "cfaBusy=${_cameraCfaApplying.value} referenceBusy=${pointingCaptureOwned.get()} " +
+            "recording=${_isRecording.value} writerBusy=${recordingWriteSession != null} license=${License.canRecord}")
         if (_cameraCfaApplying.value) { _statusMessage.value = app.getString(R.string.camera_cfa_busy_settings); return@synchronized }
         if (pointingCaptureOwned.get()) { _statusMessage.value = "Reference capture in progress"; return }
         // A timed-out old worker still owns its file and queue until final cleanup returns.
@@ -3249,10 +3259,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             } else {
                 "REC [$effectiveExt$bitsInfo]: ${file.name}"
             }
-            Log.i(TAG, "Recording started ($effectiveExt ${pixFmt.name}): ${file.absolutePath}")
+            FileLogger.i(TAG, "Recording started ($effectiveExt ${pixFmt.name}): ${file.name}")
             startRecordWriteThread()
         } catch (e: Throwable) {
-            Log.e(TAG, "startRecording failed", e)
+            FileLogger.e(TAG, "startRecording failed format=${_recordFormat.value}", e)
             recordingWriteSession?.fail("recording_start_failed", e)
             closeRecordingResources(saveToGallery = false)
             val detail = e.message.orEmpty()
