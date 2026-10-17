@@ -72,6 +72,7 @@ import com.indigo.mobileobservatory.recording.RawRecordingNormalizer
 import com.indigo.mobileobservatory.recording.RecordingWriteOutcome
 import com.indigo.mobileobservatory.recording.RecordingWriteSession
 import com.indigo.mobileobservatory.stacking.LiveStackPhase
+import com.indigo.mobileobservatory.stacking.LiveStackAdmission
 import com.indigo.mobileobservatory.stacking.PixelTraits
 import com.indigo.mobileobservatory.stacking.StackSessionKey
 import com.indigo.mobileobservatory.stacking.StackMode
@@ -2148,11 +2149,30 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             return "disable_auto_exposure"
         }
         if (_previewPaused.value || !cam.isCapturing.value) return "capture_paused"
-        if (currentStackKey() == null) return "wait_frame"
-        return null
+        val key = currentStackKey() ?: return "wait_frame"
+        return stacking.liveInputIssue(key)
     }
 
+    /** Explicit recovery, using actual device bins. Never silently crop or discard calibration. */
+    fun recommendedLiveStackBin(): Int? {
+        val calibration = stacking.calibration.state.value
+        if (_isRecording.value || recordingWriteSession != null || currentRecordingFile != null ||
+            !calibration.initialized || calibration.busy || calibration.selectedIds.isNotEmpty() ||
+            stacking.live.state.value.phase != LiveStackPhase.EMPTY ||
+            liveStackStartIssue() !in setOf("processing_size", "memory_budget")) return null
+        val cam = cameraManager.activeCamera as? CameraBinningCapable ?: return null
+        val info = cameraManager.activeCamera?.cameraInfo ?: return null
+        val key = currentStackKey() ?: return null
+        return LiveStackAdmission.recommendHardwareBin(key, info.sensorWidth, info.sensorHeight,
+            cam.supportedHardwareBins, stacking.memoryBudgetBytes)
+    }
+
+    fun useRecommendedLiveStackBin() { recommendedLiveStackBin()?.let(::setBinning) }
+
     fun startLiveStack() {
+        FileLogger.i(TAG, "Live stack requested camera=${cameraManager.activeCamera?.cameraInfo?.name} " +
+            "input=$stackFrameGeometry appBin=${_binning.value} target=${stacking.liveTarget.value} " +
+            "demosaic=${stacking.demosaicAlgorithm.value} budget=${stacking.memoryBudgetBytes}")
         liveStackStartIssue()?.let { stacking.report(it); return }
         val key = currentStackKey() ?: run { stacking.report("wait_frame"); return }
         if (stacking.live.state.value.phase == LiveStackPhase.PAUSED) stacking.live.resume(key)
@@ -2329,7 +2349,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             closeWriter = ::closeRecorders,
             onFailure = { outcome ->
                 synchronized(recordingEnqueueLock) { _isRecording.value = false }
-                Log.e(TAG, outcome.failure.orEmpty(), outcome.cause)
+                FileLogger.e(TAG, outcome.failure.orEmpty(), outcome.cause)
                 _statusMessage.value = app.getString(R.string.recording_error_detail,
                     outcome.cause?.message ?: outcome.failure.orEmpty())
             },
@@ -2778,6 +2798,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun publishBinPlan(cam: Camera, plan: AppBinPlan) {
+        FileLogger.i(TAG, "Binning applied app=${plan.appBin} hardware=${plan.hardwareBin} " +
+            "software=${plan.softwareBin} output=${cam.currentRoi.width}x${cam.currentRoi.height}")
         softwareBinning.factor = plan.softwareBin
         _binning.value = plan.appBin
         _binningUsesHardware.value = plan.usesHardware
@@ -3113,6 +3135,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun startRecording(): Unit = synchronized(recordingLifecycleLock) {
+        val source = cameraManager.activeCamera
+        FileLogger.i(TAG, "Recording requested format=${_recordFormat.value} camera=${source?.cameraInfo?.name} " +
+            "roi=${source?.currentRoi} pixels=${source?.currentPixelFormat} capturing=${source?.isCapturing?.value} " +
+            "cfaBusy=${_cameraCfaApplying.value} referenceBusy=${pointingCaptureOwned.get()} " +
+            "recording=${_isRecording.value} writerBusy=${recordingWriteSession != null} license=${License.canRecord}")
         if (_cameraCfaApplying.value) { _statusMessage.value = app.getString(R.string.camera_cfa_busy_settings); return@synchronized }
         if (pointingCaptureOwned.get()) { _statusMessage.value = "Reference capture in progress"; return }
         // A timed-out old worker still owns its file and queue until final cleanup returns.
@@ -3124,7 +3151,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
         try {
             val cam = cameraManager.activeCamera ?: return
-            if (!cam.recordsLiveViewAsScience || cam.currentPixelFormat == PixelFormat.RGB24) {
+            if (_recordFormat.value != RecordFormat.MP4 &&
+                (!cam.recordsLiveViewAsScience || cam.currentPixelFormat == PixelFormat.RGB24)) {
                 _statusMessage.value = app.getString(R.string.dslr_live_view_not_science)
                 return
             }
@@ -3231,10 +3259,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             } else {
                 "REC [$effectiveExt$bitsInfo]: ${file.name}"
             }
-            Log.i(TAG, "Recording started ($effectiveExt ${pixFmt.name}): ${file.absolutePath}")
+            FileLogger.i(TAG, "Recording started ($effectiveExt ${pixFmt.name}): ${file.name}")
             startRecordWriteThread()
         } catch (e: Throwable) {
-            Log.e(TAG, "startRecording failed", e)
+            FileLogger.e(TAG, "startRecording failed format=${_recordFormat.value}", e)
             recordingWriteSession?.fail("recording_start_failed", e)
             closeRecordingResources(saveToGallery = false)
             val detail = e.message.orEmpty()

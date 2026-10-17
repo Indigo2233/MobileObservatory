@@ -183,6 +183,7 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
             bayer = props.bayerPattern
             supportedBins = props.bins.ifEmpty { listOf(1) }
             currentBin = 1
+            FileLogger.i(TAG, "Hardware bins supported=${supportedBins.joinToString()} current=$currentBin")
 
             cameraInfo = CameraInfo(
                 name = props.cameraModelName ?: "Player One Camera",

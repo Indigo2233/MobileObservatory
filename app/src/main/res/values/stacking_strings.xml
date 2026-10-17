@@ -97,7 +97,10 @@
     <string name="stack_phase_paused">Paused · result retained</string>
     <string name="stack_phase_reset_required">Reset required</string>
     <string name="stack_phase_closed">Session closed</string>
-    <string name="stack_reason_memory">Memory budget exceeded. Use a smaller ROI or lower resolution, then retry.</string>
+    <string name="stack_reason_memory">Not enough processing memory. Reduce the capture resolution using camera binning or a capture ROI, then retry.</string>
+    <string name="stack_reason_processing_size">Capture resolution exceeds the stacking limit. Camera binning preserves the field of view; a capture ROI uses a smaller area.</string>
+    <string name="stack_reason_invalid_dimensions">Invalid image dimensions. Check the source file or camera ROI.</string>
+    <string name="stack_use_hardware_bin">Use full-frame %1$d× camera binning</string>
     <string name="stack_reason_settings">Capture settings changed; save the result and reset the session.</string>
     <string name="stack_reason_disconnect">Camera disconnected; result retained. Reconnect and start a new session.</string>
     <string name="stack_reason_stars">Too few stars for reliable alignment</string>

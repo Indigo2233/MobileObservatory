@@ -262,14 +262,24 @@ private fun LiveStackControls(vm: CameraViewModel, state: LiveStackState, showSt
     val scienceReady by vm.scienceCaptureReady.collectAsStateWithPageLifecycle()
     val rendering by c.rendering.collectAsStateWithPageLifecycle()
     var readiness by remember { mutableStateOf(vm.liveStackStartIssue()) }
-    LaunchedEffect(vm, scienceReady) { while (true) { readiness = vm.liveStackStartIssue(); delay(500) } }
+    var suggestedBin by remember { mutableStateOf(vm.recommendedLiveStackBin()) }
+    LaunchedEffect(vm, scienceReady) { while (true) {
+        readiness = vm.liveStackStartIssue(); suggestedBin = vm.recommendedLiveStackBin(); delay(500)
+    } }
     val recording by vm.isRecording.collectAsStateWithPageLifecycle()
     val recordedFrames by vm.recordingFrameCount.collectAsStateWithPageLifecycle()
     var details by rememberSaveable { mutableStateOf(false) }
     Text(stringResource(if (target == StackTarget.PLANETARY) R.string.stack_live_planetary_intro else R.string.stack_eaa_intro), style = MaterialTheme.typography.bodySmall)
     if (state.phase == LiveStackPhase.EMPTY || state.phase == LiveStackPhase.PAUSED) {
         Text(readiness?.let { stackMessage(it) } ?: stringResource(R.string.stack_eaa_ready),
-            color = if (readiness == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.tertiary)
+            color = if (readiness == null) MaterialTheme.colorScheme.primary
+                else if (readiness in setOf("processing_size", "memory_budget")) MaterialTheme.colorScheme.error
+                else MaterialTheme.colorScheme.tertiary)
+        suggestedBin?.let { bin ->
+            OutlinedButton(onClick = vm::useRecommendedLiveStackBin, enabled = !recording && !task.busy) {
+                Text(stringResource(R.string.stack_use_hardware_bin, bin))
+            }
+        }
         when (readiness) {
             "disable_auto_exposure" -> OutlinedButton(onClick = { vm.setAutoExposureMode(AutoExposureMode.OFF) }) { Text(stringResource(R.string.stack_disable_ae)) }
             "capture_paused" -> OutlinedButton(onClick = vm::resumeCaptureForStacking) { Text(stringResource(R.string.stack_resume_capture)) }
@@ -703,6 +713,8 @@ internal fun stackMessage(code: String): String {
         "calibration_master_created" -> R.string.stack_cal_created
         "calibration_master_in_use" -> R.string.stack_cal_in_use
         "memory_budget", "input_budget", "MEMORY_BUDGET" -> R.string.stack_reason_memory
+        "processing_size", "PIXEL_BUDGET" -> R.string.stack_reason_processing_size
+        "calibration_dimensions" -> R.string.stack_reason_invalid_dimensions
         "settings_changed", "GEOMETRY" -> R.string.stack_reason_settings
         "camera_disconnected" -> R.string.stack_reason_disconnect
         "TOO_FEW_STARS" -> R.string.stack_reason_stars

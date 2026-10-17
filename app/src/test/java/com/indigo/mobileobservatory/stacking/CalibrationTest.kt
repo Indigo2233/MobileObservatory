@@ -123,7 +123,7 @@ class CalibrationTest {
                 cancelCheck = { if (reads >= 2) throw CancellationException("cancel") })
             fail("Expected cancellation")
         } catch (_: CancellationException) { assertEquals(2, reads) }
-        rejects("dimensions") { CalibrationGeometry(4096, 4096, "MONO", 16) }
+        rejects("dimensions") { CalibrationGeometry(0, 4096, "MONO", 16) }
     }
 
     @Test fun sensorRoiCfaGeometryMatchesDecoderAndRejectsUnknownEvenBin() {

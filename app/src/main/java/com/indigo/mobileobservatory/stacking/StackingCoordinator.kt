@@ -1,6 +1,7 @@
 package com.indigo.mobileobservatory.stacking
 
 import android.app.Application
+import com.indigo.mobileobservatory.util.FileLogger
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Debug
@@ -295,12 +296,19 @@ class StackingCoordinator(
     fun hasResult(mode: StackMode = activeMode) = product(mode) != null
     private fun product(mode: StackMode) = if (mode == StackMode.LIVE) liveProduct else planetaryProduct
 
+    fun liveInputIssue(key: StackSessionKey): String? =
+        LiveStackAdmission.issue(key, memoryBudgetBytes, calibration.memoryBytes, calibration.memoryBytes > 0)
+
     fun startLive(key: StackSessionKey) = synchronized(stateLock) {
         if (closed) return
+        FileLogger.i("Stacking", "Live requested input=${key.width}x${key.height} format=${key.format} " +
+            "hardwareBin=${key.hardwareBin} softwareBin=${key.softwareBin} target=${key.target} " +
+            "demosaic=${key.demosaicAlgorithm} budget=$memoryBudgetBytes calibrationBytes=${calibration.memoryBytes}")
         // Button recomposition can lag a rapid second tap; starting is idempotent here.
         if (live.state.value.phase != LiveStackPhase.EMPTY) return
         if (key.target != _liveTarget.value) { report("stack_target_changed"); return }
         if (key.demosaicAlgorithm != _demosaicAlgorithm.value) { report("demosaic_changed"); return }
+        liveInputIssue(key)?.let { report(it); return }
         if (taskRunning || planetaryProduct != null) {
             report("finish_offline_first")
             return
@@ -314,24 +322,7 @@ class StackingCoordinator(
         val capture = liveCapture(key)
         try { selectedCalibration.validate(geometry, capture) }
         catch (error: Exception) { report(error.message ?: "calibration_settings_mismatch"); return }
-        if (key.softwareBin < 1 || key.width < key.softwareBin || key.height < key.softwareBin) { report("memory_budget"); return }
-        val channels = if (key.format.isMono) 1 else 3
-        val pixels = key.width.toLong() * key.height
-        val width = key.width / key.softwareBin
-        val height = key.height / key.softwareBin
-        val inputExpansionBytes = (pixels - width.toLong() * height).coerceAtLeast(0) *
-            (key.format.bytesPerPixel * 3L + (channels + 1) * 4L)
         val demosaicScratch = LinearPixelDecoder.demosaicExtraBytes(key.width, key.height, key.format, key.demosaicAlgorithm)
-        val engineBytes = if (key.target == StackTarget.PLANETARY)
-            LivePlanetaryEngine.estimateWorkingBytes(width, height, channels)
-        else DeepSkyStacker.estimateWorkingBytes(width, height, channels)
-        if (pixels > LinearImage.DEFAULT_STACK_PIXELS ||
-            engineBytes + inputExpansionBytes +
-                selectedCalibration.memoryBytes + demosaicScratch + (if (selectedCalibration.enabled) geometry.sampleCount * 4L else 0L) > memoryBudgetBytes) {
-            report("memory_budget")
-            return
-        }
-        if (key.format.isBayer && key.hardwareBin % 2 == 0 && !key.pixelTraits.bayerPatternAtOutput) { report("bayer_hardware_bin"); return }
         activateModeLocked(StackMode.LIVE)
         liveCalibration = selectedCalibration
         liveCalibrationWarnings = selectedCalibration.unknownWarnings(geometry, capture)
@@ -780,7 +771,10 @@ class StackingCoordinator(
         if (!closed) scheduleRender(activeMode)
     }
 
-    fun report(reason: String) { _task.update { it.copy(message = reason) } }
+    fun report(reason: String) {
+        if (reason.isNotBlank() && _task.value.message != reason) FileLogger.i("Stacking", "Message mode=$activeMode: $reason")
+        _task.update { it.copy(message = reason) }
+    }
 
     private fun publishPlanetaryPreview(bitmap: Bitmap) = synchronized(stateLock) {
         if (closed) bitmap.recycle() else {
@@ -907,8 +901,14 @@ class StackingCoordinator(
                 action()
             }
             catch (error: CancellationException) { failed(StackTaskPhase.CANCELLED, error.message ?: "cancelled") }
-            catch (error: Exception) { failed(StackTaskPhase.FAILED, error.message ?: "processing_failed") }
-            catch (_: OutOfMemoryError) { failed(StackTaskPhase.FAILED, "memory_budget") }
+            catch (error: Exception) {
+                FileLogger.e("Stacking", "Task failed phase=$phase source=${_task.value.source?.width}x${_task.value.source?.height}", error)
+                failed(StackTaskPhase.FAILED, error.message ?: "processing_failed")
+            }
+            catch (error: OutOfMemoryError) {
+                FileLogger.e("Stacking", "Task exhausted memory phase=$phase budget=$memoryBudgetBytes", error)
+                failed(StackTaskPhase.FAILED, "memory_budget")
+            }
             finally { recordMemory() }
         }
         taskJob = job

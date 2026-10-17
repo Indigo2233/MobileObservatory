@@ -97,7 +97,10 @@
     <string name="stack_phase_paused">已暂停 · 结果已保留</string>
     <string name="stack_phase_reset_required">需要重置会话</string>
     <string name="stack_phase_closed">会话已关闭</string>
-    <string name="stack_reason_memory">超出内存预算。请减小 ROI 或图像尺寸后重试。</string>
+    <string name="stack_reason_memory">叠加所需内存超限。请用相机像素合并或采集裁切降低分辨率后重试。</string>
+    <string name="stack_reason_processing_size">采集分辨率超出叠加上限。像素合并可保留视野，也可回拍摄设置裁切。</string>
+    <string name="stack_reason_invalid_dimensions">图像尺寸无效，请检查源文件或相机裁切设置。</string>
+    <string name="stack_use_hardware_bin">使用全幅 %1$d× 像素合并</string>
     <string name="stack_reason_settings">采集参数已变化；请保存结果并重置会话。</string>
     <string name="stack_reason_disconnect">相机已断开，结果已保留。重新连接后请开始新会话。</string>
     <string name="stack_reason_stars">星点不足，无法可靠配准</string>
