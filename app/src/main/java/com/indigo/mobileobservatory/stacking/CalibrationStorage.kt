@@ -95,14 +95,15 @@ class CalibrationLibrary(private val directory: File) {
         } finally { temporary.delete() }
     }
 
-    fun load(id: String, cancelCheck: () -> Unit = {}): CalibrationMaster {
+    fun load(id: String, maxBytes: Long = 256L * 1024 * 1024, cancelCheck: () -> Unit = {}): CalibrationMaster {
         val source = file(id)
         val digest = MessageDigest.getInstance("SHA-256")
         DigestInputStream(BufferedInputStream(source.inputStream(), 65536), digest).use { hashing ->
             val input = DataInputStream(hashing)
             val descriptor = readHeader(input, source.length())
             require(descriptor.id == id) { "calibration_id_mismatch" }
-            require(descriptor.geometry.width.toLong() * descriptor.geometry.height <= LinearImage.DEFAULT_STACK_PIXELS) { "memory_budget" }
+            require(descriptor.geometry.width.toLong() * descriptor.geometry.height <= LinearImage.MAX_PIXELS &&
+                descriptor.geometry.sampleCount * 4L <= maxBytes) { "memory_budget" }
             cancelCheck()
             val samples = FloatArray(descriptor.geometry.sampleCount)
             val bytes = ByteArray(64 * 1024)

@@ -94,7 +94,7 @@ data class PlanetaryStackResult(val image: LinearImage, val weights: FloatArray,
  */
 class PlanetaryStacker {
     companion object {
-        const val MAX_PIXELS = 4_194_304L
+        const val MAX_PIXELS = LinearImage.MAX_PIXELS
         const val MAX_SELECTED_FRAMES = 10_000_000L // Exact integer per-pixel counts in Float.
         /** Includes decode scratch, two input images, two gray planes, double sums, weights, output + preview/post scratch. */
         fun estimatedPeakBytes(width: Int, height: Int, channels: Int): Long =
@@ -223,7 +223,7 @@ class PlanetaryStacker {
 
     private fun validate(source: PlanetaryFrameSource, options: PlanetaryOptions) {
         require(source.width >= 12 && source.height >= 12 && source.channels in listOf(1, 3) && source.frameCount > 0) { "Unsupported or empty recording" }
-        require(source.width.toLong() * source.height <= MAX_PIXELS) { "Recording exceeds 4 megapixels; record a smaller target ROI" }
+        require(source.width.toLong() * source.height <= MAX_PIXELS) { "processing_size" }
         val bytes = estimatedPeakBytes(source.width, source.height, source.channels)
         require(bytes <= options.memoryBudgetBytes) { "Stack needs about ${bytes / 1048576} MiB; choose a smaller recording ROI or free memory" }
         options.roi?.checked(source.width, source.height)

@@ -452,6 +452,7 @@ internal fun CaptureWorkspaceScreen(
                     ControlPanel(
                         fillWidth = true,
                         captureSettingsOnly = portrait,
+                        roiBudgetControls = { StackRoiControls(viewModel) },
                         exposureUs = exposureUs,
                         gain = gain,
                         gainWriteInProgress = gainWriteInProgress,
