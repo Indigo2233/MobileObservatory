@@ -188,8 +188,8 @@ not accumulate a queue of processed images. The memory estimate now reserves
 case of a renderer holding snapshot A while B is current and C is being created,
 automatic-background output, and simultaneous sharpening/local-contrast scratch.
 Calibration masters and pre-binning input expansion are added separately.
-The coordinator caps the working budget at the smaller of 256 MiB and 40% of the
-Java maximum heap. Since 2026-10-18 the coordinated processing paths no longer
+Since 2026-10-19 the coordinator uses 40% of the actual VM maximum heap without
+the former fixed 256 MiB cap. Since 2026-10-18 the coordinated processing paths no longer
 use a universal 4 MP gate: byte admission decides usable dimensions, within the
 16,777,216-pixel image representation ceiling and 32 MiB live raw-frame bound.
 The conservative 4 MP defaults on standalone reader helpers remain; admitted
@@ -263,7 +263,8 @@ The old 4,194,304-pixel constant (2^22) originated in the initial stacking
 implementation, commit `65d8dea`. It was an engineering safeguard, not a camera,
 SER, or Android pixel-format rule. Android limits an app's heap separately from
 the phone's total RAM; see the [Android memory overview](https://developer.android.com/topic/performance/memory-overview).
-Our 256 MiB / 40% policy is an additional conservative application budget.
+The original 256 MiB / 40% policy was an additional conservative application
+budget; the fixed cap was removed on 2026-10-19 (see below).
 
 The byte estimate reserves simultaneous input, accumulation, registration,
 snapshots, render/filter workspace, and selected calibration masters. For RGB
@@ -306,8 +307,8 @@ byte budgets before allocation, including old/new selection overlap. A tested
 2056×2056 MONO8 input with software Bin 4 now passes admission and reaches the
 live accumulator at 514×514; a master above 4 MP can also be built if its byte
 budget fits. The 585 full-frame colour/DDFAPD case can still exceed the budget.
-An offline planetary tracking ROI does not shrink full-frame decode buffers;
-this change does not implement arbitrary-large-SER tiling or resampling.
+At this revision the offline planetary tracking ROI did not shrink full-frame
+decode buffers. That limitation is superseded by the 2026-10-19 work below.
 
 Validation covers maximum-boundary search, each aspect/alignment, moving the
 box at sensor edges, actual CFA contracts, software versus hardware Bin,
@@ -323,3 +324,79 @@ Local verification for this change: 1,041 JVM tests and 13 API 34 Android tests
 passed with no skips; Android Lint reported no errors. The UI evidence uses the
 real Compose component with synthetic 585 geometry and a simulated ROI adapter,
 not a physical 585C or an S23 Ultra memory measurement.
+
+## Tiled offline processing and heap budgets (2026-10-19)
+
+The reported 3856×2180 RAW16 recording could not be used even after editing the
+offline ROI. The old ROI only constrained quality/registration; import decoded
+the whole image before showing any preview, and the start budget still described
+the full native image. Large recordings now first show a bounded 262,144-pixel
+display preview. This preview is never passed to the scientific pipeline.
+
+Both offline targets share **Stacking region / Processing Bin 1–4**. Show output
+dimensions, estimated work bytes and the app's science budget next to the action.
+An over-budget action is disabled with a local recovery: increase processing Bin
+to retain the field, or select a suggested smaller crop. Changes are explicit.
+Numeric crop coordinates and the preview outline remain in original file pixels;
+the crop is now the actual exported region, not just a quality scoring window.
+The drag hint describes this operation instead of background-model protection.
+
+Science reads contiguous native row spans from SER, or the corresponding bit
+spans from PSER. Each output tile is at most 64×64 pixels. Native input is expanded
+by the software Bin and a demosaic halo (DDFAPD 16, VNG 4, bilinear 2 pixels).
+BIAS/DARK/FLAT are validated against original file geometry and indexed at the
+original pixel positions. Then native samples are demosaiced with the correct
+CFA phase, followed by RGB/mono averaging for software Bin. Raw Bayer samples
+are never averaged across colours. The final cropped/binned float image alone
+goes to registration/accumulation. Non-divisible Bin edges discard at most Bin−1
+pixels at the right/bottom, matching the existing software-bin convention.
+
+This separates full-field imaging from full-resolution processing. For example,
+3856×2180 at Bin 4 retains the field at 964×545 output. Native Bin 1 full-field
+accumulation can still exceed a device's heap; tiling does not make the final
+accumulators free. Output images retain the 16,777,216-pixel representation bound.
+Input file geometry no longer requires an entire raw frame allocation. Crop
+boundaries are distinguished from physical frame edges during planetary quality
+checks, so an intentional lunar/planetary crop is not falsely rejected as clipped.
+
+The old large estimates were not file sizes or measured peaks. At this geometry,
+RAW16 is about 16 MiB, a float RGB image about 96 MiB, and the former full-frame
+DDFAPD scratch alone about 265 MiB. The old offline deep-sky calculation also
+reserved live queues and three overlapping previews. Offline deep-sky now uses
+`pixels × (channels × 20 + 24) + 8 MiB` for its sequential engine, with tile and
+calibration overhead separately counted; live concurrency keeps its own formula.
+Offline planetary sources with explicitly bounded decoder scratch use
+`pixels × (channels × 24 + 12) + 8 MiB`: four Float channel-image reserves
+(reference, old/new input, result), Double sums, two mono gray planes and coverage.
+The current gray plane is reused across alignment/edge checks and frames. Generic
+frame-source callers retain the old decoder-inclusive bound. Post-processing
+starts after the science worker returns and fits within the above reserve.
+Offline accumulators are explicitly released after the final snapshot. The tile
+estimate reserves old/new scratch overlap across tile size changes. No Double
+planes are changed to Float and no empirical safety factor is removed without
+corresponding changes to the arrays' lifetime.
+
+`StackMemoryBudget` now derives 40% from `Runtime.maxMemory()`; a 1 GiB VM heap
+therefore gives about 410 MiB, instead of being capped at 256 MiB. The remaining
+60% leaves room for the rest of the app and allocation/GC headroom. This is an app
+policy, not a claim that Android assigns 40% of the phone's total RAM. The expanded
+details show both actual VM heap limit and science budget. See Android's
+[per-app heap documentation](https://developer.android.com/topic/performance/memory-overview).
+No manifest heap override or claim of access to all advertised device RAM is made.
+
+Exports record original dimensions, source region, software Bin, decoding identity
+and processing order. Original recordings and calibration masters are not modified.
+Regression fixtures compare all four CFA patterns, all three demosaic algorithms,
+odd crop origins, tile seams, calibration and Bin against full-frame processing;
+also cover packed row bit offsets, endian/alignment, RGB/BGR and a source above
+the full-frame allocation ceiling. Android acceptance uses synthetic 585-sized
+data, real preview/analysis/stack/export and UI recovery. Actual device memory,
+thermal behaviour and sustained performance remain field acceptance items.
+
+Local acceptance: 1,048 JVM tests and 17 API 34 instrumentation tests passed with
+no skips; Lint reported no errors. On the 192 MiB-heap emulator, the 585-sized
+synthetic planetary fixture completed preview/analysis/stack/export at Bin 4
+(964×545), with a 76.8 MiB science budget and 58.4 MiB working-set estimate.
+Progress-boundary sampling recorded 34.2 MiB Java heap used and 19.7 MiB native
+heap used; these are sampled process values, not continuous peaks, RSS/PSS, or a
+before/after device benchmark. Evidence is in local `build/reports/offline-region-*`.

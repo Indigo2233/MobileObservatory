@@ -168,6 +168,36 @@ class CalibrationSelection(
               cancelCheck: () -> Unit = {}): LinearImage =
         applyImpl(sensor, geometry, capture, null, cancelCheck)
 
+    /** A file crop retains its original sensor coordinates. Read matching master samples
+     * directly, including the demosaic border, without copying full-size masters or lights. */
+    fun applyRegion(sensor: LinearImage, geometry: CalibrationGeometry, capture: CalibrationCapture,
+                    region: PixelRoi, cancelCheck: () -> Unit = {}): LinearImage {
+        region.checked(geometry.width, geometry.height)
+        require(sensor.width == region.width && sensor.height == region.height && sensor.channels == geometry.channels) {
+            "calibration_geometry_mismatch"
+        }
+        validate(geometry, capture)
+        cancelCheck()
+        if (!enabled) return sensor
+        val subtraction = dark ?: bias
+        val output = FloatArray(sensor.pixels.size)
+        val rowSamples = region.width * sensor.channels
+        for (y in 0 until region.height) {
+            cancelCheck()
+            val original = ((region.top + y) * geometry.width + region.left) * sensor.channels
+            val start = y * rowSamples
+            for (x in 0 until rowSamples) {
+                val input = sensor.pixels[start + x]
+                require(input.isFinite()) { "calibration_nonfinite_light" }
+                val index = original + x
+                val value = (input.toDouble() - (subtraction?.sample(index)?.toDouble() ?: 0.0)) / (flat?.sample(index) ?: 1f)
+                output[start + x] = value.toFloat()
+                require(output[start + x].isFinite()) { "calibration_nonfinite_output" }
+            }
+        }
+        return sensor.copy(pixels = output)
+    }
+
     /** Returns workspace-owned calibrated pixels. Disabled calibration passes [sensor] through. */
     internal fun applyBorrowed(sensor: LinearImage, geometry: CalibrationGeometry,
                                capture: CalibrationCapture, workspace: Workspace,

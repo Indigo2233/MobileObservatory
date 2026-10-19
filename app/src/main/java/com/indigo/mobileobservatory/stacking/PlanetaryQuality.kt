@@ -17,6 +17,10 @@ data class PixelRoi(val left: Int, val top: Int, val width: Int, val height: Int
 
 enum class PlanetaryRejection { NONE, LOW_SIGNAL, SATURATION, OUT_OF_FRAME, NOISE, GLOBAL_MATCH, LOCAL_MATCH, FOLDED_WARP, EDGE_MISMATCH }
 
+/** A user crop is not a physical sensor boundary. Only real frame edges can prove clipping. */
+data class PlanetaryImageEdges(val left: Boolean = true, val top: Boolean = true,
+                              val right: Boolean = true, val bottom: Boolean = true)
+
 data class PlanetaryQuality(
     val score: Double,
     val sharpness: Double,
@@ -33,7 +37,10 @@ data class PlanetaryQuality(
  * A smoothed gradient removes single-pixel noise/hot pixels; a Laplacian MAD estimates noise.
  */
 object PlanetaryQualityEstimator {
-    fun measure(image: LinearImage, roi: PixelRoi, checkCancelled: () -> Unit = {}): PlanetaryQuality {
+    fun measure(image: LinearImage, roi: PixelRoi, checkCancelled: () -> Unit = {}): PlanetaryQuality =
+        measure(image, roi, PlanetaryImageEdges(), checkCancelled)
+
+    fun measure(image: LinearImage, roi: PixelRoi, edges: PlanetaryImageEdges, checkCancelled: () -> Unit = {}): PlanetaryQuality {
         roi.checked(image.width, image.height)
         val histogram = IntArray(1024)
         val noiseHistogram = IntArray(1024)
@@ -85,6 +92,7 @@ object PlanetaryQualityEstimator {
         val edgeStep = max(1, min(image.width, image.height) / 512)
         for (x in 1 until image.width - 1 step edgeStep) {
             for (y in intArrayOf(1, image.height - 2)) {
+                if (y == 1 && !edges.top || y == image.height - 2 && !edges.bottom) continue
                 if (x >= roi.left && x < roi.right && y >= roi.top && y < roi.bottom) {
                     borderCount++; if (PlanetarySampling.luma(image, x, y) > threshold) borderSignal++
                 }
@@ -92,6 +100,7 @@ object PlanetaryQualityEstimator {
         }
         for (y in 1 until image.height - 1 step edgeStep) {
             for (x in intArrayOf(1, image.width - 2)) {
+                if (x == 1 && !edges.left || x == image.width - 2 && !edges.right) continue
                 if (x >= roi.left && x < roi.right && y >= roi.top && y < roi.bottom) {
                     borderCount++; if (PlanetarySampling.luma(image, x, y) > threshold) borderSignal++
                 }

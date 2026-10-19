@@ -13,6 +13,7 @@ import com.indigo.mobileobservatory.stacking.SampleAlignment
 import com.indigo.mobileobservatory.stacking.DemosaicAlgorithm
 import com.indigo.mobileobservatory.util.BayerDemosaic
 import com.indigo.mobileobservatory.stacking.SerCfaInterpretation
+import com.indigo.mobileobservatory.stacking.PixelRoi
 import java.io.File
 import java.io.IOException
 import java.io.RandomAccessFile
@@ -286,6 +287,64 @@ class SERReader(private val file: File,
         require(h.width.toLong() * h.height <= maxPixels) { "Image exceeds calibration budget; use a smaller source ROI" }
         cancelCheck()
         return readFrame(index)?.let { decodeFrameSensor(it, maxPixels, cancelCheck) }
+    }
+
+    /** Read only selected native samples. No full-frame byte or float buffer is allocated.
+     * The returned Bayer samples still use the file's CFA origin; callers must carry the
+     * region offset into demosaicing and match calibration against the original geometry.
+     */
+    fun readSensorRegion(index: Int, region: PixelRoi, maxPixels: Long = LinearImage.DEFAULT_STACK_PIXELS,
+                         cancelCheck: () -> Unit = {}): LinearImage? {
+        val r = raf ?: return null
+        val h = header ?: return null
+        if (index !in 0 until h.frameCount) return null
+        region.checked(h.width, h.height)
+        require(region.width.toLong() * region.height <= minOf(maxPixels, LinearImage.MAX_PIXELS)) { "memory_budget" }
+        // Detecting alignment from a dim crop could disagree with the rest of the sequence.
+        require(h.isPSER || h.pixelDepth in listOf(8, 16) || sampleAlignment != SampleAlignment.AUTO) {
+            "Choose an explicit sequence bit alignment"
+        }
+        return synchronized(r) {
+            cancelCheck()
+            if (raf !== r || header !== h) return@synchronized null
+            val channels = if (h.colorId >= 100) 3 else 1
+            val sampleBytes = if (h.pixelDepth > 8) 2 else 1
+            val rowBytes = Math.multiplyExact(region.width, channels * sampleBytes)
+            val raw = ByteArray(Math.multiplyExact(rowBytes, region.height))
+            val base = frameOffset(index)
+            if (!h.isPSER || h.pixelDepth in listOf(8, 16)) {
+                for (y in 0 until region.height) {
+                    cancelCheck()
+                    val pixel = (region.top.toLong() + y) * h.width + region.left
+                    r.seek(Math.addExact(base, pixel * channels * sampleBytes))
+                    r.readFully(raw, y * rowBytes, rowBytes)
+                }
+            } else {
+                // Packed rows need not start at a byte boundary. Read only the row's bit span.
+                val bits = h.pixelDepth
+                val packed = ByteArray(((region.width.toLong() * bits + 14) / 8).toInt())
+                val mask = (1 shl bits) - 1
+                for (y in 0 until region.height) {
+                    cancelCheck()
+                    val bitStart = ((region.top.toLong() + y) * h.width + region.left) * bits
+                    val offset = (bitStart % 8).toInt()
+                    val length = ((offset + region.width.toLong() * bits + 7) / 8).toInt()
+                    r.seek(base + bitStart / 8)
+                    r.readFully(packed, 0, length)
+                    for (x in 0 until region.width) {
+                        val bit = offset + x * bits
+                        val at = bit / 8; val shift = bit % 8
+                        var word = (packed[at].toInt() and 255) or ((packed[at + 1].toInt() and 255) shl 8)
+                        if (shift + bits > 16) word = word or ((packed[at + 2].toInt() and 255) shl 16)
+                        val value = (word ushr shift) and mask
+                        val dest = y * rowBytes + x * 2
+                        raw[dest] = value.toByte(); raw[dest + 1] = (value ushr 8).toByte()
+                    }
+                }
+            }
+            LinearPixelDecoder.decodeSensor(FrameData(raw, region.width, region.height, sensorFormat, index.toLong(), 0),
+                sensorTraits, maxPixels, cancelCheck)
+        }
     }
 
     fun decodeFrameSensor(data: ByteArray, maxPixels: Long = LinearImage.DEFAULT_STACK_PIXELS,

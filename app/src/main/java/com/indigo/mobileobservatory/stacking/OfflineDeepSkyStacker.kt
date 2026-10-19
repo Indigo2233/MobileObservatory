@@ -26,9 +26,10 @@ class OfflineDeepSkyStacker {
         require(source.frameCount in 1..MAX_FRAMES) { "deep_sky_frame_count" }
         require(source.width > 0 && source.height > 0 && source.channels in listOf(1, 3)) { "source_geometry_changed" }
         require(source.width.toLong() * source.height <= LinearImage.MAX_PIXELS &&
-            DeepSkyStacker.estimateWorkingBytes(source.width, source.height, source.channels) <= config.memoryBudgetBytes) { "memory_budget" }
+            DeepSkyStacker.estimateOfflineWorkingBytes(source.width, source.height, source.channels) <= config.memoryBudgetBytes) { "memory_budget" }
         val start = System.nanoTime()
-        val algorithm = DeepSkyStacker(config)
+        val algorithm = DeepSkyStacker(config, livePreviewOverlap = false)
+        try {
         val rejected = linkedMapOf<DeepSkyRejection, Long>()
         var reference = -1L
         var unknown = 0L
@@ -53,6 +54,7 @@ class OfflineDeepSkyStacker {
         return OfflineDeepSkyResult(snapshot.image, snapshot.weights,
             OfflineDeepSkyStats(snapshot.stats, source.frameCount, reference, unknown, rejected.toMap(),
                 (System.nanoTime() - start) / 1_000_000))
+        } finally { algorithm.reset() }
     }
 
     companion object {

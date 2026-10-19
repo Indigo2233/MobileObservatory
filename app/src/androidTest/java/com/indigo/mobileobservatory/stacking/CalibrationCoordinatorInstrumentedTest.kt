@@ -76,6 +76,7 @@ class CalibrationCoordinatorInstrumentedTest {
             exports += c.task.value.exportedFiles.map(::File)
             val fits = exports.single { it.extension == "fits" }
             val output = StackFitsReader.read(fits)
+            assertEquals(120, output.width); assertEquals(88, output.height)
             val metadata = StackFitsReader.readMetadata(fits)
             assertEquals("true", metadata["calibrated"])
             val provenance = JSONObject(metadata.getValue("calibration"))
@@ -86,7 +87,7 @@ class CalibrationCoordinatorInstrumentedTest {
             var error = 0.0; var samples = 0
             for (y in 8 until 88) for (x in 8 until 120) {
                 val i = y * 128 + x
-                error += abs(output.pixels[i] - cleanPlanet(i) / 65535f); samples++
+                error += abs(output.pixels[(y - 4) * output.width + x - 4] - cleanPlanet(i) / 65535f); samples++
             }
             assertTrue("The raw FITS must have the real bias removed, mean error=${error / samples}", error / samples < 0.0001)
             assertArrayEquals(originalHash, hash(lights))

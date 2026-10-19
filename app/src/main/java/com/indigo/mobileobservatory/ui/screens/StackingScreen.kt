@@ -61,6 +61,7 @@ fun StackingScreen(viewModel: CameraViewModel, mode: StackMode, onBack: () -> Un
     val rendering by coordinator.rendering.collectAsStateWithPageLifecycle()
     val live = coordinator.live.state.collectAsStateWithPageLifecycle().value
     val rendered by coordinator.preview.collectAsStateWithPageLifecycle()
+    val sourcePreview by coordinator.sourcePreview.collectAsStateWithPageLifecycle()
     val cameraFrame by viewModel.previewBitmap.collectAsStateWithPageLifecycle()
     val showStack by coordinator.showLiveStack.collectAsStateWithPageLifecycle()
     val parameters by coordinator.processing.collectAsStateWithPageLifecycle()
@@ -75,6 +76,8 @@ fun StackingScreen(viewModel: CameraViewModel, mode: StackMode, onBack: () -> Un
     var pendingTarget by rememberSaveable(mode) { mutableStateOf<StackTarget?>(null) }
     var drawRoi by rememberSaveable { mutableStateOf(false) }
     var drawnRoi by remember { mutableStateOf<PixelRoi?>(null) }
+    var selectedRegion by remember { mutableStateOf<PixelRoi?>(null) }
+    LaunchedEffect(task.source?.identity) { drawRoi = false; drawnRoi = null; selectedRegion = null }
     var browseRecordings by rememberSaveable { mutableStateOf(false) }
     var observingOnly by rememberSaveable { mutableStateOf(false) }
     var showDetails by rememberSaveable { mutableStateOf(false) }
@@ -116,7 +119,8 @@ fun StackingScreen(viewModel: CameraViewModel, mode: StackMode, onBack: () -> Un
         onSelect = { file -> browseRecordings = false; viewModel.openPlanetaryStack(file) },
         onCamera = { browseRecordings = false; onCamera() })
 
-    val bitmap = if (mode == StackMode.LIVE && (!showStack || rendered == null)) cameraFrame else rendered
+    val bitmap = if (mode == StackMode.LIVE && (!showStack || rendered == null)) cameraFrame
+        else if (mode == StackMode.PLANETARY && (drawRoi || !coordinator.hasResult(mode))) sourcePreview else rendered
     if (editBackground) BackgroundEditor(rendered, parameters.background,
         onDismiss = { editBackground = false },
         onApply = { background ->
@@ -147,6 +151,7 @@ fun StackingScreen(viewModel: CameraViewModel, mode: StackMode, onBack: () -> Un
             OfflineStackControls(coordinator, task, drawnRoi, target,
                 onChoose = { documentPicker.launch(arrayOf("*/*")) },
                 onBrowse = { browseRecordings = true },
+                onRegionChange = { selectedRegion = it },
                 onDrawRoi = { drawRoi = true })
         }
         if (task.message.isNotEmpty()) {
@@ -175,6 +180,8 @@ fun StackingScreen(viewModel: CameraViewModel, mode: StackMode, onBack: () -> Un
         }
         TextButton(onClick = { showDetails = !showDetails }) { Text(stringResource(if (showDetails) R.string.stack_hide_details else R.string.stack_show_details)) }
         if (showDetails) {
+        Text(stringResource(R.string.stack_heap_budget, coordinator.heapLimitBytes / 1024 / 1024,
+            coordinator.memoryBudgetBytes / 1048576.0), style = MaterialTheme.typography.bodySmall)
         if (task.exportedFiles.isNotEmpty()) task.exportedFiles.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
         Text(stringResource(R.string.stack_limits, coordinator.memoryBudgetBytes / 1024 / 1024), style = MaterialTheme.typography.bodySmall)
         Text(stringResource(R.string.stack_foreground), style = MaterialTheme.typography.bodySmall)
@@ -205,9 +212,13 @@ fun StackingScreen(viewModel: CameraViewModel, mode: StackMode, onBack: () -> Un
                 }
             }
         }
-        if (drawRoi) Text(stringResource(R.string.stack_drag_hint), Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.primary)
+        if (drawRoi) Text(stringResource(R.string.stack_offline_drag_hint), Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.primary)
         val preview: @Composable (Modifier) -> Unit = { modifier ->
-            StackImage(bitmap, parameters.background.targetMasks, drawRoi, modifier) { rectangle ->
+            val masks = if (mode == StackMode.PLANETARY && (drawRoi || !coordinator.hasResult(mode)))
+                selectedRegion?.let { r -> task.source?.let { s -> listOf(TargetMask(r.left.toDouble()/s.width,
+                    r.top.toDouble()/s.height, r.right.toDouble()/s.width, r.bottom.toDouble()/s.height)) } }.orEmpty()
+                else parameters.background.targetMasks
+            StackImage(bitmap, masks, drawRoi, modifier) { rectangle ->
                 task.source?.let { source ->
                     val x = (rectangle.left * source.width).toInt().coerceIn(0, source.width - 1)
                     val y = (rectangle.top * source.height).toInt().coerceIn(0, source.height - 1)
@@ -332,7 +343,8 @@ private fun LiveStackControls(vm: CameraViewModel, state: LiveStackState, showSt
 
 @Composable
 private fun OfflineStackControls(c: StackingCoordinator, task: StackingTaskState, drawn: PixelRoi?, target: StackTarget,
-    onChoose: () -> Unit, onBrowse: () -> Unit, onDrawRoi: () -> Unit) {
+    onChoose: () -> Unit, onBrowse: () -> Unit, onRegionChange: (PixelRoi?) -> Unit, onDrawRoi: () -> Unit) {
+    val sourcePreview by c.sourcePreview.collectAsStateWithPageLifecycle()
     val live by c.live.state.collectAsStateWithPageLifecycle()
     val algorithm by c.demosaicAlgorithm.collectAsStateWithPageLifecycle()
     val interpretation by c.serCfaInterpretation.collectAsStateWithPageLifecycle()
@@ -344,10 +356,15 @@ private fun OfflineStackControls(c: StackingCoordinator, task: StackingTaskState
     var roiW by rememberSaveable(source?.identity) { mutableStateOf(source?.width?.toString().orEmpty()) }
     var roiH by rememberSaveable(source?.identity) { mutableStateOf(source?.height?.toString().orEmpty()) }
     var local by rememberSaveable { mutableStateOf(true) }
+    var softwareBin by rememberSaveable(source?.identity) { mutableIntStateOf(1) }
     var percent by rememberSaveable { mutableStateOf("25") }
     var count by rememberSaveable { mutableStateOf("") }
     var analyzedConfig by rememberSaveable { mutableStateOf("") }
-    val currentConfig = "$roiX,$roiY,$roiW,$roiH,$local,${source?.identity},${c.endianConvention},${c.sampleAlignment},$algorithm,$interpretation"
+    val currentConfig = "$roiX,$roiY,$roiW,$roiH,$local,$softwareBin,${source?.identity},${c.endianConvention},${c.sampleAlignment},$algorithm,$interpretation"
+    val region = source?.let { runCatching { PixelRoi(roiX.toInt(), roiY.toInt(), roiW.toInt(), roiH.toInt()).checked(it.width, it.height) }.getOrNull() }
+    val plan = region?.let { c.offlinePlan(it, softwareBin) }
+    val issue = plan?.issue(c.memoryBudgetBytes)
+    LaunchedEffect(region, source?.identity) { onRegionChange(region) }
     LaunchedEffect(drawn) { drawn?.let { roiX = it.left.toString(); roiY = it.top.toString(); roiW = it.width.toString(); roiH = it.height.toString() } }
     if (live.phase != LiveStackPhase.EMPTY) {
         Text(stackMessage("reset_live_first"), color = MaterialTheme.colorScheme.tertiary)
@@ -390,8 +407,29 @@ private fun OfflineStackControls(c: StackingCoordinator, task: StackingTaskState
                 }
             }
         }
-        if (target == StackTarget.PLANETARY) {
-        Text(stringResource(R.string.stack_roi), style = MaterialTheme.typography.titleSmall)
+        Text(stringResource(R.string.stack_offline_region), style = MaterialTheme.typography.titleSmall)
+        if (region == null) Text(stackMessage("invalid_roi"), color = MaterialTheme.colorScheme.error)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(stringResource(R.string.stack_offline_bin), Modifier.align(Alignment.CenterVertically))
+            (1..4).forEach { value -> FilterChip(selected = softwareBin == value, enabled = !task.busy,
+                onClick = { softwareBin = value }, modifier = Modifier.testTag("offline-bin-$value"), label = { Text("$value×") }) }
+        }
+        if (plan != null) {
+            Text(stringResource(R.string.stack_offline_estimate, plan.width, plan.height,
+                plan.workingBytes / 1048576.0, c.memoryBudgetBytes / 1048576.0),
+                color = if (issue == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                modifier = Modifier.testTag("offline-budget"), style = MaterialTheme.typography.bodySmall)
+            if (issue != null) {
+                Text(stackMessage(issue), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                val suggestedBin = (1..4).firstOrNull { it > softwareBin && plan.copy(softwareBin = it).issue(c.memoryBudgetBytes) == null }
+                if (suggestedBin != null) OutlinedButton(onClick = { softwareBin = suggestedBin }, enabled = !task.busy,
+                    modifier = Modifier.testTag("offline-bin-suggested")) { Text(stringResource(R.string.stack_offline_use_bin, suggestedBin)) }
+                val suggested = plan.suggested(c.memoryBudgetBytes)
+                if (suggested != null) TextButton(enabled = !task.busy, modifier = Modifier.testTag("offline-roi-suggested"), onClick = {
+                    roiX = suggested.left.toString(); roiY = suggested.top.toString(); roiW = suggested.width.toString(); roiH = suggested.height.toString()
+                }) { Text(stringResource(R.string.stack_offline_use_roi, suggested.width, suggested.height)) }
+            }
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             NumberField(roiX, { roiX = it }, R.string.stack_roi_x, Modifier.weight(1f), !task.busy)
             NumberField(roiY, { roiY = it }, R.string.stack_roi_y, Modifier.weight(1f), !task.busy)
@@ -402,13 +440,14 @@ private fun OfflineStackControls(c: StackingCoordinator, task: StackingTaskState
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TextButton(onClick = { roiX = "0"; roiY = "0"; roiW = source.width.toString(); roiH = source.height.toString() }, enabled = !task.busy) { Text(stringResource(R.string.stack_full_frame)) }
-            TextButton(onClick = onDrawRoi, enabled = !task.busy) { Text(stringResource(R.string.stack_draw_roi)) }
+            TextButton(onClick = onDrawRoi, enabled = !task.busy && sourcePreview != null) { Text(stringResource(R.string.stack_draw_roi)) }
         }
+        if (target == StackTarget.PLANETARY) {
         SwitchLine(R.string.stack_local_alignment, local, !task.busy) { local = it }
         Button(onClick = {
             val roi = runCatching { PixelRoi(roiX.toInt(), roiY.toInt(), roiW.toInt(), roiH.toInt()).checked(source.width, source.height) }.getOrNull()
-            if (roi == null) c.report("invalid_roi") else { analyzedConfig = currentConfig; c.analyze(roi, local) }
-        }, enabled = !task.busy, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.stack_analyze)) }
+            if (roi == null) c.report("invalid_roi") else { analyzedConfig = currentConfig; c.analyze(roi, local, softwareBin) }
+        }, enabled = !task.busy && region != null && issue == null, modifier = Modifier.fillMaxWidth().testTag("offline-analyze")) { Text(stringResource(R.string.stack_analyze)) }
         if (task.histogram.isNotEmpty()) {
             Text(stringResource(R.string.stack_quality, task.qualityFrames, task.referenceFrame + 1))
             QualityHistogram(task.histogram)
@@ -445,7 +484,7 @@ private fun OfflineStackControls(c: StackingCoordinator, task: StackingTaskState
             if (stats.framesWithUnknownExposure > 0) Text(stringResource(R.string.stack_unknown_exposure, stats.framesWithUnknownExposure), style = MaterialTheme.typography.bodySmall)
         }
         } else {
-            Button(onClick = c::stackDeepSky, enabled = !task.busy && !calibration.busy && live.phase == LiveStackPhase.EMPTY,
+            Button(onClick = { c.stackDeepSky(region, softwareBin) }, enabled = !task.busy && region != null && issue == null && !calibration.busy && live.phase == LiveStackPhase.EMPTY,
                 modifier = Modifier.fillMaxWidth().testTag("stack-deep-sky-start")) {
                 Text(stringResource(R.string.stack_deep_sky_start))
             }
@@ -718,6 +757,7 @@ internal fun stackMessage(code: String): String {
         "calibration_master_created" -> R.string.stack_cal_created
         "calibration_master_in_use" -> R.string.stack_cal_in_use
         "memory_budget", "input_budget", "MEMORY_BUDGET" -> R.string.stack_reason_memory
+        "offline_memory_budget" -> R.string.stack_offline_memory
         "processing_size", "PIXEL_BUDGET" -> R.string.stack_reason_processing_size
         "calibration_dimensions" -> R.string.stack_reason_invalid_dimensions
         "settings_changed", "GEOMETRY" -> R.string.stack_reason_settings
