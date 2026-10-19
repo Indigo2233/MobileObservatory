@@ -95,6 +95,7 @@ internal fun CaptureWorkspaceScreen(
     val recordLimit by viewModel.recordLimit.collectAsStateWithPageLifecycle()
     val previewPaused by viewModel.previewPaused.collectAsStateWithPageLifecycle()
     val statusMessage by viewModel.statusMessage.collectAsStateWithPageLifecycle()
+    val recordingFinalizing by viewModel.recordingFinalizing.collectAsStateWithPageLifecycle()
     val focusAssistEnabled by viewModel.focusAssistEnabled.collectAsStateWithPageLifecycle()
     val lp750Enabled by viewModel.lp750PreviewEnabled.collectAsStateWithPageLifecycle()
     val focusScore by viewModel.focusScore.collectAsStateWithPageLifecycle()
@@ -573,7 +574,7 @@ internal fun CaptureWorkspaceScreen(
                 onSelectCaptureFormat = { viewModel.setCaptureFormat(it) },
                 onSelectRecordFormat = { viewModel.setRecordFormat(it) },
                 onSelectRecordLimit = { viewModel.setRecordLimit(it) },
-                compact = portrait, onOpenLibrary = { viewModel.openPlayer() }
+                compact = portrait, onOpenLibrary = { viewModel.openPlayer() }, isFinalizing = recordingFinalizing
             )
         }
             }

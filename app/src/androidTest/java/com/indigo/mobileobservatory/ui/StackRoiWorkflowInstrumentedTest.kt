@@ -14,6 +14,8 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.camera.*
+import com.indigo.mobileobservatory.recording.RecordingWriteSession
+import com.indigo.mobileobservatory.stacking.StackRoiApplyPhase
 import com.indigo.mobileobservatory.ui.screens.CameraScreen
 import com.indigo.mobileobservatory.ui.theme.MobileObservatoryTheme
 import com.indigo.mobileobservatory.ui.viewmodel.CameraViewModel
@@ -24,6 +26,11 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 
 @RunWith(AndroidJUnit4::class)
 class StackRoiWorkflowInstrumentedTest {
@@ -131,6 +138,88 @@ class StackRoiWorkflowInstrumentedTest {
                 store.clear()
             } }
             prefs.edit().putBoolean("update_auto_check", autoCheck).commit()
+        }
+    }
+
+    @Test fun plannerReportsPendingReadbackFailureAndSuccessfulRetry() = runBlocking {
+        val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as Application
+        val store = ViewModelStore()
+        val delegate = SimulatedCamera("ROI readback fixture")
+        val accept = AtomicBoolean(false)
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val camera = object : Camera by delegate {
+            override val recordsLiveViewAsScience = true
+            override val sciencePixelTraits get() = CameraScienceLayouts.fullContainer(currentPixelFormat)
+            override fun setRoi(roi: Roi) {
+                entered.countDown()
+                check(release.await(10, TimeUnit.SECONDS))
+                if (accept.get()) delegate.setRoi(roi)
+            }
+        }
+        lateinit var vm: CameraViewModel
+        val main = InstrumentationRegistry.getInstrumentation()
+        try {
+            main.runOnMainSync {
+                vm = ViewModelProvider(store, ViewModelProvider.AndroidViewModelFactory(app))[CameraViewModel::class.java]
+                vm.cameraManager.javaClass.getDeclaredField("activeCamera").apply { isAccessible = true }.set(vm.cameraManager, camera)
+            }
+            withTimeout(5000) { while (vm.stackRoiContext()?.blockedReason != null) delay(20) }
+            val requested = Roi(8, 8, 320, 240)
+            main.runOnMainSync { assertTrue(vm.applyStackRoi(requireNotNull(vm.stackRoiContext()), requested)) }
+            assertTrue(entered.await(5, TimeUnit.SECONDS))
+            assertEquals(StackRoiApplyPhase.APPLYING, vm.stackRoiApplyState.value.phase)
+            main.runOnMainSync { vm.startRecording() }
+            assertFalse(vm.isRecording.value)
+            release.countDown()
+            withTimeout(5000) { while (vm.stackRoiApplyState.value.phase == StackRoiApplyPhase.APPLYING) delay(20) }
+            assertEquals(StackRoiApplyPhase.FAILED, vm.stackRoiApplyState.value.phase)
+            assertEquals("roi_apply_failed", vm.stackRoiApplyState.value.reason)
+            assertEquals(delegate.currentRoi, vm.roi.value)
+            accept.set(true)
+            main.runOnMainSync { assertTrue(vm.applyStackRoi(requireNotNull(vm.stackRoiContext()), requested)) }
+            withTimeout(5000) { while (vm.stackRoiApplyState.value.phase == StackRoiApplyPhase.APPLYING) delay(20) }
+            assertEquals(StackRoiApplyPhase.APPLIED, vm.stackRoiApplyState.value.phase)
+            assertEquals(requested, vm.roi.value)
+        } finally { release.countDown(); main.runOnMainSync { store.clear() }; delegate.close() }
+    }
+
+    @Test fun stopReturnsWhileWriterClosesAndPixelLayoutWaitsForThatClose() = runBlocking {
+        val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as Application
+        val main = InstrumentationRegistry.getInstrumentation()
+        val store = ViewModelStore()
+        val delegate = SimulatedCamera("Closing writer fixture")
+        val pixelWritten = AtomicBoolean(false)
+        val camera = object : Camera by delegate {
+            override fun setPixelFormat(format: PixelFormat) { pixelWritten.set(true); delegate.setPixelFormat(format) }
+        }
+        val closing = CountDownLatch(1)
+        val finish = CountDownLatch(1)
+        val session = RecordingWriteSession(LinkedBlockingQueue<FrameData>(), write = {}, release = {},
+            closeWriter = { closing.countDown(); check(finish.await(10, TimeUnit.SECONDS)) }, onFinished = {})
+        lateinit var vm: CameraViewModel
+        try {
+            main.runOnMainSync {
+                vm = ViewModelProvider(store, ViewModelProvider.AndroidViewModelFactory(app))[CameraViewModel::class.java]
+                vm.cameraManager.javaClass.getDeclaredField("activeCamera").apply { isAccessible = true }.set(vm.cameraManager, camera)
+                vm.javaClass.getDeclaredField("recordingWriteSession").apply { isAccessible = true }.set(vm, session)
+            }
+            session.start()
+            val stopped = CountDownLatch(1)
+            main.runOnMainSync { vm.stopRecording(); stopped.countDown() }
+            assertTrue(closing.await(5, TimeUnit.SECONDS))
+            assertFalse("Stopping must not mark a still-closing writer as failed", session.hasFailed)
+            assertTrue(stopped.await(1, TimeUnit.SECONDS))
+            assertTrue(vm.recordingFinalizing.value)
+            main.runOnMainSync { vm.setPixelFormat(PixelFormat.MONO8) }
+            delay(100)
+            assertFalse(pixelWritten.get())
+            finish.countDown()
+            assertTrue(withTimeout(5000) { session.awaitCompletion() }.succeeded)
+            withTimeout(5000) { while (!pixelWritten.get()) delay(20) }
+        } finally {
+            finish.countDown(); session.requestStop(); session.awaitFinished(5000)
+            main.runOnMainSync { store.clear() }; delegate.close()
         }
     }
 }

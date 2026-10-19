@@ -3,6 +3,7 @@ package com.indigo.mobileobservatory.camera
 import android.app.Application
 import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.os.Build
 import android.provider.MediaStore
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
@@ -32,6 +33,41 @@ class CameraCfaPipelineInstrumentedTest {
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
     private val app get() = instrumentation.targetContext.applicationContext as Application
     private fun main(action: () -> Unit) = instrumentation.runOnMainSync(action)
+
+    @Test fun mp4IsFinalizedBeforeTheCameraAcceptsADifferentPixelFormat() = runBlocking {
+        workspace(tokens = true) { vm, camera ->
+            await { camera.emitLatest(); vm.scienceCaptureReady.value }
+            var recording: File? = null
+            try {
+                main { vm.setRecordFormat("MP4"); vm.startRecording() }
+                assertTrue(vm.isRecording.value)
+                recording = checkNotNull(vm.getActiveRecordingFile())
+                camera.emitLatest()
+                await { vm.recordingFrameCount.value > 0 }
+                main { vm.setPixelFormat(PixelFormat.MONO8) }
+                assertFalse(vm.isRecording.value)
+                await { camera.pixelFormatWrites == 1 }
+                assertNull("SDK layout write must wait until the old recording has closed", vm.getActiveRecordingFile())
+                assertFalse(vm.recordingFinalizing.value)
+                assertEquals(PixelFormat.MONO8, camera.currentPixelFormat)
+                assertTrue(requireNotNull(recording).length() > 0)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val name = requireNotNull(recording).name
+                    await {
+                        app.contentResolver.query(MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                            arrayOf(MediaStore.Video.Media._ID), "${MediaStore.Video.Media.DISPLAY_NAME} = ? AND ${MediaStore.Video.Media.IS_PENDING} = 0",
+                            arrayOf(name), null)?.use { it.moveToFirst() } == true
+                    }
+                    app.contentResolver.delete(MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                        "${MediaStore.Video.Media.DISPLAY_NAME} = ?", arrayOf(name))
+                }
+            } finally {
+                main { vm.stopRecording() }
+                await { vm.getActiveRecordingFile() == null }
+                recording?.delete()
+            }
+        }
+    }
 
     @Test fun cfaApplyReachesLiveKeyAndSerAndRecordingCannotChangeIt() = runBlocking {
         workspace(tokens = true) { vm, camera ->
@@ -197,8 +233,8 @@ class CameraCfaPipelineInstrumentedTest {
         override val gainRange = FloatRange(0f,100f,10f)
         override val currentExposureUs = 10_000f
         override val currentGain = 10f
-        override val currentPixelFormat = PixelFormat.MONO12
-        override val supportedPixelFormats = listOf(currentPixelFormat)
+        @Volatile override var currentPixelFormat = PixelFormat.MONO12
+        override val supportedPixelFormats = listOf(PixelFormat.MONO8, PixelFormat.MONO12)
         @Volatile override var currentRoi = Roi(1,1,24,24)
         override val cropInfo = CropInfo(0,0,24,24)
         override val hwExposureMaxUs = 1_000_000f
@@ -228,7 +264,7 @@ class CameraCfaPipelineInstrumentedTest {
         override fun close() { stopCapture(); isOpen.value=false }
         override fun setExposureTime(us: Float) {}
         override fun setGain(value: Float) {}
-        override fun setPixelFormat(format: PixelFormat) { pixelFormatWrites++ }
+        override fun setPixelFormat(format: PixelFormat) { currentPixelFormat = format; pixelFormatWrites++ }
         override fun setRoi(roi: Roi) { currentRoi = roi }
         override fun resetRoi() {}
     }

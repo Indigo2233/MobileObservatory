@@ -2,6 +2,11 @@ package com.indigo.mobileobservatory.recording
 
 import org.junit.Assert.*
 import org.junit.Test
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import java.io.IOException
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
@@ -11,6 +16,29 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
 class RecordingWriteSessionTest {
+    @Test fun asynchronousStopRetainsSuccessAndCancellingAWaiterDoesNotCancelFinalization() = runBlocking {
+        val enteredClose = CountDownLatch(1)
+        val finishClose = CountDownLatch(1)
+        val session = RecordingWriteSession(LinkedBlockingQueue<Int>(), write = {}, release = {}, closeWriter = {
+            enteredClose.countDown()
+            check(finishClose.await(5, TimeUnit.SECONDS))
+        }, onFinished = {})
+        session.requestStop(); session.start()
+        try {
+            assertTrue(enteredClose.await(5, TimeUnit.SECONDS))
+            val firstWaiter = async(start = CoroutineStart.UNDISPATCHED) { session.awaitCompletion() }
+            assertFalse(firstWaiter.isCompleted)
+            firstWaiter.cancelAndJoin()
+            assertFalse(session.hasFailed)
+            assertNull(session.outcome)
+            val secondWaiter = async(start = CoroutineStart.UNDISPATCHED) { session.awaitCompletion() }
+            assertFalse(secondWaiter.isCompleted)
+            finishClose.countDown()
+            assertTrue(withTimeout(5000) { secondWaiter.await() }.succeeded)
+            assertTrue(session.isFinished)
+        } finally { finishClose.countDown(); session.awaitFinished(5000) }
+    }
+
     @Test fun gracefulStopDrainsEveryAcceptedFrameBeforeCloseAndFinalSuccessOnTheSameWorker() {
         val queue = LinkedBlockingQueue<Int>().apply { addAll(listOf(1, 2, 3)) }
         val entered = CountDownLatch(1); val resume = CountDownLatch(1)

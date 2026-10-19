@@ -228,11 +228,14 @@ fun RecordBar(
     onSelectRecordLimit: (RecordLimit) -> Unit,
     modifier: Modifier = Modifier,
     compact: Boolean = false,
-    onOpenLibrary: () -> Unit = {}
+    onOpenLibrary: () -> Unit = {},
+    isFinalizing: Boolean = false
 ) {
     if (compact) {
         Column(modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(horizontal = 12.dp, vertical = 4.dp)) {
-            if (isRecording) Text(stringResource(R.string.recording_status, ImageUtils.formatDuration(durationMs), frameCount,
+            if (isFinalizing) Text(stringResource(R.string.recording_finishing), Modifier.testTag("record-finalizing"),
+                style = MaterialTheme.typography.labelMedium)
+            else if (isRecording) Text(stringResource(R.string.recording_status, ImageUtils.formatDuration(durationMs), frameCount,
                 ImageUtils.formatFileSize(bytesWritten)), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.error)
             else Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 TargetSelector(targetName, onTargetNameChange)
@@ -247,8 +250,10 @@ fun RecordBar(
                 OutlinedIconButton(onClick = onCapture, modifier = Modifier.size(48.dp)) {
                     Icon(Icons.Default.Camera, stringResource(R.string.capture_desc), Modifier.size(22.dp))
                 }
-                OutlinedIconButton(onClick = if (isRecording) onStopRecord else onStartRecord, modifier = Modifier.size(48.dp)) {
-                    Icon(if (isRecording) Icons.Default.Stop else Icons.Default.FiberManualRecord,
+                OutlinedIconButton(onClick = if (isRecording) onStopRecord else onStartRecord,
+                    enabled = !isFinalizing, modifier = Modifier.size(48.dp)) {
+                    if (isFinalizing) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+                    else Icon(if (isRecording) Icons.Default.Stop else Icons.Default.FiberManualRecord,
                         stringResource(if (isRecording) R.string.stop_recording else R.string.start_recording),
                         Modifier.size(30.dp), tint = MaterialTheme.colorScheme.error)
                 }
@@ -264,7 +269,10 @@ fun RecordBar(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        if (isRecording) {
+        if (isFinalizing) {
+            Text(stringResource(R.string.recording_finishing), Modifier.testTag("record-finalizing"),
+                style = MaterialTheme.typography.labelSmall)
+        } else if (isRecording) {
             Column {
                 Text(
                     stringResource(
@@ -322,10 +330,12 @@ fun RecordBar(
                         if (isRecording) Color(0xFFFF4444) else MaterialTheme.colorScheme.onSurfaceVariant,
                         CircleShape
                     )
-                    .clickable { if (isRecording) onStopRecord() else onStartRecord() },
+                    .clickable(enabled = !isFinalizing) { if (isRecording) onStopRecord() else onStartRecord() },
                 contentAlignment = Alignment.Center
             ) {
-                if (isRecording) {
+                if (isFinalizing) {
+                    CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+                } else if (isRecording) {
                     Icon(
                         Icons.Default.Stop,
                         contentDescription = stringResource(R.string.stop_recording),

@@ -7,6 +7,9 @@ import kotlin.math.roundToInt
 
 enum class StackRoiAspect { SENSOR, SQUARE, FOUR_THREE, SIXTEEN_NINE }
 
+enum class StackRoiApplyPhase { IDLE, APPLYING, APPLIED, FAILED }
+data class StackRoiApplyState(val phase: StackRoiApplyPhase = StackRoiApplyPhase.IDLE, val reason: String = "")
+
 /** Native camera ROI coordinates, after hardware binning and before software binning. */
 data class StackRoiContext(
     val key: StackSessionKey,

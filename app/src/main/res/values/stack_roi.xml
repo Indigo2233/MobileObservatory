@@ -8,6 +8,9 @@
     <string name="stack_roi_frame_hint">Solid: current ROI · Dashed: suggested maximum. Tap to move.</string>
     <string name="stack_roi_maximum">Suggested maximum ROI: %1$d×%2$d</string>
     <string name="stack_roi_apply">Use this range</string>
+    <string name="stack_roi_applying">Applying the capture range…</string>
+    <string name="stack_roi_applied">Capture range applied.</string>
+    <string name="stack_roi_failed">Could not apply the capture range. Check the camera connection and try again.</string>
     <string name="stack_roi_unavailable">No usable range for this format and Bin setting.</string>
     <string name="stack_roi_calibration_locked">Deselect calibration frames before changing the capture range.</string>
     <string name="stack_roi_why">Why this limit?</string>

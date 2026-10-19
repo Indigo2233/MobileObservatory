@@ -1,5 +1,6 @@
 package com.indigo.mobileobservatory.recording
 
+import kotlinx.coroutines.CompletableDeferred
 import java.util.concurrent.BlockingQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -21,6 +22,7 @@ class RecordingWriteSession<T>(
 ) {
     private val lock = Any()
     private val done = CountDownLatch(1)
+    private val completion = CompletableDeferred<RecordingWriteOutcome>()
     @Volatile private var stopping = false
     @Volatile private var failure: RecordingWriteOutcome? = null
     @Volatile private var terminal: RecordingWriteOutcome? = null
@@ -38,6 +40,10 @@ class RecordingWriteSession<T>(
     }
 
     fun requestStop() { stopping = true }
+
+    /** Waiting or cancelling a waiter never changes the writer's outcome. The worker owns
+     * draining and codec/filesystem deadlines, including when the UI has already returned. */
+    suspend fun awaitCompletion(): RecordingWriteOutcome = completion.await()
 
     fun fail(reason: String, cause: Throwable? = null) {
         val reported = synchronized(lock) {
@@ -90,7 +96,7 @@ class RecordingWriteSession<T>(
                 (failure ?: RecordingWriteOutcome()).also { terminal = it }
             }
             try { onFinished(completed) }
-            finally { done.countDown() }
+            finally { done.countDown(); completion.complete(completed) }
         }
     }
 }

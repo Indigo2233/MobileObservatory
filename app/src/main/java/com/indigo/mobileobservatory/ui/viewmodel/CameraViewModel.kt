@@ -74,6 +74,8 @@ import com.indigo.mobileobservatory.recording.RecordingWriteSession
 import com.indigo.mobileobservatory.stacking.LiveStackPhase
 import com.indigo.mobileobservatory.stacking.LiveStackAdmission
 import com.indigo.mobileobservatory.stacking.StackRoiContext
+import com.indigo.mobileobservatory.stacking.StackRoiApplyPhase
+import com.indigo.mobileobservatory.stacking.StackRoiApplyState
 import com.indigo.mobileobservatory.stacking.PixelTraits
 import com.indigo.mobileobservatory.stacking.StackSessionKey
 import com.indigo.mobileobservatory.stacking.StackMode
@@ -575,6 +577,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val recordingLifecycleLock = Any()
     @Volatile private var recordingWriteSession: RecordingWriteSession<FrameData>? = null
     @Volatile private var recordingSaveToGallery = false
+    private val _recordingFinalizing = MutableStateFlow(false)
+    val recordingFinalizing = _recordingFinalizing.asStateFlow()
+    private val _stackRoiApplyState = MutableStateFlow(StackRoiApplyState())
+    val stackRoiApplyState = _stackRoiApplyState.asStateFlow()
 
     private val _captureFormat = MutableStateFlow(CaptureFormat.JPG)
     val captureFormat: StateFlow<CaptureFormat> = _captureFormat.asStateFlow()
@@ -901,6 +907,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 when (state) {
                     is ConnectionState.Connected -> {
                         val cam = cameraManager.activeCamera ?: return@collect
+                        if (_stackRoiApplyState.value.phase != StackRoiApplyPhase.APPLYING)
+                            _stackRoiApplyState.value = StackRoiApplyState()
                         _exposureUs.value = cam.currentExposureUs
                         _gainCapability.value = cam.gainCapability
                         _gain.value = cam.currentGain
@@ -2170,7 +2178,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun useRecommendedLiveStackBin() { recommendedLiveStackBin()?.let(::setBinning) }
 
-    fun stackRoiContext(): StackRoiContext? {
+    fun stackRoiContext(): StackRoiContext? = buildStackRoiContext()
+
+    private fun buildStackRoiContext(ignorePendingCaptureChanges: Boolean = false): StackRoiContext? {
         val cam = cameraManager.activeCamera ?: return null
         if (!cam.recordsLiveViewAsScience || !cam.supportsHostRoi) return null
         val key = captureSettingsSnapshot(cam)?.copy(target = stacking.liveTarget.value,
@@ -2180,7 +2190,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val blocked = when {
             _isRecording.value || recordingWriteSession != null || currentRecordingFile != null -> "recording_active"
             pointingCaptureOwned.get() || pendingFrameSnapshot.get() != null || frameSnapshotMutex.isLocked -> "roi_capture_busy"
-            pendingCaptureChanges.get() != 0 || binningSwitching || _cameraCfaApplying.value || _gainWriteInProgress.value -> "settings_busy"
+            (!ignorePendingCaptureChanges && pendingCaptureChanges.get() != 0) || binningSwitching ||
+                _cameraCfaApplying.value || _gainWriteInProgress.value -> "settings_busy"
             stacking.live.state.value.phase != LiveStackPhase.EMPTY -> "reset_live_first"
             stacking.hasPlanetaryWork() -> "finish_offline_first"
             !calibration.initialized || calibration.busy -> "calibration_busy"
@@ -2192,29 +2203,51 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             cam.roiWidthStep, cam.roiHeightStep, blocked)
     }
 
-    /** Revalidate the proposed bounds against the current camera and budget at the action boundary. */
+    /** Returns whether the request was accepted. Final SDK/restart outcome is published to
+     * stackRoiApplyState, shared by the capture and stacking planners. */
     fun applyStackRoi(expected: StackRoiContext, roi: Roi): Boolean = synchronized(recordingLifecycleLock) {
-        val camera = cameraManager.activeCamera ?: return@synchronized false
-        val current = stackRoiContext() ?: return@synchronized false
-        if (current.layoutIdentity != expected.layoutIdentity || current.blockedReason != null) return@synchronized false
+        if (_stackRoiApplyState.value.phase == StackRoiApplyPhase.APPLYING) return@synchronized false
+        fun rejected(reason: String = "settings_changed"): Boolean {
+            _stackRoiApplyState.value = StackRoiApplyState(StackRoiApplyPhase.FAILED, reason)
+            return false
+        }
+        val camera = cameraManager.activeCamera ?: return@synchronized rejected("camera_disconnected")
+        val current = stackRoiContext() ?: return@synchronized rejected()
+        if (current.layoutIdentity != expected.layoutIdentity) return@synchronized rejected()
+        current.blockedReason?.let { return@synchronized rejected(it) }
         if (roi.x < 0 || roi.y < 0 || roi.width < current.minWidth || roi.height < current.minHeight ||
             roi.x.toLong() + roi.width > current.sensorWidth || roi.y.toLong() + roi.height > current.sensorHeight ||
             roi.width % current.widthStep != 0 || roi.height % current.heightStep != 0 || current.issue(roi) != null) {
-            return@synchronized false
+            return@synchronized rejected()
         }
-        if (cameraManager.activeCamera !== camera) return@synchronized false
+        if (cameraManager.activeCamera !== camera) return@synchronized rejected("camera_disconnected")
+        _stackRoiApplyState.value = StackRoiApplyState(StackRoiApplyPhase.APPLYING)
         invalidateStackSettings(layoutChanged = true)
-        changeCaptureSettings(camera) {
-            check(cameraManager.activeCamera === camera) { "camera_changed" }
+        var applied = false
+        var failureReason = "roi_apply_failed"
+        changeCaptureSettings(camera, onFinished = {
+            _stackRoiApplyState.value = if (applied && cameraManager.activeCamera === camera)
+                StackRoiApplyState(StackRoiApplyPhase.APPLIED)
+            else StackRoiApplyState(StackRoiApplyPhase.FAILED, failureReason)
+            if (_stackRoiApplyState.value.phase == StackRoiApplyPhase.FAILED)
+                _statusMessage.value = app.getString(if (failureReason == "settings_changed")
+                    R.string.stack_roi_changed else R.string.stack_roi_failed)
+        }, onFailure = { failure ->
+            applied = false
+            failureReason = when (failure.message) {
+                "settings_changed", "recording_active", "calibration_busy", "roi_calibration_selected",
+                "roi_capture_busy", "reset_live_first", "finish_offline_first" -> failure.message!!
+                else -> "roi_apply_failed"
+            }
+        }) {
             check(!_isRecording.value && recordingWriteSession == null && currentRecordingFile == null) { "recording_active" }
-            val latest = captureSettingsSnapshot(camera)?.copy(target = stacking.liveTarget.value,
-                demosaicAlgorithm = stacking.demosaicAlgorithm.value) ?: error("settings_changed")
-            check(StackRoiContext(latest, current.sensorWidth, current.sensorHeight, current.budgetBytes,
-                current.calibrationBytes, current.calibrated, current.minWidth, current.minHeight,
-                current.widthStep, current.heightStep).layoutIdentity == expected.layoutIdentity) { "settings_changed" }
+            val latest = buildStackRoiContext(ignorePendingCaptureChanges = true) ?: error("settings_changed")
+            latest.blockedReason?.let { error(it) }
+            check(latest.layoutIdentity == expected.layoutIdentity && latest.issue(roi) == null) { "settings_changed" }
             camera.setRoi(roi)
-            check(camera.currentRoi == roi) { "roi_apply_failed" }
             _roi.value = camera.currentRoi
+            check(camera.currentRoi == roi) { "roi_apply_failed" }
+            applied = true
         }
         true
     }
@@ -2279,14 +2312,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (layoutChanged) {
             // Finish queued bytes using their original CFA/alignment before a camera mode or
             // ROI can change the interpretation of subsequently delivered samples.
-            if (rawRecordingLayout != null) stopRecording()
+            if (_isRecording.value || recordingWriteSession != null || currentRecordingFile != null) stopRecording()
             stackFrameGeometry = null
             _liveStackPixelFormat.value = null
         }
     }
 
     /** Serialize stop -> control writes -> fresh SDK acquisition; never relabel buffered frames. */
-    private fun changeCaptureSettings(cam: Camera, onFinished: () -> Unit = {}, action: suspend () -> Unit) {
+    private fun changeCaptureSettings(cam: Camera, onFinished: () -> Unit = {},
+                                      onFailure: (Throwable) -> Unit = {}, action: suspend () -> Unit) {
         pendingCaptureChanges.incrementAndGet()
         invalidateStackSettings()
         viewModelScope.launch(Dispatchers.IO) {
@@ -2296,12 +2330,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             catch (failure: Throwable) {
                 Log.e(TAG, "Camera settings/acquisition restart failed", failure)
                 _statusMessage.value = failure.message.orEmpty()
+                onFailure(failure)
             } finally { pendingCaptureChanges.decrementAndGet(); onFinished() }
         }
     }
 
     private suspend fun applyCaptureSettingsAndRestart(cam: Camera, action: suspend () -> Unit) {
         captureSettingsMutex.withLock {
+            if (cameraManager.activeCamera !== cam) return@withLock
+            // Layout changes request stop synchronously. Finish the old file with its frozen
+            // layout before the SDK or per-frame FITS metadata can observe new settings.
+            val finishing = synchronized(recordingLifecycleLock) {
+                recordingWriteSession?.takeIf { !_isRecording.value }
+            }
+            finishing?.awaitCompletion()
             if (cameraManager.activeCamera !== cam) return@withLock
             val restart = cam.isCapturing.value
             previewEpoch.invalidate()
@@ -2396,6 +2438,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     limitReached = true
                     synchronized(recordingEnqueueLock) { _isRecording.value = false }
                     recordingSaveToGallery = true
+                    _recordingFinalizing.value = true
                     session.requestStop()
                     _statusMessage.value = app.getString(R.string.recording_limit_reached)
                 }
@@ -2404,14 +2447,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             closeWriter = ::closeRecorders,
             onFailure = { outcome ->
                 synchronized(recordingEnqueueLock) { _isRecording.value = false }
+                _recordingFinalizing.value = true
                 FileLogger.e(TAG, outcome.failure.orEmpty(), outcome.cause)
                 _statusMessage.value = app.getString(R.string.recording_error_detail,
                     outcome.cause?.message ?: outcome.failure.orEmpty())
             },
             onFinished = { outcome -> synchronized(recordingLifecycleLock) {
                 if (recordingWriteSession === session) {
+                    val stoppedByUser = recordingSaveToGallery && !limitReached
                     finishRecordingResources(outcome)
                     recordingWriteSession = null
+                    _recordingFinalizing.value = false
+                    if (outcome.succeeded && stoppedByUser) _statusMessage.value = app.getString(R.string.recording_stopped)
                 }
             } }
         )
@@ -3201,7 +3248,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
         if (pointingCaptureOwned.get()) { _statusMessage.value = "Reference capture in progress"; return }
         // A timed-out old worker still owns its file and queue until final cleanup returns.
-        if (_isRecording.value || recordingWriteSession != null || currentRecordingFile != null || hasOpenRecorder()) return
+        if (_isRecording.value) return
+        if (recordingWriteSession != null || currentRecordingFile != null || hasOpenRecorder()) {
+            _statusMessage.value = app.getString(R.string.recording_finishing)
+            return
+        }
         (cameraManager.activeCamera as? SimulatedCamera)?.let { startSimulatedRecording(it); return }
         if (!License.canRecord) {
             _statusMessage.value = app.getString(R.string.trial_recording_disabled)
@@ -3334,9 +3385,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun stopRecording() {
         val wasSimulated = simulatedRecordingJob != null
-        val outcome = closeRecordingResources(saveToGallery = true)
+        closeRecordingResources(saveToGallery = true)
         if (wasSimulated) _statusMessage.value = app.getString(R.string.sim_camera_recording_done)
-        else if (outcome?.succeeded == true) _statusMessage.value = app.getString(R.string.recording_stopped)
     }
 
     private fun closeRecordingResources(saveToGallery: Boolean): RecordingWriteOutcome? {
@@ -3345,7 +3395,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val session = synchronized(recordingLifecycleLock) {
             synchronized(recordingEnqueueLock) { _isRecording.value = false }
             recordingSaveToGallery = recordingSaveToGallery || saveToGallery
-            recordingWriteSession?.also { it.requestStop() } ?: run {
+            recordingWriteSession?.also {
+                _recordingFinalizing.value = true
+                it.requestStop()
+            } ?: run {
                 // Opening failed before a worker could own the file. This is never success.
                 if (currentRecordingFile != null || hasOpenRecorder()) {
                     val error = runCatching { closeRecorders() }.exceptionOrNull()
@@ -3356,8 +3409,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 null
             }
         }
-        // Never hold the lifecycle lock while waiting: completion uses it to release the gate.
-        session?.awaitFinished(3000)
+        // Completion owns cleanup/status. UI callers return while the writer drains; the
+        // SDK-settings coroutine awaits awaitCompletion before applying a new pixel layout.
         return session?.outcome
     }
 

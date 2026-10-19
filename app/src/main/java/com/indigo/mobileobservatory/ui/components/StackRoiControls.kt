@@ -40,9 +40,10 @@ import kotlin.math.min
 fun StackRoiControls(viewModel: CameraViewModel, showBinning: Boolean = false) {
     var context by remember { mutableStateOf(viewModel.stackRoiContext()) }
     LaunchedEffect(viewModel) { while (true) { context = viewModel.stackRoiContext(); delay(300) } }
+    val application by viewModel.stackRoiApplyState.collectAsStateWithPageLifecycle()
     val current = context
     if (current == null) Text(stringResource(R.string.stack_roi_need_camera), style = MaterialTheme.typography.bodySmall)
-    else StackRoiPanel(current, showBinning, viewModel::setStackPlanningBin) { roi ->
+    else StackRoiPanel(current, showBinning, viewModel::setStackPlanningBin, application) { roi ->
         val applied = viewModel.applyStackRoi(current, roi)
         context = viewModel.stackRoiContext()
         applied
@@ -52,7 +53,8 @@ fun StackRoiControls(viewModel: CameraViewModel, showBinning: Boolean = false) {
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
 internal fun StackRoiPanel(context: StackRoiContext, showBinning: Boolean = false,
-                          onBin: (Int) -> Unit = {}, onApply: (Roi) -> Boolean) {
+                          onBin: (Int) -> Unit = {}, application: StackRoiApplyState = StackRoiApplyState(),
+                          onApply: (Roi) -> Boolean) {
     var aspect by rememberSaveable { mutableStateOf(StackRoiAspect.SENSOR) }
     var details by rememberSaveable { mutableStateOf(false) }
     var changed by remember { mutableStateOf(false) }
@@ -66,13 +68,14 @@ internal fun StackRoiPanel(context: StackRoiContext, showBinning: Boolean = fals
     val maximum = remember(context, aspect, centerX, centerY) { StackRoiPlanner.maximum(context, aspect, centerX, centerY) }
     val issue = context.issue()
     val software = context.key.softwareBin.coerceAtLeast(1)
+    val applying = application.phase == StackRoiApplyPhase.APPLYING
     Column(Modifier.fillMaxWidth().testTag("stack-roi-planner"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (!showBinning) Text(stringResource(R.string.stack_roi_title), style = MaterialTheme.typography.titleSmall)
         if (showBinning) FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Text("Bin", modifier = Modifier.align(Alignment.CenterVertically))
             AppBinning.OPTIONS.forEach { bin ->
                 FilterChip(selected = context.key.hardwareBin * software == bin,
-                    enabled = context.blockedReason == null, onClick = { onBin(bin) }, label = { Text("$bin×") })
+                    enabled = context.blockedReason == null && !applying, onClick = { onBin(bin) }, label = { Text("$bin×") })
             }
         }
         Text(stringResource(R.string.stack_roi_bins, context.key.hardwareBin, software), style = MaterialTheme.typography.labelMedium)
@@ -121,11 +124,22 @@ internal fun StackRoiPanel(context: StackRoiContext, showBinning: Boolean = fals
         if (maximum != null) {
             Text(stringResource(R.string.stack_roi_maximum, maximum.width, maximum.height),
                 modifier = Modifier.testTag("stack-roi-maximum"), color = maxColor, style = MaterialTheme.typography.titleSmall)
-            Button(onClick = { changed = !onApply(maximum) }, enabled = context.blockedReason == null && maximum != current,
+            Button(onClick = { changed = !onApply(maximum) }, enabled = !applying && context.blockedReason == null && maximum != current,
                 modifier = Modifier.fillMaxWidth().testTag("stack-roi-apply")) { Text(stringResource(R.string.stack_roi_apply)) }
         } else Text(stringResource(R.string.stack_roi_unavailable), style = MaterialTheme.typography.bodySmall)
-        if (changed) Text(stringResource(R.string.stack_roi_changed), color = MaterialTheme.colorScheme.error)
-        context.blockedReason?.let { reason ->
+        when (application.phase) {
+            StackRoiApplyPhase.APPLYING -> Text(stringResource(R.string.stack_roi_applying), Modifier.testTag("stack-roi-result"))
+            StackRoiApplyPhase.APPLIED -> Text(stringResource(R.string.stack_roi_applied), Modifier.testTag("stack-roi-result"),
+                color = MaterialTheme.colorScheme.primary)
+            StackRoiApplyPhase.FAILED -> Text(when (application.reason) {
+                "roi_apply_failed" -> stringResource(R.string.stack_roi_failed)
+                "roi_calibration_selected" -> stringResource(R.string.stack_roi_calibration_locked)
+                "roi_capture_busy" -> stringResource(R.string.stack_roi_capture_busy)
+                else -> stackMessage(application.reason)
+            }, Modifier.testTag("stack-roi-result"), color = MaterialTheme.colorScheme.error)
+            StackRoiApplyPhase.IDLE -> if (changed) Text(stringResource(R.string.stack_roi_changed), color = MaterialTheme.colorScheme.error)
+        }
+        context.blockedReason?.takeIf { !applying && application.phase != StackRoiApplyPhase.FAILED }?.let { reason ->
             Text(when (reason) {
                 "roi_calibration_selected" -> stringResource(R.string.stack_roi_calibration_locked)
                 "roi_capture_busy" -> stringResource(R.string.stack_roi_capture_busy)

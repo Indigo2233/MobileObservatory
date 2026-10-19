@@ -583,6 +583,7 @@
     <string name="record_mp4_encoder_failed">MP4 encoder failed on this phone (%s). Try SER or FITS, or a smaller ROI.</string>
     <string name="dslr_live_view_not_science">Live View cannot be saved as SER/FITS. Use still capture for JPEG.</string>
     <string name="recording_stopped">Recording stopped</string>
+    <string name="recording_finishing">Finishing recording…</string>
     <string name="trial_capture_disabled">Trial version — capture disabled</string>
     <string name="saved_file">Saved: %s</string>
     <string name="capture_error_detail">Capture error: %s</string>

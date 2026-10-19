@@ -8,6 +8,9 @@
     <string name="stack_roi_frame_hint">实线：当前 ROI · 虚线：建议最大范围。点按可移动。</string>
     <string name="stack_roi_maximum">建议最大 ROI：%1$d×%2$d</string>
     <string name="stack_roi_apply">使用此范围</string>
+    <string name="stack_roi_applying">正在应用采集范围…</string>
+    <string name="stack_roi_applied">采集范围已应用。</string>
+    <string name="stack_roi_failed">采集范围应用失败，请检查相机连接后重试。</string>
     <string name="stack_roi_unavailable">当前格式和 Bin 设置下没有可用范围。</string>
     <string name="stack_roi_calibration_locked">更改采集范围前，请先取消已选校准帧。</string>
     <string name="stack_roi_why">为什么有限制？</string>

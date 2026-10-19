@@ -38,6 +38,33 @@ class StackRoiPlannerInstrumentedTest {
             1, 1, 10_000.0, 0f, "none", "raw", pixelTraits = requireNotNull(CameraScienceLayouts.fullContainer(PixelFormat.BAYER_RG16))),
         3856, 2180, 128L shl 20, minWidth = 16, minHeight = 16, widthStep = 4, heightStep = 2)
 
+    @Test fun asynchronousApplicationShowsProgressFailureAndRetrySuccess() {
+        var current by mutableStateOf(context())
+        var application by mutableStateOf(StackRoiApplyState())
+        var request: Roi? = null
+        compose.setContent { MobileObservatoryTheme { Surface(Modifier.fillMaxSize()) {
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp)) {
+                StackRoiPanel(current, application = application) { roi ->
+                    request = roi
+                    application = StackRoiApplyState(StackRoiApplyPhase.APPLYING)
+                    true
+                }
+            }
+        } } }
+        compose.onNodeWithTag("stack-roi-apply").performScrollTo().performClick()
+        compose.onNodeWithTag("stack-roi-apply").assertIsNotEnabled()
+        compose.onNodeWithTag("stack-roi-result").assertTextEquals(app.getString(R.string.stack_roi_applying))
+        compose.runOnIdle { application = StackRoiApplyState(StackRoiApplyPhase.FAILED, "roi_apply_failed") }
+        compose.onNodeWithTag("stack-roi-result").assertTextEquals(app.getString(R.string.stack_roi_failed))
+        compose.onNodeWithTag("stack-roi-apply").assertIsEnabled().performClick()
+        compose.runOnIdle {
+            current = current.copy(key = current.withRoi(requireNotNull(request)))
+            application = StackRoiApplyState(StackRoiApplyPhase.APPLIED)
+        }
+        compose.onNodeWithTag("stack-roi-result").assertTextEquals(app.getString(R.string.stack_roi_applied))
+        compose.onNodeWithTag("stack-roi-apply").assertIsNotEnabled()
+    }
+
     @Test fun ratioFrameAndApplyUseTheDisplayedBudgetAndPreserveCfaParity() {
         var current by mutableStateOf(context())
         var applied: Roi? = null

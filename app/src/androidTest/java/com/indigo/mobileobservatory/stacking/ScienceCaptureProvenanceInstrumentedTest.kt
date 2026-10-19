@@ -46,22 +46,27 @@ class ScienceCaptureProvenanceInstrumentedTest {
         }
     }
 
-    @Test fun recordingStartedDuringExposureTransitionCannotBecomeValidCalibrationMaterial() = runBlocking {
+    @Test fun recordingWaitsForExposureTransitionAndThenRetainsTheVerifiedSettings() = runBlocking {
         workspace { vm, camera ->
             val oldRun = camera.scienceCaptureGeneration!!
             camera.emit(oldRun)
             main { vm.setRecordFormat("SER"); vm.setExposure(2_000_000f); vm.startRecording() }
+            assertFalse(vm.isRecording.value)
+            assertNull(vm.getActiveRecordingFile())
+            camera.allowExposure.countDown()
+            await { camera.starts >= 2 && camera.scienceCaptureGeneration != null && vm.exposureUs.value == 2_000_000f }
+            await { camera.emit(camera.scienceCaptureGeneration!!); vm.scienceCaptureReady.value }
+            main { vm.startRecording() }
             assertTrue(vm.isRecording.value)
             val file = checkNotNull(vm.getActiveRecordingFile())
             try {
                 camera.emit(oldRun)
-                camera.allowExposure.countDown()
-                await { camera.starts >= 2 && camera.scienceCaptureGeneration != null }
                 camera.emit(camera.scienceCaptureGeneration!!)
                 main { vm.stopRecording() }
                 await { vm.getActiveRecordingFile() == null }
                 val context = JSONObject(File(file.parentFile, "${file.name}.capture.json").readText())
-                assertFalse(context.getBoolean("valid"))
+                assertTrue(context.getBoolean("valid"))
+                assertEquals(2_000_000.0, context.getJSONObject("capture").getDouble("exposureUs"), 0.0)
             } finally {
                 main { vm.stopRecording() }
                 file.delete(); File(file.parentFile, "${file.name}.capture.json").delete()
