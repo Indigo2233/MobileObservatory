@@ -1,10 +1,10 @@
 <resources>
     <string name="stack_offline_region">Stacking region</string>
     <string name="stack_offline_bin">Processing Bin</string>
-    <string name="stack_offline_estimate">Output %1$d×%2$d · estimated %3$d MiB / budget %4$d MiB</string>
+    <string name="stack_offline_estimate">Output %1$d×%2$d · estimated %3$.1f MiB / budget %4$.1f MiB</string>
     <string name="stack_offline_use_bin">Use Bin %1$d×, keep the field</string>
     <string name="stack_offline_use_roi">Or crop to %1$d×%2$d</string>
     <string name="stack_offline_memory">This region exceeds the processing budget. Increase processing Bin or select a smaller region.</string>
     <string name="stack_offline_drag_hint">Drag to select the stacking region. Pixels outside it are excluded.</string>
-    <string name="stack_heap_budget">App heap limit %1$d MiB · stacking budget %2$d MiB. The budget is 40%% of the heap limit, which differs from total phone RAM.</string>
+    <string name="stack_heap_budget">App heap limit %1$d MiB · stacking budget %2$.1f MiB. The budget is 40%% of the heap limit, which differs from total phone RAM.</string>
 </resources>

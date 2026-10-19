@@ -181,7 +181,7 @@ fun StackingScreen(viewModel: CameraViewModel, mode: StackMode, onBack: () -> Un
         TextButton(onClick = { showDetails = !showDetails }) { Text(stringResource(if (showDetails) R.string.stack_hide_details else R.string.stack_show_details)) }
         if (showDetails) {
         Text(stringResource(R.string.stack_heap_budget, coordinator.heapLimitBytes / 1024 / 1024,
-            coordinator.memoryBudgetBytes / 1024 / 1024), style = MaterialTheme.typography.bodySmall)
+            coordinator.memoryBudgetBytes / 1048576.0), style = MaterialTheme.typography.bodySmall)
         if (task.exportedFiles.isNotEmpty()) task.exportedFiles.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
         Text(stringResource(R.string.stack_limits, coordinator.memoryBudgetBytes / 1024 / 1024), style = MaterialTheme.typography.bodySmall)
         Text(stringResource(R.string.stack_foreground), style = MaterialTheme.typography.bodySmall)
@@ -416,7 +416,7 @@ private fun OfflineStackControls(c: StackingCoordinator, task: StackingTaskState
         }
         if (plan != null) {
             Text(stringResource(R.string.stack_offline_estimate, plan.width, plan.height,
-                ceil(plan.workingBytes / 1048576.0).toLong(), c.memoryBudgetBytes / 1048576),
+                plan.workingBytes / 1048576.0, c.memoryBudgetBytes / 1048576.0),
                 color = if (issue == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
                 modifier = Modifier.testTag("offline-budget"), style = MaterialTheme.typography.bodySmall)
             if (issue != null) {
