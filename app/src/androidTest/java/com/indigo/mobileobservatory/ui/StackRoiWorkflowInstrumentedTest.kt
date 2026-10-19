@@ -22,6 +22,8 @@ import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 @RunWith(AndroidJUnit4::class)
 class StackRoiWorkflowInstrumentedTest {
@@ -87,6 +89,47 @@ class StackRoiWorkflowInstrumentedTest {
             assertFalse(compose.activity.isFinishing)
         } finally {
             instrumentation.runOnMainSync { store.clear() }
+            prefs.edit().putBoolean("update_auto_check", autoCheck).commit()
+        }
+    }
+
+    @Test fun recordingWaitsForAnInFlightRoiTransaction() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val app = instrumentation.targetContext.applicationContext as Application
+        val prefs = app.getSharedPreferences("mobile_observatory", Context.MODE_PRIVATE)
+        val autoCheck = prefs.getBoolean("update_auto_check", true)
+        prefs.edit().putBoolean("update_auto_check", false).commit()
+        val store = ViewModelStore()
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        var vm: CameraViewModel? = null
+        val delegate = SimulatedCamera("ROI recording gate fixture")
+        val camera = object : Camera by delegate {
+            override fun setRoi(roi: Roi) {
+                entered.countDown()
+                check(release.await(10, TimeUnit.SECONDS)) { "ROI fixture timed out" }
+                delegate.setRoi(roi)
+            }
+        }
+        try {
+            instrumentation.runOnMainSync {
+                val model = ViewModelProvider(store, ViewModelProvider.AndroidViewModelFactory(app))[CameraViewModel::class.java]
+                vm = model
+                model.cameraManager.javaClass.getDeclaredField("activeCamera").apply { isAccessible = true }
+                    .set(model.cameraManager, camera)
+                model.setRoi(Roi(8, 8, 320, 240))
+            }
+            assertTrue("ROI write never reached the camera boundary", entered.await(5, TimeUnit.SECONDS))
+            val model = requireNotNull(vm)
+            instrumentation.runOnMainSync { model.startRecording() }
+            assertFalse(model.isRecording.value)
+            assertEquals(app.getString(R.string.camera_cfa_busy_settings), model.statusMessage.value)
+        } finally {
+            release.countDown()
+            vm?.let { model -> instrumentation.runOnMainSync {
+                model.stopRecording()
+                store.clear()
+            } }
             prefs.edit().putBoolean("update_auto_check", autoCheck).commit()
         }
     }

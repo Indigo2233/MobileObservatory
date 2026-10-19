@@ -2193,17 +2193,30 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /** Revalidate the proposed bounds against the current camera and budget at the action boundary. */
-    fun applyStackRoi(expected: StackRoiContext, roi: Roi): Boolean {
-        val camera = cameraManager.activeCamera ?: return false
-        val current = stackRoiContext() ?: return false
-        if (current.layoutIdentity != expected.layoutIdentity || current.blockedReason != null) return false
+    fun applyStackRoi(expected: StackRoiContext, roi: Roi): Boolean = synchronized(recordingLifecycleLock) {
+        val camera = cameraManager.activeCamera ?: return@synchronized false
+        val current = stackRoiContext() ?: return@synchronized false
+        if (current.layoutIdentity != expected.layoutIdentity || current.blockedReason != null) return@synchronized false
         if (roi.x < 0 || roi.y < 0 || roi.width < current.minWidth || roi.height < current.minHeight ||
             roi.x.toLong() + roi.width > current.sensorWidth || roi.y.toLong() + roi.height > current.sensorHeight ||
-            roi.width % current.widthStep != 0 || roi.height % current.heightStep != 0 || current.issue(roi) != null) return false
-        if (cameraManager.activeCamera !== camera) return false
+            roi.width % current.widthStep != 0 || roi.height % current.heightStep != 0 || current.issue(roi) != null) {
+            return@synchronized false
+        }
+        if (cameraManager.activeCamera !== camera) return@synchronized false
         invalidateStackSettings(layoutChanged = true)
-        changeCaptureSettings(camera) { camera.setRoi(roi); _roi.value = camera.currentRoi }
-        return true
+        changeCaptureSettings(camera) {
+            check(cameraManager.activeCamera === camera) { "camera_changed" }
+            check(!_isRecording.value && recordingWriteSession == null && currentRecordingFile == null) { "recording_active" }
+            val latest = captureSettingsSnapshot(camera)?.copy(target = stacking.liveTarget.value,
+                demosaicAlgorithm = stacking.demosaicAlgorithm.value) ?: error("settings_changed")
+            check(StackRoiContext(latest, current.sensorWidth, current.sensorHeight, current.budgetBytes,
+                current.calibrationBytes, current.calibrated, current.minWidth, current.minHeight,
+                current.widthStep, current.heightStep).layoutIdentity == expected.layoutIdentity) { "settings_changed" }
+            camera.setRoi(roi)
+            check(camera.currentRoi == roi) { "roi_apply_failed" }
+            _roi.value = camera.currentRoi
+        }
+        true
     }
 
     fun setStackPlanningBin(bin: Int) {
@@ -3182,7 +3195,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             "roi=${source?.currentRoi} pixels=${source?.currentPixelFormat} capturing=${source?.isCapturing?.value} " +
             "cfaBusy=${_cameraCfaApplying.value} referenceBusy=${pointingCaptureOwned.get()} " +
             "recording=${_isRecording.value} writerBusy=${recordingWriteSession != null} license=${License.canRecord}")
-        if (_cameraCfaApplying.value) { _statusMessage.value = app.getString(R.string.camera_cfa_busy_settings); return@synchronized }
+        if (_cameraCfaApplying.value || _gainWriteInProgress.value || binningSwitching || pendingCaptureChanges.get() != 0) {
+            _statusMessage.value = app.getString(R.string.camera_cfa_busy_settings)
+            return@synchronized
+        }
         if (pointingCaptureOwned.get()) { _statusMessage.value = "Reference capture in progress"; return }
         // A timed-out old worker still owns its file and queue until final cleanup returns.
         if (_isRecording.value || recordingWriteSession != null || currentRecordingFile != null || hasOpenRecorder()) return
