@@ -13,6 +13,9 @@ interface PlanetaryFrameSource : Closeable {
     val width: Int
     val height: Int
     val channels: Int
+    val physicalEdges: PlanetaryImageEdges get() = PlanetaryImageEdges()
+    /** The caller separately budgets bounded native decoder/calibration scratch. */
+    val boundedDecode: Boolean get() = false
     fun readFrame(index: Long): LinearImage
     /** Zero means unknown, never inferred from video FPS. */
     fun exposureSeconds(index: Long): Double = 0.0
@@ -97,8 +100,13 @@ class PlanetaryStacker {
         const val MAX_PIXELS = LinearImage.MAX_PIXELS
         const val MAX_SELECTED_FRAMES = 10_000_000L // Exact integer per-pixel counts in Float.
         /** Includes decode scratch, two input images, two gray planes, double sums, weights, output + preview/post scratch. */
-        fun estimatedPeakBytes(width: Int, height: Int, channels: Int): Long =
-            Math.multiplyExact(Math.multiplyExact(width.toLong(), height.toLong()), channels * 32L + 24L) + 2L * 1024 * 1024
+        fun estimatedPeakBytes(width: Int, height: Int, channels: Int, boundedDecode: Boolean = false): Long =
+            if (boundedDecode) {
+                // Reference + old/new input + result (4 Float channel images), Double sums,
+                // reference/current reusable gray planes and Float coverage. Post-processing
+                // runs after this worker returns; its lower live set fits the same reserve.
+                width.toLong() * height * (channels * 24L + 12L) + 8L * 1024 * 1024
+            } else Math.multiplyExact(Math.multiplyExact(width.toLong(), height.toLong()), channels * 32L + 24L) + 2L * 1024 * 1024
     }
 
     fun analyze(source: PlanetaryFrameSource, options: PlanetaryOptions = PlanetaryOptions(), cacheDirectory: File,
@@ -123,7 +131,7 @@ class PlanetaryStacker {
                     control.progress(PlanetaryProgress(PlanetaryPhase.READ, frame, source.frameCount))
                     val image = source.readFrame(frame)
                     validateFrame(image, source)
-                    val q = PlanetaryQualityEstimator.measure(image, roi, control.checkCancelled)
+                    val q = PlanetaryQualityEstimator.measure(image, roi, source.physicalEdges, control.checkCancelled)
                     val rank = (q.score * 65535).roundToInt().coerceIn(0, 65535)
                     out.writeInt(rank); out.writeByte(q.rejection.ordinal)
                     if (q.rejection == PlanetaryRejection.NONE) {
@@ -136,7 +144,7 @@ class PlanetaryStacker {
             }
             require(valid > 0) { "No usable target frames; adjust ROI, exposure or focus (${reasons.entries.joinToString { "${it.key}: ${it.value}" }})" }
             return PlanetaryAnalysis(index, source.frameCount, valid, bestFrame, distribution, reasons, options,
-                source.width, source.height, source.channels, estimatedPeakBytes(source.width, source.height, source.channels),
+                source.width, source.height, source.channels, estimatedPeakBytes(source.width, source.height, source.channels, source.boundedDecode),
                 (System.nanoTime() - start) / 1_000_000, ranks)
         } catch (error: Throwable) { index.delete(); throw error }
     }
@@ -161,6 +169,7 @@ class PlanetaryStacker {
         val registration = PlanetaryRegistration(reference, options.roi ?: PixelRoi(0, 0, source.width, source.height), options, control.checkCancelled)
         val sums = DoubleArray(reference.pixels.size)
         val weights = FloatArray(source.width * source.height)
+        var grayScratch: FloatArray? = null
         val modes = linkedMapOf<PlanetaryRegistrationMode, Long>()
         val reasons = analysis.rejectionCounts.toMutableMap()
         var accepted = 0L; var processed = 0L; var totalCorrelation = 0.0; var exposure = 0.0; var unknownExposure = 0L
@@ -179,7 +188,8 @@ class PlanetaryStacker {
                     val image = if (frame == analysis.referenceFrame) reference else source.readFrame(frame)
                     validateFrame(image, source)
                     control.progress(PlanetaryProgress(PlanetaryPhase.REGISTER, processed, selected))
-                    val prepared = if (frame == analysis.referenceFrame) null else registration.prepareFrame(image)
+                    val prepared = if (frame == analysis.referenceFrame) null else registration.prepareFrame(image,
+                        grayScratch ?: FloatArray(source.width * source.height).also { grayScratch = it })
                     val alignment = if (frame == analysis.referenceFrame) PlanetaryAlignment(
                         PlanetaryShift(0.0, 0.0, 1.0), emptyList(), registration.points.size,
                         if (!options.localAlignment) PlanetaryRegistrationMode.GLOBAL else if (registration.points.size < 3) PlanetaryRegistrationMode.GLOBAL_LOW_TEXTURE else PlanetaryRegistrationMode.MULTIPOINT
@@ -224,7 +234,7 @@ class PlanetaryStacker {
     private fun validate(source: PlanetaryFrameSource, options: PlanetaryOptions) {
         require(source.width >= 12 && source.height >= 12 && source.channels in listOf(1, 3) && source.frameCount > 0) { "Unsupported or empty recording" }
         require(source.width.toLong() * source.height <= MAX_PIXELS) { "processing_size" }
-        val bytes = estimatedPeakBytes(source.width, source.height, source.channels)
+        val bytes = estimatedPeakBytes(source.width, source.height, source.channels, source.boundedDecode)
         require(bytes <= options.memoryBudgetBytes) { "Stack needs about ${bytes / 1048576} MiB; choose a smaller recording ROI or free memory" }
         options.roi?.checked(source.width, source.height)
         require(options.maxAlignmentPoints in 3..256 && options.maxGlobalShift in 2..128 && options.maxLocalShift in 2..16)

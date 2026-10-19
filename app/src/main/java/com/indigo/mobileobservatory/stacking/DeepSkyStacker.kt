@@ -14,7 +14,7 @@ data class DeepSkySnapshot(val image: LinearImage, val weights: FloatArray, val 
  * Cancellation discards this engine's accumulation; live pause lets an in-flight frame finish,
  * while reset/close cancels and discards the engine. Previously returned snapshots stay valid.
  */
-class DeepSkyStacker(private val config: DeepSkyConfig = DeepSkyConfig()) {
+class DeepSkyStacker(private val config: DeepSkyConfig = DeepSkyConfig(), private val livePreviewOverlap: Boolean = true) {
     private val starDetectionWorkspace = StarRegistration.Workspace()
     private var reference: StarField? = null
     private var width = 0; private var height = 0; private var channels = 0
@@ -39,7 +39,8 @@ class DeepSkyStacker(private val config: DeepSkyConfig = DeepSkyConfig()) {
         if (reference != null && (image.width != width || image.height != height || image.channels != channels)) return reject(DeepSkyRejection.GEOMETRY)
         // mean, M2, current, bounded raw queue, immutable snapshot, background and processed
         // preview, plus mono detail filters/weights/masks. Fail before allocating accumulation.
-        val workingBytes = estimateWorkingBytes(image.width, image.height, image.channels)
+        val workingBytes = if (livePreviewOverlap) estimateWorkingBytes(image.width, image.height, image.channels)
+            else estimateOfflineWorkingBytes(image.width, image.height, image.channels)
         if (workingBytes > config.memoryBudgetBytes) return reject(DeepSkyRejection.MEMORY_BUDGET)
         val field = StarRegistration.detect(image, workspace = starDetectionWorkspace, cancelled = cancelled)
         stats = stats.copy(stars = field.stars.size, estimatedWorkingBytes = workingBytes)
@@ -112,6 +113,11 @@ class DeepSkyStacker(private val config: DeepSkyConfig = DeepSkyConfig()) {
         // and simultaneous sharpening/local-contrast scratch. Calibration is added by
         // the coordinator because its masters and sensor geometry can differ after binning.
         fun estimateWorkingBytes(width: Int, height: Int, channels: Int): Long = width.toLong() * height * (channels * 40L + 32L) + 8L * 1024 * 1024
+        // Sequential offline work has no live raw queue or three concurrent previews.
+        // Reserve mean/M2, old/new input and final snapshot (5 channel planes), two
+        // weight planes and filter/registration headroom. Native tile scratch is extra.
+        fun estimateOfflineWorkingBytes(width: Int, height: Int, channels: Int): Long =
+            width.toLong() * height * (channels * 20L + 24L) + 8L * 1024 * 1024
         const val REJECTION_LIMITATION = "Temporal sigma rejection starts after 5 valid samples per pixel. Early outliers and persistent hot pixels are not guaranteed to be removed; use dark calibration/dithering for persistent defects. Uncalibrated by default."
     }
 }

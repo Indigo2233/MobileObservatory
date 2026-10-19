@@ -78,6 +78,8 @@ class StackingCoordinator(
     val task = _task.asStateFlow()
     private val _preview = MutableStateFlow<Bitmap?>(null)
     val preview = _preview.asStateFlow()
+    private val _sourcePreview = MutableStateFlow<Bitmap?>(null)
+    val sourcePreview = _sourcePreview.asStateFlow()
     private val _livePreview = MutableStateFlow<Bitmap?>(null)
     val livePreview = _livePreview.asStateFlow()
     private val _showLiveStack = MutableStateFlow(true)
@@ -115,13 +117,16 @@ class StackingCoordinator(
     private var analysisIdentity = ""
     private var analysisCalibration: CalibrationSelection? = null
     private var analysisDemosaic: DemosaicAlgorithm? = null
+    private var analysisRegion: PixelRoi? = null
+    private var analysisBin = 1
     private var sourceFile: File? = null
     var endianConvention: SerEndianConvention = SerEndianConvention.COMPATIBILITY
         private set
     // Use one explicit layout for the sequence: dim left-aligned frames must not rescale differently.
     var sampleAlignment: SampleAlignment = SampleAlignment.RIGHT
         private set
-    val memoryBudgetBytes: Long = minOf(256L * 1024 * 1024, Runtime.getRuntime().maxMemory() * 2 / 5)
+    val heapLimitBytes: Long = Runtime.getRuntime().maxMemory()
+    val memoryBudgetBytes: Long = StackMemoryBudget.forHeap(heapLimitBytes)
     private val cache = File(app.cacheDir, "stack-analysis")
     private val engine = PlanetaryStacker()
     @Volatile private var liveCalibration = CalibrationSelection()
@@ -274,7 +279,7 @@ class StackingCoordinator(
         } else {
             _offlineTarget.value = newTarget
             planetaryProduct = null
-            planetaryPreview = null
+            planetaryPreview = null; _sourcePreview.value = null
             if (activeMode == mode) _preview.value = null
             val retainedFile = sourceFile ?: _task.value.source?.file
             if (live.state.value.phase != LiveStackPhase.EMPTY) {
@@ -382,7 +387,7 @@ class StackingCoordinator(
         cancelRenderingLocked()
         _demosaicAlgorithm.value = algorithm
         analysis?.close(); analysis = null; analysisCalibration = null; analysisDemosaic = null
-        planetaryProduct = null; planetaryPreview = null
+        planetaryProduct = null; planetaryPreview = null; _sourcePreview.value = null
         if (activeMode == StackMode.PLANETARY) _preview.value = null
         val file = sourceFile
         _task.update { it.copy(phase = if (file == null) StackTaskPhase.EMPTY else StackTaskPhase.READY,
@@ -411,7 +416,7 @@ class StackingCoordinator(
         cancelRenderingLocked()
         _serCfaInterpretation.value = interpretation
         analysis?.close(); analysis = null; analysisCalibration = null; analysisDemosaic = null
-        planetaryProduct = null; planetaryPreview = null
+        planetaryProduct = null; planetaryPreview = null; _sourcePreview.value = null
         if (activeMode == StackMode.PLANETARY) _preview.value = null
         val file = sourceFile
         _task.update { it.copy(phase = if (file == null) StackTaskPhase.EMPTY else StackTaskPhase.READY,
@@ -429,7 +434,7 @@ class StackingCoordinator(
         planetaryProduct = null
         sourceFile = null
         synchronized(stateLock) {
-            planetaryPreview = null
+            planetaryPreview = null; _sourcePreview.value = null
             if (activeMode == StackMode.PLANETARY) _preview.value = null
         }
         _task.value = StackingTaskState(phase = StackTaskPhase.READING, source = retainedSource)
@@ -440,11 +445,12 @@ class StackingCoordinator(
             // or fails to decode. The user can then select a cheaper algorithm and retry.
             sourceFile = file
             _task.value = StackingTaskState(phase = StackTaskPhase.READING, source = info)
-            checkBudget(source)
-            val first = source.readFrame(0)
-            val processed = StackPostProcessor.prepare(first, StackProcessingParameters.preset(ProcessingPreset.NATURAL), backgroundModelCache) { !isActive }
-            val bitmap = StackBitmap.create(processed, 1280) { ensureActive() }
-            publishPlanetaryPreview(bitmap)
+            // Selecting a large recording must show a bounded full-field preview before
+            // science admission, so the user can actually choose a crop or software Bin.
+            val bitmap = source.reader.readPreviewBitmap(0, maxPixels = 262_144) { ensureActive() }
+                ?: error(source.reader.lastError ?: "read_failed")
+            ensureActive()
+            publishPlanetaryPreview(bitmap, sourceImage = true)
             sourceFile = file
             _task.value = StackingTaskState(phase = StackTaskPhase.READY, source = info)
         }
@@ -498,7 +504,7 @@ class StackingCoordinator(
             planetaryProduct = null
             sourceFile = null
             synchronized(stateLock) {
-                planetaryPreview = null
+                planetaryPreview = null; _sourcePreview.value = null
                 if (activeMode == StackMode.PLANETARY) _preview.value = null
             }
             _task.value = StackingTaskState(phase = StackTaskPhase.READING)
@@ -506,17 +512,17 @@ class StackingCoordinator(
             source(target).use {
                 sourceFile = target
                 _task.value = StackingTaskState(phase = StackTaskPhase.READING, source = it.info)
-                checkBudget(it)
-                val first = it.readFrame(0)
-                val processed = StackPostProcessor.prepare(first, StackProcessingParameters.preset(ProcessingPreset.NATURAL), backgroundModelCache) { !isActive }
-                publishPlanetaryPreview(StackBitmap.create(processed, 1280) { ensureActive() })
+                val bitmap = it.reader.readPreviewBitmap(0, maxPixels = 262_144) { ensureActive() }
+                    ?: error(it.reader.lastError ?: "read_failed")
+                ensureActive()
+                publishPlanetaryPreview(bitmap, sourceImage = true)
                 sourceFile = target
                 _task.value = StackingTaskState(phase = StackTaskPhase.READY, source = it.info)
             }
         } finally { partial.delete() }
     }
 
-    fun analyze(roi: PixelRoi?, localAlignment: Boolean) = runTask(StackTaskPhase.ANALYZING) {
+    fun analyze(roi: PixelRoi?, localAlignment: Boolean, softwareBin: Int = 1) = runTask(StackTaskPhase.ANALYZING) {
         ensureOfflineAvailable()
         check(_offlineTarget.value == StackTarget.PLANETARY) { "stack_target_changed" }
         val file = sourceFile ?: error("choose_source")
@@ -524,9 +530,9 @@ class StackingCoordinator(
         analysis?.close(); analysis = null; analysisCalibration = null; analysisDemosaic = null
         planetaryProduct = null
         _task.update { it.copy(histogram = emptyList(), qualityFrames = 0, referenceFrame = 0, stats = null, deepSkyStats = null) }
-        source(file).use { source ->
+        source(file, roi, softwareBin).use { source ->
             checkBudget(source)
-            val options = PlanetaryOptions(roi = roi, localAlignment = localAlignment,
+            val options = PlanetaryOptions(localAlignment = localAlignment,
                 memoryBudgetBytes = memoryBudgetBytes - source.processingOverheadBytes)
             val result = engine.analyze(source, options, cache, control())
             try {
@@ -537,6 +543,8 @@ class StackingCoordinator(
                     analysisIdentity = source.info.decodingIdentity
                     analysisCalibration = source.calibration
                     analysisDemosaic = source.algorithm
+                    analysisRegion = source.plan.region
+                    analysisBin = softwareBin
                     _task.update { it.copy(phase = StackTaskPhase.ANALYZED, source = source.info,
                         histogram = result.histogram.toList(), qualityFrames = result.validFrames,
                         referenceFrame = result.referenceFrame, message = "", completed = result.frameCount, total = result.frameCount) }
@@ -555,7 +563,8 @@ class StackingCoordinator(
         // Keep the display bitmap, but release the previous full-resolution product before
         // allocating another stack. Export and rendering were already joined by runTask.
         planetaryProduct = null
-        source(file).use { source ->
+        source(file, analysisRegion, analysisBin).use { source ->
+            checkBudget(source)
             check(source.info.decodingIdentity == analysisIdentity) { "source_changed" }
             check(source.calibration === analysisCalibration) { "calibration_changed_analyze_again" }
             check(source.algorithm == analysisDemosaic) { "demosaic_changed_analyze_again" }
@@ -599,7 +608,7 @@ class StackingCoordinator(
         }
     }
 
-    fun stackDeepSky() = runTask(StackTaskPhase.STACKING) {
+    fun stackDeepSky(roi: PixelRoi? = null, softwareBin: Int = 1) = runTask(StackTaskPhase.STACKING) {
         ensureOfflineAvailable()
         check(_offlineTarget.value == StackTarget.DEEP_SKY) { "stack_target_changed" }
         val file = sourceFile ?: error("choose_source")
@@ -607,7 +616,7 @@ class StackingCoordinator(
         analysis?.close(); analysis = null; analysisCalibration = null; analysisDemosaic = null
         planetaryProduct = null
         _task.update { it.copy(histogram = emptyList(), qualityFrames = 0, referenceFrame = 0, stats = null, deepSkyStats = null) }
-        source(file).use { source ->
+        source(file, roi, softwareBin).use { source ->
             checkBudget(source)
             val result = OfflineDeepSkyStacker().stack(source,
                 DeepSkyConfig(memoryBudgetBytes = memoryBudgetBytes - source.processingOverheadBytes),
@@ -668,7 +677,7 @@ class StackingCoordinator(
         analysisDemosaic = null
         planetaryProduct = null; sourceFile = null
         synchronized(stateLock) {
-            planetaryPreview = null
+            planetaryPreview = null; _sourcePreview.value = null
             if (activeMode == StackMode.PLANETARY) _preview.value = null
         }
         _task.value = StackingTaskState()
@@ -776,8 +785,9 @@ class StackingCoordinator(
         _task.update { it.copy(message = reason) }
     }
 
-    private fun publishPlanetaryPreview(bitmap: Bitmap) = synchronized(stateLock) {
+    private fun publishPlanetaryPreview(bitmap: Bitmap, sourceImage: Boolean = false) = synchronized(stateLock) {
         if (closed) bitmap.recycle() else {
+            if (sourceImage) _sourcePreview.value = bitmap
             planetaryPreview = bitmap
             if (activeMode == StackMode.PLANETARY) _preview.value = bitmap
         }
@@ -927,11 +937,18 @@ class StackingCoordinator(
     }
 
     private fun checkBudget(source: SerSource) {
-        val engineBytes = if (_offlineTarget.value == StackTarget.DEEP_SKY)
-            DeepSkyStacker.estimateWorkingBytes(source.width, source.height, source.channels)
-        else PlanetaryStacker.estimatedPeakBytes(source.width, source.height, source.channels)
-        require(source.width.toLong() * source.height <= PlanetaryStacker.MAX_PIXELS &&
-            engineBytes + source.processingOverheadBytes <= memoryBudgetBytes) { "memory_budget" }
+        FileLogger.i("Stacking", "Offline input=${source.info.width}x${source.info.height} region=${source.plan.region} " +
+            "bin=${source.plan.softwareBin} output=${source.width}x${source.height} estimate=${source.plan.workingBytes} " +
+            "budget=$memoryBudgetBytes heapLimit=$heapLimitBytes target=${source.plan.target}")
+        source.plan.issue(memoryBudgetBytes)?.let { error(it) }
+    }
+
+    fun offlinePlan(region: PixelRoi? = null, softwareBin: Int = 1): OfflineRegionPlan? {
+        val info = _task.value.source ?: return null
+        return runCatching { OfflineRegionPlan(info.width, info.height,
+            _serCfaInterpretation.value.sensorFormat(info.headerColorId, info.bits),
+            region ?: PixelRoi(0, 0, info.width, info.height), _demosaicAlgorithm.value, _offlineTarget.value,
+            softwareBin, calibration.memoryBytes, calibration.memoryBytes > 0) }.getOrNull()
     }
 
     private fun CoroutineScope.control() = PlanetaryControl(checkCancelled = { ensureActive() }, progress = { progress ->
@@ -952,54 +969,63 @@ class StackingCoordinator(
         _task.update { it.copy(javaPeakBytes = maxOf(java, it.javaPeakBytes), nativePeakBytes = maxOf(native, it.nativePeakBytes)) }
     }
 
-    private suspend fun CoroutineScope.source(file: File): SerSource =
+    private suspend fun CoroutineScope.source(file: File, region: PixelRoi? = null, softwareBin: Int = 1): SerSource =
         SerSource(file, endianConvention, sampleAlignment, calibration.snapshot(), _demosaicAlgorithm.value,
-            _serCfaInterpretation.value) { ensureActive() }
+            _serCfaInterpretation.value, region, softwareBin, _offlineTarget.value) { ensureActive() }
 
     private class SerSource(file: File, endian: SerEndianConvention, alignment: SampleAlignment,
         val calibration: CalibrationSelection, val algorithm: DemosaicAlgorithm,
         val interpretation: SerCfaInterpretation,
+        region: PixelRoi?, softwareBin: Int, target: StackTarget,
         private val cancelCheck: () -> Unit) : PlanetaryFrameSource {
         val reader = SERReader(file, endian, interpretation).apply { sampleAlignment = alignment }
         private val demosaicWorkspace = DdfapdDemosaicer.Workspace()
         val info: StackSourceInfo
         private val capture: CalibrationCapture
         private val geometry: CalibrationGeometry
+        val plan: OfflineRegionPlan
         val calibrationOverheadBytes: Long
         val demosaicScratchBytes: Long
-        val processingOverheadBytes: Long get() = calibrationOverheadBytes + demosaicScratchBytes
+        val processingOverheadBytes: Long get() = plan.overheadBytes
         init {
             try {
                 check(reader.open()) { reader.lastError ?: "invalid_source" }
                 val header = reader.header!!
                 geometry = CalibrationGeometry.from(header.width, header.height, reader.sensorFormat, reader.sensorTraits)
+                plan = OfflineRegionPlan(header.width, header.height, reader.sensorFormat,
+                    region ?: PixelRoi(0, 0, header.width, header.height), algorithm, target, softwareBin,
+                    calibration.memoryBytes, calibration.enabled)
                 val fileIdentity = identity(file)
                 info = StackSourceInfo(file, header.width, header.height,
                     if (reader.sensorFormat.isMono) 1 else 3, header.pixelDepth, header.frameCount.toLong(), fileIdentity,
                     reader.sensorFormat.isBayer, header.colorId, geometry.layout,
-                    interpretation.decodingIdentity(fileIdentity, endian.name, alignment.name, algorithm.name),
+                    interpretation.decodingIdentity(fileIdentity, endian.name, alignment.name, algorithm.name) +
+                        "|region=${plan.region}|bin=$softwareBin",
                     header.colorId in 0..99)
                 capture = if (calibration.enabled) CalibrationCoordinator.recordingCapture(file)
                     else runCatching { CalibrationCoordinator.recordingCapture(file) }.getOrDefault(CalibrationCapture())
                 calibration.validate(geometry, capture)
-                calibrationOverheadBytes = calibration.memoryBytes + if (calibration.enabled) geometry.sampleCount * 4L else 0L
-                demosaicScratchBytes = LinearPixelDecoder.demosaicExtraBytes(header.width, header.height, reader.sensorFormat, algorithm)
+                calibrationOverheadBytes = plan.calibrationOverheadBytes
+                demosaicScratchBytes = plan.demosaicScratchBytes
             } catch (failure: Throwable) { reader.close(); throw failure }
         }
-        override val width get() = info.width
-        override val height get() = info.height
+        override val width get() = plan.width
+        override val height get() = plan.height
         override val channels get() = info.channels
+        override val boundedDecode get() = true
+        override val physicalEdges get() = PlanetaryImageEdges(plan.region.left == 0, plan.region.top == 0,
+            plan.region.right == info.width, plan.region.bottom == info.height)
         override val frameCount get() = info.frames
         override fun readFrame(index: Long): LinearImage {
             require(index in 0 until frameCount && index <= Int.MAX_VALUE)
             cancelCheck()
-            val sensor = reader.readSensorFrame(index.toInt(), maxPixels = LinearImage.MAX_PIXELS, cancelCheck = cancelCheck)
-                ?: error(reader.lastError ?: "read_failed")
-            return LinearPixelDecoder.demosaicSensor(calibration.apply(sensor, geometry, capture, cancelCheck),
-                reader.sensorFormat, reader.sensorTraits, algorithm, demosaicWorkspace, cancelCheck)
+            return SerRegionDecoder.read(reader, index.toInt(), plan, calibration, geometry, capture, demosaicWorkspace, cancelCheck)
         }
         override fun exposureSeconds(index: Long): Double = capture.exposureUs?.div(1_000_000.0) ?: 0.0
         fun calibrationMetadata() = calibration.metadata() + mapOf(
+            "sourceWidth" to info.width.toString(), "sourceHeight" to info.height.toString(),
+            "sourceRegion" to JSONArray(listOf(plan.region.left, plan.region.top, plan.region.width, plan.region.height)).toString(),
+            "softwareBin" to plan.softwareBin.toString(), "processingDomain" to "native_tiles_calibrate_demosaic_then_bin",
             "calibrationWorkingBytes" to calibrationOverheadBytes.toString(),
             "calibrationUnknownSettings" to JSONArray(calibration.unknownWarnings(geometry, capture)).toString()
         )
@@ -1040,7 +1066,7 @@ class StackingCoordinator(
             backgroundModelCache.clear()
             calibration.close()
             live.close()
-            liveProduct = null; planetaryProduct = null; planetaryPreview = null
+            liveProduct = null; planetaryProduct = null; planetaryPreview = null; _sourcePreview.value = null
             _preview.value = null; _livePreview.value = null
             taskJob to renderJob
         }

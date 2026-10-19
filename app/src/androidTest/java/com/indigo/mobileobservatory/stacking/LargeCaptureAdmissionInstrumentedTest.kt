@@ -38,7 +38,7 @@ class LargeCaptureAdmissionInstrumentedTest {
         } finally { main { c.close() }; scope.cancel(); directory.deleteRecursively() }
     }
 
-    @Test fun largeSerHeaderStaysSelectableAndFailsTheProcessingBudgetRatherThanCalibration() = runBlocking {
+    @Test fun largeSerCanPreviewBeforeScienceAdmissionAndReportsTheOfflineBudget() = runBlocking {
         val directory = File(app.cacheDir, "stack-ser-admission-${System.nanoTime()}").apply { mkdirs() }
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
         val c = StackingCoordinator(app, scope, calibrationDirectory = File(directory, "masters"))
@@ -50,8 +50,12 @@ class LargeCaptureAdmissionInstrumentedTest {
             writer.close()
             await { c.calibration.state.value.initialized && !c.calibration.state.value.busy }
             main { c.loadFile(file) }
+            await { c.task.value.phase == StackTaskPhase.READY }
+            assertNotNull(c.sourcePreview.value)
+            assertEquals("offline_memory_budget", c.offlinePlan()!!.issue(c.memoryBudgetBytes))
+            main { c.analyze(null, false) }
             await { c.task.value.phase == StackTaskPhase.FAILED }
-            assertEquals("memory_budget", c.task.value.message)
+            assertEquals("offline_memory_budget", c.task.value.message)
             assertEquals(3536, c.task.value.source?.width)
             assertEquals("RGGB", c.task.value.source?.effectiveLayout)
         } finally { main { c.close() }; scope.cancel(); directory.deleteRecursively() }
@@ -79,6 +83,7 @@ class LargeCaptureAdmissionInstrumentedTest {
             c.acceptFrame(FrameData(pixels, side, side, PixelFormat.MONO8, 1, 0), key)
             await { c.live.state.value.accepted > 0 || c.live.state.value.phase == LiveStackPhase.FAILED || c.live.state.value.rejected > 0 }
             assertEquals(c.live.state.value.toString(), 1L, c.live.state.value.accepted)
+            await { c.live.latestSnapshot != null }
             assertEquals(514, c.live.latestSnapshot?.image?.width)
         } finally { main { c.close() }; scope.cancel(); directory.deleteRecursively() }
     }

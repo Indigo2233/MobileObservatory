@@ -1,0 +1,10 @@
+<resources>
+    <string name="stack_offline_region">叠加范围</string>
+    <string name="stack_offline_bin">处理 Bin</string>
+    <string name="stack_offline_estimate">输出 %1$d×%2$d · 预计 %3$d MiB / 预算 %4$d MiB</string>
+    <string name="stack_offline_use_bin">使用 Bin %1$d×，保留视野</string>
+    <string name="stack_offline_use_roi">或裁切至 %1$d×%2$d</string>
+    <string name="stack_offline_memory">当前范围超出处理预算，可增大处理 Bin 或缩小选区。</string>
+    <string name="stack_offline_drag_hint">拖动选择叠加范围，框外像素不进入叠加。</string>
+    <string name="stack_heap_budget">应用堆上限 %1$d MiB · 叠加预算 %2$d MiB。预算取堆上限的 40%%，手机总 RAM 不等于应用堆上限。</string>
+</resources>
