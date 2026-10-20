@@ -93,33 +93,50 @@ object DdfapdDemosaicer {
         demosaic(src, width, height, redX, redY, Workspace(), cancelCheck)
 
     fun demosaic(src: FloatArray, width: Int, height: Int, redX: Int, redY: Int,
-                 workspace: Workspace, cancelCheck: () -> Unit = {}): LinearImage {
-        return demosaicImpl(src, width, height, redX, redY, workspace, false, cancelCheck)
-    }
+                 workspace: Workspace, cancelCheck: () -> Unit = {}): LinearImage =
+        demosaicImpl(src, width, height, redX, redY, workspace, borrowOutput = false, cancelCheck = cancelCheck)
 
     /** Returns workspace-owned RGB pixels for a synchronous consumer. The pixels are overwritten
      * by the next borrowed call and released by [Workspace.release].
      */
     internal fun demosaicBorrowed(src: FloatArray, width: Int, height: Int, redX: Int, redY: Int,
-                                  workspace: Workspace, cancelCheck: () -> Unit = {}): LinearImage {
-        return demosaicImpl(src, width, height, redX, redY, workspace, true, cancelCheck)
+                                   workspace: Workspace, cancelCheck: () -> Unit = {}): LinearImage =
+        demosaicImpl(src, width, height, redX, redY, workspace, borrowOutput = true, cancelCheck = cancelCheck)
+
+    /**
+     * Reconstructs into a caller-owned buffer, so one worker can hold a single RGB array across
+     * every algorithm it uses. [destination] must hold exactly width * height * 3 samples and is
+     * fully rewritten by this call.
+     */
+    internal fun demosaicInto(src: FloatArray, width: Int, height: Int, redX: Int, redY: Int,
+                              workspace: Workspace, destination: FloatArray,
+                              cancelCheck: () -> Unit = {}): LinearImage {
+        // The scratch still comes from the workspace; only the RGB output is caller-owned.
+        return demosaicImpl(src, width, height, redX, redY, workspace, borrowOutput = false,
+            destination = destination, cancelCheck = cancelCheck)
     }
 
     private fun demosaicImpl(src: FloatArray, width: Int, height: Int, redX: Int, redY: Int,
-                             workspace: Workspace, borrowOutput: Boolean,
+                             workspace: Workspace?,
+                             borrowOutput: Boolean = false,
+                             destination: FloatArray? = null,
                              cancelCheck: () -> Unit): LinearImage {
         require(width >= 2 && height >= 2) { "A Bayer image needs at least 2 x 2 pixels" }
         require(width.toLong() * height <= LinearImage.MAX_PIXELS && width.toLong() * height == src.size.toLong())
         require(redX in 0..1 && redY in 0..1)
         cancelCheck()
-        val buffers = workspace.acquire(width, height)
+        val buffers = workspace?.acquire(width, height)
+        val owned = buffers == null
+        val scratch = buffers ?: Buffers(width, height)
         try {
-            val rgb = if (borrowOutput) workspace.borrowOutput(width, height) else FloatArray(src.size * 3)
-            reconstruct(src, width, height, redX, redY, buffers, rgb, cancelCheck)
+            val rgb = destination ?: if (borrowOutput && workspace != null) workspace.borrowOutput(width, height)
+                else FloatArray(src.size * 3)
+            require(rgb.size.toLong() == src.size.toLong() * 3) { "Invalid demosaic destination" }
+            reconstruct(src, width, height, redX, redY, scratch, rgb, cancelCheck)
             return LinearImage(width, height, 3, rgb)
         } finally {
             // Cancellation or invalid samples may leave partial scratch, but never lock reuse.
-            workspace.finish()
+            if (!owned) checkNotNull(workspace).finish()
         }
     }
 

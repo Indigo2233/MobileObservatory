@@ -87,6 +87,82 @@ object LinearPixelDecoder {
                                       cancelCheck: () -> Unit = {}): LinearImage =
         decodeSensorImpl(frame, traits, maxPixels, workspace, cancelCheck)
 
+    /**
+     * Decodes a native region that is a sub-rectangle of a wider caller-owned band buffer.
+     * [bandRowSamples] is the band's row pitch in interleaved samples, so a single read per band
+     * row serves every tile across that row. The destination belongs to [workspace] and stays
+     * valid until the next borrowed decode.
+     */
+    internal fun decodeSensorRegionBorrowed(band: ByteArray, bandRowSamples: Int, region: PixelRoi,
+                                           format: PixelFormat, traits: PixelTraits = PixelTraits(),
+                                           maxPixels: Long = LinearImage.DEFAULT_STACK_PIXELS,
+                                           workspace: SensorWorkspace,
+                                           cancelCheck: () -> Unit = {}): LinearImage {
+        cancelCheck()
+        val channels = if (format.isRgb) 3 else 1
+        val sampleBytes = if (format.isHighBit) 2 else 1
+        val bits = traits.validBits ?: format.nativeBits
+        require(bits in 1..(sampleBytes * 8)) { "Invalid sample depth" }
+        require(region.width > 0 && region.height > 0 && region.left >= 0 &&
+            region.right <= bandRowSamples / channels) { "region_outside_band" }
+        require(region.width.toLong() * region.height <= minOf(maxPixels, LinearImage.MAX_PIXELS)) {
+            "Image exceeds processing budget; select a smaller camera ROI"
+        }
+        require(band.size.toLong() >= bandRowSamples.toLong() * region.bottom * sampleBytes) {
+            "Sensor band buffer has the wrong size"
+        }
+        val max = (1 shl bits) - 1
+        fun read(row: Int, column: Int, channel: Int): Int {
+            val at = (row * bandRowSamples + column * channels + channel) * sampleBytes
+            val a = band[at].toInt() and 255
+            if (sampleBytes == 1) return a
+            val b = band[at + 1].toInt() and 255
+            return if (traits.byteOrder == ByteOrder.LITTLE_ENDIAN) a or (b shl 8) else (a shl 8) or b
+        }
+        var alignment = traits.alignment
+        if (alignment == SampleAlignment.AUTO) {
+            alignment = SampleAlignment.RIGHT
+            if (bits < sampleBytes * 8) {
+                var scanned = 0
+                var leftAligned = false
+                for (y in 0 until region.height) {
+                    for (x in 0 until region.width) {
+                        if (scanned++ % 16384 == 0) cancelCheck()
+                        for (channel in 0 until channels) {
+                            if (read(region.top + y, region.left + x, channel) > max) { leftAligned = true; break }
+                        }
+                        if (leftAligned) break
+                    }
+                    if (leftAligned) break
+                }
+                if (leftAligned) alignment = SampleAlignment.LEFT
+            }
+        }
+        val shift = if (alignment == SampleAlignment.LEFT) sampleBytes * 8 - bits else 0
+        val swap = channels == 3 && traits.channelOrder == ChannelOrder.BGR
+        val samples = workspace.acquire(region.width, region.height, channels)
+        try {
+            var index = 0
+            var scanned = 0
+            for (y in 0 until region.height) {
+                if (scanned++ % 16384 == 0) cancelCheck()
+                val row = region.top + y
+                for (x in 0 until region.width) {
+                    val column = region.left + x
+                    for (channel in 0 until channels) {
+                        val value = read(row, column, channel) ushr shift
+                        require(value <= max) { "Sample exceeds declared bit depth; check alignment" }
+                        samples[index + if (swap) 2 - channel else channel] = value.toFloat() / max
+                    }
+                    index += channels
+                }
+            }
+            return LinearImage(region.width, region.height, channels, samples)
+        } finally {
+            workspace.finish()
+        }
+    }
+
     private fun decodeSensorImpl(frame: FrameData, traits: PixelTraits, maxPixels: Long,
                                  workspace: SensorWorkspace?,
                                  cancelCheck: () -> Unit): LinearImage {
@@ -163,6 +239,34 @@ object LinearPixelDecoder {
         demosaicSensorImpl(sensor, format, traits, DemosaicAlgorithm.DDFAPD, workspace,
             cancelCheck, borrowDdfapdOutput = true)
 
+    /**
+     * Reconstructs into a caller-owned RGB buffer for any Bayer algorithm, so one worker holds a
+     * single output array regardless of which demosaic it uses. Non-Bayer input passes through.
+     */
+    internal fun demosaicSensorInto(sensor: LinearImage, format: PixelFormat,
+                                    algorithm: DemosaicAlgorithm, destination: FloatArray,
+                                    workspace: DdfapdDemosaicer.Workspace,
+                                    traits: PixelTraits = PixelTraits(),
+                                    cancelCheck: () -> Unit = {}): LinearImage {
+        cancelCheck()
+        if (!format.isBayer) {
+            require(sensor.pixels === destination) { "Non-Bayer input must reuse the caller's buffer" }
+            return sensor
+        }
+        val phaseX = if (traits.bayerPatternAtOutput) 0 else traits.roiX and 1
+        val phaseY = if (traits.bayerPatternAtOutput) 0 else traits.roiY and 1
+        val redX = (if (format.name.startsWith("BAYER_GR") || format.name.startsWith("BAYER_BG")) 1 else 0) xor phaseX
+        val redY = (if (format.name.startsWith("BAYER_GB") || format.name.startsWith("BAYER_BG")) 1 else 0) xor phaseY
+        return when (algorithm) {
+            DemosaicAlgorithm.BILINEAR -> debayer(sensor.pixels, sensor.width, sensor.height,
+                redX, redY, cancelCheck, destination)
+            DemosaicAlgorithm.VNG -> VngDemosaicer.demosaic(sensor.pixels, sensor.width, sensor.height,
+                redX, redY, cancelCheck, destination)
+            DemosaicAlgorithm.DDFAPD -> DdfapdDemosaicer.demosaicInto(sensor.pixels, sensor.width,
+                sensor.height, redX, redY, workspace, destination, cancelCheck)
+        }
+    }
+
     private fun demosaicSensorImpl(sensor: LinearImage, format: PixelFormat, traits: PixelTraits,
                                   algorithm: DemosaicAlgorithm, workspace: DdfapdDemosaicer.Workspace?,
                                   cancelCheck: () -> Unit,
@@ -205,14 +309,16 @@ object LinearPixelDecoder {
     /** Bilinear interpolation in floating point, before any geometric resampling. At a border,
      * only existing samples of the requested color contribute (no clamped opposite-color taps).
      */
-    private fun debayer(src: FloatArray, w: Int, h: Int, redX: Int, redY: Int, cancelCheck: () -> Unit): LinearImage {
+    private fun debayer(src: FloatArray, w: Int, h: Int, redX: Int, redY: Int,
+                        cancelCheck: () -> Unit, destination: FloatArray? = null): LinearImage {
         require(w >= 2 && h >= 2) { "A Bayer image needs at least 2 x 2 pixels" }
         fun color(x: Int, y: Int): Int = when {
             (x and 1) == redX && (y and 1) == redY -> 0
             (x and 1) != redX && (y and 1) != redY -> 2
             else -> 1
         }
-        val out = FloatArray(w * h * 3)
+        val out = destination ?: FloatArray(w * h * 3)
+        require(out.size == w * h * 3) { "Invalid demosaic destination" }
         for (y in 0 until h) for (x in 0 until w) {
             if (x == 0) cancelCheck()
             val own = color(x, y)

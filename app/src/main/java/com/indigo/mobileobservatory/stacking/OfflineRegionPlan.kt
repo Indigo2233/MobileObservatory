@@ -21,11 +21,31 @@ data class OfflineRegionPlan(
             DemosaicAlgorithm.BILINEAR -> 2
         }
     fun readRegion(tile: PixelRoi): PixelRoi {
-        val left = (tile.left - halo).coerceAtLeast(0)
-        val top = (tile.top - halo).coerceAtLeast(0)
-        val right = (tile.right.toLong() + halo).coerceAtMost(sourceWidth.toLong()).toInt()
-        val bottom = (tile.bottom.toLong() + halo).coerceAtMost(sourceHeight.toLong()).toInt()
-        return PixelRoi(left, top, right - left, bottom - top)
+        // Fixed native extents keep the same demosaic buffers at edges and tail tiles.
+        // Clamping the origin preserves physical-edge reflection and every tile's halo.
+        val readWidth = minOf(sourceWidth, tileSide)
+        val readHeight = minOf(sourceHeight, tileSide)
+        val left = (tile.left - halo).coerceIn(0, sourceWidth - readWidth)
+        val top = (tile.top - halo).coerceIn(0, sourceHeight - readHeight)
+        return PixelRoi(left, top, readWidth, readHeight)
+    }
+    /**
+     * Native extent that carries every tile read in one output row. Tiles in a row share their
+     * vertical extent, so only the horizontal union is computed, and it is identical for every
+     * row, which keeps the band buffer at one stable size for a whole frame. The decoder and the
+     * memory budget both derive from this, so a band can never be narrower than a tile read.
+     */
+    fun bandRegion(oy: Int): PixelRoi {
+        val h = kotlin.math.min(TILE, height - oy)
+        val top = region.top + oy * softwareBin
+        val span = TILE * softwareBin
+        val first = readRegion(PixelRoi(region.left, top, span, h * softwareBin))
+        // A short tail tile starts further right than region.right - span, so the last tile's own
+        // origin is what fixes the band's right edge.
+        val lastLeft = region.left + ((width - 1) / TILE) * TILE * softwareBin
+        val last = readRegion(PixelRoi(lastLeft, top, span, h * softwareBin))
+        val left = minOf(first.left, last.left)
+        return PixelRoi(left, first.top, maxOf(first.right, last.right) - left, first.height)
     }
     val channels get() = if (format.isMono) 1 else 3
     private val tileSide get() = TILE * softwareBin + 2 * halo
@@ -35,11 +55,14 @@ data class OfflineRegionPlan(
     val calibrationOverheadBytes get() = calibrationBytes + if (calibrated) 2 * tilePixels * sensorChannels * 4 else 0L
     val overheadBytes: Long get() {
         val decode = tilePixels * (format.bytesPerPixel + 4L * sensorChannels + 4L * channels)
-        // Reserve old/new tile scratch across dimension changes, not prompt garbage collection.
-        return calibrationOverheadBytes + 2 * decode + demosaicScratchBytes + 256 * 1024
+        val band = bandRegion(0)
+        val bandBytes = band.width.toLong() * band.height * format.bytesPerPixel
+        // Reserve old/new tile scratch and the reused band across dimension changes, not prompt
+        // garbage collection. The band holds one row of tiles at native width.
+        return calibrationOverheadBytes + 2 * decode + bandBytes + demosaicScratchBytes + 256 * 1024
     }
     val workingBytes: Long get() = overheadBytes + if (target == StackTarget.PLANETARY)
-        PlanetaryStacker.estimatedPeakBytes(width, height, channels, boundedDecode = true)
+        PlanetaryStacker.estimatedPeakBytes(width, height, channels, boundedDecode = true, reusableInput = true)
         else DeepSkyStacker.estimateOfflineWorkingBytes(width, height, channels)
     fun issue(budget: Long): String? = when {
         width < 12 || height < 12 -> "invalid_roi"

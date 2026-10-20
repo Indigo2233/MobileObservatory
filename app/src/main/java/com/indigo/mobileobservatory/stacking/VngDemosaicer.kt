@@ -109,7 +109,7 @@ object VngDemosaicer {
     }
 
     fun demosaic(src: FloatArray, width: Int, height: Int, redX: Int, redY: Int,
-                 cancelCheck: () -> Unit = {}): LinearImage {
+                 cancelCheck: () -> Unit = {}, destination: FloatArray? = null): LinearImage {
         validateDimensions(width, height)
         require(redX in 0..1 && redY in 0..1) { "Invalid output CFA phase" }
         require(src.size.toLong() == width.toLong() * height) { "Invalid CFA buffer length" }
@@ -118,7 +118,8 @@ object VngDemosaicer {
             if (i % 16384 == 0) cancelCheck()
             require(src[i].isFinite()) { "Nonfinite CFA sample" }
         }
-        val dst = FloatArray(src.size * 3)
+        val dst = destination ?: FloatArray(src.size * 3)
+        require(dst.size.toLong() == src.size.toLong() * 3) { "Invalid demosaic destination" }
         // Complete same-colour neighbours at image edges, never parity-changing clamping.
         for (y in 0 until height) {
             cancelCheck()

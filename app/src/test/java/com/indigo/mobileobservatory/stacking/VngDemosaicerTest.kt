@@ -159,7 +159,7 @@ class VngDemosaicerTest {
         val w = 97; val h = 99
         val src = FloatArray(w*h) { (it%101)/100f }; val copy = src.copyOf(); var checks = 0
         try {
-            VngDemosaicer.demosaic(src,w,h,0,0) { if (++checks == 210) throw CancellationException("stop in VNG rows") }
+            VngDemosaicer.demosaic(src,w,h,0,0, cancelCheck = { if (++checks == 210) throw CancellationException("stop in VNG rows") })
             fail("Cancellation was not observed")
         } catch (_: CancellationException) { assertEquals(210,checks) }
         assertArrayEquals(copy,src,0f)

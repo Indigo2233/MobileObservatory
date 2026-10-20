@@ -295,22 +295,54 @@ class SERReader(private val file: File,
      */
     fun readSensorRegion(index: Int, region: PixelRoi, maxPixels: Long = LinearImage.DEFAULT_STACK_PIXELS,
                          cancelCheck: () -> Unit = {}): LinearImage? {
-        val r = raf ?: return null
-        val h = header ?: return null
-        if (index !in 0 until h.frameCount) return null
+        if (raf == null || header == null) return null
+        val raw = ByteArray(sensorRegionByteSize(region))
+        if (!readSensorRegionInto(index, region, raw, maxPixels, cancelCheck)) return null
+        return LinearPixelDecoder.decodeSensor(FrameData(raw, region.width, region.height, sensorFormat, index.toLong(), 0),
+            sensorTraits, maxPixels, cancelCheck)
+    }
+
+    /**
+     * Byte length a native region read occupies. A worker that reads many regions can size one
+     * buffer once and pass it to [readSensorRegionInto] instead of allocating per region.
+     */
+    fun sensorRegionByteSize(region: PixelRoi): Int {
+        val h = checkNotNull(header) { "Reader is closed" }
+        val channels = sensorChannelCount
+        val sampleBytes = if (h.pixelDepth > 8) 2 else 1
+        return Math.multiplyExact(Math.multiplyExact(region.width, channels * sampleBytes), region.height)
+    }
+
+    /** Interleaved samples stored per native row in this recording. */
+    val sensorChannelCount: Int
+        get() = if (checkNotNull(header) { "Reader is closed" }.colorId >= 100) 3 else 1
+
+    /**
+     * Fills a caller-owned buffer with the same native samples [readSensorRegion] would decode.
+     * The buffer must hold exactly [sensorRegionByteSize] bytes for [region]; rows stay in native
+     * sensor order and the CFA origin is unchanged, so calibration and demosaicing carry the
+     * region offset exactly as before.
+     */
+    fun readSensorRegionInto(index: Int, region: PixelRoi, destination: ByteArray,
+                             maxPixels: Long = LinearImage.DEFAULT_STACK_PIXELS,
+                             cancelCheck: () -> Unit = {}): Boolean {
+        val r = raf ?: return false
+        val h = header ?: return false
+        if (index !in 0 until h.frameCount) return false
         region.checked(h.width, h.height)
         require(region.width.toLong() * region.height <= minOf(maxPixels, LinearImage.MAX_PIXELS)) { "memory_budget" }
+        require(destination.size == sensorRegionByteSize(region)) { "Sensor region destination has the wrong size" }
         // Detecting alignment from a dim crop could disagree with the rest of the sequence.
         require(h.isPSER || h.pixelDepth in listOf(8, 16) || sampleAlignment != SampleAlignment.AUTO) {
             "Choose an explicit sequence bit alignment"
         }
         return synchronized(r) {
             cancelCheck()
-            if (raf !== r || header !== h) return@synchronized null
+            if (raf !== r || header !== h) return@synchronized false
             val channels = if (h.colorId >= 100) 3 else 1
             val sampleBytes = if (h.pixelDepth > 8) 2 else 1
             val rowBytes = Math.multiplyExact(region.width, channels * sampleBytes)
-            val raw = ByteArray(Math.multiplyExact(rowBytes, region.height))
+            val raw = destination
             val base = frameOffset(index)
             if (!h.isPSER || h.pixelDepth in listOf(8, 16)) {
                 for (y in 0 until region.height) {
@@ -342,8 +374,7 @@ class SERReader(private val file: File,
                     }
                 }
             }
-            LinearPixelDecoder.decodeSensor(FrameData(raw, region.width, region.height, sensorFormat, index.toLong(), 0),
-                sensorTraits, maxPixels, cancelCheck)
+            true
         }
     }
 

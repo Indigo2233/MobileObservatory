@@ -977,9 +977,9 @@ class StackingCoordinator(
         val calibration: CalibrationSelection, val algorithm: DemosaicAlgorithm,
         val interpretation: SerCfaInterpretation,
         region: PixelRoi?, softwareBin: Int, target: StackTarget,
-        private val cancelCheck: () -> Unit) : PlanetaryFrameSource {
+        private val cancelCheck: () -> Unit) : BufferedPlanetaryFrameSource {
         val reader = SERReader(file, endian, interpretation).apply { sampleAlignment = alignment }
-        private val demosaicWorkspace = DdfapdDemosaicer.Workspace()
+        private val decodeWorkspace = SerRegionDecoder.Workspace()
         val info: StackSourceInfo
         private val capture: CalibrationCapture
         private val geometry: CalibrationGeometry
@@ -1019,7 +1019,15 @@ class StackingCoordinator(
         override fun readFrame(index: Long): LinearImage {
             require(index in 0 until frameCount && index <= Int.MAX_VALUE)
             cancelCheck()
-            return SerRegionDecoder.read(reader, index.toInt(), plan, calibration, geometry, capture, demosaicWorkspace, cancelCheck)
+            return SerRegionDecoder.read(reader, index.toInt(), plan, calibration, geometry, capture, decodeWorkspace, cancelCheck)
+        }
+        override fun readFrameInto(index: Long, destination: FloatArray): LinearImage = readInto(index, destination, false)
+        override fun readLuminanceInto(index: Long, destination: FloatArray): LinearImage = readInto(index, destination, true)
+        private fun readInto(index: Long, destination: FloatArray, luminance: Boolean): LinearImage {
+            require(index in 0 until frameCount && index <= Int.MAX_VALUE)
+            cancelCheck()
+            return SerRegionDecoder.readInto(reader, index.toInt(), plan, calibration, geometry, capture,
+                decodeWorkspace, destination, luminance, cancelCheck)
         }
         override fun exposureSeconds(index: Long): Double = capture.exposureUs?.div(1_000_000.0) ?: 0.0
         fun calibrationMetadata() = calibration.metadata() + mapOf(
@@ -1029,7 +1037,7 @@ class StackingCoordinator(
             "calibrationWorkingBytes" to calibrationOverheadBytes.toString(),
             "calibrationUnknownSettings" to JSONArray(calibration.unknownWarnings(geometry, capture)).toString()
         )
-        override fun close() { try { reader.close() } finally { demosaicWorkspace.release() } }
+        override fun close() { try { reader.close() } finally { decodeWorkspace.release() } }
     }
 
     private fun liveMetadata(snapshot: LiveStackSnapshot): Map<String, String> {

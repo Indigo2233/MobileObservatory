@@ -204,6 +204,41 @@ class CalibrationSelection(
                                cancelCheck: () -> Unit = {}): LinearImage =
         applyImpl(sensor, geometry, capture, workspace, cancelCheck)
 
+    /** Region form of [applyBorrowed]: [sensor] is a sub-rectangle of the master geometry, and the
+     * calibrated tile is written into [workspace] so a tiled worker keeps one output buffer. */
+    internal fun applyRegionBorrowed(sensor: LinearImage, geometry: CalibrationGeometry,
+                                     capture: CalibrationCapture, region: PixelRoi,
+                                     workspace: Workspace,
+                                     cancelCheck: () -> Unit = {}): LinearImage {
+        region.checked(geometry.width, geometry.height)
+        require(sensor.width == region.width && sensor.height == region.height &&
+            sensor.channels == geometry.channels) { "calibration_geometry_mismatch" }
+        validate(geometry, capture)
+        cancelCheck()
+        if (!enabled) return sensor
+        val subtraction = dark ?: bias
+        val output = workspace.acquire(sensor.pixels.size)
+        try {
+            val rowSamples = region.width * sensor.channels
+            for (y in 0 until region.height) {
+                cancelCheck()
+                val original = ((region.top + y) * geometry.width + region.left) * sensor.channels
+                val start = y * rowSamples
+                for (x in 0 until rowSamples) {
+                    val input = sensor.pixels[start + x]
+                    require(input.isFinite()) { "calibration_nonfinite_light" }
+                    val index = original + x
+                    val value = (input.toDouble() - (subtraction?.sample(index)?.toDouble() ?: 0.0)) / (flat?.sample(index) ?: 1f)
+                    output[start + x] = value.toFloat()
+                    require(output[start + x].isFinite()) { "calibration_nonfinite_output" }
+                }
+            }
+            return sensor.copy(pixels = output)
+        } finally {
+            workspace.finish()
+        }
+    }
+
     private fun applyImpl(sensor: LinearImage, geometry: CalibrationGeometry,
                           capture: CalibrationCapture, workspace: Workspace?,
                           cancelCheck: () -> Unit): LinearImage {
