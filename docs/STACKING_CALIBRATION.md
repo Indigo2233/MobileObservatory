@@ -188,8 +188,10 @@ not accumulate a queue of processed images. The memory estimate now reserves
 case of a renderer holding snapshot A while B is current and C is being created,
 automatic-background output, and simultaneous sharpening/local-contrast scratch.
 Calibration masters and pre-binning input expansion are added separately.
-Since 2026-10-19 the coordinator uses 40% of the actual VM maximum heap without
-the former fixed 256 MiB cap. Since 2026-10-18 the coordinated processing paths no longer
+Since 2026-10-19 the coordinator uses a fixed fraction of the actual VM maximum
+heap without the former fixed 256 MiB cap. Since 2026-10-20 that fraction is 60%
+and the manifest declares android:largeHeap, so the limit is dalvik.vm.heapsize
+(512 MiB on 16 GB phones) rather than dalvik.vm.heapgrowthlimit (256 MiB). Since 2026-10-18 the coordinated processing paths no longer
 use a universal 4 MP gate: byte admission decides usable dimensions, within the
 16,777,216-pixel image representation ceiling and 32 MiB live raw-frame bound.
 The conservative 4 MP defaults on standalone reader helpers remain; admitted
@@ -264,7 +266,8 @@ implementation, commit `65d8dea`. It was an engineering safeguard, not a camera,
 SER, or Android pixel-format rule. Android limits an app's heap separately from
 the phone's total RAM; see the [Android memory overview](https://developer.android.com/topic/performance/memory-overview).
 The original 256 MiB / 40% policy was an additional conservative application
-budget; the fixed cap was removed on 2026-10-19 (see below).
+budget; the fixed cap was removed on 2026-10-19 and the fraction became 60%
+on 2026-10-20 (see below).
 
 The byte estimate reserves simultaneous input, accumulation, registration,
 snapshots, render/filter workspace, and selected calibration masters. For RGB
@@ -376,13 +379,19 @@ estimate reserves old/new scratch overlap across tile size changes. No Double
 planes are changed to Float and no empirical safety factor is removed without
 corresponding changes to the arrays' lifetime.
 
-`StackMemoryBudget` now derives 40% from `Runtime.maxMemory()`; a 1 GiB VM heap
-therefore gives about 410 MiB, instead of being capped at 256 MiB. The remaining
-60% leaves room for the rest of the app and allocation/GC headroom. This is an app
-policy, not a claim that Android assigns 40% of the phone's total RAM. The expanded
-details show both actual VM heap limit and science budget. See Android's
+`StackMemoryBudget` derives 60% from `Runtime.maxMemory()`. Since 2026-10-20 the
+manifest declares `android:largeHeap`, so the VM limit is `dalvik.vm.heapsize`
+(512 MiB on a 16 GB phone) instead of `dalvik.vm.heapgrowthlimit` (256 MiB): the
+budget rises from 102.4 MiB to 307.2 MiB on such a device. A 1 GiB VM heap gives
+about 614 MiB. The remaining 40% leaves room for the rest of the app and
+allocation/GC headroom. This is an app policy, not a claim that Android assigns
+60% of the phone's total RAM, and it stays below the vendor-set heap ceiling. The
+expanded details show both actual VM heap limit and science budget. See Android's
 [per-app heap documentation](https://developer.android.com/topic/performance/memory-overview).
-No manifest heap override or claim of access to all advertised device RAM is made.
+Declaring `largeHeap` trades an earlier `OutOfMemoryError` for a higher likelihood of
+being killed under memory pressure; the offline pass writes to temporary files and can be
+restarted, so the failure mode is recoverable. Device RSS/PSS and GC pause
+measurements remain part of phone acceptance.
 
 Exports record original dimensions, source region, software Bin, decoding identity
 and processing order. Original recordings and calibration masters are not modified.
@@ -400,3 +409,175 @@ synthetic planetary fixture completed preview/analysis/stack/export at Bin 4
 Progress-boundary sampling recorded 34.2 MiB Java heap used and 19.7 MiB native
 heap used; these are sampled process values, not continuous peaks, RSS/PSS, or a
 before/after device benchmark. Evidence is in local `build/reports/offline-region-*`.
+
+## Reusable offline planetary buffers (2026-10-19)
+
+The follow-up keeps the requested native region, processing Bin, Float image
+samples and Double accumulation precision unchanged. The SER/PSER source exposes
+an explicit caller-owned buffer contract alongside the existing independently
+owned `readFrame` API. Other consumers retain their existing ownership rules.
+
+- Quality analysis fills one reusable luminance plane directly from calibrated,
+  demosaiced and binned tiles. Its Float values match the previous RGB-to-luminance
+  operation, including channel rounding; no full RGB image is built for this pass.
+- Registration retains only private reference luminance. Selected RGB frames are
+  reread in their original order into one reusable full-resolution input. The
+  reference still receives its identity alignment when selected. Quality ranking,
+  tied-score selection, exposure accounting and rejection rules remain unchanged.
+- After the final contribution, normalization overwrites that input and transfers
+  it to the result. Uncovered pixels are explicitly zeroed. The source never owns
+  the destination; retrying or starting another stack cannot overwrite a previous
+  result. Cancellation publishes no partial image and leaves valid analysis usable.
+- Offline displacement meshes are reused across frames. Native tiles use fixed
+  read extents, clamped at physical frame boundaries, so edge/tail tiles retain
+  demosaic scratch and borrowed RGB output instead of changing its geometry.
+  Sensor reads and non-DDFAPD decoders still have bounded tile allocations.
+
+For this explicitly buffered source, the engine estimate is now
+`pixels × (channels × 12 + 12) + maximum dx/dy mesh + 8 MiB`.
+It covers one Float channel image, Double sums, coverage and two gray planes;
+tile/calibration/master storage remains separately budgeted. The existing
+decoder-inclusive and bounded-but-owned estimates remain for generic sources.
+The post-processing reserve fits within the same bound after the worker returns.
+At 3856×2180 Bayer RAW16, full field, Bin 1 and DDFAPD without calibration masters,
+the full pipeline estimate changes from about 682.6 MiB to 398.0 MiB. Heap policy,
+representation bounds and output dimensions are unchanged. This is an allocation
+model, not a measured Android peak.
+
+`PlanetaryBufferReuseTest` compares owned/buffered mono and RGB paths with global
+and local registration, multiple quality selections, pixel/weight/statistics
+identity, destination reuse, previous-result independence and cancellation/retry.
+`SerRegionDecoderTest` additionally checks RGB/mono/luminance destinations, all
+three demosaic algorithms, Bin 1/2/4, physical boundaries and stable DDFAPD tile
+allocations. Existing whole-frame reference fixtures cover calibration, CFA
+phase, tile seams and packed SER interpretation.
+
+The optional desktop `PlanetaryBufferBenchmark` generates each frame on demand.
+Its HotSpot thread-allocation counters report cumulative bytes allocated, and its
+phase-boundary heap values are samples, with neither interpreted as Android/RSS
+peaks. On a 1024×768 RGB six-frame fixture, quality-analysis allocations fell from
+about 54.9 MiB to 4.0 MiB and stack allocations from 90.3 MiB to 36.3 MiB. Increasing
+three frames to six leaves the buffered stack allocation near 36.3 MiB; the owned
+path adds about 27 MiB. A 3856×2180 RGB three-frame full-field Bin 1 fixture also
+completed under a 512 MiB desktop VM heap. Reports are generated beneath
+`build/reports/stacking/planetary-buffer-*.txt`. The isolated benchmark admits up
+to 90% of its desktop heap; the app retains its 40% policy, so this run does not
+claim full-field admission on a phone with a 512 MiB VM heap. Real file I/O, actual phone peak
+heap/RSS, GC pauses and sustained thermal performance remain device acceptance.
+
+Validation: 1,052 JVM tests passed with no failures, errors or skips;
+`compileDebugAndroidTestKotlin` passed, and `lintDebug` reported zero errors
+(246 warnings across the project). Android instrumentation was compiled but was
+not executed on a compatible phone in this follow-up. No APK was rebuilt or
+published as part of these optimization checks.
+
+## Bounded registration search convergence (2026-10-20)
+
+Three changes reduce the work per accepted frame without altering the alignment
+that a frame resolves to:
+
+- The global coarse sweep runs at twice the resolution stride over the whole
+  ±[PlanetaryOptions.maxGlobalShift] window, then the original stride resolves the
+  winner's neighbourhood in both axes. A winner within one wide stride of an edge
+  widens the window back to the full range, so no candidate the single fine sweep
+  would have scored is dropped.
+- Local points are searched from the previous frame's displacement relative to
+  that frame's global shift, in a ±1 integer window. Relative storage means a
+  uniform drift between frames moves the guess with the frame. A hint that no
+  longer explains its patch fails the existing acceptance test and the bounded
+  full window is searched instead, so a lost hint costs time and never a result.
+- Refinement uses a centre-plus-eight-neighbour pattern instead of a 5 x 5
+  lattice, up to three passes per level before the step halves. The floor stays
+  0.125 px.
+
+Accumulation resolves the displacement mesh once per image row and column
+instead of once per pixel per axis, and tests the interpolated sample for
+finiteness. A non-finite tap always propagates into its weighted sum, so this is
+equivalent to the previous four-input test per channel and keeps every RGB
+channel on one coverage decision. The mesh also hoists the per-point correlation
+fourth power, support radius and relative displacement out of the node loop.
+
+Measured on the desktop synthetic harness, 2048x1152 RGB, six frames, full
+field, 52 alignment points, local alignment. A build switch isolated the
+two-stage global sweep and the temporal hint, with the compass refinement
+present in both arms: correlation evaluations fell from 39,610 to 15,399 and
+evaluated samples from 54.1M to 21.8M per stack. With local alignment disabled
+the global stage alone fell from 1,650 evaluations to 735. The compass
+refinement is not in that ratio: it replaces 25 evaluations per level with at
+most eight, and the hinted local window replaces a 121-point coarse grid with
+nine. These are deterministic counts, not timings; wall-clock differences on
+this host varied by about 15 percent between repeated runs.
+
+Numerical comparison used a fixed 512x512 six-frame fixture whose frames carry a
+known global drift and a spatially varying local distortion. Every frame's global
+dx, dy and correlation matched to all printed digits, the mode counts, rejection
+counts and mean correlation (0.999804990) were unchanged, and all six frames
+resolved 52 local points in both builds. Four of 312 local shifts differed, each
+by exactly one 0.125 px refinement step. The stacked image sum moved by 3.9e-6
+relative and the weight sum by 9.3e-5, which is edge coverage following from
+those sub-step differences.
+
+PlanetarySearchRegressionTest locks the recorded per-frame values, asserts that a
+hint never changes a result and a stale hint falls back, checks the mesh offset
+table against the direct bilinear lookup bit for bit, and compares accumulation
+against the previous finiteness implementation bit for bit for mono and RGB,
+including a pixel carrying a NaN.
+
+Validation: 1,056 JVM tests passed with no failures, errors or skips, and
+compileDebugAndroidTestKotlin passed. Android instrumentation was compiled but not
+executed, no APK was rebuilt or published, and phone timing, peak heap and GC
+remain device acceptance.
+
+## SER decode path (2026-10-20)
+
+The native stage used to read one tile at a time, allocating a byte array per
+tile, a sensor float array per tile inside the decoder, an RGB array per tile for
+BILINEAR and VNG, and a calibrated float array per tile when calibration was on.
+It also issued one seek plus one read per tile row.
+
+The decoder now walks one output row at a time. OfflineRegionPlan.bandRegion
+defines the native extent that carries every tile read in that row; it is the
+same definition the memory budget uses, so a band can never be narrower than a
+tile read and the reserve cannot be too small. SerRegionDecoder.Workspace holds
+the band bytes, one sensor tile, the calibrated tile, the demosaiced RGB tile and
+the DDFAPD scratch, all reused across frames. BILINEAR, VNG and DDFAPD write into
+the same caller-owned RGB buffer; the public demosaic entry points keep their
+independent-ownership behaviour. A new region form of the calibration borrow
+keeps the calibrated tile in the same workspace.
+
+SERReader gained readSensorRegionInto and sensorRegionByteSize so a worker can
+size and reuse the native buffer, and LinearPixelDecoder gained
+decodeSensorRegionBorrowed, which decodes a strided sub-rectangle of the band
+without copying it first. Sample order, CFA origin, byte order, bit alignment and
+the automatic left/right alignment scan are unchanged, so calibration offsets and
+demosaic phases are carried exactly as before.
+
+Desktop synthetic measurement, 3856x2180, DDFAPD, Bin 1, full field, three
+frames, HotSpot thread allocation counters:
+
+| | BAYER_RG16 before | after | MONO16 before | after |
+|---|---|---|---|---|
+| allocated per frame | 441.5 MiB | 1.06 MiB | 81.4 MiB | 0.85 MiB |
+| decode per frame | 1977 ms | 1717 ms | 439 ms | 138 ms |
+| estimated working set | 683 MiB | 399 MiB | 297 MiB | 205 MiB |
+| native row reads per frame | 204,960 | 3,360 | 204,960 | 2,240 |
+
+The Bayer decode time barely moves because DDFAPD reconstruction dominates that
+path and was not touched; MONO has no demosaic, so the read and allocation savings
+show directly. These are host counters, not Android peak heap, RSS or GC pauses.
+
+Writing the benchmark caught a real defect before it shipped: demosaicInto was
+constructed with a null workspace, so every tile rebuilt the five DDFAPD scratch
+planes and the Bayer path allocated 620 MiB per frame. The workspace is now passed
+through and only the RGB output is caller-owned.
+
+SerRegionDecoderTest gained a case that asserts the per-frame row-read count
+equals the sum of band heights and beats the per-tile count, that the workspace
+stops allocating across repeated decodes, and that the band buffer keeps its size.
+The existing whole-frame versus tiled comparison over four Bayer phases, three
+demosaic algorithms and Bin 1/2/4 still passes unchanged, which is the byte-level
+evidence that banding did not move a sample.
+
+Validation: 1,057 JVM tests passed with no failures, errors or skips,
+compileDebugAndroidTestKotlin passed, and lintDebug reported zero errors (246
+warnings). No APK was rebuilt or published.
