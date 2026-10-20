@@ -49,7 +49,7 @@ class SerRegionDecoderTest {
                     val expectedFull = LinearPixelDecoder.demosaicSensor(full, format, reader.sensorTraits, algorithm)
                     for (bin in listOf(1, 2, 4)) for (region in listOf(PixelRoi(13, 15, 283, 271), PixelRoi(0, 0, 319, 303))) {
                         val plan = OfflineRegionPlan(319, 303, format, region, algorithm, StackTarget.PLANETARY, bin)
-                        val workspace = DdfapdDemosaicer.Workspace()
+                        val workspace = SerRegionDecoder.Workspace()
                         val actual = try { SerRegionDecoder.read(reader, 0, plan, calibration, geometry, CalibrationCapture(), workspace) {} }
                             finally { workspace.release() }
                         val expected = LinearPixelDecoder.bin(crop(expectedFull, region), bin)
@@ -70,6 +70,98 @@ class SerRegionDecoderTest {
                 assertArrayEquals(crop(reader.readSensorFrame(0)!!, region).pixels, reader.readSensorRegion(0, region)!!.pixels, 0f)
             } } finally { file.delete() }
         }
+    }
+
+    @Test fun callerOwnedRgbAndLuminanceMatchOwnedDecoderAndReuseDdfapdTiles() {
+        for (format in listOf(PixelFormat.BAYER_RG16, PixelFormat.BAYER_BG16, PixelFormat.MONO16, PixelFormat.RGB48)) {
+            val file = recording(format)
+            try { SERReader(file).use { reader ->
+                reader.sampleAlignment = SampleAlignment.RIGHT; assertTrue(reader.open())
+                val geometry = CalibrationGeometry.from(319, 303, format, reader.sensorTraits)
+                val calibration = CalibrationSelection()
+                for (algorithm in DemosaicAlgorithm.entries) for (bin in listOf(1, 2, 4)) {
+                    val plan = OfflineRegionPlan(319, 303, format, PixelRoi(13, 15, 283, 271), algorithm, StackTarget.PLANETARY, bin)
+                    val workspace = SerRegionDecoder.Workspace()
+                    try {
+                        val owned = SerRegionDecoder.read(reader, 0, plan, calibration, geometry, CalibrationCapture(), workspace) {}
+                        val rgb = FloatArray(owned.pixels.size)
+                        val gray = FloatArray(owned.pixelCount)
+                        val arraysBefore = workspace.arrayAllocations
+                        val outputsBefore = workspace.borrowedOutputBytes
+                        repeat(2) {
+                            val decoded = SerRegionDecoder.readInto(reader, 0, plan, calibration, geometry, CalibrationCapture(), workspace, rgb) {}
+                            assertSame(rgb, decoded.pixels)
+                            assertArrayEquals(owned.pixels, decoded.pixels, 0f)
+                            val luminance = SerRegionDecoder.readInto(reader, 0, plan, calibration, geometry, CalibrationCapture(), workspace, gray, true) {}
+                            assertSame(gray, luminance.pixels)
+                            assertEquals(1, luminance.channels)
+                            assertArrayEquals(owned.luminance(), luminance.pixels, 0f)
+                        }
+                        assertEquals(arraysBefore, workspace.arrayAllocations)
+                        assertEquals(outputsBefore, workspace.borrowedOutputBytes)
+                        assertArrayEquals(owned.pixels, rgb, 0f)
+                    } finally { workspace.release() }
+                }
+            } } finally { file.delete() }
+        }
+    }
+
+    @Test fun destinationValidationAndCancellationPrecedeScientificDecode() {
+        val file = recording(PixelFormat.BAYER_RG16)
+        try { SERReader(file).use { reader ->
+            assertTrue(reader.open())
+            val geometry = CalibrationGeometry.from(319, 303, reader.sensorFormat, reader.sensorTraits)
+            val plan = OfflineRegionPlan(319, 303, reader.sensorFormat, PixelRoi(0, 0, 319, 303), DemosaicAlgorithm.DDFAPD, StackTarget.PLANETARY)
+            val workspace = SerRegionDecoder.Workspace()
+            try {
+                assertThrows(IllegalArgumentException::class.java) {
+                    SerRegionDecoder.readInto(reader, 0, plan, CalibrationSelection(), geometry, CalibrationCapture(), workspace, FloatArray(1)) {}
+                }
+                assertThrows(java.util.concurrent.CancellationException::class.java) {
+                    SerRegionDecoder.readInto(reader, 0, plan, CalibrationSelection(), geometry, CalibrationCapture(), workspace,
+                        FloatArray(plan.width * plan.height), true) { throw java.util.concurrent.CancellationException() }
+                }
+                assertEquals(0, workspace.arrayAllocations)
+            } finally { workspace.release() }
+        } } finally { file.delete() }
+    }
+
+    @Test fun oneBandReadServesEveryTileInARowAndBuffersStopGrowing() {
+        val file = recording(PixelFormat.BAYER_RG16)
+        try { SERReader(file).use { reader ->
+            reader.sampleAlignment = SampleAlignment.RIGHT; assertTrue(reader.open())
+            val geometry = CalibrationGeometry.from(319, 303, reader.sensorFormat, reader.sensorTraits)
+            val plan = OfflineRegionPlan(319, 303, reader.sensorFormat, PixelRoi(0, 0, 319, 303),
+                DemosaicAlgorithm.DDFAPD, StackTarget.PLANETARY)
+            val workspace = SerRegionDecoder.Workspace()
+            try {
+                val destination = FloatArray(plan.width * plan.height * plan.channels)
+                SerRegionDecoder.readInto(reader, 0, plan, CalibrationSelection(), geometry,
+                    CalibrationCapture(), workspace, destination) {}
+                val readsPerFrame = workspace.rowReads
+                assertTrue("expected at least one read per native row", readsPerFrame >= 303)
+                val bands = (0 until plan.height step OfflineRegionPlan.TILE).count()
+                val bandRows = (0 until plan.height step OfflineRegionPlan.TILE)
+                    .sumOf { plan.bandRegion(it).height }
+                assertEquals(bandRows.toLong(), readsPerFrame)
+                val tiles = ((plan.width + OfflineRegionPlan.TILE - 1) / OfflineRegionPlan.TILE) *
+                    ((plan.height + OfflineRegionPlan.TILE - 1) / OfflineRegionPlan.TILE)
+                // A per-tile reader would issue one read per tile row instead of per band row.
+                val tiledReads = tiles.toLong() * plan.readRegion(
+                    PixelRoi(0, 0, OfflineRegionPlan.TILE, OfflineRegionPlan.TILE)).height
+                assertTrue("banded $readsPerFrame must beat tiled $tiledReads over $bands bands",
+                    readsPerFrame * 4 <= tiledReads)
+                val allocations = workspace.arrayAllocations
+                val bandBytes = workspace.bandBytes
+                assertTrue(bandBytes > 0)
+                repeat(8) {
+                    SerRegionDecoder.readInto(reader, 0, plan, CalibrationSelection(), geometry,
+                        CalibrationCapture(), workspace, destination) {}
+                }
+                assertEquals("steady-state decoding must not reallocate", allocations, workspace.arrayAllocations)
+                assertEquals(bandBytes, workspace.bandBytes)
+            } finally { workspace.release() }
+        } } finally { file.delete() }
     }
 
     @Test fun regionReadsLargeSourceBeyondFullFrameCeilingAndHonorsCancellationAndBounds() {
@@ -123,10 +215,17 @@ class SerRegionDecoderTest {
     }
 
     @Test fun budgetsFollowHeapAndTiledOutputInsteadOfFullNativeDdfapdPlanes() {
-        assertEquals(1024L * 1024 * 1024 / 5 * 2, StackMemoryBudget.forHeap(1024L * 1024 * 1024))
+        assertEquals(1024L * 1024 * 1024 / 5 * 3, StackMemoryBudget.forHeap(1024L * 1024 * 1024))
+        assertEquals(512L * 1024 * 1024 / 5 * 3, StackMemoryBudget.forHeap(512L * 1024 * 1024))
+        assertEquals(256L * 1024 * 1024 / 5 * 3, StackMemoryBudget.forHeap(256L * 1024 * 1024))
+        assertEquals(128L * 1024 * 1024 / 5 * 3, StackMemoryBudget.forHeap(128L * 1024 * 1024))
         assertTrue(StackMemoryBudget.forHeap(1024L * 1024 * 1024) > 256L * 1024 * 1024)
         assertEquals(84L * 1000 * 1000 + 8L * 1024 * 1024, PlanetaryStacker.estimatedPeakBytes(1000, 1000, 3, boundedDecode = true))
+        val reusable = PlanetaryStacker.estimatedPeakBytes(3856, 2180, 3, boundedDecode = true, reusableInput = true)
+        assertTrue(reusable < PlanetaryStacker.estimatedPeakBytes(3856, 2180, 3, boundedDecode = true) * 3 / 5)
         val full = OfflineRegionPlan(3856, 2180, PixelFormat.BAYER_RG16, PixelRoi(0, 0, 3856, 2180), DemosaicAlgorithm.DDFAPD, StackTarget.PLANETARY)
+        assertNull(full.issue(StackMemoryBudget.forHeap(1024L shl 20)))
+        assertEquals(full.workingBytes, reusable + full.overheadBytes)
         assertNotNull(full.issue(128L shl 20))
         assertNull(full.copy(softwareBin = 4).issue(76L shl 20))
         val crop = full.copy(region = PixelRoi(500, 500, 600, 600))
