@@ -77,7 +77,12 @@ fun StackingScreen(viewModel: CameraViewModel, mode: StackMode, onBack: () -> Un
     var drawRoi by rememberSaveable { mutableStateOf(false) }
     var drawnRoi by remember { mutableStateOf<PixelRoi?>(null) }
     var selectedRegion by remember { mutableStateOf<PixelRoi?>(null) }
-    LaunchedEffect(task.source?.identity) { drawRoi = false; drawnRoi = null; selectedRegion = null }
+    // A finished result describes one region/Bin/algorithm combination. Changing any of them
+    // must not keep that image on screen as if it answered the current settings.
+    var offlineResultStale by remember { mutableStateOf(false) }
+    LaunchedEffect(task.source?.identity) {
+        drawRoi = false; drawnRoi = null; selectedRegion = null; offlineResultStale = false
+    }
     var browseRecordings by rememberSaveable { mutableStateOf(false) }
     var observingOnly by rememberSaveable { mutableStateOf(false) }
     var showDetails by rememberSaveable { mutableStateOf(false) }
@@ -120,7 +125,10 @@ fun StackingScreen(viewModel: CameraViewModel, mode: StackMode, onBack: () -> Un
         onCamera = { browseRecordings = false; onCamera() })
 
     val bitmap = if (mode == StackMode.LIVE && (!showStack || rendered == null)) cameraFrame
-        else if (mode == StackMode.PLANETARY && (drawRoi || !coordinator.hasResult(mode))) sourcePreview else rendered
+        else if (mode == StackMode.PLANETARY && (drawRoi || offlineResultStale || !coordinator.hasResult(mode))) sourcePreview else rendered
+    if (offlineResultStale && !drawRoi) Text(stringResource(R.string.stack_offline_stale_result),
+        Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.tertiary,
+        style = MaterialTheme.typography.bodySmall)
     if (editBackground) BackgroundEditor(rendered, parameters.background,
         onDismiss = { editBackground = false },
         onApply = { background ->
@@ -152,6 +160,7 @@ fun StackingScreen(viewModel: CameraViewModel, mode: StackMode, onBack: () -> Un
                 onChoose = { documentPicker.launch(arrayOf("*/*")) },
                 onBrowse = { browseRecordings = true },
                 onRegionChange = { selectedRegion = it },
+                onStaleChange = { offlineResultStale = it },
                 onDrawRoi = { drawRoi = true })
         }
         if (task.message.isNotEmpty()) {
@@ -214,7 +223,7 @@ fun StackingScreen(viewModel: CameraViewModel, mode: StackMode, onBack: () -> Un
         }
         if (drawRoi) Text(stringResource(R.string.stack_offline_drag_hint), Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.primary)
         val preview: @Composable (Modifier) -> Unit = { modifier ->
-            val masks = if (mode == StackMode.PLANETARY && (drawRoi || !coordinator.hasResult(mode)))
+            val masks = if (mode == StackMode.PLANETARY && (drawRoi || offlineResultStale || !coordinator.hasResult(mode)))
                 selectedRegion?.let { r -> task.source?.let { s -> listOf(TargetMask(r.left.toDouble()/s.width,
                     r.top.toDouble()/s.height, r.right.toDouble()/s.width, r.bottom.toDouble()/s.height)) } }.orEmpty()
                 else parameters.background.targetMasks
@@ -343,7 +352,8 @@ private fun LiveStackControls(vm: CameraViewModel, state: LiveStackState, showSt
 
 @Composable
 private fun OfflineStackControls(c: StackingCoordinator, task: StackingTaskState, drawn: PixelRoi?, target: StackTarget,
-    onChoose: () -> Unit, onBrowse: () -> Unit, onRegionChange: (PixelRoi?) -> Unit, onDrawRoi: () -> Unit) {
+    onChoose: () -> Unit, onBrowse: () -> Unit, onRegionChange: (PixelRoi?) -> Unit,
+    onStaleChange: (Boolean) -> Unit, onDrawRoi: () -> Unit) {
     val sourcePreview by c.sourcePreview.collectAsStateWithPageLifecycle()
     val live by c.live.state.collectAsStateWithPageLifecycle()
     val algorithm by c.demosaicAlgorithm.collectAsStateWithPageLifecycle()
@@ -366,6 +376,11 @@ private fun OfflineStackControls(c: StackingCoordinator, task: StackingTaskState
     val issue = plan?.issue(c.memoryBudgetBytes)
     LaunchedEffect(region, source?.identity) { onRegionChange(region) }
     LaunchedEffect(drawn) { drawn?.let { roiX = it.left.toString(); roiY = it.top.toString(); roiW = it.width.toString(); roiH = it.height.toString() } }
+    // The finished product belongs to analyzedConfig. Any later edit of the region, Bin or
+    // alignment switch leaves that image answering settings it was not produced with.
+    LaunchedEffect(analyzedConfig, currentConfig) {
+        onStaleChange(c.hasResult(StackMode.PLANETARY) && analyzedConfig.isNotEmpty() && analyzedConfig != currentConfig)
+    }
     if (live.phase != LiveStackPhase.EMPTY) {
         Text(stackMessage("reset_live_first"), color = MaterialTheme.colorScheme.tertiary)
         TextButton(onClick = { c.open(StackMode.LIVE) }) { Text(stringResource(R.string.stack_eaa_title)) }
