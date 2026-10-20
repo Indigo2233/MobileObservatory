@@ -14,17 +14,66 @@ data class PlanetaryAlignment(
     val rejection: PlanetaryRejection = PlanetaryRejection.NONE
 )
 
+/**
+ * Previous frame's per-point displacement, stored in the point order of one registration.
+ * Values are relative to that frame's global shift, which is re-measured every frame, so the
+ * window only has to cover how much the local distortion field itself moved.
+ * It is only a search starting guess: every value is re-measured each frame and a hint that no
+ * longer explains its patch is discarded in favour of the bounded full window.
+ */
+internal class LocalShiftHint {
+    private var dx = DoubleArray(0)
+    private var dy = DoubleArray(0)
+    private var filled = 0
+    fun has(index: Int): Boolean = index < filled
+    fun dxAt(index: Int): Double = dx[index]
+    fun dyAt(index: Int): Double = dy[index]
+
+    /** Records one frame's accepted shifts. Gaps and a changed point count stay unfilled. */
+    fun record(points: List<PlanetaryAlignmentPoint>, alignment: PlanetaryAlignment) {
+        if (dx.size != points.size) { dx = DoubleArray(points.size); dy = DoubleArray(points.size) }
+        filled = 0
+        for (shift in alignment.local) {
+            val index = points.indexOfFirst { it === shift.point }
+            if (index < 0) continue
+            dx[index] = shift.shift.dx - alignment.global.dx
+            dy[index] = shift.shift.dy - alignment.global.dy
+            filled = maxOf(filled, index + 1)
+        }
+    }
+
+    fun clear() { dx = DoubleArray(0); dy = DoubleArray(0); filled = 0 }
+}
+
 /** Inverse mapping: reference (x,y) samples source (x+dx,y+dy). No display stretch is used. */
-class PlanetaryRegistration(
-    reference: LinearImage,
+class PlanetaryRegistration private constructor(
+    private val width: Int,
+    private val height: Int,
+    private val channels: Int,
+    private val ref: FloatArray,
     private val roi: PixelRoi,
     private val options: PlanetaryOptions,
-    private val checkCancelled: () -> Unit = {}
+    private val checkCancelled: () -> Unit
 ) {
-    private val width = reference.width
-    private val height = reference.height
-    private val channels = reference.channels
-    private val ref = PlanetarySampling.plane(reference, checkCancelled)
+    constructor(reference: LinearImage, roi: PixelRoi, options: PlanetaryOptions,
+                checkCancelled: () -> Unit = {}) : this(reference.width, reference.height,
+        reference.channels, PlanetarySampling.plane(reference, checkCancelled), roi, options, checkCancelled)
+
+    companion object {
+        /** Integer window a temporal hint is searched in, against [PlanetaryOptions.maxLocalShift]. */
+        private const val HINT_RADIUS = 1
+        /** Centre-plus-neighbour passes allowed per refinement level before the step halves. */
+        private const val REFINE_SWEEPS = 3
+
+        /** Transfers the caller's private luminance plane; it must not be overwritten. */
+        internal fun fromLuminance(reference: LinearImage, inputChannels: Int, roi: PixelRoi,
+                                   options: PlanetaryOptions, checkCancelled: () -> Unit): PlanetaryRegistration {
+            require(reference.channels == 1 && inputChannels in listOf(1, 3))
+            return PlanetaryRegistration(reference.width, reference.height, inputChannels, reference.pixels,
+                roi, options, checkCancelled)
+        }
+    }
+
     private val referenceCenter = center(ref)
     val points: List<PlanetaryAlignmentPoint> = makePoints()
 
@@ -87,9 +136,11 @@ class PlanetaryRegistration(
         return PreparedFrame(scratch, this)
     }
 
-    fun align(image: LinearImage): PlanetaryAlignment = align(prepareFrame(image))
+    fun align(image: LinearImage): PlanetaryAlignment = align(prepareFrame(image), null)
 
-    internal fun align(frame: PreparedFrame): PlanetaryAlignment {
+    internal fun align(frame: PreparedFrame): PlanetaryAlignment = align(frame, null)
+
+    internal fun align(frame: PreparedFrame, hint: LocalShiftHint?): PlanetaryAlignment {
         require(frame.owner === this) { "Prepared frame belongs to another registration" }
         val src = frame.pixels
         val currentCenter = center(src)
@@ -102,15 +153,24 @@ class PlanetaryRegistration(
         }
         if (!options.localAlignment) return PlanetaryAlignment(global, emptyList(), points.size, PlanetaryRegistrationMode.GLOBAL)
         if (points.size < 3) return PlanetaryAlignment(global, emptyList(), points.size, PlanetaryRegistrationMode.GLOBAL_LOW_TEXTURE)
-        val local = ArrayList<PlanetaryLocalShift>()
-        for (p in points) {
+        val local = ArrayList<PlanetaryLocalShift>(points.size)
+        fun acceptable(shift: PlanetaryShift) = shift.correlation >= options.minimumLocalCorrelation &&
+            abs(shift.dx - global.dx) < options.maxLocalShift - .2 && abs(shift.dy - global.dy) < options.maxLocalShift - .2
+        for (index in points.indices) {
             checkCancelled()
+            val p = points[index]
             val area = PixelRoi(p.x.toInt() - p.radius, p.y.toInt() - p.radius, p.radius * 2, p.radius * 2)
-            val shift = search(src, area, global.dx, global.dy, options.maxLocalShift, global = false)
-            if (shift.correlation >= options.minimumLocalCorrelation &&
-                abs(shift.dx - global.dx) < options.maxLocalShift - .2 && abs(shift.dy - global.dy) < options.maxLocalShift - .2) {
-                local += PlanetaryLocalShift(p, shift)
-            }
+            // Consecutive frames move the distortion field slowly, so the previous frame's
+            // relative displacement for this point centres a far smaller window than the
+            // global shift does, and it survives a uniform drift between the two frames.
+            // A hint that no longer explains the patch fails acceptance and the bounded full
+            // window is searched instead, so a lost hint costs time and never a correct answer.
+            var shift = if (hint != null && hint.has(index))
+                search(src, area, global.dx + hint.dxAt(index), global.dy + hint.dyAt(index), HINT_RADIUS, global = false)
+                    .takeIf { acceptable(it) } else null
+            if (shift == null) shift = search(src, area, global.dx, global.dy, options.maxLocalShift, global = false)
+                .takeIf { acceptable(it) }
+            if (shift != null) local += PlanetaryLocalShift(p, shift)
         }
         // Grossly contradictory patches cause double edges, so reject rather than hiding them behind blending.
         val consistent = local.filter { a ->
@@ -170,32 +230,67 @@ class PlanetaryRegistration(
         return if (n >= 20) sqrt(squared / n) else 0.0
     }
 
-    private fun search(src: FloatArray, area: PixelRoi, startX: Double, startY: Double, radius: Int, global: Boolean): PlanetaryShift {
+    /** One stride of a bounded integer sweep. The seed keeps the caller's running best. */
+    private fun sweep(src: FloatArray, area: PixelRoi, fromX: Int, toX: Int, fromY: Int, toY: Int,
+                      stride: Int, seed: PlanetaryShift, sampleStep: Int): PlanetaryShift {
+        var bestX = seed.dx; var bestY = seed.dy; var best = seed.correlation
+        for (dy in fromY..toY step stride) {
+            checkCancelled()
+            for (dx in fromX..toX step stride) {
+                val score = correlation(src, area, dx.toDouble(), dy.toDouble(), sampleStep)
+                if (score > best) { best = score; bestX = dx.toDouble(); bestY = dy.toDouble() }
+            }
+        }
+        return PlanetaryShift(bestX, bestY, best)
+    }
+
+    private fun search(src: FloatArray, area: PixelRoi, startX: Double, startY: Double, radius: Int,
+                       global: Boolean, coarseStep: Int = if (global) max(1, radius / 8) else 1): PlanetaryShift {
         val sampleStep = if (global) max(1, min(area.width, area.height) / 72) else max(1, area.width / 32)
         var bestX = startX.roundToInt().toDouble(); var bestY = startY.roundToInt().toDouble()
         var best = correlation(src, area, bestX, bestY, sampleStep)
-        val initialStep = if (global) max(1, radius / 8) else 1
         // Centroid handles large motion. The bounded full search also handles changes in target brightness.
         val fromX = if (global) -radius else (startX - radius).roundToInt()
         val toX = if (global) radius else (startX + radius).roundToInt()
         val fromY = if (global) -radius else (startY - radius).roundToInt()
         val toY = if (global) radius else (startY + radius).roundToInt()
-        for (dy in fromY..toY step initialStep) {
-            checkCancelled()
-            for (dx in fromX..toX step initialStep) {
-                val score = correlation(src, area, dx.toDouble(), dy.toDouble(), sampleStep)
-                if (score > best) { best = score; bestX = dx.toDouble(); bestY = dy.toDouble() }
-            }
-        }
-        var step = if (global) max(1.0, initialStep / 2.0) else .5
+        val start = PlanetaryShift(bestX, bestY, best)
+        val seed = if (global && coarseStep > 1) {
+            // A stride twice the resolution cannot resolve a peak, so the wide sweep runs
+            // first and the original stride then resolves its neighbourhood in both axes.
+            val wide = coarseStep * 2
+            val coarse = sweep(src, area, fromX, toX, fromY, toY, wide, start, sampleStep)
+            val nearX = floor(coarse.dx).toInt().coerceIn(fromX, toX)
+            val nearY = floor(coarse.dy).toInt().coerceIn(fromY, toY)
+            val half = 2 * coarseStep
+            // An edge winner cannot certify the opposite side, so its window widens back to
+            // the whole range and no candidate is dropped relative to the single fine sweep.
+            sweep(src, area,
+                if (nearX - half <= fromX || nearX + half >= toX) fromX else max(fromX, nearX - half),
+                if (nearX - half <= fromX || nearX + half >= toX) toX else min(toX, nearX + half),
+                if (nearY - half <= fromY || nearY + half >= toY) fromY else max(fromY, nearY - half),
+                if (nearY - half <= fromY || nearY + half >= toY) toY else min(toY, nearY + half),
+                coarseStep, coarse, sampleStep)
+        } else sweep(src, area, fromX, toX, fromY, toY, coarseStep, start, sampleStep)
+        bestX = seed.dx; bestY = seed.dy; best = seed.correlation
+        // A centre-plus-eight-neighbour pattern reaches the same 0.125 px floor with a third of
+        // the correlations a 5 x 5 lattice needs. The centre is the current best and cannot win.
+        var step = if (global) max(1.0, coarseStep / 2.0) else .5
         while (step >= .125) {
             checkCancelled()
-            val cx = bestX; val cy = bestY
-            for (iy in -2..2) for (ix in -2..2) {
-                val dx = cx + ix * step; val dy = cy + iy * step
-                if (dx < fromX || dx > toX || dy < fromY || dy > toY) continue
-                val score = correlation(src, area, dx, dy, sampleStep)
-                if (score > best) { best = score; bestX = dx; bestY = dy }
+            var sweeps = 0
+            while (sweeps < REFINE_SWEEPS) {
+                checkCancelled(); sweeps++
+                val cx = bestX; val cy = bestY
+                var improved = false
+                for (iy in -1..1) for (ix in -1..1) {
+                    if (ix == 0 && iy == 0) continue
+                    val dx = cx + ix * step; val dy = cy + iy * step
+                    if (dx < fromX || dx > toX || dy < fromY || dy > toY) continue
+                    val score = correlation(src, area, dx, dy, sampleStep)
+                    if (score > best) { best = score; bestX = dx; bestY = dy; improved = true }
+                }
+                if (!improved) break
             }
             step *= .5
         }
@@ -218,6 +313,48 @@ class PlanetaryRegistration(
     }
 }
 
+/**
+ * Mesh indices and interpolation fractions resolved once per image coordinate. The mesh grid
+ * depends only on the geometry, so one table serves every frame of a stack and removes the
+ * per-pixel division, bounds test and rounding that a direct bilinear lookup repeats.
+ */
+internal class OffsetTable(val width: Int, val height: Int, val step: Int, val columns: Int, val rows: Int) {
+    private val columnIndex = IntArray(width)
+    private val columnNext = IntArray(width)
+    private val columnFraction = DoubleArray(width)
+    private val rowBase = IntArray(height)
+    private val rowNextBase = IntArray(height)
+    private val rowFraction = DoubleArray(height)
+    init {
+        for (x in 0 until width) {
+            val grid = x.toDouble() / step
+            val index = grid.toInt()
+            columnIndex[x] = index
+            columnNext[x] = min(columns - 1, index + 1)
+            columnFraction[x] = grid - index
+        }
+        for (y in 0 until height) {
+            val grid = y.toDouble() / step
+            val index = grid.toInt()
+            rowBase[y] = index * columns
+            rowNextBase[y] = min(rows - 1, index + 1) * columns
+            rowFraction[y] = grid - index
+        }
+    }
+    fun rowBase(y: Int): Int = rowBase[y]
+    fun rowNextBase(y: Int): Int = rowNextBase[y]
+    fun rowFraction(y: Int): Double = rowFraction[y]
+    fun columnIndex(x: Int): Int = columnIndex[x]
+    fun columnNext(x: Int): Int = columnNext[x]
+    fun columnFraction(x: Int): Double = columnFraction[x]
+    fun offset(values: FloatArray, x: Int, y: Int): Double {
+        val fx = columnFraction[x]; val ix = columnIndex[x]; val nx = columnNext[x]
+        val fy = rowFraction[y]; val top = rowBase[y]; val bottom = rowNextBase[y]
+        return (values[top + ix] * (1 - fx) + values[top + nx] * fx) * (1 - fy) +
+            (values[bottom + ix] * (1 - fx) + values[bottom + nx] * fx) * fy
+    }
+}
+
 /** Smooth partition-of-unity displacement interpolation, then bilinear mesh interpolation per pixel. */
 internal class PlanetaryWarp(width: Int, height: Int, alignment: PlanetaryAlignment, checkCancelled: () -> Unit = {}, workspace: Workspace? = null) {
     val step = max(4, min(32, alignment.local.firstOrNull()?.point?.radius ?: 16))
@@ -226,19 +363,37 @@ internal class PlanetaryWarp(width: Int, height: Int, alignment: PlanetaryAlignm
     private val buffers = workspace?.buffers(columns * rows)
     val dx = buffers?.first ?: FloatArray(columns * rows)
     val dy = buffers?.second ?: FloatArray(columns * rows)
+    val offsets: OffsetTable = workspace?.tables(width, height, step, columns, rows)
+        ?: OffsetTable(width, height, step, columns, rows)
     var folded = false
         private set
     init {
+        // A point's support radius, correlation weight and displacement relative to the global
+        // shift are identical at every mesh node, so they are resolved once per alignment.
+        val points = alignment.local
+        val pointX = DoubleArray(points.size); val pointY = DoubleArray(points.size)
+        val relativeX = DoubleArray(points.size); val relativeY = DoubleArray(points.size)
+        val correlation4 = DoubleArray(points.size); val support = DoubleArray(points.size)
+        for (i in points.indices) {
+            val local = points[i]
+            pointX[i] = local.point.x; pointY[i] = local.point.y
+            relativeX[i] = local.shift.dx - alignment.global.dx
+            relativeY[i] = local.shift.dy - alignment.global.dy
+            correlation4[i] = local.shift.correlation.pow(4)
+            support[i] = local.point.radius * 3.0
+        }
         for (y in 0 until rows) {
           checkCancelled()
+          val nodeY = y * step
           for (x in 0 until columns) {
+            val nodeX = x * step
             var sx = 0.0; var sy = 0.0; var weight = 0.0
-            for (ap in alignment.local) {
-                val distance = hypot(x * step - ap.point.x, y * step - ap.point.y) / (ap.point.radius * 3.0)
+            for (i in points.indices) {
+                val distance = hypot(nodeX - pointX[i], nodeY - pointY[i]) / support[i]
                 if (distance < 1) {
-                    val w = (1 - distance * distance).pow(3) * ap.shift.correlation.pow(4)
-                    sx += (ap.shift.dx - alignment.global.dx) * w
-                    sy += (ap.shift.dy - alignment.global.dy) * w
+                    val w = (1 - distance * distance).pow(3) * correlation4[i]
+                    sx += relativeX[i] * w
+                    sy += relativeY[i] * w
                     weight += w
                 }
             }
@@ -261,16 +416,25 @@ internal class PlanetaryWarp(width: Int, height: Int, alignment: PlanetaryAlignm
         }
     }
     fun offset(values: FloatArray, x: Int, y: Int): Double =
-        PlanetarySampling.bilinear(values, columns, rows, x.toDouble() / step, y.toDouble() / step)
+        offsets.offset(values, x, y)
 
     internal class Workspace {
         private var arrays = FloatArray(0) to FloatArray(0)
+        private var table: OffsetTable? = null
         fun buffers(size: Int): Pair<FloatArray, FloatArray> {
             // Local/global fallback can change mesh dimensions. Keep the largest capacity so
             // a seeing fluctuation does not reallocate two large meshes on each mode change.
             if (arrays.first.size < size) arrays = FloatArray(size) to FloatArray(size)
             return arrays
         }
-        fun clear() { arrays = FloatArray(0) to FloatArray(0) }
+        /** Reused while the geometry holds; a step change from local/global mode rebuilds it. */
+        fun tables(width: Int, height: Int, step: Int, columns: Int, rows: Int): OffsetTable {
+            val current = table
+            if (current == null || current.width != width || current.height != height ||
+                current.step != step || current.columns != columns || current.rows != rows)
+                table = OffsetTable(width, height, step, columns, rows)
+            return checkNotNull(table)
+        }
+        fun clear() { arrays = FloatArray(0) to FloatArray(0); table = null }
     }
 }

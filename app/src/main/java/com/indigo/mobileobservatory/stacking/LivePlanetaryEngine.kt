@@ -28,6 +28,7 @@ class LivePlanetaryEngine(
     private var referenceRestartRequired = false
     private val accumulator = PlanetaryStacker()
     private val warpWorkspace = PlanetaryWarp.Workspace()
+    private val hint = LocalShiftHint()
     private val qualityScores = DoubleArray(qualityWindowFrames.also { require(it in 2..4096) })
     private val sortedScores = DoubleArray(qualityWindowFrames)
     private var scoreCount = 0; private var nextScore = 0
@@ -130,7 +131,7 @@ class LivePlanetaryEngine(
                 if (!options.localAlignment) PlanetaryRegistrationMode.GLOBAL
                 else if (registered.points.size < 3) PlanetaryRegistrationMode.GLOBAL_LOW_TEXTURE
                 else PlanetaryRegistrationMode.MULTIPOINT)
-            else registered.align(checkNotNull(prepared))
+            else registered.align(checkNotNull(prepared), hint)
             if (alignment.rejection != PlanetaryRejection.NONE) return reject(alignment.rejection.name)
             val warp = PlanetaryWarp(width, height, alignment, ::checkCancelled, warpWorkspace)
             if (warp.folded) return reject(PlanetaryRejection.FOLDED_WARP.name)
@@ -149,6 +150,10 @@ class LivePlanetaryEngine(
             }
             improvedEdgeFailures = 0
             accumulator.accumulate(image, sums, weights, warp, ::checkCancelled)
+            // Only a full multipoint result is fed forward; a global or fallback frame means
+            // the distortion field itself moved and the previous per-point guesses are stale.
+            if (alignment.mode == PlanetaryRegistrationMode.MULTIPOINT)
+                hint.record(registered.points, alignment)
             checkCancelled()
             accepted++
             exposure += exposureSeconds
@@ -171,6 +176,7 @@ class LivePlanetaryEngine(
         bootstrapValidFrames = 0; improvedEdgeFailures = 0; referenceRestartRequired = false
         sums = DoubleArray(0); weights = FloatArray(0); sourcePlane = FloatArray(0)
         warpWorkspace.clear()
+        hint.clear()
         width = 0; height = 0; channels = 0
         received = 0; qualityValid = 0; accepted = 0
         referenceFrame = 0; referenceQuality = 0.0; lastQuality = 0.0; threshold = 0.0

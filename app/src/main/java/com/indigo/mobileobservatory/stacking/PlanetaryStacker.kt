@@ -21,6 +21,15 @@ interface PlanetaryFrameSource : Closeable {
     fun exposureSeconds(index: Long): Double = 0.0
 }
 
+/** Synchronous bounded decoder. Destinations belong to the caller and must never be retained.
+ * Luminance must equal [PlanetarySampling.luma] after the same calibration/demosaic/Bin steps.
+ * The independently owned [readFrame] contract remains available for other consumers. */
+internal interface BufferedPlanetaryFrameSource : PlanetaryFrameSource {
+    override val boundedDecode: Boolean get() = true
+    fun readFrameInto(index: Long, destination: FloatArray): LinearImage
+    fun readLuminanceInto(index: Long, destination: FloatArray): LinearImage
+}
+
 data class PlanetaryOptions(
     val roi: PixelRoi? = null,
     val localAlignment: Boolean = true,
@@ -100,8 +109,17 @@ class PlanetaryStacker {
         const val MAX_PIXELS = LinearImage.MAX_PIXELS
         const val MAX_SELECTED_FRAMES = 10_000_000L // Exact integer per-pixel counts in Float.
         /** Includes decode scratch, two input images, two gray planes, double sums, weights, output + preview/post scratch. */
-        fun estimatedPeakBytes(width: Int, height: Int, channels: Int, boundedDecode: Boolean = false): Long =
-            if (boundedDecode) {
+        fun estimatedPeakBytes(width: Int, height: Int, channels: Int, boundedDecode: Boolean = false,
+                               reusableInput: Boolean = false): Long =
+            if (reusableInput) {
+                require(boundedDecode)
+                // One caller-owned Float input becomes the result. Double sums, coverage and
+                // two gray planes stay resident. Reserve the largest reusable dx/dy mesh plus
+                // 8 MiB for quality/index/metadata; decoder/calibration tiles are added separately.
+                val meshColumns = (width.toLong() + 3) / 4 + 1
+                val meshRows = (height.toLong() + 3) / 4 + 1
+                width.toLong() * height * (channels * 12L + 12L) + meshColumns * meshRows * 8 + 8L * 1024 * 1024
+            } else if (boundedDecode) {
                 // Reference + old/new input + result (4 Float channel images), Double sums,
                 // reference/current reusable gray planes and Float coverage. Post-processing
                 // runs after this worker returns; its lower live set fits the same reserve.
@@ -114,6 +132,8 @@ class PlanetaryStacker {
         val start = System.nanoTime()
         validate(source, options)
         control.checkCancelled()
+        val buffered = source as? BufferedPlanetaryFrameSource
+        val luminance = buffered?.let { FloatArray(source.width * source.height) }
         require(cacheDirectory.isDirectory || cacheDirectory.mkdirs()) { "Cannot create quality cache; choose writable storage" }
         val needed = Math.addExact(Math.multiplyExact(source.frameCount, 5L), 1024L * 1024)
         require(cacheDirectory.usableSpace >= needed) { "Not enough storage for quality analysis; free at least $needed bytes" }
@@ -129,8 +149,11 @@ class PlanetaryStacker {
                 while (frame < source.frameCount) {
                     control.checkCancelled()
                     control.progress(PlanetaryProgress(PlanetaryPhase.READ, frame, source.frameCount))
-                    val image = source.readFrame(frame)
-                    validateFrame(image, source)
+                    val image = if (buffered == null) source.readFrame(frame)
+                        else buffered.readLuminanceInto(frame, checkNotNull(luminance)).also {
+                            require(it.pixels === luminance) { "Decoder did not fill the caller's buffer" }
+                        }
+                    validateFrame(image, source, if (buffered == null) source.channels else 1)
                     val q = PlanetaryQualityEstimator.measure(image, roi, source.physicalEdges, control.checkCancelled)
                     val rank = (q.score * 65535).roundToInt().coerceIn(0, 65535)
                     out.writeInt(rank); out.writeByte(q.rejection.ordinal)
@@ -144,7 +167,8 @@ class PlanetaryStacker {
             }
             require(valid > 0) { "No usable target frames; adjust ROI, exposure or focus (${reasons.entries.joinToString { "${it.key}: ${it.value}" }})" }
             return PlanetaryAnalysis(index, source.frameCount, valid, bestFrame, distribution, reasons, options,
-                source.width, source.height, source.channels, estimatedPeakBytes(source.width, source.height, source.channels, source.boundedDecode),
+                source.width, source.height, source.channels,
+                estimatedPeakBytes(source.width, source.height, source.channels, source.boundedDecode, buffered != null),
                 (System.nanoTime() - start) / 1_000_000, ranks)
         } catch (error: Throwable) { index.delete(); throw error }
     }
@@ -163,13 +187,26 @@ class PlanetaryStacker {
         while (threshold > 0 && above + analysis.rankHistogram[threshold] < selected) { above += analysis.rankHistogram[threshold]; threshold-- }
         var tiesRemaining = selected - above
         control.checkCancelled()
-        val reference = source.readFrame(analysis.referenceFrame)
-        validateFrame(reference, source)
+        val buffered = source as? BufferedPlanetaryFrameSource
+        // Generic sources keep their independently owned reference. Bounded decoders only
+        // retain reference luminance and reread selected RGB into a single caller-owned input.
+        val reference = if (buffered == null) source.readFrame(analysis.referenceFrame).also { validateFrame(it, source) } else null
         val options = analysis.options
-        val registration = PlanetaryRegistration(reference, options.roi ?: PixelRoi(0, 0, source.width, source.height), options, control.checkCancelled)
-        val sums = DoubleArray(reference.pixels.size)
+        val roi = options.roi ?: PixelRoi(0, 0, source.width, source.height)
+        val registration = if (buffered == null) PlanetaryRegistration(checkNotNull(reference), roi, options, control.checkCancelled)
+            else {
+                val plane = FloatArray(source.width * source.height)
+                val gray = buffered.readLuminanceInto(analysis.referenceFrame, plane)
+                validateFrame(gray, source, 1)
+                require(gray.pixels === plane) { "Decoder did not fill the caller's buffer" }
+                PlanetaryRegistration.fromLuminance(gray, source.channels, roi, options, control.checkCancelled)
+            }
+        val framePixels = buffered?.let { FloatArray(source.width * source.height * source.channels) }
+        val sums = DoubleArray(source.width * source.height * source.channels)
         val weights = FloatArray(source.width * source.height)
         var grayScratch: FloatArray? = null
+        val warpWorkspace = PlanetaryWarp.Workspace()
+        val hint = if (options.localAlignment) LocalShiftHint() else null
         val modes = linkedMapOf<PlanetaryRegistrationMode, Long>()
         val reasons = analysis.rejectionCounts.toMutableMap()
         var accepted = 0L; var processed = 0L; var totalCorrelation = 0.0; var exposure = 0.0; var unknownExposure = 0L
@@ -185,7 +222,9 @@ class PlanetaryStacker {
                 if (choose) {
                     if (rank == threshold) tiesRemaining--
                     control.progress(PlanetaryProgress(PlanetaryPhase.READ, processed, selected))
-                    val image = if (frame == analysis.referenceFrame) reference else source.readFrame(frame)
+                    val image = if (buffered != null) buffered.readFrameInto(frame, checkNotNull(framePixels)).also {
+                        require(it.pixels === framePixels) { "Decoder did not fill the caller's buffer" }
+                    } else if (frame == analysis.referenceFrame) checkNotNull(reference) else source.readFrame(frame)
                     validateFrame(image, source)
                     control.progress(PlanetaryProgress(PlanetaryPhase.REGISTER, processed, selected))
                     val prepared = if (frame == analysis.referenceFrame) null else registration.prepareFrame(image,
@@ -193,15 +232,19 @@ class PlanetaryStacker {
                     val alignment = if (frame == analysis.referenceFrame) PlanetaryAlignment(
                         PlanetaryShift(0.0, 0.0, 1.0), emptyList(), registration.points.size,
                         if (!options.localAlignment) PlanetaryRegistrationMode.GLOBAL else if (registration.points.size < 3) PlanetaryRegistrationMode.GLOBAL_LOW_TEXTURE else PlanetaryRegistrationMode.MULTIPOINT
-                    ) else registration.align(checkNotNull(prepared))
+                    ) else registration.align(checkNotNull(prepared), hint)
                     var reason = alignment.rejection
                     if (reason == PlanetaryRejection.NONE) {
-                        val warp = PlanetaryWarp(source.width, source.height, alignment, control.checkCancelled)
+                        val warp = PlanetaryWarp(source.width, source.height, alignment, control.checkCancelled, warpWorkspace)
                         if (warp.folded) reason = PlanetaryRejection.FOLDED_WARP
                         else if (prepared != null && registration.edgeResidual(prepared, warp) > options.maximumEdgeResidual) reason = PlanetaryRejection.EDGE_MISMATCH
                         else {
                             control.progress(PlanetaryProgress(PlanetaryPhase.STACK, processed, selected))
                             accumulate(image, sums, weights, warp, control.checkCancelled)
+                            // Only a full multipoint result is fed forward: a global or
+                            // fallback frame signals that the field itself has moved.
+                            if (hint != null && alignment.mode == PlanetaryRegistrationMode.MULTIPOINT)
+                                hint.record(registration.points, alignment)
                             accepted++; totalCorrelation += alignment.global.correlation
                             modes[alignment.mode] = (modes[alignment.mode] ?: 0L) + 1
                             val seconds = source.exposureSeconds(frame)
@@ -216,13 +259,15 @@ class PlanetaryStacker {
         }
         check(processed == selected) { "Quality cache changed; analyze again" }
         require(accepted > 0) { "No frames passed registration; use a larger ROI or improve tracking" }
-        val output = FloatArray(sums.size)
+        // All inputs have been consumed. Transfer this buffer to the immutable result after
+        // normalization; the source never owns it and a later stack allocates its own input.
+        val output = framePixels ?: FloatArray(sums.size)
         for (y in 0 until source.height) {
             control.checkCancelled()
             for (x in 0 until source.width) {
                 val p = y * source.width + x
-                if (weights[p] > 0) for (channel in 0 until source.channels) output[p * source.channels + channel] =
-                    (sums[p * source.channels + channel] / weights[p]).toFloat()
+                for (channel in 0 until source.channels) output[p * source.channels + channel] =
+                    if (weights[p] > 0) (sums[p * source.channels + channel] / weights[p]).toFloat() else 0f
             }
         }
         control.progress(PlanetaryProgress(PlanetaryPhase.COMPLETE, selected, selected))
@@ -234,7 +279,8 @@ class PlanetaryStacker {
     private fun validate(source: PlanetaryFrameSource, options: PlanetaryOptions) {
         require(source.width >= 12 && source.height >= 12 && source.channels in listOf(1, 3) && source.frameCount > 0) { "Unsupported or empty recording" }
         require(source.width.toLong() * source.height <= MAX_PIXELS) { "processing_size" }
-        val bytes = estimatedPeakBytes(source.width, source.height, source.channels, source.boundedDecode)
+        val bytes = estimatedPeakBytes(source.width, source.height, source.channels, source.boundedDecode,
+            source is BufferedPlanetaryFrameSource)
         require(bytes <= options.memoryBudgetBytes) { "Stack needs about ${bytes / 1048576} MiB; choose a smaller recording ROI or free memory" }
         options.roi?.checked(source.width, source.height)
         require(options.maxAlignmentPoints in 3..256 && options.maxGlobalShift in 2..128 && options.maxLocalShift in 2..16)
@@ -243,36 +289,58 @@ class PlanetaryStacker {
         require(options.maximumEdgeResidual in .05..1.0)
     }
 
-    private fun validateFrame(image: LinearImage, source: PlanetaryFrameSource) {
-        require(image.width == source.width && image.height == source.height && image.channels == source.channels &&
-            image.pixels.size.toLong() == source.width.toLong() * source.height * source.channels) { "Recording frame dimensions changed or data are truncated" }
+    private fun validateFrame(image: LinearImage, source: PlanetaryFrameSource, channels: Int = source.channels) {
+        require(image.width == source.width && image.height == source.height && image.channels == channels &&
+            image.pixels.size.toLong() == source.width.toLong() * source.height * channels) { "Recording frame dimensions changed or data are truncated" }
     }
 
     internal fun accumulate(image: LinearImage, sums: DoubleArray, weights: FloatArray, warp: PlanetaryWarp, checkCancelled: () -> Unit) {
         val width = image.width; val height = image.height; val channels = image.channels
+        val pixels = image.pixels
+        val table = warp.offsets
+        val dxMesh = warp.dx; val dyMesh = warp.dy
         for (y in 0 until height) {
             checkCancelled()
+            val rowTop = table.rowBase(y); val rowBottom = table.rowNextBase(y)
+            val meshY = table.rowFraction(y); val notMeshY = 1 - meshY
             for (x in 0 until width) {
-                val sx = x + warp.offset(warp.dx, x, y); val sy = y + warp.offset(warp.dy, x, y)
+                val column = table.columnIndex(x); val nextColumn = table.columnNext(x)
+                val meshX = table.columnFraction(x); val notMeshX = 1 - meshX
+                val dxTop = dxMesh[rowTop + column] * notMeshX + dxMesh[rowTop + nextColumn] * meshX
+                val dxBottom = dxMesh[rowBottom + column] * notMeshX + dxMesh[rowBottom + nextColumn] * meshX
+                val dyTop = dyMesh[rowTop + column] * notMeshX + dyMesh[rowTop + nextColumn] * meshX
+                val dyBottom = dyMesh[rowBottom + column] * notMeshX + dyMesh[rowBottom + nextColumn] * meshX
+                val sx = x + (dxTop * notMeshY + dxBottom * meshY)
+                val sy = y + (dyTop * notMeshY + dyBottom * meshY)
                 if (sx < 0 || sy < 0 || sx > width - 1 || sy > height - 1) continue
                 val ix = sx.toInt(); val iy = sy.toInt(); val nx = min(width - 1, ix + 1); val ny = min(height - 1, iy + 1)
                 val fx = sx - ix; val fy = sy - iy
                 val a = (iy * width + ix) * channels; val b = (iy * width + nx) * channels
                 val c = (ny * width + ix) * channels; val d = (ny * width + nx) * channels
-                // Skip the whole pixel on non-finite input so RGB channels always have identical coverage.
-                var finite = true
-                for (channel in 0 until channels) {
-                    if (!image.pixels[a + channel].isFinite() || !image.pixels[b + channel].isFinite() ||
-                        !image.pixels[c + channel].isFinite() || !image.pixels[d + channel].isFinite()) { finite = false; break }
-                }
-                if (!finite) continue
                 val p = y * width + x
-                for (channel in 0 until channels) {
-                    val value = (image.pixels[a + channel] * (1 - fx) + image.pixels[b + channel] * fx) * (1 - fy) +
-                        (image.pixels[c + channel] * (1 - fx) + image.pixels[d + channel] * fx) * fy
-                    sums[p * channels + channel] += value
+                val oneMinusFx = 1 - fx; val oneMinusFy = 1 - fy
+                // A non-finite tap always propagates into its weighted sum, so testing the
+                // interpolated sample is equivalent to testing four inputs per channel and it
+                // keeps every RGB channel on the same coverage decision.
+                if (channels == 1) {
+                    val value = (pixels[a] * oneMinusFx + pixels[b] * fx) * oneMinusFy +
+                        (pixels[c] * oneMinusFx + pixels[d] * fx) * fy
+                    if (!value.isFinite()) continue
+                    sums[p] += value
+                    weights[p] += 1f
+                } else {
+                    val first = (pixels[a] * oneMinusFx + pixels[b] * fx) * oneMinusFy +
+                        (pixels[c] * oneMinusFx + pixels[d] * fx) * fy
+                    if (!first.isFinite()) continue
+                    val second = (pixels[a + 1] * oneMinusFx + pixels[b + 1] * fx) * oneMinusFy +
+                        (pixels[c + 1] * oneMinusFx + pixels[d + 1] * fx) * fy
+                    if (!second.isFinite()) continue
+                    val third = (pixels[a + 2] * oneMinusFx + pixels[b + 2] * fx) * oneMinusFy +
+                        (pixels[c + 2] * oneMinusFx + pixels[d + 2] * fx) * fy
+                    if (!third.isFinite()) continue
+                    sums[p * 3] += first; sums[p * 3 + 1] += second; sums[p * 3 + 2] += third
+                    weights[p] += 1f
                 }
-                weights[p]++
             }
         }
     }
