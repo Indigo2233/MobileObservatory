@@ -619,18 +619,19 @@ class StackingCoordinator(
         source(file, roi, softwareBin).use { source ->
             checkBudget(source)
             val result = OfflineDeepSkyStacker().stack(source,
-                DeepSkyConfig(memoryBudgetBytes = memoryBudgetBytes - source.processingOverheadBytes),
+                DeepSkyConfig(memoryBudgetBytes = memoryBudgetBytes),
                 checkCancelled = { ensureActive() },
                 progress = { completed, total, stats ->
                     ensureActive()
                     _task.update { it.copy(phase = StackTaskPhase.STACKING, completed = completed, total = total,
                         qualityFrames = stats.accepted.toLong()) }
                     recordMemory()
-                })
+                }, decoderWorkingBytes = source.processingOverheadBytes - source.calibration.memoryBytes,
+                retainedCalibrationBytes = source.calibration.memoryBytes)
             ensureActive()
             check(identity(file) == source.info.identity) { "source_changed" }
-            val stats = result.stats.copy(stack = result.stats.stack.copy(
-                estimatedWorkingBytes = result.stats.stack.estimatedWorkingBytes + source.processingOverheadBytes))
+            val stats = result.stats
+            val memory = source.plan.deepSkyMemory()
             val meta = linkedMapOf(
                 "kind" to "offline_deep_sky", "workflow" to "offline", "target" to "deep_sky",
                 "algorithm" to "rigid_star_ransac_online_welford_sigma",
@@ -648,6 +649,11 @@ class StackingCoordinator(
                 "demosaicAlgorithm" to if (source.info.isBayer) source.algorithm.name else "NONE",
                 "demosaicScratchBytes" to source.demosaicScratchBytes.toString(),
                 "qualitySelection" to "all_frames_passing_star_field_and_registration_checks",
+                "memoryEstimate" to JSONObject().apply {
+                    put("stackingBytes", memory.stackingBytes); put("previewBytes", memory.previewBytes)
+                    put("exportBytes", memory.exportBytes); put("peakBytes", memory.peakBytes)
+                    put("inputOwnership", "reused_caller_buffer"); put("resultOwnership", "transferred_accumulation")
+                }.toString(),
                 "registration" to JSONObject().apply {
                     put("referenceFrame", stats.referenceFrame); put("referencePolicy", "first_accepted_star_field")
                     put("inputFrames", stats.inputFrames); put("acceptedFrames", stats.stack.accepted)
@@ -852,7 +858,7 @@ class StackingCoordinator(
                 }
                 val result = StackPostProcessor.prepare(snapshot.image, effective, backgroundModelCache) { !isActive || serial != renderSerial }
                 ensureActive()
-                val bitmap = StackBitmap.create(result, 1280) { ensureActive() }
+                val bitmap = StackBitmap.create(result, OfflineDeepSkyMemory.PREVIEW_MAX_SIDE) { ensureActive() }
                 synchronized(stateLock) {
                     if (!closed && foreground && serial == renderSerial && activeMode == mode &&
                         (mode != StackMode.LIVE || liveEpoch == liveGeneration())) {

@@ -581,3 +581,100 @@ evidence that banding did not move a sample.
 Validation: 1,057 JVM tests passed with no failures, errors or skips,
 compileDebugAndroidTestKotlin passed, and lintDebug reported zero errors (246
 warnings). No APK was rebuilt or published.
+
+## Offline deep-sky buffer ownership and phase budgets (2026-10-23)
+
+Deep-sky offline processing now uses the same explicit caller-owned input contract
+as offline planetary processing. A SER/PSER pass allocates one output-resolution
+Float input, then fills it from the existing native band/tile decoder for every
+frame. Star detection and accumulation finish synchronously before that input is
+overwritten. The reference keeps star coordinates/statistics, never input pixels.
+Generic frame sources retain the independently owned `readFrame` API and an
+old/new input overlap reserve. Their decoder workspaces must still be budgeted by
+the caller.
+
+After the last frame, `DeepSkyStacker.takeResult()` transfers its mean and coverage
+arrays to the result and releases M2, registration scratch and engine references.
+It is restricted to the sequential offline engine. Live `snapshot()` still copies
+its pixels and weights; changing or resetting an engine cannot mutate a previously
+published result. Cancellation, including cancellation at finalization, publishes
+no partial product. Rigid registration, Float Welford accumulation, warmup/sigma
+rejection, CFA/calibration/Bin order, unknown exposure and source ownership are
+unchanged.
+
+`OfflineDeepSkyMemory` estimates three phases and admits their **maximum**, not
+their sum. UI ROI/Bin planning, admission, progress, final statistics and export
+metadata use that same model. The coordinator joins the preceding renderer before
+stacking/export and closes the decoder before scheduling the result preview.
+
+| Phase | Retained arrays and temporary storage |
+|---|---|
+| Stacking | Float mean + M2 + one reusable input + Float weights: `pixels × (12 × channels + 4)`; a generic owned source reserves one further input. Native band/tile scratch is added here. |
+| Preview | Transferred result and weights; the larger of four mono filter planes during preparation or three mono planes plus the new bounded Bitmap during rendering; an old preview, and one Float/ARGB row. |
+| Export | Transferred result and weights; the larger of four mono filter planes or three planes plus a full-size ARGB Bitmap; the old bounded preview and row buffers. FITS writes scalar samples. |
+
+Calibration masters remain budgeted in **every** phase. The existing 8 MiB
+small-workspace/allocation reserve remains; old preview storage is conservatively
+bounded by 1280² ARGB pixels even if the previous aspect ratio differs. The model
+always covers sharpening and local contrast together, so enabling them after a
+stack does not invalidate admission. It does not reserve obsolete full-size RGB
+background/processed copies. Export `memoryEstimate` records all three phase
+values, their maximum, and the input/result ownership contract.
+
+For 3856×2180 Bayer RAW16 with DDFAPD, full field and no calibration masters:
+
+| Processing Bin | Output | Previous estimate | Current estimate |
+|---|---|---:|---:|
+| 1 | 3856×2180 | 683.3 MiB | 330.5 MiB |
+| 2 | 1928×1090 | 180.3 MiB | 92.1 MiB |
+| 4 | 964×545 | 60.5 MiB | 38.5 MiB |
+
+These are allocation models, not measured Android peaks. Full-size Bin 1 still
+exceeds the 307.2 MiB stacking budget of a 512 MiB app heap. This work does not raise
+the existing 60% budget or change the live full-frame decoder. The real VM heap
+limit is read at runtime; `largeHeap` does not guarantee the same limit on every
+phone. The live ROI detail text is corrected from 40% to the existing 60% policy.
+
+`OfflineDeepSkyBufferTest` compares buffered and owned inputs with the copying
+science engine, including mono/RGB, drift, rejected frames, unknown exposure,
+warmup and pixel rejection. It checks one input identity per pass, source/old
+result independence, destructive finalization, cancellation/retry, a broken buffer
+contract, calibration/decoder lifetime accounting, and admission one byte below
+the full pipeline estimate. The existing tiled decoder tests cover native CFA,
+calibration, seams, PSER and output values.
+
+`DeepSkyBufferBenchmark` is an optional desktop harness. Its `legacy` arm reproduces
+the previous owned-read plus copying-snapshot call pattern with the same science
+engine; `owned` uses the new result transfer, and `buffered` also reuses input.
+At 1024×768 RGB, six synthetic frames, cumulative thread allocations were
+116.3 MiB / 95.0 MiB / 50.7 MiB respectively, with identical image and weight sums.
+The buffered three-frame pass allocated 44.9 MiB: registration still allocates
+small objects, but extending a pass no longer adds a complete RGB array per frame.
+A 3856×2180 RGB three-frame buffered run completed in a 512 MiB desktop VM with
+373.6 MiB cumulative allocations and a 366.3 MiB phase-boundary used-heap sample.
+This isolated harness permits 90% of its desktop heap, unlike the app's 60% policy;
+it does **not** claim full-field admission on a phone with a 512 MiB heap. Used-heap
+samples include unreachable allocations awaiting GC and other VM objects, so they
+are not a measurement of the model's simultaneously retained arrays. No Android
+RSS/PSS, GC pause or sustained device performance claim follows from these runs.
+
+After `:app:compileDebugUnitTestKotlin`, run the benchmark main class with
+`app/build/tmp/kotlin-classes/debug`, `app/build/tmp/kotlin-classes/debugUnitTest`
+and the toolchain's Kotlin standard library on the classpath:
+
+```text
+java -Xmx512m -XX:ActiveProcessorCount=2 -cp <classpath> com.indigo.mobileobservatory.stacking.DeepSkyBufferBenchmark legacy 1024 768 6
+java -Xmx512m -XX:ActiveProcessorCount=2 -cp <classpath> com.indigo.mobileobservatory.stacking.DeepSkyBufferBenchmark owned 1024 768 6
+java -Xmx512m -XX:ActiveProcessorCount=2 -cp <classpath> com.indigo.mobileobservatory.stacking.DeepSkyBufferBenchmark buffered 1024 768 6
+java -Xmx512m -XX:ActiveProcessorCount=2 -cp <classpath> com.indigo.mobileobservatory.stacking.DeepSkyBufferBenchmark buffered 3856 2180 3
+```
+
+Reports are written beneath `build/reports/stacking/deep-sky-buffer-*.txt`.
+
+Validation: 1,063 JVM tests passed without failures/errors/skips, and Lint reported
+zero errors (246 existing warnings). Seventeen API 34 emulator tests passed across
+offline source processing, calibration, CFA, large-input admission and the stacking
+screen's end-to-end workflow. The new case processes three 3856×2180 RAW16 star
+frames at full-field Bin 2, compares admission with final statistics, renders with
+both local contrast and sharpening, exports FITS/PNG, and checks output dimensions
+and phase-budget metadata. Actual phone/recording acceptance remains outstanding.
