@@ -22,11 +22,12 @@ class GuideTaskRunner(
         return true
     }
     fun cancel() { synchronized(lock) { job?.cancel() } }
-    suspend fun pulse(direction: MountDirection, durationMs: Int) {
+    suspend fun pulse(direction: MountDirection, durationMs: Int, onStarted: () -> Unit = {}) {
         require(durationMs in 1..5000)
         currentCoroutineContext().ensureActive()
         try {
             startPulse(direction, durationMs)
+            onStarted()
             currentCoroutineContext().ensureActive()
             delay(durationMs.toLong())
         } finally {

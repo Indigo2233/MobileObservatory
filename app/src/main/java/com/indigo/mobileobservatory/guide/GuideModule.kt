@@ -29,7 +29,11 @@ data class GuideCorrection(
 data class GuideHistoryPoint(
     val timestampMs: Long,
     val raErrorPx: Float,
-    val decErrorPx: Float
+    val decErrorPx: Float,
+    val raPulseMs: Int = 0,
+    val decPulseMs: Int = 0,
+    val raCorrectionPx: Float = 0f,
+    val decCorrectionPx: Float = 0f
 )
 
 enum class GuideAlgorithm {
@@ -51,7 +55,14 @@ data class GuideCalibration(
     val eastYPerMs: Float,
     val northXPerMs: Float,
     val northYPerMs: Float,
-    val pulseMs: Int
+    val pulseMs: Int,
+    val eastSteps: Int = 0,
+    val northSteps: Int = 0,
+    val eastTravelPx: Float = 0f,
+    val northTravelPx: Float = 0f,
+    val raBacklashMs: Int = 0,
+    val decBacklashMs: Int = 0,
+    val fitResidualPx: Float = 0f
 ) {
     val eastRatePxPerSec: Float get() = hypot(eastXPerMs, eastYPerMs) * 1000f
     val northRatePxPerSec: Float get() = hypot(northXPerMs, northYPerMs) * 1000f
@@ -248,7 +259,7 @@ class GuideModule {
         star.x.isFinite() && star.y.isFinite() && star.snr.isFinite() && star.snr >= 5f &&
             star.flux.isFinite() && star.flux > 0 && !star.saturated && (star.radiusPx.isNaN() || star.radiusPx in .6f..8f)
 
-    private fun rawValue(frame: FrameData, x: Int, y: Int): Int {
+    internal fun rawValue(frame: FrameData, x: Int, y: Int): Int {
         val index = y * frame.width + x
         return when {
             frame.pixelFormat == PixelFormat.RGB24 -> {

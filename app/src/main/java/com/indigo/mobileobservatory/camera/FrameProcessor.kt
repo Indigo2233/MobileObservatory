@@ -106,6 +106,8 @@ class FrameProcessor {
     private var lastFocusComputeMs = 0L
 
     var autoStretchEnabled: Boolean = true
+    /** Guide cameras render the original single-channel samples without CFA interpolation. */
+    var rawMonochrome: Boolean = false
     /** Infrared LP750 is an explicit display conversion, never the normal visible-light path. */
     var lp750Enabled: Boolean = false
     var manualBlackPoint: Int = 0
@@ -193,7 +195,7 @@ class FrameProcessor {
             fillRgb48Pixels(preview, pixels, w, h)
         } else if (preview.pixelFormat == PixelFormat.RGB24) {
             fillRgb24Pixels(preview, pixels, w, h)
-        } else if (preview.pixelFormat.isBayer) {
+        } else if (preview.pixelFormat.isBayer && !rawMonochrome) {
             fillBayerPixels(preview, pixels, w, h, traits)
         } else {
             fillMonoPixels(preview, pixels, w, h, traits)

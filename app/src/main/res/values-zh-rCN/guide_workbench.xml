@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="gw_devices">设备连接</string>
+    <string name="gw_start_exposure">开始曝光</string>
+    <string name="gw_stop_exposure">停止曝光</string>
+    <string name="gw_exposure_stopped">曝光已停止，可调整相机参数</string>
+    <string name="gw_start_exposure_first">请先开始曝光</string>
+    <string name="gw_auto_guide">自动选星并导星</string>
+    <string name="gw_stop_guiding">停止导星 / 校准</string>
+    <string name="gw_corrections">修正脉冲</string>
+    <string name="gw_image">导星原始灰度图像，可平移缩放与点选星点</string>
+    <string name="gw_algorithms">算法</string>
+    <string name="gw_optics">光学</string>
+    <string name="gw_focal_mm">导星焦距（mm，留空使用 px）</string>
+    <string name="gw_scale_help">填写导星镜焦距并读取有效像元尺寸后，曲线、散点和 HFR 使用角秒。焦距缺省或像元未知时使用 px。</string>
+    <string name="gw_pixel_um">有效像元：%1$.2f μm</string>
+    <string name="gw_peak">峰值 %1$.0f ADU</string>
+    <string name="gw_flux">背景扣除流量 %1$.0f ADU</string>
+    <string name="gw_profile">星点能量分布</string>
+    <string name="gw_profile_legend" formatted="false">蓝：环带平均强度 · 黄：包围能量 0–100%</string>
+    <string name="gw_profile_radius">半径 0–%1$.1f %2$s · 竖线 HFR</string>
+    <string name="gw_rms">RMS  RA %1$.2f · DEC %2$.2f · 总计 %3$.2f %4$s  |  %5$d / %6$d 点</string>
+    <string name="gw_bit_depth">原始格式 / 位深</string>
+    <string name="gw_readout">相机读出模式</string>
+    <string name="gw_apply_exposure">应用曝光（0.05–5 s）</string>
+    <string name="gw_raw_help">导星显示与测量使用原始单通道数据。相机格式和读出模式改变后需要重新校准。</string>
+    <string name="gw_calibration_help">先消除空程，测量不少于指定步数和位移，拟合双轴响应并在返回时测量回差。首步脉冲决定初始测量，后续步长根据响应调整。</string>
+    <string name="gw_steps">每轴最少步数</string>
+    <string name="gw_distance">每轴最小位移（px）</string>
+    <string name="gw_backlash">DEC 换向回差补偿</string>
+    <string name="gw_calibration_result">RA / DEC：%1$d / %2$d 步\n回差 RA %3$d ms · DEC %4$d ms\n拟合残差 %5$.2f px</string>
+    <string name="gw_clear_east">消除 RA 空程</string>
+    <string name="gw_clear_north">消除 DEC 空程</string>
+    <string name="gw_calibration_progress">%1$s · 第 %2$d 步 · %3$.2f px</string>
+    <string name="gw_multistar">多星导星</string>
+    <string name="gw_ra_aggression">RA 修正强度</string>
+    <string name="gw_dec_aggression">DEC 修正强度</string>
+    <string name="gw_min_move">最小修正量（px）</string>
+    <string name="gw_reverse_ra">反向 RA</string>
+    <string name="gw_reverse_dec">反向 DEC</string>
+</resources>
