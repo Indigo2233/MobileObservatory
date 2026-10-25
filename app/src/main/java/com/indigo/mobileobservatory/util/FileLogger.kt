@@ -19,6 +19,7 @@ object FileLogger {
             if (!logDir.exists()) logDir.mkdirs()
             logFile = File(logDir, "app.log")
             enabled = true
+            installCrashLogger()
             i("FileLogger", "FileLogger initialized: ${logFile?.absolutePath}")
         } catch (e: Exception) {
             Log.e("FileLogger", "Failed to init FileLogger", e)
@@ -26,6 +27,13 @@ object FileLogger {
     }
 
     fun getLogFile(): File? = logFile
+
+    @Synchronized private fun installCrashLogger() {
+        val previous = Thread.getDefaultUncaughtExceptionHandler() ?: return
+        if (previous is UncaughtCrashLogger) return
+        Thread.setDefaultUncaughtExceptionHandler(UncaughtCrashLogger(
+            persist = { report -> writeLog("FATAL", "AppCrash", report) }, delegate = previous))
+    }
 
     fun clearLog() {
         logFile?.let {
