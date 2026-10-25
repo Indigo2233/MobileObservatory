@@ -180,10 +180,9 @@ internal fun PolarWorkflowPreview(
             Box(Modifier.weight(1f).fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center) {
                 val image = bitmap ?: livePreview?.takeIf { source == null && !it.isRecycled }
-                if (image != null) Box(Modifier.fillMaxSize().testTag("polar-main-preview")
-                    .clickable(enabled = source != null) { onInspect(source) }) {
+                if (image != null) Box(Modifier.fillMaxSize().testTag("polar-main-preview")) {
                     PolarCorrectionImage(image, prepared?.originalWidth ?: image.width, prepared?.originalHeight ?: image.height,
-                        imageAdjustment?.geometry, Modifier.fillMaxSize())
+                        imageAdjustment?.geometry, Modifier.fillMaxSize().clickable(enabled = source != null) { onInspect(source) })
                 }
                 else Text(stringResource(R.string.polar_preview_empty), Modifier.padding(16.dp), style = MaterialTheme.typography.bodySmall)
                 if (loading) CircularProgressIndicator(Modifier.size(28.dp))

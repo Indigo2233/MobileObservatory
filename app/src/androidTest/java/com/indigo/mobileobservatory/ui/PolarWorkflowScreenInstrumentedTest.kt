@@ -275,7 +275,7 @@ class PolarWorkflowScreenInstrumentedTest {
             output.write(header.padEnd(((header.length + 2879) / 2880) * 2880).toByteArray(Charsets.US_ASCII))
             val pixels = java.nio.ByteBuffer.allocate(384 * 256 * 2).order(java.nio.ByteOrder.BIG_ENDIAN)
             for (y in 0 until 256) for (x in 0 until 384) {
-                val star = (1..18).any { i -> kotlin.math.abs(x - i * 19) < 2 && kotlin.math.abs(y - (20 + i * 11)) < 2 }
+                val star = (1..18).any { i -> kotlin.math.abs(x - i * 19) < 3 && kotlin.math.abs(y - (20 + i * 11)) < 3 }
                 pixels.putShort(((if (star) 50000 else 1000) - 32768).toShort())
             }
             output.write(pixels.array())
