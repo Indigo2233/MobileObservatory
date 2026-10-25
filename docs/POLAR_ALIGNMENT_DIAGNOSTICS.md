@@ -34,7 +34,7 @@
 
 最终代码 `5d9195a150045adc4344a22de4b56743cda80b6a` 的 [完整页面运行 40200003084](https://github.com/Indigo2233/MobileObservatory/actions/runs/40200003084) 在 API 34 / Pixel 2 模拟器执行 5 项测试，0 失败、0 错误、0 跳过。覆盖无星表试拍与 3 秒曝光传参、解算期间全屏查看/关闭/系统返回、7 星点失败原因、USB 取图异常、200% 字体和实际横屏。已检查常规字号、完整失败说明、大字体和横屏截图；当前失败与图像保持可见，日志入口直接可达。
 
-相关 JVM 回归增至 258 项，全部通过；主代码、Android 测试源码编译及 Android lint 通过。[签名候选构建 40200007379](https://github.com/Indigo2233/MobileObservatory/actions/runs/40200007379) 生成 v1.0.9 / build 51，保持序列入口关闭及 arm64-v8a 架构。下载后核对包名、源码提交、正式签名与 Android 8 兼容签名，并逐字节核对冻结的 ZWO/libusb 库。APK SHA-256 为 `d58b477f477f1e2d3f814961f49de63984922d410529108a56f3fa83f29d6b79`；本地候选与截图保存在 `bin/Candidates/5d9195a/`。
+相关 JVM 回归增至 258 项，全部通过；主代码、Android 测试源码编译及 Android lint 通过。[完整 Android CI 40200000733](https://github.com/Indigo2233/MobileObservatory/actions/runs/40200000733) 也已通过。[签名候选构建 40200007379](https://github.com/Indigo2233/MobileObservatory/actions/runs/40200007379) 生成 v1.0.9 / build 51，保持序列入口关闭及 arm64-v8a 架构。下载后核对包名、源码提交、正式签名与 Android 8 兼容签名，并逐字节核对冻结的 ZWO/libusb 库。APK SHA-256 为 `d58b477f477f1e2d3f814961f49de63984922d410529108a56f3fa83f29d6b79`；本地候选与截图保存在 `bin/Candidates/5d9195a/`。
 
 模拟器注入相机和解算边界用于验证页面行为，真实 Player One 相机、OnStep USB 与天空解算仍需现场验收。候选包已完成上述验证，未替代 GitHub 正式更新源。
 
