@@ -225,7 +225,7 @@ internal fun PolarWorkflowPreview(
     if (inspectFile != null) {
         val navigation = remember { MediaInspectionNavigation() }
         Dialog(onDismissRequest = { if (!navigation.onBack()) onInspect(null) },
-            properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnBackPress = false)) {
+            properties = DialogProperties(usePlatformDefaultWidth = false)) {
             Surface(Modifier.fillMaxSize().testTag("polar-fullscreen-preview")) {
                 Column {
                     Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
