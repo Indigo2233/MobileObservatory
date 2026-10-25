@@ -56,4 +56,6 @@ jobs:
             app/build/outputs/androidTest-results/
             app/build/reports/polar-ui-screenshots/
             app/build/reports/ui-crash.log
+            app/build/reports/ui-app.log
+            app/build/reports/guide-entry-screenshots/
           if-no-files-found: ignore
