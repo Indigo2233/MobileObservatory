@@ -1,0 +1,61 @@
+{
+  "source": "2026-10-25-2004-IMX585.fits",
+  "sourceSha256": "56e0ace11e507302f24df80e36e5690b6a973e6c389dd0d12556ad2035e0e88b",
+  "width": 3856,
+  "height": 2180,
+  "bits": 8,
+  "bayer": "RGGB",
+  "arcsecPerPixel": 1.3292620831111108,
+  "usableStars": 16,
+  "primary": {
+    "x": 1523.6195,
+    "y": 389.74988,
+    "snr": 76.1405,
+    "flux": 6542.6133,
+    "radius": 3.7853396,
+    "hfr": 3.367461,
+    "peak": 223.0,
+    "background": 27.75
+  },
+  "translationCount": 9,
+  "translationMaxErrorPx": 0.037454184,
+  "translationRmsErrorPx": 0.021429371618507963,
+  "calibration": {
+    "eastX": 0.0034721352,
+    "eastY": 0.001996948,
+    "northX": -0.0030027402,
+    "northY": 0.005190319,
+    "raBacklash": 595.0,
+    "decBacklash": 1806.0,
+    "eastSteps": 7.0,
+    "northSteps": 7.0,
+    "residual": 0.019904424
+  },
+  "closedLoop": {
+    "HYSTERESIS": {
+      "steps": 72,
+      "last30RmsPx": 0.14087126711460948,
+      "last30RmsArcsec": 0.18725483397526752,
+      "maxMeasurementErrorPx": 0.022508806
+    },
+    "LOW_PASS": {
+      "steps": 72,
+      "last30RmsPx": 0.15070281969480073,
+      "last30RmsArcsec": 0.20032354403822897,
+      "maxMeasurementErrorPx": 0.04584012
+    },
+    "PREDICTIVE_RA": {
+      "steps": 72,
+      "last30RmsPx": 0.1476154131146642,
+      "last30RmsArcsec": 0.19621957153610572,
+      "maxMeasurementErrorPx": 0.05031808
+    },
+    "RESIST_SWITCH": {
+      "steps": 72,
+      "last30RmsPx": 0.14569047986189101,
+      "last30RmsArcsec": 0.19366083075067458,
+      "maxMeasurementErrorPx": 0.05000626
+    }
+  },
+  "scope": "Recorded image with synthetic CFA-preserving shifts and specified mount dynamics; no physical hardware measurement."
+}

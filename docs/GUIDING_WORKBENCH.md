@@ -44,3 +44,9 @@ JVM 回归覆盖多步校准、反向回差、无运动失败、原始 Bayer 星
 本轮设备枚举为空，Android 界面用例与实际 USB 相机、架台现场验收待执行。
 
 后续合并 main 前，复核相机连接与实际采集启停、8/16 bit 和每种读出模式回读、校准 STOP、丢星/重获、DEC 换向、两轴误差收敛、横屏小尺寸/大字体/红光。校准保存恢复、过中天变换、RA/DEC 独立 MinMove、局部 ROI 质心仍保留为后续工作。
+
+## 实拍 FITS 回归补充
+
+用户提供的 IMX585 全幅图像已用于检测、已知平移、多步校准及四种算法各 72 轮闭环回放，并修复饱和区域次峰、边界星像、CFA 背景候选与 HFR 背景偏置。生产修正策略和回放共用 `GuideModule.solveCorrection`。完整证据、设定参数、原图校验和与现场验证边界见 [IMX585 回放记录](validation/guiding-imx585/README.md)。
+
+补充后的全量回归为 1145 项 JVM 测试全部通过、Android 测试源码编译通过、Lint 0 errors / 297 warnings；原始全幅 FITS 回放通过。

@@ -18,19 +18,22 @@ object GuideStarAnalysis {
         val radius = 12
         val x0 = (star.x.roundToInt() - radius).coerceAtLeast(0); val y0 = (star.y.roundToInt() - radius).coerceAtLeast(0)
         val x1 = (star.x.roundToInt() + radius).coerceAtMost(frame.width - 1); val y1 = (star.y.roundToInt() + radius).coerceAtMost(frame.height - 1)
-        val border = mutableListOf<Float>(); val pixels = mutableListOf<Float>()
+        val bayer = frame.pixelFormat.isBayer
+        fun phase(x: Int, y: Int) = if (bayer) (y and 1) * 2 + (x and 1) else 0
+        val border = Array(if (bayer) 4 else 1) { mutableListOf<Float>() }; val pixels = mutableListOf<Float>()
         for (y in y0..y1) for (x in x0..x1) {
             val v = reader.rawValue(frame, x, y).toFloat(); pixels += v
-            if (hypot(x - star.x, y - star.y) >= 10f) border += v
+            if (hypot(x - star.x, y - star.y) >= 10f) border[phase(x, y)] += v
         }
-        if (border.isEmpty()) return null
-        val background = border.sorted()[border.size / 2]
+        if (border.any { it.isEmpty() }) return null
+        val backgrounds = border.map { values -> values.sorted()[values.size / 2] }
+        val background = backgrounds.average().toFloat()
         val radial = FloatArray(radius + 1); val counts = IntArray(radius + 1)
         val fluxes = mutableListOf<Pair<Float, Float>>()
         for (y in y0..y1) for (x in x0..x1) {
             val r = hypot(x - star.x, y - star.y)
             if (r > radius) continue
-            val flux = (reader.rawValue(frame, x, y) - background).coerceAtLeast(0f)
+            val flux = (reader.rawValue(frame, x, y) - backgrounds[phase(x, y)]).coerceAtLeast(0f)
             fluxes += r to flux
             val bin = r.toInt(); radial[bin] += flux; counts[bin]++
         }

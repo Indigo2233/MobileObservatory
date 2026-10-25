@@ -1,0 +1,15 @@
+{
+  "source": "2026-10-25-2004-IMX585.fits",
+  "sourceSha256": "56e0ace11e507302f24df80e36e5690b6a973e6c389dd0d12556ad2035e0e88b",
+  "sourceWidth": 3856,
+  "sourceHeight": 2180,
+  "x": 656,
+  "y": 788,
+  "width": 1024,
+  "height": 768,
+  "bitpix": 8,
+  "bayer": "RGGB",
+  "pixelSizeUm": 2.9,
+  "focalLengthMm": 450.0,
+  "rawSha256": "773cbdafb5dd301d434d0475d47d86ba1692e3523bdcb0d34cc5a29e035ef072"
+}

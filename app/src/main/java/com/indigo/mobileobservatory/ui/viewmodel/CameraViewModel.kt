@@ -2013,17 +2013,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         return measureStarShift(references, currentStars)
     }
 
-    private fun projectGuideError(calibration: GuideCalibration, dx: Float, dy: Float) =
-        guideModule.projectError(calibration, dx, dy)
-
-    private fun applyGuideAlgorithm(errorMs: Float, raAxis: Boolean): Float =
-        guideModule.filter(
-            errorMs = errorMs,
-            raAxis = raAxis,
-            algorithm = _guideAlgorithm.value,
-            aggressiveness = if (raAxis) _guideRaAggressiveness.value else _guideDecAggressiveness.value
-        )
-
     private fun resetGuideAlgorithmState() = synchronized(guideOperationLock) { guideModule.resetFilter() }
 
     private fun appendGuideHistory(timestampMs: Long, raErrorPx: Float, decErrorPx: Float) {
@@ -2073,41 +2062,22 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 dx += offsetX
                 dy += offsetY
             }
-            val minMove = _guideMinMovePx.value
-            val axisError = projectGuideError(calibration, dx, dy) ?: run {
+            val solution = guideModule.solveCorrection(calibration, dx, dy, _guideAlgorithm.value,
+                _guideRaAggressiveness.value, _guideDecAggressiveness.value, _guideMinMovePx.value,
+                guideDecBacklash, _guideBacklashEnabled.value, _guideReverseRa.value, _guideReverseDec.value) ?: run {
                 _guideStatus.value = app.getString(R.string.guide_calibration_invalid)
                 return
             }
-            val raErrorPx = -axisError.first * hypot(calibration.eastXPerMs, calibration.eastYPerMs)
-            val decErrorPx = -axisError.second * hypot(calibration.northXPerMs, calibration.northYPerMs)
-            appendGuideHistory(now, raErrorPx, decErrorPx)
-            val filteredRaError = applyGuideAlgorithm(axisError.first, true)
-            val filteredDecError = applyGuideAlgorithm(axisError.second, false)
-            val raPulse = if (abs(raErrorPx) >= minMove) abs(filteredRaError).roundToInt().coerceIn(20, 2000) else 0
-            var decPulse = if (abs(decErrorPx) >= minMove) abs(filteredDecError).roundToInt().coerceIn(20, 2000) else 0
+            appendGuideHistory(now, solution.raErrorPx, solution.decErrorPx)
+            val correction = solution.correction
+            _guideCorrection.value = correction
+            val raPulse = correction.raPulseMs; val decPulse = correction.decPulseMs
+            val raDirection = correction.raDirection; val decDirection = correction.decDirection
             if (raPulse == 0 && decPulse == 0) {
-                _guideCorrection.value = GuideCorrection(dx, dy, 0, 0, null, null)
-                _guideStatus.value = app.getString(
-                    R.string.guiding_status,
-                    dx,
-                    dy,
-                    if (_guideMultiStarEnabled.value) _guideReferenceStars.value.size else 1
-                )
+                _guideStatus.value = app.getString(R.string.guiding_status, dx, dy,
+                    if (_guideMultiStarEnabled.value) _guideReferenceStars.value.size else 1)
                 return
             }
-
-            val raDirection = if (raPulse > 0) {
-                if ((filteredRaError > 0f) xor _guideReverseRa.value) MountDirection.EAST else MountDirection.WEST
-            } else {
-                null
-            }
-            val decDirection = if (decPulse > 0) {
-                if ((filteredDecError > 0f) xor _guideReverseDec.value) MountDirection.NORTH else MountDirection.SOUTH
-            } else {
-                null
-            }
-            decPulse = guideDecBacklash.pulse(decPulse, decDirection, calibration.decBacklashMs, _guideBacklashEnabled.value)
-            _guideCorrection.value = GuideCorrection(dx, dy, raPulse, decPulse, raDirection, decDirection)
             lastGuideCorrectionMs = now
             guideTasks.launch {
                 try {

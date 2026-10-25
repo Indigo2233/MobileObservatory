@@ -7,6 +7,7 @@ import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.sign
 import kotlin.math.sqrt
+import kotlin.math.roundToInt
 
 data class GuideStar(
     val x: Float,
@@ -73,6 +74,7 @@ data class GuideVector(val x: Float, val y: Float) {
 }
 
 data class GuideRms(val raPx: Float, val decPx: Float, val totalPx: Float)
+data class GuideSolution(val raErrorPx: Float, val decErrorPx: Float, val correction: GuideCorrection)
 
 /** Pure guide-domain implementation: star detection, matching, calibration projection and filtering. */
 class GuideModule {
@@ -87,31 +89,34 @@ class GuideModule {
         if (width < 16 || height < 16) return emptyList()
         if (frame.data.size.toLong() < width.toLong() * height * frame.pixelFormat.bytesPerPixel) return emptyList()
 
-        var sum = 0.0
-        var sumSquared = 0.0
-        var samples = 0
-        for (y in 0 until height step 8) {
-            for (x in 0 until width step 8) {
-                val value = rawValue(frame, x, y).toDouble()
-                sum += value
-                sumSquared += value * value
-                samples++
+        val bayer = frame.pixelFormat.isBayer
+        val phases = if (bayer) 4 else 1
+        fun phase(x: Int, y: Int) = if (bayer) (y and 1) * 2 + (x and 1) else 0
+        val sums = DoubleArray(phases)
+        val squares = DoubleArray(phases)
+        val counts = IntArray(phases)
+        for (y in 0 until height step 8) for (x in 0 until width step 8) {
+            for (dy in 0..if (bayer) 1 else 0) for (dx in 0..if (bayer) 1 else 0) {
+                val sx = x + dx; val sy = y + dy
+                if (sx >= width || sy >= height) continue
+                val index = phase(sx, sy)
+                val value = rawValue(frame, sx, sy).toDouble()
+                sums[index] += value; squares[index] += value * value; counts[index]++
             }
         }
-        if (samples == 0) return emptyList()
-
-        val mean = sum / samples
-        val sigma = sqrt((sumSquared / samples - mean * mean).coerceAtLeast(0.0))
-        val threshold = mean + sigma * 4.0
+        if (counts.any { it == 0 }) return emptyList()
+        val means = DoubleArray(phases) { sums[it] / counts[it] }
+        val sigmas = DoubleArray(phases) { sqrt((squares[it] / counts[it] - means[it] * means[it]).coerceAtLeast(0.0)) }
+        val thresholds = DoubleArray(phases) { means[it] + sigmas[it] * 4.0 }
+        fun signal(x: Int, y: Int) = rawValue(frame, x, y) - means[phase(x, y)]
         val candidates = ArrayList<Candidate>()
         for (y in 2 until height - 2) {
             for (x in 2 until width - 2) {
                 val value = rawValue(frame, x, y).toDouble()
-                if (value <= threshold) continue
-                if (value >= rawValue(frame, x - 1, y) &&
-                    value >= rawValue(frame, x + 1, y) &&
-                    value >= rawValue(frame, x, y - 1) &&
-                    value >= rawValue(frame, x, y + 1)) {
+                if (value <= thresholds[phase(x, y)]) continue
+                val centered = value - means[phase(x, y)]
+                if (centered >= signal(x - 1, y) && centered >= signal(x + 1, y) &&
+                    centered >= signal(x, y - 1) && centered >= signal(x, y + 1)) {
                     candidates += Candidate(x, y, value)
                 }
             }
@@ -121,14 +126,17 @@ class GuideModule {
         val rejected = ArrayList<GuideStar>()
         for (candidate in candidates.sortedByDescending { it.value }) {
             if (stars.size >= maxStars) break
+            if (candidate.x < 12 || candidate.y < 12 || candidate.x >= width - 12 || candidate.y >= height - 12) continue
             if (stars.any { hypot(it.x - candidate.x, it.y - candidate.y) < 24f }) continue
             var weightSum = 0.0
             var xSum = 0.0
             var ySum = 0.0
             var squaredRadiusSum = 0.0
+            var aperturePeak = 0
             for (y in (candidate.y - 10).coerceAtLeast(0)..(candidate.y + 10).coerceAtMost(height - 1)) {
                 for (x in (candidate.x - 10).coerceAtLeast(0)..(candidate.x + 10).coerceAtMost(width - 1)) {
-                    val weight = (rawValue(frame, x, y) - threshold).coerceAtLeast(0.0)
+                    aperturePeak = maxOf(aperturePeak, peakValue(frame, x, y))
+                    val weight = (rawValue(frame, x, y) - thresholds[phase(x, y)]).coerceAtLeast(0.0)
                     weightSum += weight
                     xSum += x * weight
                     ySum += y * weight
@@ -136,15 +144,18 @@ class GuideModule {
                 }
             }
             if (weightSum > 0.0) {
+                val centerX = (xSum / weightSum).toFloat()
+                val centerY = (ySum / weightSum).toFloat()
+                if (centerX.roundToInt() !in 12..width - 13 || centerY.roundToInt() !in 12..height - 13) continue
                 val star = GuideStar(
-                    x = (xSum / weightSum).toFloat(),
-                    y = (ySum / weightSum).toFloat(),
-                    snr = ((candidate.value - mean) / sigma.coerceAtLeast(1.0)).toFloat(),
+                    x = centerX,
+                    y = centerY,
+                    snr = ((candidate.value - means[phase(candidate.x, candidate.y)]) / sigmas[phase(candidate.x, candidate.y)].coerceAtLeast(1.0)).toFloat(),
                     flux = weightSum.toFloat(),
                     radiusPx = sqrt((squaredRadiusSum / weightSum - (xSum / weightSum).let { it * it } -
                         (ySum / weightSum).let { it * it }).coerceAtLeast(0.0)).toFloat(),
                     saturated = run {
-                        val peak = peakValue(frame, candidate.x, candidate.y)
+                        val peak = aperturePeak
                         val nominal = (1 shl frame.pixelFormat.nativeBits) - 1
                         val maximum = saturationLevel ?: if (peak > nominal) 65535 else nominal
                         peak >= maximum - maxOf(1, maximum / 1000)
@@ -237,6 +248,24 @@ class GuideModule {
             lastDecError = errorMs
         }
         return result
+    }
+
+    /** Shared by the live camera loop and recorded-image replays. Only accepted pulses update backlash state. */
+    fun solveCorrection(calibration: GuideCalibration, dx: Float, dy: Float, algorithm: GuideAlgorithm,
+        raAggressiveness: Float, decAggressiveness: Float, minMovePx: Float,
+        backlash: GuideBacklashCompensation, backlashEnabled: Boolean = true,
+        reverseRa: Boolean = false, reverseDec: Boolean = false): GuideSolution? {
+        val axes = projectError(calibration, dx, dy) ?: return null
+        val raError = -axes.first * hypot(calibration.eastXPerMs, calibration.eastYPerMs)
+        val decError = -axes.second * hypot(calibration.northXPerMs, calibration.northYPerMs)
+        val ra = filter(axes.first, true, algorithm, raAggressiveness)
+        val dec = filter(axes.second, false, algorithm, decAggressiveness)
+        val raMs = if (abs(raError) >= minMovePx) abs(ra).roundToInt().coerceIn(20, 2000) else 0
+        val decMs = if (abs(decError) >= minMovePx) abs(dec).roundToInt().coerceIn(20, 2000) else 0
+        val raDirection = if (raMs == 0) null else if ((ra > 0) xor reverseRa) MountDirection.EAST else MountDirection.WEST
+        val decDirection = if (decMs == 0) null else if ((dec > 0) xor reverseDec) MountDirection.NORTH else MountDirection.SOUTH
+        return GuideSolution(raError, decError, GuideCorrection(dx, dy, raMs,
+            backlash.pulse(decMs, decDirection, calibration.decBacklashMs, backlashEnabled), raDirection, decDirection))
     }
 
     fun rms(points: List<GuideHistoryPoint>): GuideRms {
