@@ -341,6 +341,9 @@ private fun ObservatoryContent(
             mountCoordinates = coordinates,
             cameraPixelSizeUm = cameraPixelSize,
             onSolved = vm::recordPlateSolveResult,
+            recordingsDir = vm.getRecordingsDir(),
+            capturesDir = vm.getCapturesDir(),
+            excludeFile = vm.getActiveRecordingFile(),
             onBack = back
         )
         ObservatoryDestination.POLAR_ALIGNMENT -> {

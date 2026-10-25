@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="plate_image_library">App images</string>
+    <string name="plate_image_device">Device files</string>
+    <string name="plate_image_library_empty">No images yet. Capture or import a JPG, PNG or FITS image in the media library.</string>
+    <string name="plate_image_load_failed">Unable to read the image. Check that the file is still available and try again.</string>
+    <string name="media_share_preview">Share display preview (PNG)</string>
+    <string name="media_share_original">Share original file</string>
+    <string name="media_share_preview_hint">PNG shares the current display at preview resolution and 8 bits per channel. Share the original for full resolution and scientific data.</string>
+    <string name="media_share_failed">Unable to share the file. Check that it is still available and try again.</string>
+</resources>
