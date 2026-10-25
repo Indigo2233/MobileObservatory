@@ -2,6 +2,11 @@ name: Polar workflow UI
 
 on:
   workflow_dispatch:
+    inputs:
+      test_classes:
+        description: Instrumentation classes to execute
+        required: false
+        default: com.indigo.mobileobservatory.ui.PolarWorkflowScreenInstrumentedTest
 
 permissions:
   contents: read
@@ -31,6 +36,8 @@ jobs:
           chmod +x gradlew
       - name: Exercise the complete polar alignment screen
         uses: reactivecircus/android-emulator-runner@v2
+        env:
+          UI_TEST_CLASSES: ${{ inputs.test_classes }}
         with:
           api-level: 34
           arch: x86_64
@@ -48,4 +55,5 @@ jobs:
             app/build/reports/androidTests/
             app/build/outputs/androidTest-results/
             app/build/reports/polar-ui-screenshots/
+            app/build/reports/ui-crash.log
           if-no-files-found: ignore
