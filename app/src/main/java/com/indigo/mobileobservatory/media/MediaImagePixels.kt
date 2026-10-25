@@ -49,9 +49,12 @@ object MediaImageProcessing {
     fun window(image: MediaImagePixels, lowFraction: Double = .002, highFraction: Double = .998): MediaImageWindow {
         require(lowFraction >= 0 && highFraction <= 1 && lowFraction < highFraction)
         val histogram = IntArray(65536)
-        val step = (image.pixels.size / 65_536).coerceAtLeast(1)
+        val pixelCount = image.width * image.height
+        val step = (pixelCount / 65_536).coerceAtLeast(1)
         var count = 0
-        for (i in image.pixels.indices step step) { histogram[image.unsigned(i)]++; count++ }
+        for (pixel in 0 until pixelCount step step) for (channel in 0 until image.channels) {
+            histogram[image.unsigned(pixel * image.channels + channel)]++; count++
+        }
         fun percentile(fraction: Double): Float {
             val rank = ((count - 1) * fraction).toInt(); var seen = 0
             for (code in histogram.indices) {

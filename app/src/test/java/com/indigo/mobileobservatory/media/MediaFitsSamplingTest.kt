@@ -11,6 +11,14 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class MediaFitsSamplingTest {
+    @Test fun previewHistogramSamplesEveryColourChannel() {
+        val image = MediaImagePixels(256, 256, 3, ShortArray(256 * 256 * 3) { ((it % 3 + 1) * 10000).toShort() },
+            MediaImageWindow(0f, 65535f))
+        val window = MediaImageProcessing.window(image)
+        assertEquals(10000f, window.black, .01f)
+        assertEquals(30000f, window.white, .01f)
+    }
+
     @Test fun reducedBayerCropsRetainColourAndHandleIncompleteEdgeCells() {
         for ((pattern, rx, ry) in listOf(Triple("RGGB", 0, 0), Triple("GRBG", 1, 0),
                 Triple("GBRG", 0, 1), Triple("BGGR", 1, 1))) {

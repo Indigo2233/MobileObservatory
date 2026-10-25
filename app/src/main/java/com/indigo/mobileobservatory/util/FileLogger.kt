@@ -1,6 +1,8 @@
 package com.indigo.mobileobservatory.util
 
 import android.content.Context
+import android.app.ActivityManager
+import android.os.Build
 import android.util.Log
 import java.io.File
 import java.io.FileWriter
@@ -12,6 +14,7 @@ object FileLogger {
     private var logFile: File? = null
     private var enabled = false
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
+    private var crashDiagnosticsInstalled = false
 
     fun init(context: Context) {
         try {
@@ -19,9 +22,25 @@ object FileLogger {
             if (!logDir.exists()) logDir.mkdirs()
             logFile = File(logDir, "app.log")
             enabled = true
+            installCrashDiagnostics(context)
             i("FileLogger", "FileLogger initialized: ${logFile?.absolutePath}")
         } catch (e: Exception) {
             Log.e("FileLogger", "Failed to init FileLogger", e)
+        }
+    }
+
+    @Synchronized private fun installCrashDiagnostics(context: Context) {
+        if (crashDiagnosticsInstalled) return
+        crashDiagnosticsInstalled = true
+        Thread.getDefaultUncaughtExceptionHandler()?.let { previous ->
+            Thread.setDefaultUncaughtExceptionHandler(CrashLoggingHandler(previous) { e("Crash", it) })
+        }
+        if (Build.VERSION.SDK_INT >= 30) runCatching {
+            val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+            manager?.getHistoricalProcessExitReasons(context.packageName, 0, 3)?.forEach { exit ->
+                i("ProcessExit", "timestamp=${exit.timestamp} reason=${exit.reason} status=${exit.status} " +
+                    "description=${exit.description?.take(1024)}")
+            }
         }
     }
 

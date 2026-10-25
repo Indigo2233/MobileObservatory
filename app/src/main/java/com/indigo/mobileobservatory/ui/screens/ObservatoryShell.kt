@@ -85,6 +85,11 @@ fun CameraScreen(viewModel: CameraViewModel, redNightMode: Boolean = false,
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
     fun performOpen(destination: ObservatoryDestination, argument: String?, category: String?) {
+        if (destination == ObservatoryDestination.GUIDE) {
+            com.indigo.mobileobservatory.util.FileLogger.i("GuideUI",
+                "Opening from=${navigation.workspace} camera=${viewModel.guideConnectionState.value.javaClass.simpleName} " +
+                    "exposing=${viewModel.guideExposing.value} running=${viewModel.guideRunning.value}")
+        }
         focus.clearFocus()
         val previousPages = navigation.allPages
         navigation = navigation.open(destination, argument, category)
