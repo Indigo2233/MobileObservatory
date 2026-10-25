@@ -2,6 +2,11 @@ name: Polar workflow UI
 
 on:
   workflow_dispatch:
+    inputs:
+      test_classes:
+        description: 'Optional comma-separated instrumentation test classes'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -30,6 +35,8 @@ jobs:
           sudo udevadm trigger --name-match=kvm
           chmod +x gradlew
       - name: Exercise the complete polar alignment screen
+        env:
+          POLAR_UI_TEST_CLASSES: ${{ inputs.test_classes }}
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34

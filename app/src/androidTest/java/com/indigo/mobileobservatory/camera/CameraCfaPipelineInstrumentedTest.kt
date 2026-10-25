@@ -150,9 +150,13 @@ class CameraCfaPipelineInstrumentedTest {
             camera.emitLatest()
             val fits = checkNotNull(fitsTask.await())
             try {
+                assertFalse("Polar acquisition must stop before solving or mount movement", camera.isCapturing.value)
+                assertTrue("Polar acquisition must leave preview paused", vm.previewPaused.value)
                 val header = fits.readBytes().copyOfRange(0, 2880).toString(Charsets.US_ASCII)
                 assertTrue(header.contains("BAYERPAT= 'BGGR'")); assertTrue(Regex("VALIDBIT=\\s+12").containsMatchIn(header))
             } finally { fits.delete() }
+            main { vm.togglePreviewPause() }
+            await { camera.isCapturing.value }
             val jpegDirectory = File(app.getExternalFilesDir("captures"), "JPG")
             val before = jpegDirectory.listFiles()?.map { it.absolutePath }?.toSet().orEmpty()
             var jpeg: File? = null
