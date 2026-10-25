@@ -42,7 +42,7 @@ object StackFitsReader {
         if (extensionOffset >= reader.length()) return@use emptyMap()
         reader.seek(extensionOffset)
         val extension = FitsHeaderParser.read(reader)
-        if (extension["EXTNAME"] != "STACKMETA") return@use emptyMap()
+        if (extension["EXTNAME"] !in listOf("STACKMETA", "EDITMETA")) return@use emptyMap()
         require(extension["BITPIX"] == "8" && extension["NAXIS"] == "1") { "Invalid stack metadata extension" }
         val size = extension["NAXIS1"]?.toIntOrNull() ?: error("Missing metadata length")
         require(size in 0..16 * 1024 * 1024 && reader.length() - reader.filePointer >= size) { "Invalid metadata length" }

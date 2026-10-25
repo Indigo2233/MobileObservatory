@@ -12,6 +12,7 @@ import android.content.ActivityNotFoundException
 import android.graphics.Bitmap
 import android.os.SystemClock
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
@@ -30,10 +31,13 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -45,6 +49,11 @@ import android.graphics.BitmapFactory
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.media.LibraryImportViewModel
 import com.indigo.mobileobservatory.media.ExternalMediaImportError
+import com.indigo.mobileobservatory.media.MediaImageEditSettings
+import com.indigo.mobileobservatory.media.MediaImageEditing
+import com.indigo.mobileobservatory.media.MediaImageExportFormat
+import com.indigo.mobileobservatory.media.PreparedMediaImage
+import com.indigo.mobileobservatory.media.MediaImageEditViewModel
 import com.indigo.mobileobservatory.ui.components.Lp750Credit
 import com.indigo.mobileobservatory.mount.MountCoordinates
 import com.indigo.mobileobservatory.recording.SERReader
@@ -56,11 +65,15 @@ import com.indigo.mobileobservatory.stacking.StackFitsReader
 import com.indigo.mobileobservatory.stacking.StackFitsPreview
 import com.indigo.mobileobservatory.util.FitsIntegerPreview
 import com.indigo.mobileobservatory.util.FitsIntegerPreviewDecoder
+import com.indigo.mobileobservatory.util.FitsHeaderParser
+import com.indigo.mobileobservatory.util.FitsDisplayStretch
+import com.indigo.mobileobservatory.ui.theme.ObservatoryTheme
 import com.indigo.mobileobservatory.util.FileLogger
 import com.indigo.mobileobservatory.util.ImageUtils
 import kotlinx.coroutines.*
 import java.io.File
 import org.json.JSONObject
+import kotlin.math.pow
 
 @Composable
 private fun RepeatableIconButton(
@@ -261,8 +274,13 @@ fun PlayerScreen(
             key(info.file.absolutePath) {
             PlaybackView(
                 fileInfo = info,
+                capturesDir = capturesDir,
                 onBack = leaveFile,
                 onNavigateUp = onNavigateUp,
+                onImageExported = { refreshTrigger++ },
+                onViewExported = { file ->
+                    MediaLibrary.describe(file)?.let { selectedFile = it; showFilePicker = false }
+                },
                 onSolve = { plateSolveFile = firstFitsIn(info.file) ?: info.file },
                 onStackFile = onStackFile?.let { launch -> { file: File ->
                     launch(file)
@@ -625,11 +643,14 @@ private fun FilePickerView(
 @Composable
 private fun PlaybackView(
     fileInfo: VideoFileInfo,
+    capturesDir: File?,
     onBack: () -> Unit,
     onSolve: () -> Unit = {},
     onStackFile: ((File) -> Unit)? = null,
     onDelete: () -> Unit = {},
-    onNavigateUp: (() -> Unit)? = null
+    onNavigateUp: (() -> Unit)? = null,
+    onImageExported: () -> Unit = {},
+    onViewExported: (File) -> Unit = {}
 ) {
     val isImage = fileInfo.format.equals("JPG", true) ||
                   fileInfo.format.equals("JPEG", true) ||
@@ -638,8 +659,16 @@ private fun PlaybackView(
                   fileInfo.format.equals("FITS", true)
 
     if (isImage) {
-        ImageViewScreen(fileInfo = fileInfo, onBack = onNavigateUp ?: onBack, onSolve = onSolve, onDelete = onDelete,
-            externalUp = onNavigateUp != null)
+        ImageViewScreen(
+            fileInfo = fileInfo,
+            capturesDir = capturesDir,
+            onBack = onNavigateUp ?: onBack,
+            onSolve = onSolve,
+            onDelete = onDelete,
+            externalUp = onNavigateUp != null,
+            onExported = onImageExported,
+            onViewExported = onViewExported
+        )
         return
     }
 
@@ -984,21 +1013,83 @@ private fun PlaybackView(
 @Composable
 private fun ImageViewScreen(
     fileInfo: VideoFileInfo,
+    capturesDir: File?,
     onBack: () -> Unit,
     onSolve: () -> Unit,
     onDelete: () -> Unit,
-    externalUp: Boolean = false
+    externalUp: Boolean = false,
+    onExported: () -> Unit = {},
+    onViewExported: (File) -> Unit = {}
 ) {
-    var bitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var sourceBitmap by remember(fileInfo) { mutableStateOf<Bitmap?>(null) }
+    var bitmap by remember(fileInfo) { mutableStateOf<Bitmap?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var fitsInfo by remember { mutableStateOf("") }
     var resultMetadata by remember(fileInfo) { mutableStateOf("") }
     var showMetadata by remember(fileInfo) { mutableStateOf(false) }
-    var lp750Enabled by remember(fileInfo) { mutableStateOf(false) }
     var showLp750Help by remember(fileInfo) { mutableStateOf(false) }
     var fitsCache by remember(fileInfo) { mutableStateOf<FitsViewCache?>(null) }
+    var colorSource by remember(fileInfo) { mutableStateOf(true) }
+    var editing by rememberSaveable(fileInfo.file.absolutePath) { mutableStateOf(false) }
+    var editPreviewActive by rememberSaveable(fileInfo.file.absolutePath) { mutableStateOf(false) }
+    val editor: MediaImageEditViewModel = androidx.lifecycle.viewmodel.compose.viewModel(key = "image-edit:${fileInfo.file.absolutePath}")
+    val exportState by editor.state.collectAsStateWithPageLifecycle()
+    val exporting = exportState.running
+    var exportMessage by remember { mutableStateOf<String?>(null) }
+    var preparedImage by remember(fileInfo) { mutableStateOf<PreparedMediaImage?>(null) }
+    var preparing by remember { mutableStateOf(false) }
+    var prepareRetry by remember { mutableIntStateOf(0) }
+    val savedFile = exportState.result
+    var showDiscard by remember { mutableStateOf(false) }
+    var discardAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+    val editSettingsSaver = listSaver<MediaImageEditSettings, Float>(
+        save = { settings -> listOf(
+            if (settings.lp700) 1f else 0f,
+            settings.redGain, settings.greenGain, settings.blueGain,
+            settings.blackPoint, settings.whitePoint, settings.gamma, settings.exposureStops
+        ) },
+        restore = { values -> MediaImageEditSettings(
+            lp700 = values[0] >= 0.5f,
+            redGain = values[1], greenGain = values[2], blueGain = values[3],
+            blackPoint = values[4], whitePoint = values[5], gamma = values[6], exposureStops = values.getOrElse(7) { 0f }
+        ) }
+    )
+    var editSettings by rememberSaveable(fileInfo.file.absolutePath, stateSaver = editSettingsSaver) {
+        mutableStateOf(MediaImageEditSettings())
+    }
+    var savedSettings by rememberSaveable(fileInfo.file.absolutePath, stateSaver = editSettingsSaver) {
+        mutableStateOf(MediaImageEditSettings())
+    }
+    val dirty = editSettings != savedSettings
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val failedToDecodeImage = stringResource(R.string.failed_to_decode_image)
     val unknownError = stringResource(R.string.unknown_error)
+    val editorMaximumHeight = minOf(340.dp, (LocalConfiguration.current.screenHeightDp * .45f).dp)
+
+    fun leaveImage(action: () -> Unit) {
+        if (dirty || exporting) { discardAction = action; showDiscard = true } else action()
+    }
+    fun navigateImageBack() {
+        if (editing && !exporting) editing = false else leaveImage(onBack)
+    }
+    BackHandler(enabled = editing || dirty || exporting) { navigateImageBack() }
+
+    if (showDiscard) {
+        AlertDialog(
+            onDismissRequest = { showDiscard = false; discardAction = null },
+            title = { Text(stringResource(if (exporting) R.string.media_edit_cancel_save_title else R.string.media_edit_discard_title)) },
+            text = { Text(stringResource(if (exporting) R.string.media_edit_cancel_save_hint else R.string.media_edit_discard_hint)) },
+            confirmButton = { TextButton(onClick = {
+                showDiscard = false
+                val action = discardAction; discardAction = null
+                scope.launch { editor.cancelAndJoin(); action?.invoke() }
+            }) { Text(stringResource(R.string.media_edit_discard)) } },
+            dismissButton = { TextButton(onClick = { showDiscard = false; discardAction = null; editing = true }) {
+                Text(stringResource(R.string.media_edit_continue))
+            } }
+        )
+    }
 
     if (showMetadata) {
         AlertDialog(
@@ -1023,7 +1114,7 @@ private fun ImageViewScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
-                        stringResource(R.string.lp750_help_description),
+                        stringResource(if (editing) R.string.media_edit_lp700_hint else R.string.lp750_help_description),
                         style = MaterialTheme.typography.bodyMedium
                     )
                     Lp750Credit()
@@ -1037,7 +1128,7 @@ private fun ImageViewScreen(
         )
     }
 
-    LaunchedEffect(fileInfo, lp750Enabled) {
+    LaunchedEffect(fileInfo) {
         withContext(Dispatchers.IO) {
             try {
                 val taskContext = currentCoroutineContext()
@@ -1045,6 +1136,26 @@ private fun ImageViewScreen(
                 if (isFits) {
                     val startedAt = SystemClock.elapsedRealtime()
                     val source = firstFitsIn(fileInfo.file) ?: throw IllegalArgumentException("Empty FITS session")
+                    val sourceHeader = FitsHeaderParser.read(source)
+                    val displayImage = sourceHeader["EDITED"] == "T" && sourceHeader["BUNIT"] == "normalized display"
+                    val largeImage = (sourceHeader.intValue("NAXIS1") ?: 0).toLong() *
+                        (sourceHeader.intValue("NAXIS2") ?: 0) > 4_194_304L
+                    if (displayImage || largeImage) {
+                        val prepared = MediaImageEditing.prepare(source) { !taskContext.isActive }
+                        val viewSettings = if (displayImage) MediaImageEditSettings() else
+                            MediaImageEditSettings(gamma = 1f / FitsDisplayStretch.DISPLAY_GAMMA)
+                        val decoded = MediaImageEditing.renderPreview(prepared, viewSettings) { !taskContext.isActive }
+                        val metadata = StackFitsReader.readMetadata(source)
+                        withContext(Dispatchers.Main) {
+                            preparedImage = prepared
+                            sourceBitmap = decoded; bitmap = decoded
+                            fitsInfo = "${prepared.originalWidth}×${prepared.originalHeight} ${sourceHeader["BITPIX"]}bit ${if (prepared.preview.channels == 3) "RGB" else "Mono"}"
+                            colorSource = prepared.preview.channels == 3
+                            resultMetadata = if (metadata.isEmpty()) "" else JSONObject(metadata).toString(2).take(20000)
+                            error = null
+                        }
+                        return@withContext
+                    }
                     val sourceKey = "${source.absolutePath}:${source.length()}:${source.lastModified()}"
                     var workingCache = fitsCache?.takeIf { it.sourceKey == sourceKey }
                     val sourceCacheHit = workingCache != null
@@ -1065,28 +1176,28 @@ private fun ImageViewScreen(
                             metadata = metadata
                         )
                     }
-                    val cached = workingCache.bitmaps[lp750Enabled]
+                    val cached = workingCache.bitmaps[false]
                     val decoded = if (cached != null) {
-                        cached to workingCache.infoByMode.getValue(lp750Enabled)
+                        cached to workingCache.infoByMode.getValue(false)
                     } else if (workingCache.normalized) {
-                        decodeNormalizedFits(source, lp750Enabled) { !taskContext.isActive }
+                        decodeNormalizedFits(source, false) { !taskContext.isActive }
                     } else {
                         renderIntegerFits(
                             requireNotNull(workingCache.integerPreview),
-                            lp750Enabled
+                            false
                         ) { !taskContext.isActive }
                     }
                     val updatedCache = if (cached != null) {
                         workingCache
                     } else {
                         workingCache.copy(
-                            bitmaps = workingCache.bitmaps + (lp750Enabled to decoded.first),
-                            infoByMode = workingCache.infoByMode + (lp750Enabled to decoded.second)
+                            bitmaps = workingCache.bitmaps + (false to decoded.first),
+                            infoByMode = workingCache.infoByMode + (false to decoded.second)
                         )
                     }
                     FileLogger.i(
                         "FitsPreview",
-                        "file=${source.name} lp750=$lp750Enabled sourceCacheHit=$sourceCacheHit " +
+                        "file=${source.name} sourceCacheHit=$sourceCacheHit " +
                             "bitmapCacheHit=${cached != null} size=${decoded.first.width}x${decoded.first.height} " +
                             "elapsedMs=${SystemClock.elapsedRealtime() - startedAt}"
                     )
@@ -1098,8 +1209,10 @@ private fun ImageViewScreen(
                     } else ""
                     withContext(Dispatchers.Main) {
                         fitsCache = updatedCache
+                        sourceBitmap = decoded.first
                         bitmap = decoded.first
                         fitsInfo = decoded.second + extra
+                        colorSource = decoded.second.contains(" RGB") || decoded.second.contains("Bayer(")
                         resultMetadata = if (updatedCache.metadata.isEmpty()) "" else {
                             JSONObject(updatedCache.metadata).toString(2).take(20000)
                         }
@@ -1118,7 +1231,9 @@ private fun ImageViewScreen(
                         runCatching { JSONObject(sidecar.readText()).toString(2).take(20000) }.getOrDefault("")
                     } else ""
                     withContext(Dispatchers.Main) {
+                        sourceBitmap = bmp
                         bitmap = bmp
+                        colorSource = true
                         resultMetadata = metadata
                         if (bmp == null) error = failedToDecodeImage
                     }
@@ -1133,6 +1248,73 @@ private fun ImageViewScreen(
         }
     }
 
+    LaunchedEffect(fileInfo, editing, editPreviewActive, editSettings != MediaImageEditSettings(), sourceBitmap, prepareRetry) {
+        if ((!editing && !editPreviewActive && editSettings == MediaImageEditSettings()) || preparedImage != null || sourceBitmap == null) return@LaunchedEffect
+        preparing = true
+        try {
+            val taskContext = currentCoroutineContext()
+            val prepared = withContext(Dispatchers.IO) {
+                MediaImageEditing.prepare(firstFitsIn(fileInfo.file) ?: fileInfo.file) { !taskContext.isActive }
+            }
+            preparedImage = prepared
+            colorSource = prepared.preview.channels == 3
+            error = null
+        } catch (cancelled: CancellationException) { throw cancelled
+        } catch (failure: OutOfMemoryError) { error = context.getString(R.string.media_edit_memory)
+        } catch (failure: Exception) { error = mediaEditError(context, failure)
+        } finally { preparing = false }
+    }
+
+    LaunchedEffect(sourceBitmap, preparedImage, editSettings, editing, editPreviewActive) {
+        val source = sourceBitmap ?: return@LaunchedEffect
+        if (!editing && !editPreviewActive && editSettings == MediaImageEditSettings()) {
+            bitmap = source
+            return@LaunchedEffect
+        }
+        val prepared = preparedImage ?: return@LaunchedEffect
+        try {
+            delay(60)
+            val taskContext = currentCoroutineContext()
+            val rendered = withContext(Dispatchers.Default) {
+                MediaImageEditing.renderPreview(prepared, editSettings) { !taskContext.isActive }
+            }
+            bitmap = rendered
+            error = null
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: OutOfMemoryError) { error = context.getString(R.string.media_edit_memory)
+        } catch (failure: Exception) {
+            error = mediaEditError(context, failure)
+        }
+    }
+
+    fun exportImage(format: MediaImageExportFormat) {
+        if (exporting) return
+        val prepared = preparedImage ?: return
+        val settings = editSettings
+        val library = capturesDir ?: run {
+            Toast.makeText(context, R.string.media_edit_save_unavailable, Toast.LENGTH_LONG).show()
+            return
+        }
+        exportMessage = null
+        editor.export(prepared, library, format, settings)
+    }
+
+    LaunchedEffect(exportState.completionId) {
+        if (exportState.completionId == null) return@LaunchedEffect
+        if (exportState.error != null) {
+            exportMessage = mediaEditError(context, IllegalStateException(exportState.error))
+        } else {
+            exportState.result?.let { output ->
+                exportState.savedSettings?.let { savedSettings = it }
+                exportMessage = context.getString(R.string.media_edit_saved, output.name)
+                onExported()
+                Toast.makeText(context, exportMessage, Toast.LENGTH_LONG).show()
+            }
+        }
+        editor.acknowledgeCompletion()
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -1145,25 +1327,29 @@ private fun ImageViewScreen(
                 .padding(horizontal = 4.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.Default.ArrowBack, stringResource(if (externalUp) R.string.external_media_up else R.string.back), tint = Color.White)
+            IconButton(onClick = ::navigateImageBack) {
+                Icon(
+                    Icons.Default.ArrowBack,
+                    stringResource(if (editing) R.string.back else if (externalUp) R.string.external_media_up else R.string.back),
+                    tint = ObservatoryTheme.colors.onImage
+                )
             }
             Text(
                 fileInfo.name,
-                color = Color.White,
+                color = ObservatoryTheme.colors.onImage,
                 fontSize = 13.sp,
                 maxLines = 1,
                 modifier = Modifier.weight(1f)
             )
             if (resultMetadata.isNotEmpty()) {
                 IconButton(onClick = { showMetadata = true }) {
-                    Icon(Icons.Default.Info, stringResource(R.string.section_info), tint = Color.White)
+                    Icon(Icons.Default.Info, stringResource(R.string.section_info), tint = ObservatoryTheme.colors.onImage)
                 }
             }
-            if (fileInfo.format.equals("FIT", true) || fileInfo.format.equals("FITS", true)) {
+            if (!editing && colorSource && (fileInfo.format.equals("FIT", true) || fileInfo.format.equals("FITS", true))) {
                 FilterChip(
-                    selected = lp750Enabled,
-                    onClick = { lp750Enabled = !lp750Enabled },
+                    selected = editSettings.lp700,
+                    onClick = { editPreviewActive = true; editSettings = editSettings.copy(lp700 = !editSettings.lp700) },
                     label = { Text("LP700", fontSize = 11.sp) },
                     modifier = Modifier.padding(horizontal = 2.dp)
                 )
@@ -1171,19 +1357,27 @@ private fun ImageViewScreen(
                     Icon(
                         Icons.Default.HelpOutline,
                         contentDescription = stringResource(R.string.lp750_help_button),
-                        tint = Color.White
+                        tint = ObservatoryTheme.colors.onImage
                     )
                 }
             }
-            IconButton(onClick = onSolve) {
-                Icon(Icons.Default.Search, stringResource(R.string.plate_solve), tint = Color.White)
+            if (!editing) IconButton(onClick = { leaveImage(onSolve) }, enabled = !exporting) {
+                Icon(Icons.Default.Search, stringResource(R.string.plate_solve), tint = ObservatoryTheme.colors.onImage)
             }
-            IconButton(onClick = onDelete) {
-                Icon(Icons.Default.Delete, stringResource(R.string.delete), tint = Color(0xFFFF6B6B))
+            if (fileInfo.file.isFile) {
+                TextButton(onClick = { editPreviewActive = true; editing = !editing }, enabled = sourceBitmap != null && !exporting) {
+                    Text(stringResource(if (editing) R.string.media_edit_done else R.string.media_edit_action), color = ObservatoryTheme.colors.onImage,
+                        modifier = Modifier.semantics { contentDescription = context.getString(if (editing) R.string.media_edit_done else R.string.media_edit_action) })
+                }
+            }
+            if (!editing) {
+                IconButton(onClick = { leaveImage(onDelete) }, enabled = !exporting) {
+                    Icon(Icons.Default.Delete, stringResource(R.string.delete), tint = Color(0xFFFF6B6B))
+                }
             }
         }
         if (fitsInfo.isNotEmpty()) {
-            Text(fitsInfo, color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp,
+            Text(fitsInfo, color = ObservatoryTheme.colors.onImage.copy(alpha = 0.7f), fontSize = 11.sp,
                 fontFamily = FontFamily.Monospace, modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp))
         }
 
@@ -1205,11 +1399,139 @@ private fun ImageViewScreen(
             } else if (err != null) {
                 Text(err, color = Color.Red, fontSize = 14.sp)
             } else {
-                CircularProgressIndicator(color = Color.White, modifier = Modifier.size(32.dp))
+                CircularProgressIndicator(color = ObservatoryTheme.colors.onImage, modifier = Modifier.size(32.dp))
+            }
+        }
+        if (editing) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = editorMaximumHeight)
+                    .background(Color(0xEE111111))
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { exportImage(MediaImageExportFormat.JPG) }, enabled = !exporting && preparedImage != null,
+                        modifier = Modifier.weight(1f)) { Text(stringResource(R.string.media_edit_export_jpg)) }
+                    OutlinedButton(onClick = { exportImage(MediaImageExportFormat.PNG) }, enabled = !exporting && preparedImage != null,
+                        modifier = Modifier.weight(1f)) { Text(stringResource(R.string.media_edit_export_png)) }
+                    Button(onClick = { exportImage(MediaImageExportFormat.FIT) }, enabled = !exporting && preparedImage != null,
+                        modifier = Modifier.weight(1f)) { Text(stringResource(R.string.media_edit_export_fit)) }
+                }
+                if (exporting || preparing) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Text(stringResource(if (exporting) R.string.media_edit_saving else R.string.media_edit_preparing), color = ObservatoryTheme.colors.onImage, style = MaterialTheme.typography.bodySmall)
+                        if (exporting) TextButton(onClick = { editor.cancel() }) { Text(stringResource(R.string.cancel)) }
+                    }
+                }
+                if (!exporting) savedFile?.let { output -> TextButton(onClick = { leaveImage { onViewExported(output) } }) {
+                    Text(stringResource(R.string.media_edit_view_saved))
+                } }
+                Column(Modifier.fillMaxWidth().weight(1f, fill = false).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (colorSource) {
+                        FilterChip(
+                            selected = editSettings.lp700,
+                            onClick = { editSettings = editSettings.copy(lp700 = !editSettings.lp700) },
+                            enabled = !exporting && preparedImage != null,
+                            label = { Text("LP700") }
+                        )
+                        TextButton(enabled = !exporting && preparedImage != null, onClick = {
+                            val prepared = preparedImage ?: return@TextButton
+                            val requested = editSettings
+                            scope.launch {
+                                val gains = withContext(Dispatchers.Default) { MediaImageEditing.estimateWhiteBalance(prepared, requested) }
+                                if (editSettings == requested) editSettings = requested.copy(
+                                    redGain = gains[0], greenGain = gains[1], blueGain = gains[2])
+                            }
+                        }) { Text(stringResource(R.string.media_edit_auto_wb)) }
+                    }
+                    Spacer(Modifier.weight(1f))
+                    TextButton(enabled = !exporting, onClick = { editSettings = MediaImageEditSettings() }) {
+                        Text(stringResource(R.string.media_edit_reset))
+                    }
+                }
+                if (colorSource) {
+                    Text(stringResource(R.string.media_edit_white_balance), color = ObservatoryTheme.colors.onImage, style = MaterialTheme.typography.labelLarge)
+                    EditSlider(stringResource(R.string.media_edit_red), editSettings.redGain, 0.5f..2f,
+                        { editSettings = editSettings.copy(redGain = it) }, !exporting)
+                    EditSlider(stringResource(R.string.media_edit_green), editSettings.greenGain, 0.5f..2f,
+                        { editSettings = editSettings.copy(greenGain = it) }, !exporting)
+                    EditSlider(stringResource(R.string.media_edit_blue), editSettings.blueGain, 0.5f..2f,
+                        { editSettings = editSettings.copy(blueGain = it) }, !exporting)
+                }
+                Text(stringResource(R.string.media_edit_curve), color = ObservatoryTheme.colors.onImage, style = MaterialTheme.typography.labelLarge)
+                ImageEditCurve(editSettings)
+                EditSlider(stringResource(R.string.media_edit_exposure), editSettings.exposureStops, -3f..3f,
+                    { editSettings = editSettings.copy(exposureStops = it) }, !exporting)
+                EditSlider(stringResource(R.string.media_edit_black_point), editSettings.blackPoint, 0f..0.30f,
+                    { editSettings = editSettings.copy(blackPoint = it) }, !exporting)
+                EditSlider(stringResource(R.string.media_edit_white_point), editSettings.whitePoint, 0.70f..1f,
+                    { editSettings = editSettings.copy(whitePoint = it) }, !exporting)
+                EditSlider(stringResource(R.string.media_edit_gamma), editSettings.gamma, 0.5f..2f,
+                    { editSettings = editSettings.copy(gamma = it) }, !exporting)
+                Text(stringResource(R.string.media_edit_fits_note), color = ObservatoryTheme.colors.onImage.copy(alpha = 0.72f), style = MaterialTheme.typography.bodySmall)
+                if (colorSource) TextButton(onClick = { showLp750Help = true }) { Text(stringResource(R.string.lp750_help_button)) }
+                exportMessage?.let { Text(it, color = ObservatoryTheme.colors.onImage, style = MaterialTheme.typography.bodySmall) }
+                error?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    if (preparedImage == null && !preparing) TextButton(onClick = { prepareRetry++ }) {
+                        Text(stringResource(R.string.media_edit_retry))
+                    }
+                }
+                }
             }
         }
     }
 }
+
+@Composable
+private fun EditSlider(label: String, value: Float, range: ClosedFloatingPointRange<Float>, onValue: (Float) -> Unit,
+                       enabled: Boolean = true) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        Text(label, color = ObservatoryTheme.colors.onImage.copy(alpha = 0.85f), style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.width(82.dp))
+        Slider(value = value, onValueChange = onValue, valueRange = range, enabled = enabled,
+            modifier = Modifier.weight(1f).height(48.dp))
+        Text(String.format("%.2f", value), color = ObservatoryTheme.colors.onImage, style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.width(38.dp))
+    }
+}
+
+@Composable
+private fun ImageEditCurve(settings: MediaImageEditSettings) {
+    val lineColor = MaterialTheme.colorScheme.primary
+    val description = stringResource(R.string.media_edit_curve)
+    Canvas(Modifier.fillMaxWidth().height(64.dp).semantics { contentDescription = description }) {
+        drawLine(Color.DarkGray, androidx.compose.ui.geometry.Offset(0f, size.height),
+            androidx.compose.ui.geometry.Offset(size.width, 0f), 1f)
+        val path = Path()
+        val gain = 2.0.pow(settings.exposureStops.toDouble())
+        for (step in 0..128) {
+            val input = step / 128.0
+            val output = ((input * gain - settings.blackPoint) / (settings.whitePoint - settings.blackPoint))
+                .coerceIn(0.0, 1.0).pow(1.0 / settings.gamma)
+            val x = (input * size.width).toFloat()
+            val y = ((1.0 - output) * size.height).toFloat()
+            if (step == 0) path.moveTo(x, y) else path.lineTo(x, y)
+        }
+        drawPath(path, lineColor, style = Stroke(2.dp.toPx()))
+    }
+}
+
+private fun mediaEditError(context: Context, failure: Exception): String = context.getString(when (failure.message) {
+    "memory_budget" -> R.string.media_edit_memory
+    "storage_budget" -> R.string.media_edit_storage
+    "source_changed" -> R.string.media_edit_source_changed
+    else -> R.string.media_edit_save_failed
+})
 
 private data class FitsViewCache(
     val sourceKey: String,
