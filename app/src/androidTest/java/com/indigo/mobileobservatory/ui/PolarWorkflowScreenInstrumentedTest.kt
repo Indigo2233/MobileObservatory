@@ -1,11 +1,20 @@
 package com.indigo.mobileobservatory.ui
 
 import android.content.Context
+import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -50,12 +59,16 @@ class PolarWorkflowScreenInstrumentedTest {
         bitmap.recycle()
     }
 
-    @After fun restore() {
+    private fun screenshot(suffix: String = "") {
         runCatching {
             val directory = File(context.getExternalFilesDir(null), "polar-ui-screenshots").apply { mkdirs() }
             val bitmap = compose.onAllNodes(isRoot()).onLast().captureToImage().asAndroidBitmap()
-            File(directory, "${testName.methodName}.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            File(directory, "${testName.methodName}$suffix.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
         }
+    }
+
+    @After fun restore() {
+        screenshot()
         val edit = context.getSharedPreferences("mobile_observatory", Context.MODE_PRIVATE).edit()
         saved.forEach { (key, value) ->
             when (value) {
@@ -69,11 +82,16 @@ class PolarWorkflowScreenInstrumentedTest {
         image.delete()
     }
 
-    private fun screen(engine: ImagePlateSolver, capture: suspend (Float) -> File?) {
+    private fun screen(engine: ImagePlateSolver, fontScale: Float = 1f, compact: Boolean = false, capture: suspend (Float) -> File?) {
         compose.setContent { MobileObservatoryTheme {
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale)) {
+            Box(if (compact) Modifier.size(360.dp, 480.dp) else Modifier) {
             PolarAlignmentScreen(cameraConnected = true, cameraPixelSizeUm = 2.9f, cameraExposureUs = 5_000_000f,
                 cameraExposureMinUs = 1000f, cameraExposureMaxUs = 20_000_000f,
                 solver = engine, onCaptureFits = capture, onBack = {})
+            }
+            }
         } }
     }
 
@@ -112,6 +130,7 @@ class PolarWorkflowScreenInstrumentedTest {
         compose.onNodeWithTag("polar-main-preview").assertIsDisplayed()
         compose.onNodeWithTag("polar-preview-expand").assertIsEnabled().performClick()
         compose.onNodeWithTag("polar-fullscreen-preview").assertIsDisplayed()
+        screenshot("-fullscreen")
         compose.onNodeWithTag("polar-preview-close").performClick()
         compose.runOnIdle { assertFalse(cancelled.get()) }
         release.complete(PlateSolveResult(false, "ASTAP failed with exit code 1.", log = "Detected 7 stars.\nNot enough stars to solve the image."))
@@ -128,5 +147,38 @@ class PolarWorkflowScreenInstrumentedTest {
         compose.onNodeWithTag("polar-run").performScrollTo().performClick()
         compose.waitUntil(15_000) { compose.onAllNodesWithTag("polar-current-failure").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithTag("polar-current-failure").assertIsDisplayed().assert(hasText("USB disconnected", substring = true))
+    }
+
+    @Test fun compactLargeFontLayoutKeepsTheImageAndFailureVisible() {
+        val engine = object : ImagePlateSolver {
+            override val ready = true
+            override suspend fun solve(inputFile: File, fovDeg: Double, mountCoordinates: MountCoordinates?, searchRadiusDeg: Double?) =
+                PlateSolveResult(false, "ASTAP failed with exit code 2.", log = "Only 7 stars found in image. Abort")
+        }
+        screen(engine, fontScale = 2f, compact = true) { image }
+        compose.onNodeWithTag("polar-run").performScrollTo().performClick()
+        compose.waitUntil(15_000) { compose.onAllNodesWithTag("polar-current-failure").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(15_000) { compose.onAllNodesWithTag("polar-main-preview").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("polar-current-failure").assertIsDisplayed().assert(hasText("7", substring = true))
+        compose.onNodeWithTag("polar-main-preview").assertIsDisplayed()
+        compose.onNodeWithTag("polar-preview-expand").assertIsEnabled().performClick()
+        compose.onNodeWithTag("polar-fullscreen-preview").assertIsDisplayed()
+        compose.onNodeWithTag("polar-preview-close").performClick()
+    }
+
+    @Test fun landscapeLayoutKeepsTheCaptureControlsAndImageTogether() {
+        compose.activityRule.scenario.onActivity { it.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE }
+        compose.waitUntil(15_000) { context.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE }
+        val engine = object : ImagePlateSolver {
+            override val ready = false
+            override suspend fun solve(inputFile: File, fovDeg: Double, mountCoordinates: MountCoordinates?, searchRadiusDeg: Double?) = error("Test exposure")
+        }
+        screen(engine) { image }
+        compose.onNodeWithTag("polar-test-capture").performScrollTo().performClick()
+        compose.waitUntil(15_000) { compose.onAllNodesWithTag("polar-main-preview").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("polar-main-preview").assertIsDisplayed()
+        compose.onNodeWithTag("polar-exposure-seconds").assertIsDisplayed()
+        screenshot()
+        compose.activityRule.scenario.onActivity { it.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
     }
 }

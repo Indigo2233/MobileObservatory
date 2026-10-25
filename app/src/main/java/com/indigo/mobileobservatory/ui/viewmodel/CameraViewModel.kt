@@ -3624,7 +3624,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    suspend fun captureTempFitsForPlateSolve(): File? = withContext(Dispatchers.IO) {
+    suspend fun captureTempFitsForPlateSolve(requestedExposureUs: Float? = null): File? = withContext(Dispatchers.IO) {
         captureSettingsMutex.withLock {
             val cam = cameraManager.activeCamera ?: error(app.getString(R.string.polar_capture_no_camera))
             check(cam.isOpen.value) { app.getString(R.string.polar_capture_no_camera) }
@@ -3635,6 +3635,44 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 app.getString(R.string.polar_capture_busy)
             }
             check(autoExposureController.mode == AutoExposureMode.OFF) { app.getString(R.string.polar_capture_manual_exposure) }
+            if (requestedExposureUs != null) {
+                check(requestedExposureUs.isFinite() && requestedExposureUs in cam.exposureRange.min..cam.hwExposureMaxUs) {
+                    app.getString(R.string.polar_exposure_out_of_range, cam.exposureRange.min / 1_000_000f, cam.hwExposureMaxUs / 1_000_000f)
+                }
+                if (requestedExposureUs != cam.currentExposureUs) {
+                    check(!_isRecording.value && stacking.live.state.value.phase != LiveStackPhase.RUNNING) {
+                        app.getString(R.string.polar_exposure_capture_busy)
+                    }
+                    invalidateStackSettings()
+                    previewEpoch.invalidate()
+                    val restart = cam.isCapturing.value
+                    val previousLongExposure = cam.longExposureEnabled
+                    var applied = false
+                    if (restart) cam.stopCapture()
+                    try {
+                        currentCoroutineContext().ensureActive()
+                        exposureWriteMutex.withLock {
+                            val longExposure = requestedExposureUs > ExposureLimits.SHORT_MAX_US
+                            cam.longExposureEnabled = longExposure
+                            _longExposureEnabled.value = longExposure
+                            cam.setExposureTime(requestedExposureUs)
+                            check(cameraManager.activeCamera === cam) { app.getString(R.string.polar_capture_no_camera) }
+                            _exposureUs.value = cam.currentExposureUs
+                            check(com.indigo.mobileobservatory.polar.PolarExposure.matchesReadback(requestedExposureUs, cam.currentExposureUs)) {
+                                app.getString(R.string.polar_exposure_not_applied, requestedExposureUs / 1_000_000f, cam.currentExposureUs / 1_000_000f)
+                            }
+                            applied = true
+                        }
+                    } finally {
+                        if (!applied) {
+                            cam.longExposureEnabled = previousLongExposure
+                            _longExposureEnabled.value = previousLongExposure
+                        }
+                        refreshExposureUiLimits()
+                        if (restart && cameraManager.activeCamera === cam && !_previewPaused.value) startPreview()
+                    }
+                }
+            }
             if (_previewPaused.value || !cam.isCapturing.value) {
                 _previewPaused.value = false
                 startPreview()

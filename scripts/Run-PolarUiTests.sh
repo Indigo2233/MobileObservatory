@@ -3,5 +3,5 @@ set -uo pipefail
 
 ./gradlew connectedDebugAndroidTest -PstellariumNonCommercial=true -PemulatorTest=true -PsequenceEnabled=false -Pandroid.testInstrumentationRunnerArguments.class=com.indigo.mobileobservatory.ui.PolarWorkflowScreenInstrumentedTest
 result=$?
-adb pull /sdcard/Android/data/com.indigo.mobileobservatory/files/polar-ui-screenshots app/build/reports/polar-ui-screenshots || true
+adb pull /sdcard/Android/data/com.indigo.mobileobservatory.emulatortest/files/polar-ui-screenshots app/build/reports/polar-ui-screenshots || true
 exit "$result"

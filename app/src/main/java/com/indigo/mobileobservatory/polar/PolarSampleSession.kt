@@ -26,7 +26,8 @@ data class PolarSample(
     val result: PlateSolveResult? = null,
     val failure: String? = null,
     val failedPhase: PolarSamplePhase? = null,
-    val capturedAt: Instant? = null
+    val capturedAt: Instant? = null,
+    val displaySequence: Long = 0L
 )
 
 data class PolarResumePlan(val startIndex: Int, val reset: Boolean, val moveFirst: Boolean)
@@ -40,17 +41,40 @@ fun polarResumePlan(samples: List<PolarSample>, positionedPoint: Int, canResume:
 
 /** Sample execution is independent of the screen so failure evidence survives navigation. */
 class PolarSampleSession(private val onEvent: (Int, PolarSample) -> Unit = { _, _ -> }) {
+    companion object { const val PREVIEW_INDEX = 4; const val SLOT_COUNT = 5 }
     private val lock = Any()
-    private val revisions = LongArray(4)
-    private val _samples = MutableStateFlow(List(4) { PolarSample() })
+    private val revisions = LongArray(SLOT_COUNT)
+    private var displaySequence = 0L
+    private val _samples = MutableStateFlow(List(SLOT_COUNT) { PolarSample() })
     val samples = _samples.asStateFlow()
 
     fun import(index: Int, file: File) = synchronized(lock) { revisions[index]++; update(index, PolarSample(file = file)) }
-    fun clear() = synchronized(lock) { revisions.indices.forEach { revisions[it]++ }; _samples.value = List(4) { PolarSample() } }
+    fun clear() = synchronized(lock) { revisions.indices.forEach { revisions[it]++ }; _samples.value = List(SLOT_COUNT) { PolarSample() } }
     private fun update(index: Int, sample: PolarSample, revision: Long? = null) = synchronized(lock) {
         if (revision != null && revisions[index] != revision) return@synchronized
-        _samples.update { current -> current.toMutableList().also { it[index] = sample } }
-        onEvent(index, sample)
+        val displayed = sample.copy(displaySequence = ++displaySequence)
+        _samples.update { current -> current.toMutableList().also { it[index] = displayed } }
+        onEvent(index, displayed)
+    }
+
+    /** Test exposures need neither a site nor a solver database and never change mount position. */
+    suspend fun capturePreview(capture: suspend () -> File?, exposureTime: suspend (File) -> Instant = { Instant.now() }): File {
+        val index = PREVIEW_INDEX
+        var sample = PolarSample(PolarSamplePhase.CAPTURING)
+        val revision = synchronized(lock) { revisions[index]++; update(index, sample); revisions[index] }
+        try {
+            val file = capture() ?: error("No image was received from the camera.")
+            currentCoroutineContext().ensureActive()
+            sample = sample.copy(phase = PolarSamplePhase.COMPLETE, file = file, capturedAt = exposureTime(file))
+            update(index, sample, revision)
+            return file
+        } catch (cancel: CancellationException) {
+            update(index, sample.copy(phase = PolarSamplePhase.CANCELLED), revision); throw cancel
+        } catch (failure: Exception) {
+            update(index, sample.copy(phase = PolarSamplePhase.FAILED, failedPhase = PolarSamplePhase.CAPTURING,
+                failure = failure.message, result = PlateSolveResult(false, failure.message.orEmpty(), log = failure.stackTraceToString())), revision)
+            throw failure
+        }
     }
 
     suspend fun execute(index: Int, capture: suspend () -> File?, fieldOfView: suspend (File?) -> Double?,

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="polar_exposure_seconds">Exposure (s)</string>
+    <string name="polar_exposure_out_of_range">Enter an exposure between %1$.6f and %2$.3f s.</string>
+    <string name="polar_exposure_capture_busy">Stop recording or live stacking before changing the polar exposure.</string>
+    <string name="polar_exposure_not_applied">Camera did not apply %1$.3f s. Actual exposure: %2$.3f s. Check the camera and retry.</string>
+    <string name="polar_previous_image">Previous image · %1$s</string>
+    <string name="polar_exposure_actual">Camera: %1$s s · applied at next capture</string>
+    <string name="polar_exposure_applied_on_capture">Applied to the camera at the next capture.</string>
+    <string name="polar_exposure_locked">Stop the workflow to adjust exposure.</string>
+    <string name="polar_exposure_presets">Common exposure times</string>
+    <string name="polar_exposure_value">%1$s s</string>
+    <string name="polar_test_capture">Take test exposure</string>
+    <string name="polar_test_capturing">Taking a test exposure…</string>
+    <string name="polar_test_complete">Test exposure ready · inspect focus and stars</string>
+    <string name="polar_test_image">Test exposure</string>
+    <string name="polar_camera_preview">Camera preview · before sampling</string>
+    <string name="polar_preview_empty">Take a test exposure to inspect focus and stars.</string>
+    <string name="polar_preview_ready">Set exposure, then take a test image or start alignment.</string>
+    <string name="polar_detected_stars">Detected stars: %1$d</string>
+    <string name="polar_reason_capture">Camera capture failed</string>
+    <string name="polar_reason_optics">Check the solving optics</string>
+    <string name="polar_reason_stars">Too few stars for a solution</string>
+    <string name="polar_reason_database">Star database unavailable</string>
+    <string name="polar_reason_timeout">Plate solving timed out</string>
+    <string name="polar_reason_execution">Plate solver could not start</string>
+    <string name="polar_reason_image">Plate solver could not read the image</string>
+    <string name="polar_reason_memory">Plate solver ran out of memory</string>
+    <string name="polar_reason_no_solution">No matching star field found</string>
+    <string name="polar_execution_advice">Open the log to check the solver installation and permissions.</string>
+    <string name="polar_image_advice">Inspect the captured image and its format, then retry this point.</string>
+    <string name="polar_memory_advice">Close other image tasks or reduce the capture size, then retry this point.</string>
+</resources>
