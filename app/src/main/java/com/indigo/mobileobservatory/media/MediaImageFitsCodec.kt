@@ -1,6 +1,11 @@
 package com.indigo.mobileobservatory.media
 
 import com.indigo.mobileobservatory.util.FitsHeaderParser
+import com.indigo.mobileobservatory.camera.CameraCfaLayout
+import com.indigo.mobileobservatory.camera.FrameData
+import com.indigo.mobileobservatory.camera.PixelFormat
+import com.indigo.mobileobservatory.stacking.PixelTraits
+import com.indigo.mobileobservatory.stacking.SampleAlignment
 import java.io.File
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
@@ -8,6 +13,30 @@ import java.nio.ByteOrder
 import java.time.Instant
 import kotlin.math.abs
 import kotlin.math.ceil
+import kotlin.math.roundToInt
+
+/** Convert the album's bounded UInt16 samples to the live renderer's wire format. */
+internal fun MediaImagePixels.cameraFrame(gain: Double = 1.0, displayNormalized: Boolean = false,
+                                         check: () -> Unit = {}): CameraCfaLayout.Snapshot {
+    val bytes = width.toLong() * height * if (displayNormalized) 3 else channels * 2
+    require(bytes <= Int.MAX_VALUE) { "memory_budget" }
+    MediaImageMemory.check(bytes)
+    val data = ByteArray(bytes.toInt())
+    if (displayNormalized) {
+        for (pixel in 0 until width * height) {
+            if (pixel % 8192 == 0) check()
+            for (channel in 0..2) data[pixel * 3 + channel] =
+                ((unsigned(pixel * channels + if (channels == 1) 0 else channel) + 128) / 257).toByte()
+        }
+    } else for (i in pixels.indices) {
+        if (i % 8192 == 0) check()
+        val code = (unsigned(i) * gain).roundToInt().coerceIn(0, 65535)
+        data[i * 2] = code.toByte(); data[i * 2 + 1] = (code ushr 8).toByte()
+    }
+    val format = if (displayNormalized) PixelFormat.RGB24 else if (channels == 3) PixelFormat.RGB48 else PixelFormat.MONO16
+    return CameraCfaLayout.Snapshot(FrameData(data, width, height, format, 0, 0),
+        PixelTraits(validBits = format.nativeBits, alignment = SampleAlignment.RIGHT, bayerPatternAtOutput = true))
+}
 
 data class DecodedMediaImage(
     val image: MediaImagePixels,
@@ -19,6 +48,26 @@ data class DecodedMediaImage(
 
 /** Uncompressed primary FITS images; Bayer samples are demosaiced at their original CFA positions. */
 object MediaImageFitsCodec {
+    data class CameraImage(val snapshot: CameraCfaLayout.Snapshot, val originalWidth: Int, val originalHeight: Int,
+                           val region: MediaImageRegion)
+
+    /** File transport for the existing camera renderer. No display processing happens here. */
+    fun readCameraImage(file: File, maximumSide: Int = 1600, region: MediaImageRegion? = null,
+                        includeHalo: Boolean = false, check: () -> Unit = {}): CameraImage = RandomAccessFile(file, "r").use { input ->
+        require(maximumSide > 0)
+        val source = FitsSource(input, null, check)
+        val step = ceil(maxOf(source.width, source.height).toDouble() / maximumSide).toInt().coerceAtLeast(1)
+        var selected = region ?: MediaImageRegion(0, 0, source.width, source.height, step)
+        require(selected.left.toLong() + selected.width <= source.width && selected.top.toLong() + selected.height <= source.height)
+        if (includeHalo && selected.step == 1 && source.header["BAYERPAT"] != null) {
+            val left = (selected.left - 2).coerceAtLeast(0); val top = (selected.top - 2).coerceAtLeast(0)
+            val right = (selected.left.toLong() + selected.width + 2).coerceAtMost(source.width.toLong()).toInt()
+            val bottom = (selected.top.toLong() + selected.height + 2).coerceAtMost(source.height.toLong()).toInt()
+            selected = MediaImageRegion(left, top, right - left, bottom - top)
+        }
+        CameraImage(source.cameraFrame(selected, check), source.width, source.height, selected)
+    }
+
     fun open(file: File, rangeHint: MediaImageWindow? = null, check: () -> Unit = {}): MediaPixelSource {
         val input = RandomAccessFile(file, "r")
         return try { FitsSource(input, rangeHint, check) } catch (failure: Throwable) { input.close(); throw failure }
@@ -85,6 +134,43 @@ object MediaImageFitsCodec {
                 remaining -= length
             }
             return physicalRange(low, high)
+        }
+        fun cameraFrame(region: MediaImageRegion, check: () -> Unit): CameraCfaLayout.Snapshot {
+            require(region.left.toLong() + region.width <= width && region.top.toLong() + region.height <= height)
+            val rawInteger = !displayNormalized && planes == 1 && scale == 1.0 &&
+                ((bitpix == 8 && zero == 0.0) || (bitpix == 16 && zero == 32768.0))
+            val bits = if (bitpix == 8) 8 else h.intValue("VALIDBIT")?.takeIf { it in listOf(10, 12, 14, 16) } ?: 16
+            if (rawInteger && region.step == 1) {
+                val bytes = region.width.toLong() * region.height * bytesPerSample
+                MediaImageMemory.check(bytes + region.width.toLong() * bytesPerSample)
+                require(bytes <= Int.MAX_VALUE) { "memory_budget" }
+                val data = ByteArray(bytes.toInt())
+                val row = ByteArray(region.width * bytesPerSample)
+                val view = ByteBuffer.wrap(row).order(ByteOrder.BIG_ENDIAN)
+                for (y in 0 until region.height) {
+                    check()
+                    input.seek(h.dataOffset + ((region.top + y).toLong() * width + region.left) * bytesPerSample)
+                    input.readFully(row)
+                    for (x in 0 until region.width) {
+                        val value = if (bitpix == 8) row[x].toInt() and 255 else view.getShort(x * 2).toInt() + 32768
+                        val i = (y * region.width + x) * bytesPerSample
+                        data[i] = value.toByte()
+                        if (bytesPerSample == 2) data[i + 1] = (value ushr 8).toByte()
+                    }
+                }
+                val prefix = when (pattern) { "RGGB" -> "BAYER_RG"; "GRBG" -> "BAYER_GR";
+                    "GBRG" -> "BAYER_GB"; "BGGR" -> "BAYER_BG"; else -> "MONO" }
+                val traits = PixelTraits(validBits = bits, alignment = SampleAlignment.RIGHT,
+                    roiX = region.left + (h.intValue("XBAYROFF") ?: 0), roiY = region.top + (h.intValue("YBAYROFF") ?: 0),
+                    bayerPatternAtOutput = false)
+                val format = CameraCfaLayout.displayFormat(PixelFormat.valueOf("$prefix$bits"), traits)
+                return CameraCfaLayout.Snapshot(FrameData(data, region.width, region.height, format, 0, 0),
+                    traits.copy(bayerPatternAtOutput = true))
+            }
+            // Reuse the album's bounded area sampling for reduced images and imported FITS types.
+            val image = read(region, check)
+            val gain = if (rawInteger && bitpix == 16 && bits < 16) 65535.0 / ((1 shl bits) - 1) else 1.0
+            return image.cameraFrame(gain, displayNormalized, check)
         }
         override fun read(region: MediaImageRegion, check: () -> Unit): MediaImagePixels {
             require(region.left.toLong() + region.width <= width && region.top.toLong() + region.height <= height)

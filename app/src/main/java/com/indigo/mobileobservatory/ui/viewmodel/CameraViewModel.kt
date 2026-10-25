@@ -3145,6 +3145,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _autoStretch.value = enabled
     }
 
+    fun cameraPreviewSettings(): CameraPreviewSettings = frameProcessor.previewSettings()
+
     fun setLp750PreviewEnabled(enabled: Boolean) {
         frameProcessor.lp750Enabled = enabled
         _lp750PreviewEnabled.value = enabled

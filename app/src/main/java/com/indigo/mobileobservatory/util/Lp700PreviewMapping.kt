@@ -5,6 +5,8 @@ package com.indigo.mobileobservatory.util
  * Algorithm author: 奎木娘HIP5447. Source: https://space.bilibili.com/455218677
  */
 object Lp700PreviewMapping {
+    data class BackgroundBalance(val gains: FloatArray, val high: Int, val fadeEnd: Int)
+    data class ArgbRecipe(val gains: FloatArray, val background: BackgroundBalance)
     private const val MAX_GAIN = 4.0f
     private const val MIN_GAIN = 0.25f
     private const val SAMPLE_COUNT = 10_000
@@ -29,10 +31,11 @@ object Lp700PreviewMapping {
     fun applyToArgb(
         pixels: IntArray,
         gains: FloatArray? = null,
+        recipe: ArgbRecipe? = null,
         cancellationCheck: () -> Unit = {}
-    ) {
-        if (pixels.isEmpty()) return
-        val effectiveGains = gains ?: averageArgbGains(pixels)
+    ): ArgbRecipe {
+        if (pixels.isEmpty()) return recipe ?: ArgbRecipe(floatArrayOf(1f, 1f, 1f), BackgroundBalance(floatArrayOf(1f, 1f, 1f), 0, 32))
+        val effectiveGains = recipe?.gains ?: gains ?: averageArgbGains(pixels)
         for (index in pixels.indices) {
             if (index % 16_384 == 0) cancellationCheck()
             val pixel = pixels[index]
@@ -45,7 +48,8 @@ object Lp700PreviewMapping {
                 effectiveGains[2]
             )
         }
-        applyBackgroundWhiteBalance(pixels)
+        val background = applyBackgroundWhiteBalance(pixels, recipe?.background)
+        return ArgbRecipe(effectiveGains, background)
     }
 
     /** Maps interleaved linear RGB while retaining floating-point precision for later display work. */
@@ -119,8 +123,8 @@ object Lp700PreviewMapping {
         return floatArrayOf(gain(r), gain(g), gain(b))
     }
 
-    internal fun applyBackgroundWhiteBalance(pixels: IntArray) {
-        if (pixels.isEmpty()) return
+    private fun backgroundBalance(pixels: IntArray): BackgroundBalance {
+        if (pixels.isEmpty()) return BackgroundBalance(floatArrayOf(1f, 1f, 1f), 0, 32)
         val histogram = IntArray(256)
         for (pixel in pixels) {
             val red = (pixel ushr 16) and 0xFF
@@ -158,13 +162,19 @@ object Lp700PreviewMapping {
                 count++
             }
         }
-        if (count == 0) return
+        if (count == 0) return BackgroundBalance(floatArrayOf(1f, 1f, 1f), high, fadeEnd)
 
         val gains = backgroundWhiteBalanceGains(
             (red / count).toFloat(),
             (green / count).toFloat(),
             (blue / count).toFloat()
         )
+        return BackgroundBalance(gains, high, fadeEnd)
+    }
+
+    internal fun applyBackgroundWhiteBalance(pixels: IntArray, recipe: BackgroundBalance? = null): BackgroundBalance {
+        val balance = recipe ?: backgroundBalance(pixels)
+        val gains = balance.gains; val high = balance.high; val fadeEnd = balance.fadeEnd
         for (index in pixels.indices) {
             val pixel = pixels[index]
             val sourceRed = (pixel ushr 16) and 0xFF
@@ -181,6 +191,7 @@ object Lp700PreviewMapping {
             val mappedBlue = (sourceBlue * (1f + (gains[2] - 1f) * weight)).toInt().coerceIn(0, 255)
             pixels[index] = (0xFF shl 24) or (mappedRed shl 16) or (mappedGreen shl 8) or mappedBlue
         }
+        return balance
     }
 
     private fun averageArgbGains(pixels: IntArray): FloatArray {

@@ -105,6 +105,7 @@ fun PolarAlignmentScreen(
     cameraExposureUs: Float? = null,
     cameraExposureMinUs: Float = 1_000f,
     cameraExposureMaxUs: Float = 30_000_000f,
+    cameraPreviewSettings: com.indigo.mobileobservatory.camera.CameraPreviewSettings = com.indigo.mobileobservatory.camera.CameraPreviewSettings(),
     solver: ImagePlateSolver? = null,
     onReadMountSite: () -> Unit = {},
     onSyncPhoneSiteToMount: (Double, Double) -> Unit = { _, _ -> },
@@ -473,6 +474,7 @@ fun PolarAlignmentScreen(
                     val label = if (previewFile != null && latestSample?.file == null)
                         stringResource(R.string.polar_previous_image, previewLabel) else previewLabel
                     PolarWorkflowPreview(file = previewFile, label = label, livePreview = cameraPreviewBitmap,
+                        previewSettings = cameraPreviewSettings,
                         sample = latestSample, status = workflowStatus, error = error, busy = taskBusy || mountBusy,
                         onStop = {
                             if (taskBusy) workflowTask.stop() else onStopMountRaMove()
@@ -978,7 +980,8 @@ fun PolarAlignmentScreen(
                                 onSolve = { runSingleSample(index, false) },
                                 onRecapture = { runSingleSample(index, true) },
                                 onBlindRetry = { runSingleSample(index, false, blind = true) },
-                                onViewImage = { inspectFile = samples[index].file }
+                                onViewImage = { inspectFile = samples[index].file },
+                                previewSettings = cameraPreviewSettings
                             )
                         }
 
@@ -1143,7 +1146,8 @@ internal fun MeasurementCard(
     canRecapture: Boolean = true,
     onViewImage: () -> Unit = {},
     onRecapture: () -> Unit = {},
-    onBlindRetry: () -> Unit = {}
+    onBlindRetry: () -> Unit = {},
+    previewSettings: com.indigo.mobileobservatory.camera.CameraPreviewSettings = com.indigo.mobileobservatory.camera.CameraPreviewSettings()
 ) {
     val clipboard = LocalClipboardManager.current
     var showLog by rememberSaveable(file?.absolutePath) { mutableStateOf(false) }
@@ -1156,7 +1160,7 @@ internal fun MeasurementCard(
                 LinearProgressIndicator(Modifier.fillMaxWidth())
                 Text(stringResource(if (sample.phase == PolarSamplePhase.CAPTURING) R.string.polar_wait_frame else R.string.solving))
             }
-            if (available) PolarSampleThumbnail(requireNotNull(file), onViewImage)
+            if (available) PolarSampleThumbnail(requireNotNull(file), onViewImage, previewSettings)
             else if (sample.phase == PolarSamplePhase.FAILED) Text(stringResource(R.string.polar_no_image_captured))
             solve?.takeIf { it.success }?.let { Text("RA ${it.raHms}  Dec ${it.decDms}", style = MaterialTheme.typography.bodySmall) }
             if (sample.phase == PolarSamplePhase.CANCELLED) Text(stringResource(R.string.polar_sample_cancelled))
