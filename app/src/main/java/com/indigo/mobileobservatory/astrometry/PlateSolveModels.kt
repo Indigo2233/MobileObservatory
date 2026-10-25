@@ -58,5 +58,6 @@ data class PlateSolveResult(
     val usedImuPrior: Boolean = false,
     val wcsHeaderPath: String? = null,
     val measuredFocalLengthMm: Double? = null,
-    val log: String = ""
+    val log: String = "",
+    val imageWcs: SolvedImageWcs? = null
 )

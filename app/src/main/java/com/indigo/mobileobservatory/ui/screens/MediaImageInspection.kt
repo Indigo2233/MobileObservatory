@@ -19,6 +19,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
@@ -52,7 +53,8 @@ internal fun MediaImageInspection(
     nativeKey: Any,
     renderNative: suspend (MediaImageRegion, Boolean) -> Bitmap,
     navigation: MediaInspectionNavigation,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    overlay: (DrawScope.(Offset, IntSize) -> Unit)? = null
 ) {
     var zoom by rememberSaveable(imageKey) { mutableFloatStateOf(1f) }
     var panX by rememberSaveable(imageKey) { mutableFloatStateOf(0f) }
@@ -190,6 +192,7 @@ internal fun MediaImageInspection(
                 if (compare && before != null) clipRect(right = size.width * divider) { draw(before); drawRegion(nativeBefore) }
                 clipping?.let { overlay -> clipRect(left = if (compare) size.width * divider else 0f) { draw(overlay) } }
                 if (compare && before != null) drawLine(colors.onImage, Offset(size.width * divider, 0f), Offset(size.width * divider, size.height), 2.dp.toPx())
+                overlay?.invoke(this, Offset(offset.x.toFloat(), offset.y.toFloat()), IntSize(width, height))
             }
             Text(if (native?.first == region && region != null && (!compare || nativeBefore?.first == region)) "${(fit * zoom * 100).roundToInt()}%" else stringResource(R.string.media_inspect_preview),
                 Modifier.align(Alignment.BottomEnd).padding(8.dp), color = colors.onImage, style = MaterialTheme.typography.labelSmall)

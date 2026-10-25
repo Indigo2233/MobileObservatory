@@ -151,7 +151,8 @@ class AstapRunner(private val context: Context) : ImagePlateSolver {
                 arcsecPerPixel = parsed.arcsecPerPixel,
                 elapsedMs = elapsed(start),
                 wcsHeaderPath = parsed.source.absolutePath,
-                log = log
+                log = log,
+                imageWcs = SolvedImageWcs.parse(FitsHeaderReader.read(parsed.source), dims.first, dims.second)
             )
         }
 

@@ -16,6 +16,20 @@ class OpticalWcs private constructor(val header: Map<String, String>, val parity
         return SkyDirection((Math.toDegrees(ra + atan2(xi, denominator)) + 360) % 360,
             Math.toDegrees(atan2(sin(dec) + eta * cos(dec), hypot(denominator, xi))))
     }
+    /** Inverse TAN projection in FITS 1-based pixel coordinates. Back-facing rays have no image. */
+    fun pixel(direction: SkyDirection): Pair<Double, Double>? {
+        val ra0 = Math.toRadians(number("CRVAL1")); val dec0 = Math.toRadians(number("CRVAL2"))
+        val ra = Math.toRadians(direction.raDeg); val dec = Math.toRadians(direction.decDeg)
+        val denominator = sin(dec0) * sin(dec) + cos(dec0) * cos(dec) * cos(ra - ra0)
+        if (!denominator.isFinite() || denominator <= 1e-12) return null
+        val xi = Math.toDegrees(cos(dec) * sin(ra - ra0) / denominator)
+        val eta = Math.toDegrees((cos(dec0) * sin(dec) - sin(dec0) * cos(dec) * cos(ra - ra0)) / denominator)
+        val a = number("CD1_1"); val b = number("CD1_2"); val c = number("CD2_1"); val d = number("CD2_2")
+        val determinant = a * d - b * c
+        val x = number("CRPIX1") + (d * xi - b * eta) / determinant
+        val y = number("CRPIX2") + (a * eta - c * xi) / determinant
+        return if (x.isFinite() && y.isFinite()) x to y else null
+    }
     fun pose(x: Double, y: Double): SkyPose {
         val center = direction(x, y).vector()
         // Our FITS writer preserves camera row order. Camera image-up is decreasing raw Y,

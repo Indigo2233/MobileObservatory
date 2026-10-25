@@ -1,7 +1,6 @@
 package com.indigo.mobileobservatory.ui.screens
 
 import android.graphics.Bitmap
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -17,8 +16,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
@@ -43,6 +40,7 @@ import java.io.File
 internal fun PolarWorkflowLayout(
     modifier: Modifier,
     failureVisible: Boolean,
+    resultVisible: Boolean = false,
     preview: @Composable (Modifier) -> Unit,
     controls: @Composable (Modifier) -> Unit
 ) {
@@ -54,7 +52,7 @@ internal fun PolarWorkflowLayout(
             }
         } else {
             Column(Modifier.fillMaxSize()) {
-                val fraction = if (failureVisible) .62f else .46f
+                val fraction = if (failureVisible || resultVisible) .62f else .46f
                 preview(Modifier.fillMaxWidth().weight(fraction))
                 controls(Modifier.fillMaxWidth().weight(1f - fraction))
             }
@@ -128,9 +126,13 @@ internal fun PolarWorkflowPreview(
     onStop: () -> Unit,
     inspectFile: File?,
     onInspect: (File?) -> Unit,
+    adjustment: PolarAdjustmentSnapshot? = null,
     modifier: Modifier = Modifier
 ) {
     val source = inspectFile ?: file
+    val pinnedAdjustment = remember(inspectFile) { adjustment?.takeIf { it.file == inspectFile } }
+    val imageAdjustment = (if (inspectFile != null) pinnedAdjustment else adjustment)?.takeIf { it.file == source }
+    val overlayColors = polarOverlayColors()
     val key = source?.let { "${it.absolutePath}:${it.length()}:${it.lastModified()}" }
     var prepared by remember(key) { mutableStateOf<PreparedMediaImage?>(null) }
     var bitmap by remember(key) { mutableStateOf<Bitmap?>(null) }
@@ -162,7 +164,7 @@ internal fun PolarWorkflowPreview(
     val clipboard = LocalClipboardManager.current
     BoxWithConstraints(modifier.padding(horizontal = 12.dp)) {
         // Limit the error panel using the actual viewport, including large font layouts.
-        val failureMaxHeight = minOf(144.dp, maxHeight * .52f)
+        val footerMaxHeight = if (adjustment != null) minOf(220.dp, maxHeight * .43f) else minOf(144.dp, maxHeight * .52f)
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(label, Modifier.weight(1f), style = MaterialTheme.typography.labelLarge, maxLines = 1,
@@ -178,32 +180,37 @@ internal fun PolarWorkflowPreview(
             Box(Modifier.weight(1f).fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center) {
                 val image = bitmap ?: livePreview?.takeIf { source == null && !it.isRecycled }
-                if (image != null) Image(image.asImageBitmap(), stringResource(R.string.polar_sample_preview),
-                    Modifier.fillMaxSize().testTag("polar-main-preview").clickable(enabled = source != null) { onInspect(source) },
-                    contentScale = ContentScale.Fit)
+                if (image != null) Box(Modifier.fillMaxSize().testTag("polar-main-preview")
+                    .clickable(enabled = source != null) { onInspect(source) }) {
+                    PolarCorrectionImage(image, prepared?.originalWidth ?: image.width, prepared?.originalHeight ?: image.height,
+                        imageAdjustment?.geometry, Modifier.fillMaxSize())
+                }
                 else Text(stringResource(R.string.polar_preview_empty), Modifier.padding(16.dp), style = MaterialTheme.typography.bodySmall)
                 if (loading) CircularProgressIndicator(Modifier.size(28.dp))
                 previewError?.let {
                     Text(stringResource(R.string.polar_preview_failed, it), Modifier.padding(12.dp), color = MaterialTheme.colorScheme.error)
                 }
             }
-            if (details == null && error == null) {
-                Text(status.ifBlank { stringResource(R.string.polar_preview_ready) },
-                    style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            }
-            if (details != null || error != null) {
-                Surface(color = MaterialTheme.colorScheme.errorContainer, shape = MaterialTheme.shapes.small,
-                    modifier = Modifier.fillMaxWidth().testTag("polar-current-failure").semantics(mergeDescendants = true) {}) {
-                    Column(Modifier.heightIn(max = failureMaxHeight).verticalScroll(rememberScrollState())
-                        .padding(horizontal = 10.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        if (details != null) {
-                            Text(stringResource(failureTitle(details.reason)), style = MaterialTheme.typography.labelLarge)
-                            details.detectedStars?.let { Text(stringResource(R.string.polar_detected_stars, it), style = MaterialTheme.typography.bodySmall) }
-                            Text(details.nativeMessage, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                            Text(stringResource(failureAdvice(details.reason)), style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        } else Text(error.orEmpty(), style = MaterialTheme.typography.bodySmall, maxLines = 3, overflow = TextOverflow.Ellipsis)
+            Column(Modifier.heightIn(max = footerMaxHeight).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (details == null && error == null && (adjustment == null || busy)) {
+                    Text(status.ifBlank { stringResource(R.string.polar_preview_ready) },
+                        style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+                if (details != null || error != null) {
+                    Surface(color = MaterialTheme.colorScheme.errorContainer, shape = MaterialTheme.shapes.small,
+                        modifier = Modifier.fillMaxWidth().testTag("polar-current-failure").semantics(mergeDescendants = true) {}) {
+                        Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            if (details != null) {
+                                Text(stringResource(failureTitle(details.reason)), style = MaterialTheme.typography.labelLarge)
+                                details.detectedStars?.let { Text(stringResource(R.string.polar_detected_stars, it), style = MaterialTheme.typography.bodySmall) }
+                                Text(details.nativeMessage, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                Text(stringResource(failureAdvice(details.reason)), style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            } else Text(error.orEmpty(), style = MaterialTheme.typography.bodySmall, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                        }
                     }
                 }
+                adjustment?.let { PolarCorrectionSummary(it) }
             }
         }
     }
@@ -233,6 +240,9 @@ internal fun PolarWorkflowPreview(
                         if (busy) TextButton(onClick = onStop) { Text(stringResource(R.string.stop)) }
                         TextButton(onClick = { onInspect(null) }, modifier = Modifier.testTag("polar-preview-close")) { Text(stringResource(R.string.close)) }
                     }
+                    pinnedAdjustment?.let {
+                        Column(Modifier.heightIn(max = 144.dp).verticalScroll(rememberScrollState())) { PolarCorrectionSummary(it) }
+                    }
                     val image = bitmap; val decoded = prepared
                     if (image != null && decoded != null) MediaImageInspection(
                         image = image, before = null, imageKey = key.orEmpty(), originalWidth = decoded.originalWidth,
@@ -240,7 +250,11 @@ internal fun PolarWorkflowPreview(
                         renderNative = { region, _ ->
                             val task = currentCoroutineContext()
                             withContext(Dispatchers.IO) { MediaImageEditing.renderRegion(decoded, settings, region) { !task.isActive } }
-                        }, navigation = navigation, modifier = Modifier.weight(1f).fillMaxWidth())
+                        }, navigation = navigation, modifier = Modifier.weight(1f).fillMaxWidth()
+                            .then(if (pinnedAdjustment?.geometry != null) Modifier.testTag("polar-correction-inspection") else Modifier),
+                        overlay = pinnedAdjustment?.geometry?.let { geometry ->
+                            { offset, imageSize -> drawPolarCorrection(geometry, offset, imageSize, overlayColors) }
+                        })
                     else Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                         if (loading) CircularProgressIndicator()
                         else Text(stringResource(R.string.polar_preview_failed, previewError.orEmpty()))

@@ -20,6 +20,8 @@ import android.view.KeyEvent
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.indigo.mobileobservatory.astrometry.*
+import com.indigo.mobileobservatory.astro.*
+import com.indigo.mobileobservatory.polar.*
 import com.indigo.mobileobservatory.mount.MountCoordinates
 import com.indigo.mobileobservatory.ui.screens.PolarAlignmentScreen
 import com.indigo.mobileobservatory.ui.theme.MobileObservatoryTheme
@@ -32,6 +34,8 @@ import java.io.File
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicInteger
+import java.time.Instant
 
 /** Exercises the actual observing screen, with camera and solver boundaries supplied by the fixture. */
 @RunWith(AndroidJUnit4::class)
@@ -40,9 +44,12 @@ class PolarWorkflowScreenInstrumentedTest {
     @get:Rule val testName = TestName()
     private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
     private val keys = listOf("polar_latitude_deg", "polar_longitude_deg", "plate_focal_length_mm", "plate_pixel_size_um",
-        "polar_manual_mode", "polar_continuous_estimator", "plate_sensor_id", "polar_exposure_seconds")
+        "polar_manual_mode", "polar_continuous_estimator", "plate_sensor_id", "polar_exposure_seconds",
+        "polar_refraction_adjustment", "polar_pressure_hpa", "polar_temperature_c", "polar_elevation_m",
+        "polar_alignment_tolerance_arcmin")
     private var saved = emptyMap<String, Any?>()
     private lateinit var image: File
+    private val generated = mutableListOf<File>()
 
     @Before fun prepare() {
         val prefs = context.getSharedPreferences("mobile_observatory", Context.MODE_PRIVATE)
@@ -50,6 +57,9 @@ class PolarWorkflowScreenInstrumentedTest {
         prefs.edit().putFloat("polar_latitude_deg", 30f).putFloat("polar_longitude_deg", 110f)
             .putFloat("plate_focal_length_mm", 100f).putFloat("plate_pixel_size_um", 2.9f)
             .putBoolean("polar_manual_mode", true).putBoolean("polar_continuous_estimator", false)
+            .putBoolean("polar_refraction_adjustment", true).putFloat("polar_pressure_hpa", 1013.25f)
+            .putFloat("polar_temperature_c", 15f).putFloat("polar_elevation_m", 0f)
+            .putFloat("polar_alignment_tolerance_arcmin", 0f)
             .remove("plate_sensor_id").remove("polar_exposure_seconds").commit()
         image = File(context.cacheDir, "polar-screen-${UUID.randomUUID()}.png")
         val bitmap = Bitmap.createBitmap(384, 256, Bitmap.Config.ARGB_8888)
@@ -82,11 +92,13 @@ class PolarWorkflowScreenInstrumentedTest {
                 is Float -> edit.putFloat(key, value)
                 is Boolean -> edit.putBoolean(key, value)
                 is String -> edit.putString(key, value)
+                is Int -> edit.putInt(key, value)
                 else -> edit.remove(key)
             }
         }
         edit.commit()
         image.delete()
+        generated.forEach { it.delete() }
     }
 
     private fun screen(engine: ImagePlateSolver, fontScale: Float = 1f, compact: Boolean = false, capture: suspend (Float) -> File?) {
@@ -194,5 +206,82 @@ class PolarWorkflowScreenInstrumentedTest {
         compose.onNodeWithTag("polar-exposure-seconds").assertIsDisplayed()
         screenshot("-landscape")
         compose.activityRule.scenario.onActivity { it.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
+    }
+
+    @Test fun threeSuccessfulSolvesShowTheCorrectionGuideAndLiveResiduals() {
+        context.getSharedPreferences("mobile_observatory", Context.MODE_PRIVATE).edit().putFloat("plate_focal_length_mm", 41.54f).commit()
+        val at = Instant.parse("2026-10-25T10:00:00Z")
+        val site = ObserverSite(30.0, 110.0, 0.0)
+        val refraction = RefractionParameters.STANDARD
+        val axis = PolarVector3.fromTopocentric(TopocentricCoordinates(30.3, .4))
+        val start = PolarVector3.fromTopocentric(TopocentricCoordinates(55.0, 35.0))
+        val points = listOf(0.0, 15.0, 30.0).map { rotation ->
+            val sky = CoordinateTransform.topocentricToJ2000(PolarVector3.rotateByRodrigues(start, axis, rotation).toTopocentric(), at, site, refraction)
+            PolarSolvePoint(sky.raDeg, sky.decDeg, at)
+        }
+        val determination = PolarAlignmentCalculator.determine(points, site, refraction)
+        val later = at.plusSeconds(30)
+        val current = ContinuousPolarErrorEstimator.coordinatesForResidual(
+            EquatorialCoordinates(points.last().raDeg, points.last().decDeg),
+            determination.initial.azimuthErrorDeg, determination.initial.altitudeErrorDeg, .10, .05, site, refraction, later)
+        val all = points + PolarSolvePoint(current.raDeg, current.decDeg, later)
+        val fixtures = all.mapIndexed { index, point -> fitsFixture(index, point.solvedAt) }
+        val captures = AtomicInteger()
+        val pending = CompletableDeferred<File?>()
+        val engine = object : ImagePlateSolver {
+            override val ready = true
+            override suspend fun solve(inputFile: File, fovDeg: Double, mountCoordinates: MountCoordinates?, searchRadiusDeg: Double?): PlateSolveResult {
+                val i = fixtures.indexOf(inputFile); val point = all[i]
+                val wcs = requireNotNull(SolvedImageWcs.parse(mapOf("PLTSOLVD" to "T", "CRVAL1" to "${point.raDeg}",
+                    "CRVAL2" to "${point.decDeg}", "CRPIX1" to "192.5", "CRPIX2" to "128.5",
+                    "CD1_1" to "-.004", "CD1_2" to "0", "CD2_1" to "0", "CD2_2" to ".004"), 384, 256))
+                return PlateSolveResult(true, "Solved", raDeg = point.raDeg, decDeg = point.decDeg, imageWcs = wcs)
+            }
+        }
+        screen(engine) {
+            val index = captures.getAndIncrement()
+            fixtures.getOrNull(index) ?: pending.await()
+        }
+        compose.onNodeWithTag("polar-run").performScrollTo().performClick()
+        repeat(2) {
+            compose.waitUntil(20_000) { compose.onAllNodesWithTag("polar-next-point").fetchSemanticsNodes().isNotEmpty() }
+            compose.onNodeWithTag("polar-next-point").performScrollTo().performClick()
+            compose.waitUntil(10_000) { compose.onAllNodesWithTag("polar-next-point").fetchSemanticsNodes().isEmpty() }
+        }
+        compose.waitUntil(20_000) { compose.onAllNodesWithTag("polar-correction-overlay").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("polar-correction-overlay").assertIsDisplayed()
+        compose.onNodeWithTag("polar-error-summary").assertIsDisplayed().assert(hasText("30.00", substring = true))
+        screenshot("-three-point-result")
+        compose.onNodeWithTag("polar-preview-expand").performClick()
+        compose.onNodeWithTag("polar-correction-inspection").assertIsDisplayed()
+        screenshot("-result-fullscreen")
+        compose.onNodeWithTag("polar-preview-close").performClick()
+        compose.onNodeWithTag("polar-run").performScrollTo().performClick()
+        compose.waitUntil(20_000) { captures.get() >= 5 }
+        compose.waitUntil(10_000) { compose.onAllNodes(hasTestTag("polar-error-summary") and hasText("6.71", substring = true)).fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(15_000) { compose.onAllNodesWithTag("polar-correction-overlay").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("polar-correction-overlay").assertIsDisplayed()
+        compose.onNodeWithTag("polar-stop").performScrollTo().performClick()
+        compose.onNodeWithTag("polar-error-summary").assert(hasText("6.71", substring = true))
+    }
+
+    private fun fitsFixture(index: Int, at: Instant): File {
+        val file = File(context.cacheDir, "polar-result-${UUID.randomUUID()}-$index.fits")
+        generated += file
+        val header = listOf("SIMPLE" to "T", "BITPIX" to "16", "NAXIS" to "2", "NAXIS1" to "384", "NAXIS2" to "256",
+            "BSCALE" to "1", "BZERO" to "32768", "DATE-OBS" to "'$at'", "EXPTIME" to "0")
+            .joinToString("") { (key, value) -> (key.padEnd(8) + "= " + value).padEnd(80) } + "END".padEnd(80)
+        file.outputStream().use { output ->
+            output.write(header.padEnd(((header.length + 2879) / 2880) * 2880).toByteArray(Charsets.US_ASCII))
+            val pixels = java.nio.ByteBuffer.allocate(384 * 256 * 2).order(java.nio.ByteOrder.BIG_ENDIAN)
+            for (y in 0 until 256) for (x in 0 until 384) {
+                val star = (1..18).any { i -> kotlin.math.abs(x - i * 19) < 2 && kotlin.math.abs(y - (20 + i * 11)) < 2 }
+                pixels.putShort(((if (star) 50000 else 1000) - 32768).toShort())
+            }
+            output.write(pixels.array())
+            val padding = (2880 - pixels.capacity() % 2880) % 2880
+            output.write(ByteArray(padding))
+        }
+        return file
     }
 }
