@@ -90,4 +90,28 @@ class GuideModuleTest {
         val second = module.filter(0f, raAxis = true, GuideAlgorithm.HYSTERESIS, aggressiveness = 1.0f)
         assertEquals(10f, second, 0.01f)
     }
+
+    @Test fun liveCorrectionPolicyRespectsDeadbandEvenWithFilterHistory() {
+        val calibration = GuideCalibration(.004f, 0f, 0f, .006f, 1200)
+        val backlash = GuideBacklashCompensation()
+        module.solveCorrection(calibration, 10f, -10f, GuideAlgorithm.HYSTERESIS, .7f, .7f, .15f, backlash)
+        val solution = requireNotNull(module.solveCorrection(calibration, .1f, .1f, GuideAlgorithm.HYSTERESIS, .7f, .7f, .15f, backlash))
+        assertEquals(0, solution.correction.raPulseMs); assertEquals(0, solution.correction.decPulseMs)
+        org.junit.Assert.assertNull(solution.correction.raDirection); org.junit.Assert.assertNull(solution.correction.decDirection)
+        assertEquals(.1f, solution.raErrorPx, .0001f); assertEquals(.1f, solution.decErrorPx, .0001f)
+    }
+
+    @Test fun liveCorrectionPolicyLimitsPulsesAndAppliesTheRequestedDirections() {
+        val calibration = GuideCalibration(.004f, 0f, 0f, .006f, 1200, decBacklashMs = 1800)
+        val backlash = GuideBacklashCompensation().apply { accepted(com.indigo.mobileobservatory.mount.MountDirection.NORTH) }
+        val forward = requireNotNull(module.solveCorrection(calibration, 100f, 100f, GuideAlgorithm.HYSTERESIS, .7f, .7f, .15f, backlash)).correction
+        assertEquals(2000, forward.raPulseMs); assertEquals(3800, forward.decPulseMs)
+        assertEquals(com.indigo.mobileobservatory.mount.MountDirection.WEST, forward.raDirection)
+        assertEquals(com.indigo.mobileobservatory.mount.MountDirection.SOUTH, forward.decDirection)
+        val reversed = requireNotNull(module.solveCorrection(calibration, 100f, 100f, GuideAlgorithm.HYSTERESIS, .7f, .7f, .15f, backlash,
+            reverseRa = true, reverseDec = true)).correction
+        assertEquals(com.indigo.mobileobservatory.mount.MountDirection.EAST, reversed.raDirection)
+        assertEquals(com.indigo.mobileobservatory.mount.MountDirection.NORTH, reversed.decDirection)
+        assertEquals(2000, reversed.decPulseMs)
+    }
 }

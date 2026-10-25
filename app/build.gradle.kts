@@ -186,6 +186,18 @@ tasks.matching { it.name == "preReleaseBuild" }.configureEach {
     dependsOn(verifyReleaseSigning)
 }
 
+// External FITS replays track the actual source file so Gradle cannot reuse a crop-only run.
+tasks.withType<org.gradle.api.tasks.testing.Test>().configureEach {
+    providers.gradleProperty("guideFitsPath").orNull?.let { path ->
+        inputs.file(path).withPropertyName("guideFitsSource")
+        environment("GUIDE_FITS_PATH", path)
+    }
+    providers.gradleProperty("guideFitsReportDir").orNull?.let { path ->
+        inputs.property("guideFitsReportDir", path)
+        environment("GUIDE_FITS_REPORT_DIR", path)
+    }
+}
+
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2023.10.01")
     implementation(composeBom)

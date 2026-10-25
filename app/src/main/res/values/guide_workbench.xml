@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="gw_devices">Devices</string>
+    <string name="gw_start_exposure">Loop exposures</string>
+    <string name="gw_stop_exposure">Stop exposures</string>
+    <string name="gw_exposure_stopped">Exposures stopped; camera settings can be adjusted</string>
+    <string name="gw_start_exposure_first">Start exposures first</string>
+    <string name="gw_auto_guide">Auto-select and guide</string>
+    <string name="gw_stop_guiding">Stop guiding / calibration</string>
+    <string name="gw_corrections">Corrections</string>
+    <string name="gw_image">Raw monochrome guide image; pan, zoom and tap a star</string>
+    <string name="gw_algorithms">Algorithms</string>
+    <string name="gw_optics">Optics</string>
+    <string name="gw_focal_mm">Guide focal length (mm; blank uses px)</string>
+    <string name="gw_scale_help">With a guide focal length and known pixel size, graphs and HFR use arcseconds. Otherwise they use px.</string>
+    <string name="gw_pixel_um">Effective pixel size: %1$.2f μm</string>
+    <string name="gw_peak">Peak %1$.0f ADU</string>
+    <string name="gw_flux">Background-subtracted flux %1$.0f ADU</string>
+    <string name="gw_profile">Star energy profile</string>
+    <string name="gw_profile_legend" formatted="false">Blue: mean radial intensity · yellow: encircled energy 0–100%</string>
+    <string name="gw_profile_radius">Radius 0–%1$.1f %2$s · vertical line: HFR</string>
+    <string name="gw_rms">RMS  RA %1$.2f · DEC %2$.2f · total %3$.2f %4$s  |  %5$d / %6$d samples</string>
+    <string name="gw_bit_depth">Raw format / bit depth</string>
+    <string name="gw_readout">Camera readout mode</string>
+    <string name="gw_apply_exposure">Apply exposure (0.05–5 s)</string>
+    <string name="gw_raw_help">Guiding displays and measures raw single-channel pixels. Recalibrate after changing format or readout mode.</string>
+    <string name="gw_calibration_help">Clear backlash, measure at least the specified steps and travel, fit both axes, and measure reversal backlash on return. Step duration adapts to the measured response.</string>
+    <string name="gw_steps">Minimum steps per axis</string>
+    <string name="gw_distance">Minimum travel per axis (px)</string>
+    <string name="gw_backlash">DEC reversal backlash compensation</string>
+    <string name="gw_calibration_result">RA / DEC: %1$d / %2$d steps\nBacklash RA %3$d ms · DEC %4$d ms\nFit residual %5$.2f px</string>
+    <string name="gw_clear_east">Clearing RA backlash</string>
+    <string name="gw_clear_north">Clearing DEC backlash</string>
+    <string name="gw_calibration_progress">%1$s · step %2$d · %3$.2f px</string>
+    <string name="gw_multistar">Multi-star guiding</string>
+    <string name="gw_ra_aggression">RA aggressiveness</string>
+    <string name="gw_dec_aggression">DEC aggressiveness</string>
+    <string name="gw_min_move">Minimum move (px)</string>
+    <string name="gw_reverse_ra">Reverse RA</string>
+    <string name="gw_reverse_dec">Reverse DEC</string>
+</resources>
