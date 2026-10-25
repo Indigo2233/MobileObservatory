@@ -13,12 +13,34 @@ data class FovSkyAnchor(
     }
 }
 
+/** Display reference only; this does not authorize optical follow or confirm target arrival. */
+data class FovCurrentReference(
+    val anchor: FovSkyAnchor,
+    val positionAngleDeg: Double?,
+    val mountEstimated: Boolean,
+    val fieldConfirmed: Boolean
+)
+
 /**
  * JS bridge for the active optical train. Target (dashed) is anchored to a
- * selected framing coordinate or the map centre. Current (solid) requires an
- * explicit optical-path anchor; a mount model or map centre is never that anchor.
+ * selected framing coordinate or the map centre. Current (solid) has an explicit
+ * sky anchor. A mount reference must be labelled as an estimate; only the shared
+ * optical selector can authorize optical follow and pointing verification.
  */
 object StarMapFovOverlay {
+    fun currentReference(
+        optical: FovPointingDecision,
+        frameCentered: Boolean,
+        mountAnchor: FovSkyAnchor?
+    ): FovCurrentReference? {
+        val source = optical.source?.takeIf { optical.showCurrent }
+        if (source != null) return FovCurrentReference(source.anchor,
+            source.positionAngleDeg?.takeIf(Double::isFinite), false, frameCentered)
+        val mount = mountAnchor?.takeIf { it.raHours.isFinite() && it.decDegrees.isFinite() &&
+            it.decDegrees in -90.0..90.0 && it.frame.uppercase(Locale.US) in setOf("JNOW", "J2000", "ICRF") }
+        return mount?.let { FovCurrentReference(it, null, true, false) }
+    }
+
     fun targetSensorFramingScripts(
         positionAngleDeg: Double,
         mosaic: StarMapMosaicConfig,

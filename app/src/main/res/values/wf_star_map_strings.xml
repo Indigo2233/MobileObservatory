@@ -4,5 +4,5 @@
     <string name="wf_star_map_current_target">Current target</string>
     <string name="wf_star_map_target_details">More target actions</string>
     <string name="wf_star_map_hide_details">Hide target details</string>
-    <string name="wf_fov_cropped_frame">Cropped or unconfirmed field · current frame hidden</string>
+    <string name="wf_fov_cropped_frame">Configured field reference · crop or optical axis unconfirmed</string>
 </resources>
