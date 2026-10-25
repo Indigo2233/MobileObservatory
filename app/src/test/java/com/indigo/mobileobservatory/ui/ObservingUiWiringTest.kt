@@ -129,7 +129,7 @@ class ObservingUiWiringTest {
         assertTrue(starMap.contains("computation = activeComputation"))
         assertTrue(starMap.contains("currentLabel = overlayCurrentLabel"))
         assertTrue(starMap.contains("targetLabel = overlayTargetLabel"))
-        assertTrue(starMap.contains("currentAnchor = currentAnchor"))
+        assertTrue(starMap.contains("currentAnchor = currentFovReference?.anchor"))
         assertTrue(starMap.contains("targetAnchor = targetAnchor"))
         assertTrue(starMap.contains("StarMapFovOverlay.targetSensorFramingScripts"))
         assertTrue(starMap.contains("FovSkyAnchor("))

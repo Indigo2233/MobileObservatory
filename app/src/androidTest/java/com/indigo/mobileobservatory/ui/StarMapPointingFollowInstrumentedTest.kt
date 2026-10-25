@@ -1,10 +1,11 @@
 package com.indigo.mobileobservatory.ui
 
 import android.content.Context
+import androidx.activity.ComponentActivity
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.*
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.test.platform.app.InstrumentationRegistry
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.BuildConfig
@@ -19,7 +20,7 @@ import org.junit.Test
 
 /** Real screen/source-selection behavior with deterministic time; no hardware or real WCS claimed. */
 class StarMapPointingFollowInstrumentedTest {
-    @get:Rule val compose = createComposeRule()
+    @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
     private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
     private val prefs get() = context.getSharedPreferences("mobile_observatory", Context.MODE_PRIVATE)
     private var saved: Map<String, *> = emptyMap<String, Any>()
@@ -30,6 +31,7 @@ class StarMapPointingFollowInstrumentedTest {
     private val sources = mutableStateOf<List<FovPointingCandidate>>(emptyList())
     private val targets = mutableListOf<StarMapTarget>()
     private var refreshes = 0
+    private lateinit var web: StarMapWebViewProbe
 
     @Before fun setup() {
         org.junit.Assume.assumeTrue(BuildConfig.STELLARIUM_ENABLED)
@@ -83,7 +85,9 @@ class StarMapPointingFollowInstrumentedTest {
         compose.runOnIdle {
             clock = System.currentTimeMillis()
             sources.value = paths.map { candidate(it.first, it.second) }
+            web = StarMapWebViewProbe(compose.activity.window.decorView)
         }
+        web.freezeUtcNow(clock)
         compose.mainClock.advanceTimeBy(1_000)
     }
 

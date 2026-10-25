@@ -87,6 +87,7 @@
         canvas.style.height = height + "px";
         applyFovOverlay(fovCurrentElement, pendingCurrentFov);
         applyFovOverlay(fovTargetElement, pendingTargetFov);
+        scheduleFovOverlayRefresh();
     }
 
     function notifyAndroid(method, value) {
@@ -603,39 +604,25 @@
         if (maxDim > 0) applyFovDegrees(maxDim * 1.35, 1);
     }
 
-    let lastOverlayFovKey = "";
-    function fovSpecKey(spec) {
-        if (!spec) return "";
-        const shape = spec.shape === "circle"
-            ? "c" + spec.circleDeg
-            : "r" + spec.widthDeg + "x" + spec.heightDeg;
-        const ra = spec.raHours != null ? spec.raHours : "";
-        const dec = spec.decDegrees != null ? spec.decDegrees : "";
-        const rotation = spec.positionAngleDeg != null ? spec.positionAngleDeg : 0;
-        return shape + "@" + ra + "," + dec + "," + (spec.frame || "") +
-            ",r" + rotation + ",m" + (spec.rows || 1) + "x" + (spec.columns || 1) +
-            ",o" + (spec.overlapPercent || 0) + ",n" + Boolean(spec.showPanelNumbers);
-    }
     function refreshFovOverlaysFromEngine() {
         const coreFov = coreFovDegrees();
-        const observer = stel && ((stel.core && stel.core.observer) || stel.observer);
-        const yaw = observer && observer.yaw;
-        const pitch = observer && observer.pitch;
-        const utc = observer && observer.utc;
-        const key = String(coreFov) + "|" +
-            (yaw != null ? Number(yaw).toFixed(5) : "") + "|" +
-            (pitch != null ? Number(pitch).toFixed(5) : "") + "|" +
-            (utc != null ? Number(utc).toFixed(7) : "") + "|" +
-            fovSpecKey(pendingCurrentFov) + "|" +
-            fovSpecKey(pendingTargetFov);
-        const hasSkyAnchor =
-            (pendingCurrentFov && pendingCurrentFov.raHours != null) ||
-            (pendingTargetFov && pendingTargetFov.raHours != null);
-        if (key === lastOverlayFovKey && !(hasSkyAnchor && yaw == null)) return;
-        lastOverlayFovKey = key;
         if (coreFov != null) pendingFovDegrees = coreFov;
         applyFovOverlay(fovCurrentElement, pendingCurrentFov);
         applyFovOverlay(fovTargetElement, pendingTargetFov);
+    }
+
+    let fovRefreshScheduled = false;
+    function scheduleFovOverlayRefresh() {
+        if (!stel || fovRefreshScheduled) return;
+        fovRefreshScheduled = true;
+        // Property-change callbacks may run before _core_render updates VIEW.
+        // Let one engine frame finish, then redraw even if yaw/pitch stayed equal.
+        window.requestAnimationFrame(function () {
+            window.requestAnimationFrame(function () {
+                fovRefreshScheduled = false;
+                refreshFovOverlaysFromEngine();
+            });
+        });
     }
 
     function pauseFollowAfterUserPan() {
@@ -1131,7 +1118,6 @@
             const angle = Number(angleDeg);
             if (!isFinite(angle)) return false;
             pendingTargetFov.positionAngleDeg = ((angle % 360) + 360) % 360;
-            lastOverlayFovKey = "";
             applyFovOverlay(fovTargetElement, pendingTargetFov);
             return true;
         },
@@ -1158,7 +1144,6 @@
             pendingTargetFov.startCorner = [
                 "TOP_LEFT", "TOP_RIGHT", "BOTTOM_LEFT", "BOTTOM_RIGHT"
             ].indexOf(startCorner) >= 0 ? startCorner : "TOP_LEFT";
-            lastOverlayFovKey = "";
             if (alsoZoom) zoomToTargetFov();
             applyFovOverlay(fovTargetElement, pendingTargetFov);
             return true;
@@ -1219,12 +1204,10 @@
                     window.requestAnimationFrame(function () {
                         publishSelection();
                         publishView();
-                        // Pinch-zoom / zoomTo animations mutate core.fov;
-                        // refresh is cheap (deduped) and keeps overlays locked
-                        // to a fixed angular size on the sky.
-                        refreshFovOverlaysFromEngine();
                     });
+                    scheduleFovOverlayRefresh();
                 });
+                scheduleFovOverlayRefresh();
                 setStatus("", false);
                 notifyAndroid("onEngineReady", "");
             } catch (error) {

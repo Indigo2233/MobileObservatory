@@ -714,13 +714,6 @@ fun StarMapScreen(
     LaunchedEffect(Unit) {
         while (true) { delay(1_000); pointingClockUtcMs = latestPointingClock() }
     }
-    val currentFovSource = remember(pointingSources, opticalPathIds, activeTrain, activeComputation, pointingClockUtcMs) {
-        val limit = activeComputation?.let { computation ->
-            computation.circleDeg?.div(2) ?: listOfNotNull(computation.rectWidthDeg, computation.rectHeightDeg).minOrNull()?.div(2)
-        } ?: Double.POSITIVE_INFINITY
-        FovPointingSources.select(opticalPathIds[activeTrain] ?: activeTrain.prefValue(), pointingSources, pointingClockUtcMs,
-            requireRoll = activeComputation?.mode == FovInstrumentMode.SENSOR, maxUncertaintyDeg = limit)
-    }
     val currentFollowSource = remember(pointingSources, opticalPathIds, activeTrain, activeComputation, pointingClockUtcMs) {
         val limit = activeComputation?.let { computation ->
             computation.circleDeg?.div(2) ?: listOfNotNull(computation.rectWidthDeg, computation.rectHeightDeg).minOrNull()?.div(2)
@@ -728,6 +721,10 @@ fun StarMapScreen(
         // An axis can be followed without claiming an image-up angle for a rectangular FOV.
         FovPointingSources.select(opticalPathIds[activeTrain] ?: activeTrain.prefValue(), pointingSources,
             pointingClockUtcMs, requireRoll = false, maxUncertaintyDeg = limit)
+    }
+    val currentFovReference = remember(currentFollowSource, currentFrameCentered, canReadCoordinates, mountCoordinates) {
+        StarMapFovOverlay.currentReference(currentFollowSource, currentFrameCentered,
+            mountCoordinates?.takeIf { canReadCoordinates }?.let { FovSkyAnchor(it.raHours, it.decDeg, "JNOW") })
     }
     val latestFollowSource by rememberUpdatedState(currentFollowSource)
     LaunchedEffect(currentFollowSource.showCurrent, followMount, resolvedObserverSite) {
@@ -757,13 +754,21 @@ fun StarMapScreen(
                 if (activeTrain == OpticsTrainId.PRIMARY) defaultPrimaryLabel else defaultSecondaryLabel
             }
     }
-    val fovCurrentWord = stringResource(if (!currentFrameCentered && activeComputation?.mode == FovInstrumentMode.SENSOR)
-        R.string.wf_fov_cropped_frame else when (currentFovSource.role) {
+    val currentSourceWord = stringResource(if (currentFovReference?.mountEstimated == true)
+        R.string.wf_fov_mount_estimate else when (currentFollowSource.role) {
         FovPointingRole.OPTICAL -> R.string.wf_fov_optical
         FovPointingRole.CALIBRATED -> R.string.wf_fov_calibrated
         FovPointingRole.ESTIMATED -> R.string.wf_fov_estimated
         FovPointingRole.PLANNING -> R.string.wf_fov_planning
     })
+    val currentAngleUnknown = activeComputation?.mode == FovInstrumentMode.SENSOR &&
+        currentFovReference != null && currentFovReference.positionAngleDeg == null
+    val fovCurrentWord = listOfNotNull(
+        stringResource(if (currentFovReference?.fieldConfirmed == true) R.string.star_map_fov_current
+            else R.string.wf_fov_current_reference),
+        currentSourceWord,
+        if (currentAngleUnknown) stringResource(R.string.wf_fov_north_up_reference) else null
+    ).joinToString(" · ")
     val sourceStatusWord = currentFollowSource.source?.let { source -> stringResource(when {
         source.kind == com.indigo.mobileobservatory.astro.FovPointingKind.DIRECT_OPTICAL -> R.string.wf_follow_source_camera
         source.sourceId.contains("PHONE", ignoreCase = true) -> R.string.wf_follow_source_phone
@@ -776,7 +781,7 @@ fun StarMapScreen(
     }) }
     val propagationCaption = if (currentFollowSource.role == FovPointingRole.ESTIMATED)
         " · ${stringResource(R.string.wf_fov_estimated)}" else ""
-    val missingRollCaption = if (currentFovSource.reason == FovPointingReason.ROLL_UNKNOWN)
+    val missingRollCaption = if (currentFollowSource.showCurrent && currentAngleUnknown)
         " · ${stringResource(R.string.wf_fov_roll_unknown)}" else ""
     val croppedFrameCaption = if (activeComputation?.mode == FovInstrumentMode.SENSOR &&
         currentFollowSource.showCurrent && !currentFrameCentered) " · ${stringResource(R.string.wf_fov_cropped_frame)}" else ""
@@ -974,7 +979,6 @@ fun StarMapScreen(
     }
 
     fun applyFovOverlays(alsoZoom: Boolean) {
-        val currentAnchor = currentFovSource.currentAnchor.takeIf { currentFrameCentered }
         val targetAnchor = selectedTarget?.let {
             FovSkyAnchor(it.raHours, it.decDegrees, it.frame)
         }
@@ -984,10 +988,10 @@ fun StarMapScreen(
             currentLabel = overlayCurrentLabel,
             targetLabel = overlayTargetLabel,
             alsoZoom = alsoZoom,
-            currentAnchor = currentAnchor,
+            currentAnchor = currentFovReference?.anchor,
             targetAnchor = targetAnchor,
-            showCurrent = currentFovSource.showCurrent && currentFrameCentered && resolvedObserverSite != null,
-            currentPositionAngleDeg = currentFovSource.source?.positionAngleDeg
+            showCurrent = currentFovReference != null,
+            currentPositionAngleDeg = currentFovReference?.positionAngleDeg ?: 0.0
         ).forEach(::evalStarMap)
         applyTargetFraming(alsoZoom)
     }
@@ -1407,8 +1411,7 @@ fun StarMapScreen(
         secondaryTrain,
         overlayCurrentLabel,
         overlayTargetLabel,
-        currentFovSource,
-        currentFrameCentered,
+        currentFovReference,
         mountCoordinates,
         mountConnected,
         cameraPixelSizeUm,
