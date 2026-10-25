@@ -757,6 +757,28 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
         }
     }
 
+    /** OnStep owns the pulse deadline even if the host or transport disappears. */
+    suspend fun startGuidePulse(direction: MountDirection, durationMs: Int) = withContext(Dispatchers.IO) {
+        require(durationMs in 1..5000)
+        pointingAccess.requireWritable()
+        if (activeProtocol == MountProtocolType.LX200_ONSTEP && mountModel?.contains("OnStep", ignoreCase = true) == true) {
+            val axis = when (direction) {
+                MountDirection.NORTH -> 'n'
+                MountDirection.SOUTH -> 's'
+                MountDirection.EAST -> 'e'
+                MountDirection.WEST -> 'w'
+            }
+            FileLogger.i(TAG, "Mount timed guide ${direction.name} durationMs=$durationMs")
+            check(sendBooleanCommand(":MG$axis$durationMs#")) { "OnStep rejected the timed guide pulse." }
+        } else {
+            startMove(direction)
+        }
+    }
+
+    suspend fun stopGuidePulse(direction: MountDirection) = withContext(Dispatchers.IO) {
+        stopMoveBlocking(direction, requireStop = true)
+    }
+
     suspend fun stopMove(direction: MountDirection? = null) = withContext(Dispatchers.IO) {
         stopMoveBlocking(direction)
     }
@@ -770,23 +792,25 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
         }
     }
 
-    private fun stopMoveBlocking(direction: MountDirection? = null) {
+    private fun stopMoveBlocking(direction: MountDirection? = null, requireStop: Boolean = false) {
         FileLogger.i(TAG, "Mount manual move stop ${direction?.name ?: "ALL"}")
         skyWatcherAdapter?.let {
             if (accessMode.value == MountAccessMode.READ_ONLY) it.abortMotion() else it.stopMove(direction)
             return
         }
         if (activeProtocol == MountProtocolType.IOPTRON) {
-            if (direction == MountDirection.NORTH || direction == MountDirection.SOUTH) {
+            val stopped = if (direction == MountDirection.NORTH || direction == MountDirection.SOUTH) {
                 runCatching { sendIoptronOk(":qD#") }
             } else if (direction == MountDirection.EAST || direction == MountDirection.WEST) {
                 runCatching { sendIoptronOk(":qR#") }
             } else {
                 runCatching { sendIoptronOk(":Q#") }
             }
+            if (requireStop) check(stopped.getOrThrow()) { "Mount rejected the guide stop." }
         } else {
-            if (direction != null) runCatching { sendNoReplyCommand(direction.stopCommand) }
-            runCatching { sendNoReplyCommand(":Q#") }
+            val axisStop = direction?.let { runCatching { sendNoReplyCommand(it.stopCommand) } }
+            val allStop = runCatching { sendNoReplyCommand(":Q#") }
+            if (requireStop && axisStop?.isSuccess != true) allStop.getOrThrow()
         }
     }
 

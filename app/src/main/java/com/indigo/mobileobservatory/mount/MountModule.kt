@@ -1383,12 +1383,12 @@ class MountModule(
         controller.setMoveRate(MountSlewRate.GUIDE)
     }
 
-    suspend fun startGuidePulse(direction: MountDirection) {
-        controller.startMove(direction)
+    suspend fun startGuidePulse(direction: MountDirection, durationMs: Int) {
+        controller.startGuidePulse(direction, durationMs)
     }
 
     suspend fun stopGuidePulse(direction: MountDirection) {
-        controller.stopMove(direction)
+        controller.stopGuidePulse(direction)
     }
 
     suspend fun stopAllMotion() {

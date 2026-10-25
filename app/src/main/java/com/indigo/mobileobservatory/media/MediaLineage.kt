@@ -26,6 +26,17 @@ object MediaLineage {
 
     fun sidecar(file: File) = File(file.parentFile, "${file.nameWithoutExtension}.json")
 
+    fun linearSource(file: File, indexed: List<VideoFileInfo>): File? {
+        val display = metadata(file)
+        if (display["schema"] != "indigo-stack-1" || display["processedPng"] != file.name) return null
+        val name = display["linearFits"] ?: return null
+        return indexed.filter { it.file.isFile && it.file.name == name && it.file != file }.map { it.file }.filter { candidate ->
+            val source = metadata(candidate)
+            source["schema"] == "indigo-stack-1" && source["linearFits"] == candidate.name &&
+                source["processedPng"] == file.name && source["sourceIdentity"] == display["sourceIdentity"]
+        }.singleOrNull()
+    }
+
     fun recipeSource(recipe: MediaEditRecipe, indexed: List<VideoFileInfo>): File? {
         return indexed.asSequence().flatMap { info ->
             if (info.file.isDirectory) info.file.listFiles().orEmpty().asSequence()

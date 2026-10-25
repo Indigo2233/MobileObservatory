@@ -12,7 +12,9 @@ data class GuideStar(
     val x: Float,
     val y: Float,
     val snr: Float,
-    val flux: Float = snr
+    val flux: Float = snr,
+    val radiusPx: Float = Float.NaN,
+    val saturated: Boolean = false
 )
 
 data class GuideCorrection(
@@ -68,11 +70,11 @@ class GuideModule {
     private var lastRaError = 0f
     private var lastDecError = 0f
 
-    fun detectStars(frame: FrameData, maxStars: Int = 16): List<GuideStar> {
+    fun detectStars(frame: FrameData, maxStars: Int = 16, saturationLevel: Int? = null): List<GuideStar> {
         val width = frame.width
         val height = frame.height
         if (width < 16 || height < 16) return emptyList()
-        if (frame.data.size < width * height * frame.pixelFormat.bytesPerPixel) return emptyList()
+        if (frame.data.size.toLong() < width.toLong() * height * frame.pixelFormat.bytesPerPixel) return emptyList()
 
         var sum = 0.0
         var sumSquared = 0.0
@@ -111,12 +113,14 @@ class GuideModule {
             var weightSum = 0.0
             var xSum = 0.0
             var ySum = 0.0
+            var squaredRadiusSum = 0.0
             for (y in (candidate.y - 10).coerceAtLeast(0)..(candidate.y + 10).coerceAtMost(height - 1)) {
                 for (x in (candidate.x - 10).coerceAtLeast(0)..(candidate.x + 10).coerceAtMost(width - 1)) {
                     val weight = (rawValue(frame, x, y) - threshold).coerceAtLeast(0.0)
                     weightSum += weight
                     xSum += x * weight
                     ySum += y * weight
+                    squaredRadiusSum += (x.toDouble() * x + y.toDouble() * y) * weight
                 }
             }
             if (weightSum > 0.0) {
@@ -124,7 +128,15 @@ class GuideModule {
                     x = (xSum / weightSum).toFloat(),
                     y = (ySum / weightSum).toFloat(),
                     snr = ((candidate.value - mean) / sigma.coerceAtLeast(1.0)).toFloat(),
-                    flux = weightSum.toFloat()
+                    flux = weightSum.toFloat(),
+                    radiusPx = sqrt((squaredRadiusSum / weightSum - (xSum / weightSum).let { it * it } -
+                        (ySum / weightSum).let { it * it }).coerceAtLeast(0.0)).toFloat(),
+                    saturated = run {
+                        val peak = peakValue(frame, candidate.x, candidate.y)
+                        val nominal = (1 shl frame.pixelFormat.nativeBits) - 1
+                        val maximum = saturationLevel ?: if (peak > nominal) 65535 else nominal
+                        peak >= maximum - maxOf(1, maximum / 1000)
+                    }
                 )
             }
         }
@@ -133,15 +145,14 @@ class GuideModule {
 
     fun matchShift(reference: List<GuideStar>, current: List<GuideStar>): GuideVector? {
         if (reference.isEmpty() || current.isEmpty()) return null
-        var xSum = 0.0
-        var ySum = 0.0
-        var weightSum = 0.0
+        data class Shift(val dx: Float, val dy: Float, val weight: Double)
+        val shifts = ArrayList<Shift>()
         val used = HashSet<Int>()
         reference.forEach { ref ->
             var bestIndex = -1
             var bestDistance = Float.MAX_VALUE
             current.forEachIndexed { index, star ->
-                if (index !in used) {
+                if (index !in used && star.flux.isFinite() && ref.flux > 0 && star.flux / ref.flux in .2f..5f) {
                     val distance = hypot(star.x - ref.x, star.y - ref.y)
                     if (distance < bestDistance) {
                         bestDistance = distance
@@ -153,19 +164,28 @@ class GuideModule {
                 used += bestIndex
                 val star = current[bestIndex]
                 val weight = ref.flux.coerceAtLeast(1f).toDouble()
-                xSum += (star.x - ref.x) * weight
-                ySum += (star.y - ref.y) * weight
-                weightSum += weight
+                shifts += Shift(star.x - ref.x, star.y - ref.y, weight)
             }
         }
-        if (weightSum <= 0.0) return null
-        return GuideVector((xSum / weightSum).toFloat(), (ySum / weightSum).toFloat())
+        if (shifts.isEmpty()) return null
+        fun median(values: List<Float>): Float = values.sorted().let { sorted ->
+            if (sorted.size % 2 == 0) (sorted[sorted.size / 2 - 1] + sorted[sorted.size / 2]) * .5f else sorted[sorted.size / 2]
+        }
+        val x = median(shifts.map { it.dx }); val y = median(shifts.map { it.dy })
+        val inliers = shifts.filter { hypot(it.dx - x, it.dy - y) <= 2.5f }
+        if (inliers.isEmpty() || inliers.size * 2 < shifts.size) return null
+        val weight = inliers.sumOf { it.weight }
+        return GuideVector((inliers.sumOf { it.dx * it.weight } / weight).toFloat(),
+            (inliers.sumOf { it.dy * it.weight } / weight).toFloat())
     }
 
     fun projectError(calibration: GuideCalibration, dx: Float, dy: Float): Pair<Float, Float>? {
         val determinant = calibration.eastXPerMs * calibration.northYPerMs -
             calibration.northXPerMs * calibration.eastYPerMs
-        if (abs(determinant) < 0.000001f) return null
+        val east = hypot(calibration.eastXPerMs, calibration.eastYPerMs)
+        val north = hypot(calibration.northXPerMs, calibration.northYPerMs)
+        if (!determinant.isFinite() || !east.isFinite() || !north.isFinite() || east <= 0f || north <= 0f ||
+            abs(determinant.toDouble()) / (east.toDouble() * north) < .2 || !dx.isFinite() || !dy.isFinite()) return null
         val targetX = -dx
         val targetY = -dy
         return (targetX * calibration.northYPerMs - calibration.northXPerMs * targetY) / determinant to
@@ -219,9 +239,19 @@ class GuideModule {
         lastDecError = 0f
     }
 
+    fun usableStars(stars: List<GuideStar>): List<GuideStar> = stars.filter {
+        it.x.isFinite() && it.y.isFinite() && it.snr.isFinite() && it.snr >= 5f &&
+            it.flux.isFinite() && it.flux > 0 && !it.saturated && (it.radiusPx.isNaN() || it.radiusPx in .6f..8f)
+    }
+
     private fun rawValue(frame: FrameData, x: Int, y: Int): Int {
         val index = y * frame.width + x
         return when {
+            frame.pixelFormat == PixelFormat.RGB24 -> {
+                val base = index * 3
+                ((frame.data[base].toInt() and 255) * 299 + (frame.data[base + 1].toInt() and 255) * 587 +
+                    (frame.data[base + 2].toInt() and 255) * 114) / 1000
+            }
             frame.pixelFormat == PixelFormat.RGB48 -> {
                 val base = index * 6
                 if (base + 5 >= frame.data.size) return 0
@@ -236,6 +266,15 @@ class GuideModule {
                 val base = index * 2
                 if (base + 1 >= frame.data.size) 0 else u16(frame.data, base)
             }
+        }
+    }
+
+    private fun peakValue(frame: FrameData, x: Int, y: Int): Int {
+        val index = (y * frame.width + x) * frame.pixelFormat.bytesPerPixel
+        return when (frame.pixelFormat) {
+            PixelFormat.RGB24 -> maxOf(frame.data[index].toInt() and 255, frame.data[index + 1].toInt() and 255, frame.data[index + 2].toInt() and 255)
+            PixelFormat.RGB48 -> maxOf(u16(frame.data, index), u16(frame.data, index + 2), u16(frame.data, index + 4))
+            else -> rawValue(frame, x, y)
         }
     }
 

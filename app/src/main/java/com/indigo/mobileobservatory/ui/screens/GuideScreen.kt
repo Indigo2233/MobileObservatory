@@ -77,6 +77,7 @@ fun GuideScreen(
 ) {
     val connectionState by viewModel.guideConnectionState.collectAsStateWithPageLifecycle()
     val previewBitmap by viewModel.guidePreviewBitmap.collectAsStateWithPageLifecycle()
+    val guideFrameSize by viewModel.guideFrameSize.collectAsStateWithPageLifecycle()
     val guideStar by viewModel.guideStar.collectAsStateWithPageLifecycle()
     val guideStars by viewModel.guideStars.collectAsStateWithPageLifecycle()
     val referenceStar by viewModel.guideReferenceStar.collectAsStateWithPageLifecycle()
@@ -146,6 +147,7 @@ fun GuideScreen(
                     GuideOverlay(
                         bitmap = previewBitmap,
                         stars = guideStars,
+                        frameWidth = guideFrameSize.first, frameHeight = guideFrameSize.second,
                         referenceStars = referenceStars.ifEmpty { referenceStar?.let { listOf(it) } ?: emptyList() },
                         modifier = Modifier.fillMaxSize()
                     )
@@ -357,11 +359,15 @@ fun GuideScreen(
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(
                                 onClick = { viewModel.startGuideCalibration() },
-                                enabled = !guideCalibrating && connectionState is ConnectionState.Connected
+                                enabled = !guideCalibrating && !guideRunning && connectionState is ConnectionState.Connected && mountConnectionState is MountConnectionState.Connected
                             ) {
                                 Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(6.dp))
                                 Text(stringResource(R.string.calibrate))
+                            }
+                            if (guideCalibrating) OutlinedButton(onClick = { viewModel.setGuideRunning(false) }) {
+                                Icon(Icons.Default.Stop, null, modifier = Modifier.size(16.dp))
+                                Text(stringResource(R.string.guide_cancel_calibration))
                             }
                             OutlinedButton(
                                 onClick = { viewModel.clearGuideCalibration() },
@@ -383,6 +389,7 @@ fun GuideScreen(
                             Text(stringResource(if (guideRunning) R.string.running else R.string.stopped))
                             Switch(
                                 checked = guideRunning,
+                                enabled = !guideCalibrating,
                                 onCheckedChange = { viewModel.setGuideRunning(it) }
                             )
                         }
@@ -600,6 +607,7 @@ private fun GuideGraph(
 private fun GuideOverlay(
     bitmap: Bitmap?,
     stars: List<GuideStar>,
+    frameWidth: Int, frameHeight: Int,
     referenceStars: List<GuideStar>,
     modifier: Modifier = Modifier
 ) {
@@ -612,7 +620,8 @@ private fun GuideOverlay(
         val y0 = (size.height - bmp.height * scale) / 2f
 
         fun map(star: GuideStar): Offset {
-            return Offset(x0 + star.x * scale, y0 + star.y * scale)
+            return Offset(x0 + star.x * bmp.width / frameWidth.coerceAtLeast(1) * scale,
+                y0 + star.y * bmp.height / frameHeight.coerceAtLeast(1) * scale)
         }
 
         referenceStars.forEach {

@@ -720,15 +720,14 @@ class StackingCoordinator(
             val root = app.getExternalFilesDir("captures") ?: error("storage_unavailable")
             val fitsDir = File(root, "FITS").also { check(it.isDirectory || it.mkdirs()) }
             val pngDir = File(root, "JPG").also { check(it.isDirectory || it.mkdirs()) }
-            val expectedBytes = snapshot.image.pixels.size.toLong() * 12L + 16L * 1024 * 1024
+            val expectedBytes = snapshot.image.pixels.size.toLong() * 6L + 16L * 1024 * 1024
             check(root.usableSpace >= expectedBytes) { "storage_full" }
             val stem = "stack-${snapshot.metadata["workflow"] ?: mode.name.lowercase()}-${snapshot.metadata["target"] ?: "planetary"}-${System.currentTimeMillis()}-${UUID.randomUUID().toString().take(8)}-${effective.preset.name.lowercase()}"
             val fits = File(fitsDir, "$stem-linear.fits")
             val png = File(pngDir, "$stem.png")
             val recipe = File(pngDir, "$stem.json")
-            val temporaryPng = File(pngDir, "$stem.png.partial")
             val metadata = snapshot.metadata + mapOf(
-                "schema" to "indigo-stack-1", "linearFits" to fits.name, "processedPng" to png.name,
+                "schema" to "indigo-stack-1", "linearFits" to fits.name, "processedPng" to png.name, "processedPngBits" to "16",
                 "processing" to StackResultMetadata.processing(processed).toString(),
                 "comparisonRecipes" to JSONObject(allRecipes + (effective.preset.name to StackResultMetadata.parameters(effective))).toString(),
                 "width" to snapshot.image.width.toString(), "height" to snapshot.image.height.toString(),
@@ -736,25 +735,19 @@ class StackingCoordinator(
                 "weightMin" to (snapshot.weights.minOrNull() ?: 0f).toString(),
                 "weightMax" to (snapshot.weights.maxOrNull() ?: 0f).toString()
             )
-            val created = mutableListOf<File>()
-            try {
-                StackFitsWriter.write(fits, snapshot.image, metadata) { ensureActive() }
-                created += fits
+            // Publish the linear source last, after the display image and recipe are complete.
+            StackExportTransaction(listOf(recipe, png, fits)).use { output ->
+                StackFitsWriter.write(output.temporary(fits), snapshot.image, metadata) { ensureActive() }
                 _task.update { it.copy(completed = 1, total = 3) }
-                val bitmap = StackBitmap.create(processed) { ensureActive() }
-                try {
-                    temporaryPng.outputStream().use { output -> check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) { "png_failed" } }
-                } finally { bitmap.recycle() }
-                ensureActive()
-                check(temporaryPng.renameTo(png)) { "storage_unavailable" }; created += png
+                StackPngExport.write(output.temporary(png), processed) { ensureActive() }
                 _task.update { it.copy(completed = 2, total = 3) }
-                recipe.writeText(JSONObject(metadata).toString(2), Charsets.UTF_8); created += recipe
-                ensureActive()
+                java.io.FileOutputStream(output.temporary(recipe)).use { stream ->
+                    stream.write(JSONObject(metadata).toString(2).toByteArray(Charsets.UTF_8)); stream.fd.sync()
+                }
+                output.commit { ensureActive() }
                 _task.update { it.copy(phase = StackTaskPhase.COMPLETE, completed = 3, total = 3,
-                    exportedFiles = created.map(File::getAbsolutePath), message = "export_success") }
-            } catch (error: Throwable) {
-                created.forEach { it.delete() }; recipe.delete(); throw error
-            } finally { temporaryPng.delete() }
+                    exportedFiles = listOf(fits, png, recipe).map(File::getAbsolutePath), message = "export_success") }
+            }
         }
     }
 

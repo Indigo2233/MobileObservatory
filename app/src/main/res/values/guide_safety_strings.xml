@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="guide_mount_read_only">Enable mount control in the mount connection settings before calibration or guiding.</string>
+    <string name="guide_operation_busy">Stop guiding or wait for the current pulse to finish before starting another operation.</string>
+    <string name="guide_bad_frame">Star quality is insufficient; corrections are paused. Check focus, exposure and obstructions.</string>
+    <string name="no_guide_stars_after_dec_return">No usable guide stars after the DEC return pulse.</string>
+    <string name="guide_cancel_calibration">Stop calibration</string>
+    <string name="stack_edit_linear">Open linear FITS for editing</string>
+    <string name="media_edit_linear_source">Open linear stack source</string>
+    <string name="media_edit_linear_hint">The linear FITS retains the stacked data for further adjustments.</string>
+</resources>

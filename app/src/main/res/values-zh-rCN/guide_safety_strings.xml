@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="guide_mount_read_only">请先在赤道仪连接设置中启用控制，再进行校准或导星。</string>
+    <string name="guide_operation_busy">请先停止导星，或等待当前脉冲停止后再开始其他操作。</string>
+    <string name="guide_bad_frame">本帧星点质量不足，已暂停修正。请检查对焦、曝光和遮挡。</string>
+    <string name="no_guide_stars_after_dec_return">赤纬回位后未检测到可用导星星点。</string>
+    <string name="guide_cancel_calibration">停止校准</string>
+    <string name="stack_edit_linear">打开线性 FITS 继续编辑</string>
+    <string name="media_edit_linear_source">打开线性叠加原片</string>
+    <string name="media_edit_linear_hint">线性 FITS 保留叠加数据，可继续进行调整。</string>
+</resources>

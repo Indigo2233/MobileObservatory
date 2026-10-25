@@ -1120,6 +1120,7 @@ private fun ImageViewScreen(
     val context = LocalContext.current
     val recipeStore = remember(context) { MediaEditRecipeStore(File(context.filesDir, "image-recipes")) }
     var recipeSaving by remember { mutableStateOf(false) }
+    var linearSource by remember(fileInfo) { mutableStateOf<File?>(null) }
     var beforeBitmap by remember(fileInfo) { mutableStateOf<Bitmap?>(null) }
     val inspectionNavigation = remember(fileInfo) { MediaInspectionNavigation() }
     val nativePreview = remember(fileInfo) { MediaNativePreview() }
@@ -1327,7 +1328,7 @@ private fun ImageViewScreen(
         preparing = true
         try {
             val taskContext = currentCoroutineContext()
-            val restored = withContext(Dispatchers.IO) {
+            val (restored, linkedLinear) = withContext(Dispatchers.IO) {
                 val opened = firstFitsIn(fileInfo.file) ?: fileInfo.file
                 val indexed = MediaLibrary.list(recordingsDir, capturesDir, MediaCategory.RECENT, excludeFile)
                 val exportedRecipe = MediaEditRecipe.parse(MediaLineage.metadata(opened))
@@ -1335,8 +1336,9 @@ private fun ImageViewScreen(
                 val source = original ?: opened
                 val recipe = exportedRecipe?.takeIf { original != null } ?: recipeStore.load(source)
                 val prepared = MediaImageEditing.prepare(source, recipe) { !taskContext.isActive }
-                Triple(prepared, recipe, exportedRecipe != null && original == null)
+                Triple(prepared, recipe, exportedRecipe != null && original == null) to MediaLineage.linearSource(source, indexed)
             }
+            linearSource = linkedLinear
             val prepared = restored.first
             editor.bind(prepared.sourceFingerprint, restored.second?.settings ?: MediaImageEditSettings())
             if (restored.second != null && !restored.third) editPreviewActive = true
@@ -1528,6 +1530,13 @@ private fun ImageViewScreen(
                 } }
                 Column(Modifier.fillMaxWidth().weight(1f, fill = false).verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                linearSource?.let { original ->
+                    Text(stringResource(R.string.media_edit_linear_hint), color = ObservatoryTheme.colors.onImage,
+                        style = MaterialTheme.typography.bodySmall)
+                    OutlinedButton(onClick = { leaveImage { onViewExported(original) } }, enabled = !exporting) {
+                        Text(stringResource(R.string.media_edit_linear_source))
+                    }
+                }
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
                     TextButton(onClick = { editor.undo() }, enabled = !exporting && (history.past.isNotEmpty() || history.gestureStart != null)) {
                         Text(stringResource(R.string.media_edit_undo))

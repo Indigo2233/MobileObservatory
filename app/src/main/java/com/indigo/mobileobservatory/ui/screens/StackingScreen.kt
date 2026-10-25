@@ -147,6 +147,9 @@ fun StackingScreen(viewModel: CameraViewModel, mode: StackMode, onBack: () -> Un
                         Button(onClick = { onOpenResult(task.exportedFiles.firstOrNull { it.endsWith(".png", true) }?.let(::File)) }) {
                             Text(stringResource(R.string.stack_view_saved))
                         }
+                        task.exportedFiles.firstOrNull { it.endsWith(".fits", true) || it.endsWith(".fit", true) }?.let { linear ->
+                            OutlinedButton(onClick = { onOpenResult(File(linear)) }) { Text(stringResource(R.string.stack_edit_linear)) }
+                        }
                         TextButton(onClick = { onOpenResult(null) }) { Text(stringResource(R.string.stack_all_results)) }
                     }
                 }

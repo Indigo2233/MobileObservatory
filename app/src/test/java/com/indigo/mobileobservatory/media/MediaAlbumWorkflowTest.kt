@@ -85,6 +85,8 @@ class MediaAlbumWorkflowTest {
         MediaLineage.sidecar(edited).writeText(JSONObject(recipe.metadata()).toString())
         val all = listOf(original, linear, png, edited).map { MediaLibrary.describe(it)!! }
         val groups = MediaLineage.groups(all)
+        assertEquals(linear, MediaLineage.linearSource(png, all))
+        assertNull(MediaLineage.linearSource(png, all.filter { it.file != linear }))
         assertEquals(1, groups.size)
         assertEquals(4, groups.single().members.size)
         assertEquals(linear, MediaLineage.recipeSource(recipe, all))
