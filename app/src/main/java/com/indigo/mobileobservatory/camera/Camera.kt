@@ -16,6 +16,8 @@ interface Camera {
     val roiSensorScale: Int get() = 1
     val isOpen: StateFlow<Boolean>
     val isCapturing: StateFlow<Boolean>
+    /** Latest SDK acquisition failure; cleared when a complete image is received. */
+    val lastCaptureError: String? get() = null
     val cameraInfo: CameraInfo?
     val exposureRange: FloatRange
     val gainRange: FloatRange

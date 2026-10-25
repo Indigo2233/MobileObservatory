@@ -145,6 +145,8 @@ class CameraCfaPipelineInstrumentedTest {
             val fitsTask = async(Dispatchers.IO) { vm.captureTempFitsForPlateSolve() }
             await(::awaitingFrame)
             main { assertFalse(vm.applyCameraCfa(SerCfaInterpretation.RGGB)) }
+            // The polar sample must belong to an exposure started after the request.
+            kotlinx.coroutines.delay((camera.currentExposureUs / 1000).toLong() + 20)
             camera.emitLatest()
             val fits = checkNotNull(fitsTask.await())
             try {

@@ -347,11 +347,13 @@ private fun ObservatoryContent(
             val site by vm.mountSite.collectAsStateWithPageLifecycle()
             val busy by vm.mountBusy.collectAsStateWithPageLifecycle()
             val moveStatus by vm.mountMoveStatus.collectAsStateWithPageLifecycle()
+            val stopSignal by vm.mountStopSignal.collectAsStateWithPageLifecycle()
             PolarAlignmentScreen(mountCoordinates = coordinates, mountSite = site, mountBusy = busy,
-                mountMoveStatus = moveStatus, cameraPixelSizeUm = cameraPixelSize,
+                mountMoveStatus = moveStatus, mountStopSignal = stopSignal, cameraPixelSizeUm = cameraPixelSize,
                 onReadMountSite = vm::readMountSite, onSyncPhoneSiteToMount = vm::syncPhoneSiteToMount,
                 onMoveMountRaBy = vm::moveMountRaBy, onStopMountRaMove = vm::stopMountRaMove,
-                onCaptureFits = { vm.captureTempFitsForPlateSolve() }, onBack = back)
+                onCaptureFits = { vm.captureTempFitsForPlateSolve() },
+                onViewImage = { onPlayer(it, MediaCategory.RECENT) }, onBack = back)
         }
         ObservatoryDestination.GUIDE -> GuideScreen(vm, back)
         ObservatoryDestination.TARGETS -> TargetLibraryScreen(onBack = back,

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="polar_setup_summary">纬度 %1$s°，经度 %2$s°；焦距 %3$s mm，像元 %4$s μm</string>
+    <string name="polar_point_solved">第 %1$d 点解算完成</string>
+    <string name="polar_calculating">正在计算极轴误差</string>
+    <string name="polar_failure_at_stage">%1$s：%2$s</string>
+    <string name="polar_parameters">位置、光学与高级设置</string>
+    <string name="polar_progress">已成功采样：%1$d / 3</string>
+    <string name="polar_continue">从当前点继续</string>
+    <string name="polar_restart">在当前位置重新开始</string>
+    <string name="polar_wait_frame">正在等待相机的新图像</string>
+    <string name="polar_sample_preview">自动拉伸采样预览，点击检查图像</string>
+    <string name="polar_preview_failed">预览暂不可用：%1$s。仍可打开原图检查。</string>
+    <string name="polar_view_sample">查看图像</string>
+    <string name="polar_recapture_sample">在当前位置重新拍摄</string>
+    <string name="polar_retry_blind">不使用架台提示重试</string>
+    <string name="polar_copy_diagnostics">复制诊断信息</string>
+    <string name="polar_no_image_captured">本次尚未取得图像。</string>
+    <string name="polar_capture_advice">请检查相机采集状态、USB 连接和供电，恢复采集后重试当前点。</string>
+    <string name="polar_optics_advice">请在设置中检查焦距、像元尺寸和合并倍率。已拍摄的图像已保留。</string>
+    <string name="polar_stars_advice">请查看图像，检查对焦、曝光、饱和与遮挡，再重试当前点。</string>
+    <string name="polar_database_advice">请在图像解析页安装 ASTAP D20 或 D50 星表。</string>
+    <string name="polar_timeout_advice">解算已超时。请检查图像和光学参数，使用可靠的位置提示，或关闭架台提示后重试。</string>
+    <string name="polar_solve_advice">请检查图像和解算日志，并核对对焦与光学参数。架台坐标不准确时可关闭提示后重试。</string>
+    <string name="polar_sample_cancelled">本次采样已停止，已经拍摄的图像已保留。</string>
+    <string name="polar_correction_sample">最近一次调整图像</string>
+    <string name="polar_move_not_started">赤经转轴未启动，请检查架台连接和控制模式。</string>
+    <string name="polar_move_timeout">赤经转轴未在限定时间内完成，已停止运动。请检查当前位置后重新开始。</string>
+    <string name="polar_capture_no_camera">主相机已断开，请重新连接后再拍摄采样图像。</string>
+    <string name="polar_capture_start_failed">相机采集未能启动，请检查连接和采集状态。</string>
+    <string name="polar_capture_interrupted">等待图像时相机采集已停止，请恢复采集后重试。</string>
+    <string name="polar_capture_timeout">%1$d 秒内未收到新图像（曝光 %2$.1f 秒）。相机报告：%3$s</string>
+    <string name="polar_capture_busy">其他拍摄或参数设置任务正在进行，请等待完成。</string>
+    <string name="polar_capture_manual_exposure">请先关闭自动曝光，再拍摄极轴采样图像。</string>
+    <string name="polar_capture_settings_changed">拍摄期间相机参数发生变化，请重新拍摄当前点。</string>
+    <string name="polar_capture_no_sdk_error">SDK 未报告错误</string>
+</resources>

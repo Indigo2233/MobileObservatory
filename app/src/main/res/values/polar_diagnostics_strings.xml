@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="polar_setup_summary">Lat %1$s°, Lon %2$s° · Focal length %3$s mm · Pixel %4$s μm</string>
+    <string name="polar_point_solved">Point %1$d solved</string>
+    <string name="polar_calculating">Calculating polar alignment error</string>
+    <string name="polar_failure_at_stage">%1$s: %2$s</string>
+    <string name="polar_parameters">Location, optics and advanced settings</string>
+    <string name="polar_progress">Successful samples: %1$d / 3</string>
+    <string name="polar_continue">Continue from current point</string>
+    <string name="polar_restart">Start again here</string>
+    <string name="polar_wait_frame">Waiting for a new camera image</string>
+    <string name="polar_sample_preview">Auto-stretched sample preview; tap to inspect</string>
+    <string name="polar_preview_failed">Preview unavailable: %1$s. You can still open the source image.</string>
+    <string name="polar_view_sample">View image</string>
+    <string name="polar_recapture_sample">Capture again here</string>
+    <string name="polar_retry_blind">Retry without mount hint</string>
+    <string name="polar_copy_diagnostics">Copy diagnostics</string>
+    <string name="polar_no_image_captured">No image was captured for this attempt.</string>
+    <string name="polar_capture_advice">Check camera acquisition, USB connection and power. Resume capture and retry this point.</string>
+    <string name="polar_optics_advice">Check focal length, pixel size and binning in the settings. The captured image has been retained.</string>
+    <string name="polar_stars_advice">Inspect the image for focus, exposure, saturation and obstruction, then retry this point.</string>
+    <string name="polar_database_advice">Install an ASTAP D20 or D50 star database in the image solving screen.</string>
+    <string name="polar_timeout_advice">The solver timed out. Check the image and optics; use a reliable position hint or retry without the mount hint.</string>
+    <string name="polar_solve_advice">Inspect the image and solver log. Check focus and optics; an inaccurate mount hint can be disabled for a retry.</string>
+    <string name="polar_sample_cancelled">This attempt was stopped. Its captured image is retained.</string>
+    <string name="polar_correction_sample">Latest correction image</string>
+    <string name="polar_move_not_started">The RA move did not start. Check the mount connection and control mode.</string>
+    <string name="polar_move_timeout">The RA move did not finish in time. Motion has been stopped; check the position before restarting.</string>
+    <string name="polar_capture_no_camera">The main camera is disconnected. Reconnect it before capturing a sample.</string>
+    <string name="polar_capture_start_failed">Camera acquisition could not start. Check the connection and capture status.</string>
+    <string name="polar_capture_interrupted">Camera acquisition stopped while waiting for the image. Resume capture and retry.</string>
+    <string name="polar_capture_timeout">No new image within %1$d seconds (exposure %2$.1f s). Camera report: %3$s</string>
+    <string name="polar_capture_busy">Another capture or settings task is active. Wait for it to finish.</string>
+    <string name="polar_capture_manual_exposure">Disable automatic exposure before capturing polar alignment samples.</string>
+    <string name="polar_capture_settings_changed">Camera settings changed during capture. Capture this point again.</string>
+    <string name="polar_capture_no_sdk_error">no SDK error was reported</string>
+</resources>

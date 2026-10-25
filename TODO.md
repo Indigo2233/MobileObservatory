@@ -417,6 +417,8 @@
 
 ### [x] 14. 三点极轴校准对齐 NINA TPPA
 
+2026-10-25 现场反馈追加：修复实际画幅取得前的视场检查、停止未取消流程及转轴超时继续采样；增加逐点阶段、失败说明、原图/缩略图、完整 ASTAP 日志、单点重试和恢复计划。代码与自动化记录见 [三点极轴诊断](docs/POLAR_ALIGNMENT_DIAGNOSTICS.md)。现场日志仅能确认 USB 重连和 Player One 取图错误，具体失败原因与像素证据仍需新版记录；整套真机验收继续待做。
+
 **涉及模块**
 
 - 新增 `astro` 包：`AstroTime`、`Precession`、`Nutation`、`Refraction`、`CoordinateTransform`、`AstroMath`

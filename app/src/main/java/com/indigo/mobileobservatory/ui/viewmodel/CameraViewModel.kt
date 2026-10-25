@@ -629,6 +629,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val mountDetectedInfo = mountModule.mountDetectedInfo
     val mountCoordinates = mountModule.mountCoordinates
     val mountAccessMode = mountModule.mountAccessMode
+    private val _mountStopSignal = MutableStateFlow(0L)
+    val mountStopSignal = _mountStopSignal.asStateFlow()
     val mountPointingCapabilities = mountModule.pointingCapabilities
     val mountModelRevision = mountModule.modelRevision
     val mountAxisObservation = mountModule.axisObservation
@@ -1252,10 +1254,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         )
         return (j2000.raDeg / 15.0).mod(24.0) to j2000.decDeg
     }
-    fun moveMountRaBy(distanceDeg: Double, east: Boolean, rateDegPerSec: Double) =
+    fun moveMountRaBy(distanceDeg: Double, east: Boolean, rateDegPerSec: Double) {
+        stopGuideOperations()
+        if (guideTasks.busy) {
+            _statusMessage.value = app.getString(R.string.guide_operation_busy)
+            return
+        }
         mountModule.moveMountRaBy(distanceDeg, east, rateDegPerSec)
+    }
     fun stopMountRaMove() = mountModule.stopMountRaMove()
     fun stopMountMotion() {
+        _mountStopSignal.value += 1L
         stopGuideOperations()
         _guideStatus.value = app.getString(R.string.guiding_stopped)
         mountModule.stopMountMotion()
@@ -3616,33 +3625,55 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     suspend fun captureTempFitsForPlateSolve(): File? = withContext(Dispatchers.IO) {
-        val cam = cameraManager.activeCamera ?: return@withContext null
-        if (!cam.recordsLiveViewAsScience || cam.currentPixelFormat == PixelFormat.RGB24) {
-            _statusMessage.value = app.getString(R.string.dslr_live_view_not_science)
-            return@withContext null
+        captureSettingsMutex.withLock {
+            val cam = cameraManager.activeCamera ?: error(app.getString(R.string.polar_capture_no_camera))
+            check(cam.isOpen.value) { app.getString(R.string.polar_capture_no_camera) }
+            check(cam.recordsLiveViewAsScience && cam.currentPixelFormat != PixelFormat.RGB24) {
+                app.getString(R.string.dslr_live_view_not_science)
+            }
+            check(!pointingCaptureOwned.get() && pendingFrameSnapshot.get() == null && !frameSnapshotMutex.isLocked) {
+                app.getString(R.string.polar_capture_busy)
+            }
+            check(autoExposureController.mode == AutoExposureMode.OFF) { app.getString(R.string.polar_capture_manual_exposure) }
+            if (_previewPaused.value || !cam.isCapturing.value) {
+                _previewPaused.value = false
+                startPreview()
+            }
+            check(cam.isCapturing.value) { app.getString(R.string.polar_capture_start_failed) }
+            val exposure = cam.currentExposureUs
+            val gain = cam.currentGain
+            val roi = cam.currentRoi
+            val bin = _binning.value
+            val format = cam.currentPixelFormat
+            val requestedAt = System.currentTimeMillis()
+            val timeout = com.indigo.mobileobservatory.astrometry.plateSolveFrameWaitMs(exposure)
+            FileLogger.i("PolarCapture", "Waiting for fresh frame camera=${cam.cameraInfo?.name} exposureUs=$exposure gain=$gain roi=$roi format=$format waitMs=$timeout")
+            val frame = com.indigo.mobileobservatory.astrometry.awaitFreshPlateSolveFrame(
+                exposure, requestedAt, android.os.SystemClock::elapsedRealtime,
+                checkCamera = {
+                    check(cameraManager.activeCamera === cam && cam.isOpen.value) { app.getString(R.string.polar_capture_no_camera) }
+                    check(cam.isCapturing.value && !_previewPaused.value) { app.getString(R.string.polar_capture_interrupted) }
+                    check(cam.currentExposureUs == exposure && cam.currentGain == gain && cam.currentRoi == roi &&
+                        cam.currentPixelFormat == format && _binning.value == bin) { app.getString(R.string.polar_capture_settings_changed) }
+                },
+                read = { wait -> awaitFrameSnapshot(wait) }
+            ) ?: error(app.getString(R.string.polar_capture_timeout, timeout / 1000, exposure / 1_000_000f,
+                cam.lastCaptureError ?: app.getString(R.string.polar_capture_no_sdk_error)))
+            val dir = File(app.cacheDir, "polar_align").also { check(it.isDirectory || it.mkdirs()) }
+            val file = File(dir, "polar_${System.currentTimeMillis()}_${java.util.UUID.randomUUID().toString().take(8)}.fits")
+            val info = cam.cameraInfo
+            try {
+                fitsWriter.write(file = file, frame = frame, exposureSeconds = exposure / 1_000_000f,
+                    gain = gain, gainKind = cam.gainCapability.kind, gainLabel = cam.gainCapability.label,
+                    gainUnit = cam.gainCapability.unit, gainDbEquivalent = cam.gainDbEquivalent(gain),
+                    cameraName = info?.name, filterName = currentFilterName(), configuredFormat = frame.pixelFormat,
+                    pixelSizeUm = info?.pixelSizeUm,
+                    focalLengthMm = prefs.getFloat("plate_focal_length_mm", 0f).takeIf { it > 0f }, binning = bin)
+                currentCoroutineContext().ensureActive()
+                FileLogger.i("PolarCapture", "Captured file=${file.absolutePath} bytes=${file.length()} frame=${frame.width}x${frame.height} timestamp=${frame.timestamp}")
+                file
+            } catch (failure: Throwable) { file.delete(); throw failure }
         }
-        val frame = awaitFrameSnapshot() ?: return@withContext null
-        val dir = File(getApplication<Application>().cacheDir, "polar_align").also { it.mkdirs() }
-        val file = File(dir, "polar_${System.currentTimeMillis()}.fits")
-        val info = cam.cameraInfo
-        val focalLengthMm = prefs.getFloat("plate_focal_length_mm", 0f).takeIf { it > 0f }
-        fitsWriter.write(
-            file = file,
-            frame = frame,
-            exposureSeconds = cam.currentExposureUs / 1_000_000f,
-            gain = cam.currentGain,
-            gainKind = cam.gainCapability.kind,
-            gainLabel = cam.gainCapability.label,
-            gainUnit = cam.gainCapability.unit,
-            gainDbEquivalent = cam.gainDbEquivalent(cam.currentGain),
-            cameraName = info?.name,
-            filterName = currentFilterName(),
-            configuredFormat = frame.pixelFormat,
-            pixelSizeUm = info?.pixelSizeUm,
-            focalLengthMm = focalLengthMm,
-            binning = _binning.value
-        )
-        file
     }
 
     private data class AuxiliaryCaptureContext(val camera: Camera, val info: CameraInfo, val roi: Roi,

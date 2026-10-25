@@ -86,6 +86,8 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
 
     private val _isCapturing = MutableStateFlow(false)
     override val isCapturing: StateFlow<Boolean> = _isCapturing.asStateFlow()
+    @Volatile override var lastCaptureError: String? = null
+        private set
 
     override var cameraInfo: CameraInfo? = null; private set
     override var exposureRange: FloatRange = FloatRange(32f, 2_000_000_000f, 10_000f); private set
@@ -336,8 +338,10 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
         ensureDirectBuffers()
 
         try {
+            lastCaptureError = null
             cam.startExposure(false)
         } catch (e: PoaException) {
+            lastCaptureError = "startExposure ${e.error}: ${e.message}"
             FileLogger.e(TAG, "startExposure failed ${e.error}: ${e.message}", e)
             frameCallback = null
             return
@@ -742,6 +746,7 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
                 slot = freeSlots.take()
                 slot.buffer.clear()
                 cam.getImageData(slot.buffer, GRAB_TIMEOUT_MS)
+                lastCaptureError = null
                 if (!captureGeneration.isActive(generation)) { freeSlots.offer(slot); slot = null; break }
                 if (!startup.acceptCompleteFrame()) { freeSlots.offer(slot); slot = null; continue }
 
@@ -780,6 +785,7 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
                 }
             } catch (e: PoaException) {
                 slot?.let(freeSlots::offer)
+                lastCaptureError = "${e.error}: ${e.message}"
                 if (e.error == com.playeroneastronomy.camera.PoaError.TIMEOUT) continue
                 FileLogger.w(TAG, "capture ${e.error}: ${e.message}")
                 if (!running.get() || disconnected) break
@@ -789,6 +795,7 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
                 break
             } catch (e: Exception) {
                 slot?.let(freeSlots::offer)
+                lastCaptureError = e.message ?: e.javaClass.simpleName
                 FileLogger.e(TAG, "Capture error: ${e.message}")
                 if (!running.get() || disconnected) break
                 try { Thread.sleep(10) } catch (_: InterruptedException) { break }
