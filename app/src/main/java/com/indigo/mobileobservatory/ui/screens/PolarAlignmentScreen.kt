@@ -121,11 +121,13 @@ fun PolarAlignmentScreen(
     val stopMotion = rememberUpdatedState(onStopMountRaMove)
     val workflowTask = remember(scope) { PolarWorkflowTask(scope) { stopMotion.value() } }
     val taskBusy by workflowTask.busy.collectAsStateWithPageLifecycle()
+    var inspectFile by remember { mutableStateOf<File?>(null) }
     val pageForeground = rememberPageForeground()
     DisposableEffect(workflowTask) { onDispose { workflowTask.stop() } }
     LaunchedEffect(mountStopSignal) { workflowTask.stop() }
     LaunchedEffect(pageForeground) { if (!pageForeground) workflowTask.stop() }
-    BackHandler(enabled = taskBusy && pageForeground) { workflowTask.stop(); onBack() }
+    BackHandler(enabled = taskBusy && pageForeground && inspectFile == null) { workflowTask.stop(); onBack() }
+    BackHandler(enabled = inspectFile != null && pageForeground) { inspectFile = null }
     val phoneLocationFailed = stringResource(R.string.phone_location_failed)
     val plateSolveFailed = stringResource(R.string.plate_solve_failed)
     val tppaFailed = stringResource(R.string.tppa_failed)
@@ -175,7 +177,6 @@ fun PolarAlignmentScreen(
         mutableStateOf(prefs.getString("polar_exposure_seconds", null)
             ?: PolarExposure.secondsText(cameraExposureUs?.takeIf { it > 0f } ?: 5_000_000f))
     }
-    var inspectFile by remember { mutableStateOf<File?>(null) }
     val requestedExposureUs = PolarExposure.parseUs(exposureSeconds, cameraExposureMinUs, cameraExposureMaxUs)
     var locationPermissionDeniedForever by remember { mutableStateOf(false) }
     var determination by remember { mutableStateOf<PolarErrorDetermination?>(null) }
@@ -408,600 +409,602 @@ fun PolarAlignmentScreen(
         else -> stringResource(R.string.polar_camera_preview)
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-    ) {
-        Row(
+    Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
+        Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(8.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
         ) {
-            IconButton(onClick = { workflowTask.stop(); onBack() }) {
-                Icon(Icons.Default.ArrowBack, contentDescription = stringResource(R.string.back))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = { workflowTask.stop(); onBack() }) {
+                    Icon(Icons.Default.ArrowBack, contentDescription = stringResource(R.string.back))
+                }
+                Text(stringResource(R.string.three_point_polar_alignment), style = MaterialTheme.typography.titleMedium)
             }
-            Text(stringResource(R.string.three_point_polar_alignment), style = MaterialTheme.typography.titleMedium)
-        }
 
-        PolarWorkflowLayout(
-            modifier = Modifier.weight(1f),
-            failureVisible = latestSample?.phase == PolarSamplePhase.FAILED || error != null,
-            preview = { modifier ->
-                val label = if (previewFile != null && latestSample?.file == null)
-                    stringResource(R.string.polar_previous_image, previewLabel) else previewLabel
-                PolarWorkflowPreview(file = previewFile, label = label, livePreview = cameraPreviewBitmap,
-                    sample = latestSample, status = workflowStatus, error = error, busy = taskBusy || mountBusy,
-                    onStop = {
-                        if (taskBusy) workflowTask.stop() else onStopMountRaMove()
-                        workflowStatus = context.getString(R.string.stopped)
-                    }, inspectFile = inspectFile, onInspect = { inspectFile = it }, modifier = modifier)
-            },
-            controls = { modifier ->
-                Column(
-                    modifier = modifier.verticalScroll(rememberScrollState()).padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    PolarExposureControls(seconds = exposureSeconds, onSecondsChange = {
-                        exposureSeconds = it
-                        prefs.edit().putString("polar_exposure_seconds", it).apply()
-                    }, minimumUs = cameraExposureMinUs, maximumUs = cameraExposureMaxUs, actualUs = cameraExposureUs,
-                        connected = cameraConnected, busy = taskBusy || mountBusy,
-                        onCapture = {
-                            val exposure = requestedExposureUs
-                            if (exposure != null) {
-                                showParameters = false
-                                workflowTask.start(stopMotionOnFinish = false) {
-                                    error = null
-                                    workflowStatus = context.getString(R.string.polar_test_capturing)
-                                    try {
-                                        sampleSession.capturePreview(capture = { onCaptureFits(exposure) }, exposureTime = ::exposureTimeOf)
-                                        workflowStatus = context.getString(R.string.polar_test_complete)
-                                    } catch (cancel: CancellationException) {
-                                        workflowStatus = context.getString(R.string.stopped); throw cancel
-                                    } catch (failure: Exception) {
-                                        error = failure.message ?: noCameraFrame
-                                        workflowStatus = context.getString(R.string.tppa_failed)
+            PolarWorkflowLayout(
+                modifier = Modifier.weight(1f),
+                failureVisible = latestSample?.phase == PolarSamplePhase.FAILED || error != null,
+                preview = { modifier ->
+                    val label = if (previewFile != null && latestSample?.file == null)
+                        stringResource(R.string.polar_previous_image, previewLabel) else previewLabel
+                    PolarWorkflowPreview(file = previewFile, label = label, livePreview = cameraPreviewBitmap,
+                        sample = latestSample, status = workflowStatus, error = error, busy = taskBusy || mountBusy,
+                        onStop = {
+                            if (taskBusy) workflowTask.stop() else onStopMountRaMove()
+                            workflowStatus = context.getString(R.string.stopped)
+                        }, inspectFile = inspectFile, onInspect = { inspectFile = it }, modifier = modifier)
+                },
+                controls = { modifier ->
+                    Column(
+                        modifier = modifier.verticalScroll(rememberScrollState()).padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        PolarExposureControls(seconds = exposureSeconds, onSecondsChange = {
+                            exposureSeconds = it
+                            prefs.edit().putString("polar_exposure_seconds", it).apply()
+                        }, minimumUs = cameraExposureMinUs, maximumUs = cameraExposureMaxUs, actualUs = cameraExposureUs,
+                            connected = cameraConnected, busy = taskBusy || mountBusy,
+                            onCapture = {
+                                val exposure = requestedExposureUs
+                                if (exposure != null) {
+                                    showParameters = false
+                                    workflowTask.start(stopMotionOnFinish = false) {
+                                        error = null
+                                        workflowStatus = context.getString(R.string.polar_test_capturing)
+                                        try {
+                                            sampleSession.capturePreview(capture = { onCaptureFits(exposure) }, exposureTime = ::exposureTimeOf)
+                                            workflowStatus = context.getString(R.string.polar_test_complete)
+                                        } catch (cancel: CancellationException) {
+                                            workflowStatus = context.getString(R.string.stopped); throw cancel
+                                        } catch (failure: Exception) {
+                                            error = failure.message ?: noCameraFrame
+                                            workflowStatus = context.getString(R.string.tppa_failed)
+                                        }
                                     }
                                 }
-                            }
-                        })
-                    Surface(shape = MaterialTheme.shapes.medium, tonalElevation = 1.dp) {
-                        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text(stringResource(R.string.workflow), style = MaterialTheme.typography.titleSmall)
-                            Text(stringResource(R.string.polar_progress, samples.take(3).count { it.phase == PolarSamplePhase.COMPLETE }))
-                            error?.let { msg ->
-                                if (locationPermissionDeniedForever &&
-                                    msg == stringResource(R.string.location_permission_denied_forever)
-                                ) {
-                                    OutlinedButton(
-                                        onClick = { AppSettingsNavigator.openApplicationDetails(context) }
-                                    ) {
-                                        Text(stringResource(R.string.open_app_settings))
-                                    }
-                                }
-                            }
-                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Button(
-                                    onClick = {
-                                        val exposure = requestedExposureUs ?: return@Button
-                                        val site = currentSite()
-                                        if (site == null) {
-                                            reportFailure(context.getString(R.string.invalid_coordinates), exposeSettings = true)
-                                            return@Button
-                                        }
-                                        if (!solveEngine.ready) {
-                                            reportFailure(context.getString(R.string.database_required))
-                                            return@Button
-                                        }
-                                        if (!manualMode && mountCoordinates == null) {
-                                            reportFailure(context.getString(R.string.tppa_requires_mount), exposeSettings = true)
-                                            return@Button
-                                        }
-                                        persistSolveOptics()
-                                        val configuration = solveConfiguration()
-                                        val moveEast = eastDirection
-                                        val distance = targetDistanceText.toDoubleOrNull()?.coerceIn(1.0, 90.0) ?: 10.0
-                                        val rate = moveRateText.toDoubleOrNull()?.coerceIn(0.1, 20.0) ?: 3.0
-                                        val tolerance = alignmentToleranceText.toDoubleOrNull() ?: 0.0
-                                        val refraction = currentRefraction()
-                                        val useContinuous = continuousEstimator
-                                        val useManual = manualMode
-                                        val useRefractionAdjustment = refractionAdjustment
-                                        showParameters = false
-
-                                        prefs.edit()
-                                            .putFloat("polar_latitude_deg", site.latitudeDeg.toFloat())
-                                            .putFloat("polar_longitude_deg", site.longitudeDeg.toFloat())
-                                            .apply()
-
-                                        workflowTask.start {
-                                            FileLogger.i("PolarAlign", "Workflow start site=$site optics=$configuration manual=$useManual distanceDeg=$distance rateDegPerSec=$rate east=$moveEast")
-                                            runningAuto = true
-                                            error = null
-                                            determination = null
-                                            currentResult = null
-                                            correctionField = null
-                                            try {
-                                                val plan = com.indigo.mobileobservatory.polar.polarResumePlan(samples, sampleModel.positionedPoint, sampleModel.canResume)
-                                                val startIndex = plan.startIndex
-                                                if (plan.reset) {
-                                                    sampleSession.clear()
-                                                    sampleModel.positionedPoint = 0
-                                                    sampleModel.canResume = true
-                                                }
-                                                val points = samples.take(startIndex).map { sample ->
-                                                    val result = requireNotNull(sample.result)
-                                                    PolarSolvePoint(requireNotNull(result.raDeg), requireNotNull(result.decDeg), requireNotNull(sample.capturedAt))
-                                                }.toMutableList()
-                                                val mountDeclinations = mutableListOf<Double>()
-                                                var previousMountRaDeg = latestMountCoordinates.value?.raDeg
-
-                                                for (index in startIndex..2) {
-                                                    if (index > sampleModel.positionedPoint) {
-                                                        sampleModel.canResume = false
-                                                        workflowStatus = context.getString(R.string.moving_ra_point, index + 1)
-                                                        if (useManual) {
-                                                            awaitingManualAdvance = true
-                                                            manualAdvanceRequested = false
-                                                            awaitManualMove(
-                                                                latestMountCoordinates,
-                                                                manualAdvanceState,
-                                                                previousMountRaDeg,
-                                                                distance
-                                                            ) { travelled ->
-                                                                workflowStatus = if (travelled == null) {
-                                                                    context.getString(R.string.polar_move_axis_blind, distance)
-                                                                } else {
-                                                                    context.getString(R.string.polar_move_axis_prompt, travelled, distance)
-                                                                }
-                                                            }
-                                                            awaitingManualAdvance = false
-                                                            manualAdvanceRequested = false
-                                                        } else {
-                                                            onMoveMountRaBy(distance, moveEast, rate)
-                                                            when (com.indigo.mobileobservatory.polar.awaitPolarMove({ latestMountBusy.value }, distance, rate)) {
-                                                                com.indigo.mobileobservatory.polar.PolarMoveOutcome.NOT_STARTED -> error(context.getString(R.string.polar_move_not_started))
-                                                                com.indigo.mobileobservatory.polar.PolarMoveOutcome.TIMED_OUT -> error(context.getString(R.string.polar_move_timeout))
-                                                                else -> Unit
-                                                            }
-                                                            val travelled = raSeparationDeg(
-                                                                previousMountRaDeg,
-                                                                latestMountCoordinates.value?.raDeg
-                                                            )
-                                                            if (travelled != null && travelled - distance < -1.0) {
-                                                                error(context.getString(R.string.polar_short_move, travelled, distance))
-                                                            }
-                                                        }
-                                                        workflowStatus = context.getString(R.string.polar_settling)
-                                                        delay(SETTLE_MILLIS)
-                                                        sampleModel.positionedPoint = index
-                                                        sampleModel.canResume = true
-                                                    }
-
-                                                    previousMountRaDeg = latestMountCoordinates.value?.raDeg
-                                                    workflowStatus = context.getString(R.string.capturing_point, index + 1)
-                                                    solvingSlot = index
-                                                    val solved = executeSample(index, configuration) { onCaptureFits(exposure) }
-                                                    val capturedAt = requireNotNull(sampleSession.samples.value[index].capturedAt)
-                                                    solvingSlot = null
-                                                    if (!solved.success) error(solved.message)
-                                                    points += PolarSolvePoint(
-                                                        raDeg = solved.raDeg ?: error(solved.message),
-                                                        decDeg = solved.decDeg ?: error(solved.message),
-                                                        solvedAt = capturedAt
-                                                    )
-                                                    latestMountCoordinates.value?.let { mountDeclinations += it.decDeg }
-                                                }
-
-                                                workflowStatus = context.getString(R.string.polar_calculating)
-                                                val solved = PolarAlignmentCalculator.determine(
-                                                    points = points,
-                                                    site = site,
-                                                    refraction = refraction,
-                                                    correctForRefraction = useRefractionAdjustment,
-                                                    declinationSpreadArcsec =
-                                                        PolarAlignmentCalculator.declinationSpreadArcsec(mountDeclinations)
-                                                )
-                                                determination = solved
-                                                currentResult = solved.initial
-                                                workflowStatus = context.getString(R.string.tppa_complete)
-
-                                                if (useContinuous) {
-                                                    runCorrectionPhase(
-                                                        determination = solved,
-                                                        toleranceArcMin = tolerance,
-                                                        capture = {
-                                                            workflowStatus = context.getString(R.string.polar_correction_capturing)
-                                                            val result = executeSample(3, configuration) { onCaptureFits(exposure) }
-                                                            val at = requireNotNull(sampleSession.samples.value[3].capturedAt)
-                                                            if (result.success && result.raDeg != null && result.decDeg != null) {
-                                                                PolarSolvePoint(result.raDeg, result.decDeg, at)
-                                                            } else {
-                                                                error(result.message)
-                                                            }
-                                                        },
-                                                        onEstimate = { result, field ->
-                                                            currentResult = result
-                                                            correctionField = field
-                                                        },
-                                                        onUnstable = {
-                                                            workflowStatus = context.getString(R.string.polar_estimate_unstable)
-                                                        },
-                                                        onWithinTolerance = { totalArcMin ->
-                                                            workflowStatus = context.getString(R.string.polar_tolerance_reached, totalArcMin)
-                                                        }
-                                                    )
-                                                }
-                                            } catch (cancel: CancellationException) {
-                                                FileLogger.i("PolarAlign", "Workflow cancelled stage=$workflowStatus")
-                                                workflowStatus = context.getString(R.string.stopped)
-                                                throw cancel
-                                            } catch (e: Exception) {
-                                                error = context.getString(R.string.polar_failure_at_stage, workflowStatus, e.message ?: tppaFailed)
-                                                workflowStatus = tppaFailed
-                                                FileLogger.e("PolarAlign", error.orEmpty(), e)
-                                            } finally {
-                                                awaitingManualAdvance = false
-                                                runningAuto = false
-                                                solvingSlot = null
-                                            }
-                                        }
-                                    },
-                                    modifier = Modifier.testTag("polar-run"),
-                                    enabled = cameraConnected && requestedExposureUs != null && !taskBusy && !mountBusy && solvingSlot == null
-                                ) {
-                                    Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
-                                    Spacer(Modifier.width(6.dp))
-                                    Text(stringResource(when {
-                                        taskBusy -> R.string.running
-                                        samples.take(3).all { it.phase == PolarSamplePhase.COMPLETE } -> R.string.polar_restart
-                                        !sampleModel.canResume && samples.take(3).any { it.phase != PolarSamplePhase.EMPTY } -> R.string.polar_restart
-                                        samples.take(3).any { it.phase != PolarSamplePhase.EMPTY } -> R.string.polar_continue
-                                        else -> R.string.run_tppa
-                                    }))
-                                }
-                                if (awaitingManualAdvance) {
-                                    Button(onClick = { manualAdvanceRequested = true }) {
-                                        Text(stringResource(R.string.polar_next_point))
-                                    }
-                                }
-                                OutlinedButton(
-                                    onClick = {
-                                        FileLogger.i("PolarAlign", "User stop requested")
-                                        if (taskBusy) workflowTask.stop() else onStopMountRaMove()
-                                        workflowStatus = context.getString(R.string.stopped)
-                                    },
-                                    enabled = taskBusy || mountBusy
-                                ) { Text(stringResource(R.string.stop)) }
-                            }
-                            if (!taskBusy && samples.any { it.file != null || it.failure != null }) {
-                                TextButton(onClick = {
-                                    sampleSession.clear(); sampleModel.positionedPoint = 0; sampleModel.canResume = true
-                                    determination = null; currentResult = null; error = null; workflowStatus = ""
-                                }) { Text(stringResource(R.string.polar_restart)) }
-                            }
-                            if (workflowStatus.isNotBlank()) {
-                                Text(workflowStatus, fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
-                            }
-                            Text(
-                                if (manualMode) {
-                                    stringResource(R.string.polar_manual_mode_hint)
-                                } else {
-                                    stringResource(R.string.polar_automatic_mode_hint)
-                                },
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.outline
-                            )
-                        }
-                    }
-
-                    Text(stringResource(R.string.polar_setup_summary, latitudeText, longitudeText,
-                        focalLengthText.ifBlank { "—" }, pixelSizeText.ifBlank { "—" }), style = MaterialTheme.typography.bodySmall)
-                    OutlinedButton(onClick = { showParameters = !showParameters }, modifier = Modifier.fillMaxWidth(), enabled = !taskBusy) {
-                        Text(stringResource(R.string.polar_parameters), modifier = Modifier.weight(1f))
-                        Icon(if (showParameters) Icons.Default.ExpandLess else Icons.Default.ExpandMore, null)
-                    }
-                    if (showParameters) {
+                            })
                         Surface(shape = MaterialTheme.shapes.medium, tonalElevation = 1.dp) {
                             Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Text(stringResource(R.string.site), style = MaterialTheme.typography.titleSmall)
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    OutlinedTextField(
-                                        value = latitudeText,
-                                        onValueChange = { latitudeText = it.filterCoordinateText() },
-                                        label = { Text(stringResource(R.string.latitude_deg)) },
-                                        singleLine = true,
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                    OutlinedTextField(
-                                        value = longitudeText,
-                                        onValueChange = { longitudeText = it.filterCoordinateText() },
-                                        label = { Text(stringResource(R.string.longitude_deg)) },
-                                        singleLine = true,
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                }
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    OptionField(stringResource(R.string.elevation_m), elevationText, Modifier.weight(1f)) {
-                                        elevationText = it.filterCoordinateText()
-                                        it.toFloatOrNull()?.let { value ->
-                                            prefs.edit().putFloat("polar_elevation_m", value).apply()
+                                Text(stringResource(R.string.workflow), style = MaterialTheme.typography.titleSmall)
+                                Text(stringResource(R.string.polar_progress, samples.take(3).count { it.phase == PolarSamplePhase.COMPLETE }))
+                                error?.let { msg ->
+                                    if (locationPermissionDeniedForever &&
+                                        msg == stringResource(R.string.location_permission_denied_forever)
+                                    ) {
+                                        OutlinedButton(
+                                            onClick = { AppSettingsNavigator.openApplicationDetails(context) }
+                                        ) {
+                                            Text(stringResource(R.string.open_app_settings))
                                         }
                                     }
                                 }
-                                SolveOpticsFields(
-                                    focalLengthText = focalLengthText,
-                                    onFocalLengthChange = { focalLengthText = it },
-                                    selectedSensorId = selectedSensorId,
-                                    onSensorSelected = { sensor ->
-                                        selectedSensorId = sensor.id
-                                        pixelSizeText = formatPixelSizeUm(sensor.pixelSizeUm)
-                                    },
-                                    pixelSizeText = pixelSizeText,
-                                    onPixelSizeChange = { pixelSizeText = it },
-                                    sensors = sensors,
-                                    computedFovHeightDeg = computedFovDeg,
-                                    enabled = !runningAuto && solvingSlot == null
-                                )
-                                if (mountCoordinates != null) {
-                                    Text(
-                                        "Mount hint ${mountCoordinates.formatRa()}  ${mountCoordinates.formatDec()}",
-                                        fontSize = 12.sp,
-                                        color = MaterialTheme.colorScheme.outline
-                                    )
-                                }
-                                phoneSite?.let {
-                                    Text(stringResource(R.string.phone_gps_value, it.format()), fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
-                                }
-                                mountSite?.let {
-                                    Text(stringResource(R.string.mount_site_value, it.format()), fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
-                                }
-                                if (phoneSite != null && mountSite != null) {
-                                    val diffMeters = siteDifferenceMeters(phoneSite!!, mountSite)
-                                    if (diffMeters > 30.0) {
-                                        Text(
-                                            stringResource(R.string.site_mismatch_meters, diffMeters),
-                                            fontSize = 12.sp,
-                                            color = MaterialTheme.colorScheme.error
-                                        )
-                                    }
-                                }
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     Button(
                                         onClick = {
-                                            if (hasLocationPermission(context)) {
-                                                scope.launch {
-                                                    error = null
-                                                    val site = runCatching { getPhoneSite(context.applicationContext) }.getOrElse {
-                                                        error = it.message ?: phoneLocationFailed
-                                                        null
-                                                    }
-                                                    if (site != null) {
-                                                        phoneSite = site
-                                                        latitudeText = "%.6f".format(Locale.US, site.latitudeDeg)
-                                                        longitudeText = "%.6f".format(Locale.US, site.longitudeDeg)
-                                                        prefs.edit()
-                                                            .putFloat("polar_latitude_deg", site.latitudeDeg.toFloat())
-                                                            .putFloat("polar_longitude_deg", site.longitudeDeg.toFloat())
-                                                            .apply()
-                                                    }
-                                                }
-                                            } else {
-                                                locationPermissionLauncher.launch(
-                                                    arrayOf(
-                                                        Manifest.permission.ACCESS_FINE_LOCATION,
-                                                        Manifest.permission.ACCESS_COARSE_LOCATION
-                                                    )
-                                                )
+                                            val exposure = requestedExposureUs ?: return@Button
+                                            val site = currentSite()
+                                            if (site == null) {
+                                                reportFailure(context.getString(R.string.invalid_coordinates), exposeSettings = true)
+                                                return@Button
                                             }
-                                        }
-                                    ) { Text(stringResource(R.string.phone_gps)) }
-                                    OutlinedButton(
-                                        onClick = onReadMountSite,
-                                        enabled = !mountBusy
-                                    ) { Text(stringResource(if (mountBusy) R.string.mount_busy else R.string.read_mount)) }
-                                }
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    OutlinedButton(
-                                        onClick = {
-                                            val site = mountSite ?: return@OutlinedButton
-                                            latitudeText = "%.6f".format(Locale.US, site.latitudeDeg)
-                                            longitudeText = "%.6f".format(Locale.US, site.longitudeDeg)
+                                            if (!solveEngine.ready) {
+                                                reportFailure(context.getString(R.string.database_required))
+                                                return@Button
+                                            }
+                                            if (!manualMode && mountCoordinates == null) {
+                                                reportFailure(context.getString(R.string.tppa_requires_mount), exposeSettings = true)
+                                                return@Button
+                                            }
+                                            persistSolveOptics()
+                                            val configuration = solveConfiguration()
+                                            val moveEast = eastDirection
+                                            val distance = targetDistanceText.toDoubleOrNull()?.coerceIn(1.0, 90.0) ?: 10.0
+                                            val rate = moveRateText.toDoubleOrNull()?.coerceIn(0.1, 20.0) ?: 3.0
+                                            val tolerance = alignmentToleranceText.toDoubleOrNull() ?: 0.0
+                                            val refraction = currentRefraction()
+                                            val useContinuous = continuousEstimator
+                                            val useManual = manualMode
+                                            val useRefractionAdjustment = refractionAdjustment
+                                            showParameters = false
+
                                             prefs.edit()
                                                 .putFloat("polar_latitude_deg", site.latitudeDeg.toFloat())
                                                 .putFloat("polar_longitude_deg", site.longitudeDeg.toFloat())
                                                 .apply()
-                                        },
-                                        enabled = mountSite != null
-                                    ) { Text(stringResource(R.string.mount_to_app)) }
-                                    OutlinedButton(
-                                        onClick = {
-                                            val site = phoneSite ?: return@OutlinedButton
-                                            onSyncPhoneSiteToMount(site.latitudeDeg, site.longitudeDeg)
-                                        },
-                                        enabled = phoneSite != null && !mountBusy
-                                    ) { Text(stringResource(R.string.phone_to_mount)) }
-                                }
-                            }
-                        }
 
-                        Surface(shape = MaterialTheme.shapes.medium, tonalElevation = 1.dp) {
-                            Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Text(stringResource(R.string.nina_tppa_options), style = MaterialTheme.typography.titleSmall)
-                                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    LabeledSwitch(stringResource(R.string.manual), manualMode) {
-                                        manualMode = it
-                                        prefs.edit().putBoolean("polar_manual_mode", it).apply()
-                                    }
-                                    LabeledSwitch(stringResource(R.string.start_current), startFromCurrent) {
-                                        startFromCurrent = it
-                                        prefs.edit().putBoolean("polar_start_current", it).apply()
-                                    }
-                                    LabeledSwitch(stringResource(R.string.east), eastDirection) {
-                                        eastDirection = it
-                                        prefs.edit().putBoolean("polar_east_direction", it).apply()
-                                    }
-                                }
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    OptionField(stringResource(R.string.distance_deg), targetDistanceText, Modifier.weight(1f)) {
-                                        targetDistanceText = it.filterCoordinateText()
-                                        it.toIntOrNull()?.let { value -> prefs.edit().putInt("polar_target_distance_deg", value.coerceIn(1, 90)).apply() }
-                                    }
-                                    OptionField(stringResource(R.string.move_rate), moveRateText, Modifier.weight(1f)) {
-                                        moveRateText = it.filterCoordinateText()
-                                        it.toFloatOrNull()?.let { value -> prefs.edit().putFloat("polar_move_rate_deg_sec", value.coerceIn(0.1f, 20f)).apply() }
-                                    }
-                                }
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    OptionField(stringResource(R.string.search_radius), searchRadiusText, Modifier.weight(1f)) {
-                                        searchRadiusText = it.filterCoordinateText()
-                                        it.toFloatOrNull()?.let { value -> prefs.edit().putFloat("polar_search_radius_deg", value.coerceIn(30f, 180f)).apply() }
-                                    }
-                                    OptionField(stringResource(R.string.tolerance_arcmin), alignmentToleranceText, Modifier.weight(1f)) {
-                                        alignmentToleranceText = it.filterCoordinateText()
-                                        it.toFloatOrNull()?.let { value -> prefs.edit().putFloat("polar_alignment_tolerance_arcmin", value.coerceAtLeast(0f)).apply() }
-                                    }
-                                }
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    OptionField(stringResource(R.string.temperature_c), temperatureText, Modifier.weight(1f)) {
-                                        temperatureText = it.filterCoordinateText()
-                                        it.toFloatOrNull()?.let { value -> prefs.edit().putFloat("polar_temperature_c", value).apply() }
-                                    }
-                                    OptionField(stringResource(R.string.pressure_hpa), pressureText, Modifier.weight(1f)) {
-                                        pressureText = it.filterCoordinateText()
-                                        prefs.edit().putFloat("polar_pressure_hpa", it.toFloatOrNull() ?: 0f).apply()
-                                    }
-                                }
-                                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    LabeledSwitch(stringResource(R.string.refraction), refractionAdjustment) {
-                                        refractionAdjustment = it
-                                        prefs.edit().putBoolean("polar_refraction_adjustment", it).apply()
-                                    }
-                                    LabeledSwitch(stringResource(R.string.continuous), continuousEstimator) {
-                                        continuousEstimator = it
-                                        prefs.edit().putBoolean("polar_continuous_estimator", it).apply()
-                                    }
-                                }
-                                LabeledSwitch(stringResource(R.string.mount_hint), useMountHint) {
-                                useMountHint = it
-                                prefs.edit().putBoolean("polar_use_mount_hint", it).apply()
-                            }
-                            Text(
-                                    stringResource(R.string.polar_refraction_hint),
-                                    fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.outline
-                                )
-                                Text(
-                                    stringResource(R.string.polar_continuous_hint),
-                                    fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.outline
-                                )
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    Button(
-                                        onClick = {
-                                            onMoveMountRaBy(
-                                                targetDistanceText.toDoubleOrNull()?.coerceIn(1.0, 90.0) ?: 10.0,
-                                                eastDirection,
-                                                moveRateText.toDoubleOrNull()?.coerceIn(0.1, 20.0) ?: 3.0
-                                            )
+                                            workflowTask.start {
+                                                FileLogger.i("PolarAlign", "Workflow start site=$site optics=$configuration manual=$useManual distanceDeg=$distance rateDegPerSec=$rate east=$moveEast")
+                                                runningAuto = true
+                                                error = null
+                                                determination = null
+                                                currentResult = null
+                                                correctionField = null
+                                                try {
+                                                    val plan = com.indigo.mobileobservatory.polar.polarResumePlan(samples, sampleModel.positionedPoint, sampleModel.canResume)
+                                                    val startIndex = plan.startIndex
+                                                    if (plan.reset) {
+                                                        sampleSession.clear()
+                                                        sampleModel.positionedPoint = 0
+                                                        sampleModel.canResume = true
+                                                    }
+                                                    val points = samples.take(startIndex).map { sample ->
+                                                        val result = requireNotNull(sample.result)
+                                                        PolarSolvePoint(requireNotNull(result.raDeg), requireNotNull(result.decDeg), requireNotNull(sample.capturedAt))
+                                                    }.toMutableList()
+                                                    val mountDeclinations = mutableListOf<Double>()
+                                                    var previousMountRaDeg = latestMountCoordinates.value?.raDeg
+
+                                                    for (index in startIndex..2) {
+                                                        if (index > sampleModel.positionedPoint) {
+                                                            sampleModel.canResume = false
+                                                            workflowStatus = context.getString(R.string.moving_ra_point, index + 1)
+                                                            if (useManual) {
+                                                                awaitingManualAdvance = true
+                                                                manualAdvanceRequested = false
+                                                                awaitManualMove(
+                                                                    latestMountCoordinates,
+                                                                    manualAdvanceState,
+                                                                    previousMountRaDeg,
+                                                                    distance
+                                                                ) { travelled ->
+                                                                    workflowStatus = if (travelled == null) {
+                                                                        context.getString(R.string.polar_move_axis_blind, distance)
+                                                                    } else {
+                                                                        context.getString(R.string.polar_move_axis_prompt, travelled, distance)
+                                                                    }
+                                                                }
+                                                                awaitingManualAdvance = false
+                                                                manualAdvanceRequested = false
+                                                            } else {
+                                                                onMoveMountRaBy(distance, moveEast, rate)
+                                                                when (com.indigo.mobileobservatory.polar.awaitPolarMove({ latestMountBusy.value }, distance, rate)) {
+                                                                    com.indigo.mobileobservatory.polar.PolarMoveOutcome.NOT_STARTED -> error(context.getString(R.string.polar_move_not_started))
+                                                                    com.indigo.mobileobservatory.polar.PolarMoveOutcome.TIMED_OUT -> error(context.getString(R.string.polar_move_timeout))
+                                                                    else -> Unit
+                                                                }
+                                                                val travelled = raSeparationDeg(
+                                                                    previousMountRaDeg,
+                                                                    latestMountCoordinates.value?.raDeg
+                                                                )
+                                                                if (travelled != null && travelled - distance < -1.0) {
+                                                                    error(context.getString(R.string.polar_short_move, travelled, distance))
+                                                                }
+                                                            }
+                                                            workflowStatus = context.getString(R.string.polar_settling)
+                                                            delay(SETTLE_MILLIS)
+                                                            sampleModel.positionedPoint = index
+                                                            sampleModel.canResume = true
+                                                        }
+
+                                                        previousMountRaDeg = latestMountCoordinates.value?.raDeg
+                                                        workflowStatus = context.getString(R.string.capturing_point, index + 1)
+                                                        solvingSlot = index
+                                                        val solved = executeSample(index, configuration) { onCaptureFits(exposure) }
+                                                        val capturedAt = requireNotNull(sampleSession.samples.value[index].capturedAt)
+                                                        solvingSlot = null
+                                                        if (!solved.success) error(solved.message)
+                                                        points += PolarSolvePoint(
+                                                            raDeg = solved.raDeg ?: error(solved.message),
+                                                            decDeg = solved.decDeg ?: error(solved.message),
+                                                            solvedAt = capturedAt
+                                                        )
+                                                        latestMountCoordinates.value?.let { mountDeclinations += it.decDeg }
+                                                    }
+
+                                                    workflowStatus = context.getString(R.string.polar_calculating)
+                                                    val solved = PolarAlignmentCalculator.determine(
+                                                        points = points,
+                                                        site = site,
+                                                        refraction = refraction,
+                                                        correctForRefraction = useRefractionAdjustment,
+                                                        declinationSpreadArcsec =
+                                                            PolarAlignmentCalculator.declinationSpreadArcsec(mountDeclinations)
+                                                    )
+                                                    determination = solved
+                                                    currentResult = solved.initial
+                                                    workflowStatus = context.getString(R.string.tppa_complete)
+
+                                                    if (useContinuous) {
+                                                        runCorrectionPhase(
+                                                            determination = solved,
+                                                            toleranceArcMin = tolerance,
+                                                            capture = {
+                                                                workflowStatus = context.getString(R.string.polar_correction_capturing)
+                                                                val result = executeSample(3, configuration) { onCaptureFits(exposure) }
+                                                                val at = requireNotNull(sampleSession.samples.value[3].capturedAt)
+                                                                if (result.success && result.raDeg != null && result.decDeg != null) {
+                                                                    PolarSolvePoint(result.raDeg, result.decDeg, at)
+                                                                } else {
+                                                                    error(result.message)
+                                                                }
+                                                            },
+                                                            onEstimate = { result, field ->
+                                                                currentResult = result
+                                                                correctionField = field
+                                                            },
+                                                            onUnstable = {
+                                                                workflowStatus = context.getString(R.string.polar_estimate_unstable)
+                                                            },
+                                                            onWithinTolerance = { totalArcMin ->
+                                                                workflowStatus = context.getString(R.string.polar_tolerance_reached, totalArcMin)
+                                                            }
+                                                        )
+                                                    }
+                                                } catch (cancel: CancellationException) {
+                                                    FileLogger.i("PolarAlign", "Workflow cancelled stage=$workflowStatus")
+                                                    workflowStatus = context.getString(R.string.stopped)
+                                                    throw cancel
+                                                } catch (e: Exception) {
+                                                    error = context.getString(R.string.polar_failure_at_stage, workflowStatus, e.message ?: tppaFailed)
+                                                    workflowStatus = tppaFailed
+                                                    FileLogger.e("PolarAlign", error.orEmpty(), e)
+                                                } finally {
+                                                    awaitingManualAdvance = false
+                                                    runningAuto = false
+                                                    solvingSlot = null
+                                                }
+                                            }
                                         },
-                                        enabled = mountCoordinates != null && !mountBusy && !manualMode
-                                    ) { Text(stringResource(R.string.move_ra)) }
+                                        modifier = Modifier.testTag("polar-run"),
+                                        enabled = cameraConnected && requestedExposureUs != null && !taskBusy && !mountBusy && solvingSlot == null
+                                    ) {
+                                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(stringResource(when {
+                                            taskBusy -> R.string.running
+                                            samples.take(3).all { it.phase == PolarSamplePhase.COMPLETE } -> R.string.polar_restart
+                                            !sampleModel.canResume && samples.take(3).any { it.phase != PolarSamplePhase.EMPTY } -> R.string.polar_restart
+                                            samples.take(3).any { it.phase != PolarSamplePhase.EMPTY } -> R.string.polar_continue
+                                            else -> R.string.run_tppa
+                                        }))
+                                    }
+                                    if (awaitingManualAdvance) {
+                                        Button(onClick = { manualAdvanceRequested = true }) {
+                                            Text(stringResource(R.string.polar_next_point))
+                                        }
+                                    }
                                     OutlinedButton(
-                                        onClick = onStopMountRaMove,
-                                        enabled = mountBusy
+                                        onClick = {
+                                            FileLogger.i("PolarAlign", "User stop requested")
+                                            if (taskBusy) workflowTask.stop() else onStopMountRaMove()
+                                            workflowStatus = context.getString(R.string.stopped)
+                                        },
+                                        enabled = taskBusy || mountBusy
                                     ) { Text(stringResource(R.string.stop)) }
                                 }
-                                if (mountMoveStatus.isNotBlank()) {
-                                    Text(mountMoveStatus, fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
+                                if (!taskBusy && samples.any { it.file != null || it.failure != null }) {
+                                    TextButton(onClick = {
+                                        sampleSession.clear(); sampleModel.positionedPoint = 0; sampleModel.canResume = true
+                                        determination = null; currentResult = null; error = null; workflowStatus = ""
+                                    }) { Text(stringResource(R.string.polar_restart)) }
                                 }
+                                if (workflowStatus.isNotBlank()) {
+                                    Text(workflowStatus, fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
+                                }
+                                Text(
+                                    if (manualMode) {
+                                        stringResource(R.string.polar_manual_mode_hint)
+                                    } else {
+                                        stringResource(R.string.polar_automatic_mode_hint)
+                                    },
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.outline
+                                )
                             }
                         }
 
-                    }
-
-                    (0..3).filter { it < 3 || samples[3].phase != PolarSamplePhase.EMPTY }.forEach { index ->
-                        MeasurementCard(
-                            index = index,
-                            file = samples[index].file,
-                            solve = samples[index].result,
-                            solving = solvingSlot == index,
-                            sample = samples[index],
-                            actionsEnabled = !taskBusy && !mountBusy,
-                            canRecapture = index == 3 || index == sampleModel.positionedPoint,
-                            onSelect = {
-                                selectedSlot = index
-                                picker.launch(arrayOf("image/*", "application/fits", "application/octet-stream", "*/*"))
-                            },
-                            onSolve = { runSingleSample(index, false) },
-                            onRecapture = { runSingleSample(index, true) },
-                            onBlindRetry = { runSingleSample(index, false, blind = true) },
-                            onViewImage = { inspectFile = samples[index].file }
-                        )
-                    }
-
-                    Button(
-                        onClick = {
-                            val site = currentSite()
-                            if (site == null) {
-                                error = context.getString(R.string.invalid_coordinates)
-                                return@Button
-                            }
-                            val points = (0..2).mapNotNull { index ->
-                                val solve = solves[index]
-                                val time = solvedAt[index]
-                                val ra = solve?.raDeg
-                                val dec = solve?.decDeg
-                                if (solve?.success == true && time != null && ra != null && dec != null) {
-                                    PolarSolvePoint(ra, dec, time)
-                                } else {
-                                    null
+                        Text(stringResource(R.string.polar_setup_summary, latitudeText, longitudeText,
+                            focalLengthText.ifBlank { "—" }, pixelSizeText.ifBlank { "—" }), style = MaterialTheme.typography.bodySmall)
+                        OutlinedButton(onClick = { showParameters = !showParameters }, modifier = Modifier.fillMaxWidth(), enabled = !taskBusy) {
+                            Text(stringResource(R.string.polar_parameters), modifier = Modifier.weight(1f))
+                            Icon(if (showParameters) Icons.Default.ExpandLess else Icons.Default.ExpandMore, null)
+                        }
+                        if (showParameters) {
+                            Surface(shape = MaterialTheme.shapes.medium, tonalElevation = 1.dp) {
+                                Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text(stringResource(R.string.site), style = MaterialTheme.typography.titleSmall)
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        OutlinedTextField(
+                                            value = latitudeText,
+                                            onValueChange = { latitudeText = it.filterCoordinateText() },
+                                            label = { Text(stringResource(R.string.latitude_deg)) },
+                                            singleLine = true,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        OutlinedTextField(
+                                            value = longitudeText,
+                                            onValueChange = { longitudeText = it.filterCoordinateText() },
+                                            label = { Text(stringResource(R.string.longitude_deg)) },
+                                            singleLine = true,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                    }
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        OptionField(stringResource(R.string.elevation_m), elevationText, Modifier.weight(1f)) {
+                                            elevationText = it.filterCoordinateText()
+                                            it.toFloatOrNull()?.let { value ->
+                                                prefs.edit().putFloat("polar_elevation_m", value).apply()
+                                            }
+                                        }
+                                    }
+                                    SolveOpticsFields(
+                                        focalLengthText = focalLengthText,
+                                        onFocalLengthChange = { focalLengthText = it },
+                                        selectedSensorId = selectedSensorId,
+                                        onSensorSelected = { sensor ->
+                                            selectedSensorId = sensor.id
+                                            pixelSizeText = formatPixelSizeUm(sensor.pixelSizeUm)
+                                        },
+                                        pixelSizeText = pixelSizeText,
+                                        onPixelSizeChange = { pixelSizeText = it },
+                                        sensors = sensors,
+                                        computedFovHeightDeg = computedFovDeg,
+                                        enabled = !runningAuto && solvingSlot == null
+                                    )
+                                    if (mountCoordinates != null) {
+                                        Text(
+                                            "Mount hint ${mountCoordinates.formatRa()}  ${mountCoordinates.formatDec()}",
+                                            fontSize = 12.sp,
+                                            color = MaterialTheme.colorScheme.outline
+                                        )
+                                    }
+                                    phoneSite?.let {
+                                        Text(stringResource(R.string.phone_gps_value, it.format()), fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
+                                    }
+                                    mountSite?.let {
+                                        Text(stringResource(R.string.mount_site_value, it.format()), fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
+                                    }
+                                    if (phoneSite != null && mountSite != null) {
+                                        val diffMeters = siteDifferenceMeters(phoneSite!!, mountSite)
+                                        if (diffMeters > 30.0) {
+                                            Text(
+                                                stringResource(R.string.site_mismatch_meters, diffMeters),
+                                                fontSize = 12.sp,
+                                                color = MaterialTheme.colorScheme.error
+                                            )
+                                        }
+                                    }
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Button(
+                                            onClick = {
+                                                if (hasLocationPermission(context)) {
+                                                    scope.launch {
+                                                        error = null
+                                                        val site = runCatching { getPhoneSite(context.applicationContext) }.getOrElse {
+                                                            error = it.message ?: phoneLocationFailed
+                                                            null
+                                                        }
+                                                        if (site != null) {
+                                                            phoneSite = site
+                                                            latitudeText = "%.6f".format(Locale.US, site.latitudeDeg)
+                                                            longitudeText = "%.6f".format(Locale.US, site.longitudeDeg)
+                                                            prefs.edit()
+                                                                .putFloat("polar_latitude_deg", site.latitudeDeg.toFloat())
+                                                                .putFloat("polar_longitude_deg", site.longitudeDeg.toFloat())
+                                                                .apply()
+                                                        }
+                                                    }
+                                                } else {
+                                                    locationPermissionLauncher.launch(
+                                                        arrayOf(
+                                                            Manifest.permission.ACCESS_FINE_LOCATION,
+                                                            Manifest.permission.ACCESS_COARSE_LOCATION
+                                                        )
+                                                    )
+                                                }
+                                            }
+                                        ) { Text(stringResource(R.string.phone_gps)) }
+                                        OutlinedButton(
+                                            onClick = onReadMountSite,
+                                            enabled = !mountBusy
+                                        ) { Text(stringResource(if (mountBusy) R.string.mount_busy else R.string.read_mount)) }
+                                    }
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        OutlinedButton(
+                                            onClick = {
+                                                val site = mountSite ?: return@OutlinedButton
+                                                latitudeText = "%.6f".format(Locale.US, site.latitudeDeg)
+                                                longitudeText = "%.6f".format(Locale.US, site.longitudeDeg)
+                                                prefs.edit()
+                                                    .putFloat("polar_latitude_deg", site.latitudeDeg.toFloat())
+                                                    .putFloat("polar_longitude_deg", site.longitudeDeg.toFloat())
+                                                    .apply()
+                                            },
+                                            enabled = mountSite != null
+                                        ) { Text(stringResource(R.string.mount_to_app)) }
+                                        OutlinedButton(
+                                            onClick = {
+                                                val site = phoneSite ?: return@OutlinedButton
+                                                onSyncPhoneSiteToMount(site.latitudeDeg, site.longitudeDeg)
+                                            },
+                                            enabled = phoneSite != null && !mountBusy
+                                        ) { Text(stringResource(R.string.phone_to_mount)) }
+                                    }
                                 }
                             }
-                            if (points.size != 3) {
-                                error = threeSolvesRequired
-                                return@Button
+
+                            Surface(shape = MaterialTheme.shapes.medium, tonalElevation = 1.dp) {
+                                Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text(stringResource(R.string.nina_tppa_options), style = MaterialTheme.typography.titleSmall)
+                                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        LabeledSwitch(stringResource(R.string.manual), manualMode) {
+                                            manualMode = it
+                                            prefs.edit().putBoolean("polar_manual_mode", it).apply()
+                                        }
+                                        LabeledSwitch(stringResource(R.string.start_current), startFromCurrent) {
+                                            startFromCurrent = it
+                                            prefs.edit().putBoolean("polar_start_current", it).apply()
+                                        }
+                                        LabeledSwitch(stringResource(R.string.east), eastDirection) {
+                                            eastDirection = it
+                                            prefs.edit().putBoolean("polar_east_direction", it).apply()
+                                        }
+                                    }
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        OptionField(stringResource(R.string.distance_deg), targetDistanceText, Modifier.weight(1f)) {
+                                            targetDistanceText = it.filterCoordinateText()
+                                            it.toIntOrNull()?.let { value -> prefs.edit().putInt("polar_target_distance_deg", value.coerceIn(1, 90)).apply() }
+                                        }
+                                        OptionField(stringResource(R.string.move_rate), moveRateText, Modifier.weight(1f)) {
+                                            moveRateText = it.filterCoordinateText()
+                                            it.toFloatOrNull()?.let { value -> prefs.edit().putFloat("polar_move_rate_deg_sec", value.coerceIn(0.1f, 20f)).apply() }
+                                        }
+                                    }
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        OptionField(stringResource(R.string.search_radius), searchRadiusText, Modifier.weight(1f)) {
+                                            searchRadiusText = it.filterCoordinateText()
+                                            it.toFloatOrNull()?.let { value -> prefs.edit().putFloat("polar_search_radius_deg", value.coerceIn(30f, 180f)).apply() }
+                                        }
+                                        OptionField(stringResource(R.string.tolerance_arcmin), alignmentToleranceText, Modifier.weight(1f)) {
+                                            alignmentToleranceText = it.filterCoordinateText()
+                                            it.toFloatOrNull()?.let { value -> prefs.edit().putFloat("polar_alignment_tolerance_arcmin", value.coerceAtLeast(0f)).apply() }
+                                        }
+                                    }
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        OptionField(stringResource(R.string.temperature_c), temperatureText, Modifier.weight(1f)) {
+                                            temperatureText = it.filterCoordinateText()
+                                            it.toFloatOrNull()?.let { value -> prefs.edit().putFloat("polar_temperature_c", value).apply() }
+                                        }
+                                        OptionField(stringResource(R.string.pressure_hpa), pressureText, Modifier.weight(1f)) {
+                                            pressureText = it.filterCoordinateText()
+                                            prefs.edit().putFloat("polar_pressure_hpa", it.toFloatOrNull() ?: 0f).apply()
+                                        }
+                                    }
+                                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        LabeledSwitch(stringResource(R.string.refraction), refractionAdjustment) {
+                                            refractionAdjustment = it
+                                            prefs.edit().putBoolean("polar_refraction_adjustment", it).apply()
+                                        }
+                                        LabeledSwitch(stringResource(R.string.continuous), continuousEstimator) {
+                                            continuousEstimator = it
+                                            prefs.edit().putBoolean("polar_continuous_estimator", it).apply()
+                                        }
+                                    }
+                                    LabeledSwitch(stringResource(R.string.mount_hint), useMountHint) {
+                                    useMountHint = it
+                                    prefs.edit().putBoolean("polar_use_mount_hint", it).apply()
+                                }
+                                Text(
+                                        stringResource(R.string.polar_refraction_hint),
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.outline
+                                    )
+                                    Text(
+                                        stringResource(R.string.polar_continuous_hint),
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.outline
+                                    )
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        Button(
+                                            onClick = {
+                                                onMoveMountRaBy(
+                                                    targetDistanceText.toDoubleOrNull()?.coerceIn(1.0, 90.0) ?: 10.0,
+                                                    eastDirection,
+                                                    moveRateText.toDoubleOrNull()?.coerceIn(0.1, 20.0) ?: 3.0
+                                                )
+                                            },
+                                            enabled = mountCoordinates != null && !mountBusy && !manualMode
+                                        ) { Text(stringResource(R.string.move_ra)) }
+                                        OutlinedButton(
+                                            onClick = onStopMountRaMove,
+                                            enabled = mountBusy
+                                        ) { Text(stringResource(R.string.stop)) }
+                                    }
+                                    if (mountMoveStatus.isNotBlank()) {
+                                        Text(mountMoveStatus, fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
+                                    }
+                                }
                             }
-                            prefs.edit()
-                                .putFloat("polar_latitude_deg", site.latitudeDeg.toFloat())
-                                .putFloat("polar_longitude_deg", site.longitudeDeg.toFloat())
-                                .apply()
-                            try {
-                                val solved = PolarAlignmentCalculator.determine(
-                                    points = points,
-                                    site = site,
-                                    refraction = currentRefraction(),
-                                    correctForRefraction = refractionAdjustment
-                                )
-                                determination = solved
-                                currentResult = solved.initial
-                                correctionField = null
-                                error = null
-                            } catch (failure: Exception) {
-                                error = failure.message ?: tppaFailed
-                                FileLogger.e("PolarAlign", "Three-point geometry failed", failure)
-                            }
-                        },
-                        enabled = !runningAuto && solvingSlot == null && solves.count { it?.success == true } == 3
-                    ) {
-                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text(stringResource(R.string.calculate))
-                    }
+
+                        }
+
+                        (0..3).filter { it < 3 || samples[3].phase != PolarSamplePhase.EMPTY }.forEach { index ->
+                            MeasurementCard(
+                                index = index,
+                                file = samples[index].file,
+                                solve = samples[index].result,
+                                solving = solvingSlot == index,
+                                sample = samples[index],
+                                actionsEnabled = !taskBusy && !mountBusy,
+                                canRecapture = index == 3 || index == sampleModel.positionedPoint,
+                                onSelect = {
+                                    selectedSlot = index
+                                    picker.launch(arrayOf("image/*", "application/fits", "application/octet-stream", "*/*"))
+                                },
+                                onSolve = { runSingleSample(index, false) },
+                                onRecapture = { runSingleSample(index, true) },
+                                onBlindRetry = { runSingleSample(index, false, blind = true) },
+                                onViewImage = { inspectFile = samples[index].file }
+                            )
+                        }
+
+                        Button(
+                            onClick = {
+                                val site = currentSite()
+                                if (site == null) {
+                                    error = context.getString(R.string.invalid_coordinates)
+                                    return@Button
+                                }
+                                val points = (0..2).mapNotNull { index ->
+                                    val solve = solves[index]
+                                    val time = solvedAt[index]
+                                    val ra = solve?.raDeg
+                                    val dec = solve?.decDeg
+                                    if (solve?.success == true && time != null && ra != null && dec != null) {
+                                        PolarSolvePoint(ra, dec, time)
+                                    } else {
+                                        null
+                                    }
+                                }
+                                if (points.size != 3) {
+                                    error = threeSolvesRequired
+                                    return@Button
+                                }
+                                prefs.edit()
+                                    .putFloat("polar_latitude_deg", site.latitudeDeg.toFloat())
+                                    .putFloat("polar_longitude_deg", site.longitudeDeg.toFloat())
+                                    .apply()
+                                try {
+                                    val solved = PolarAlignmentCalculator.determine(
+                                        points = points,
+                                        site = site,
+                                        refraction = currentRefraction(),
+                                        correctForRefraction = refractionAdjustment
+                                    )
+                                    determination = solved
+                                    currentResult = solved.initial
+                                    correctionField = null
+                                    error = null
+                                } catch (failure: Exception) {
+                                    error = failure.message ?: tppaFailed
+                                    FileLogger.e("PolarAlign", "Three-point geometry failed", failure)
+                                }
+                            },
+                            enabled = !runningAuto && solvingSlot == null && solves.count { it?.success == true } == 3
+                        ) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(stringResource(R.string.calculate))
+                        }
 
 
-                    determination?.let { solved ->
-                        PolarAlignmentResultCard(
-                            determination = solved,
-                            current = currentResult ?: solved.initial,
-                            correctionField = correctionField
-                        )
+                        determination?.let { solved ->
+                            PolarAlignmentResultCard(
+                                determination = solved,
+                                current = currentResult ?: solved.initial,
+                                correctionField = correctionField
+                            )
+                        }
                     }
                 }
-            }
-        )
+            )
+        }
     }
 }
 

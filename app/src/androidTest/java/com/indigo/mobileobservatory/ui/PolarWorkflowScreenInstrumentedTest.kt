@@ -141,12 +141,15 @@ class PolarWorkflowScreenInstrumentedTest {
         compose.onNodeWithTag("polar-preview-close").performClick()
         compose.runOnIdle { assertFalse(cancelled.get()) }
         compose.onNodeWithTag("polar-preview-expand").performClick()
+        compose.onNodeWithTag("polar-fullscreen-preview").assertIsDisplayed()
         InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("polar-fullscreen-preview").fetchSemanticsNodes().isEmpty() }
         compose.onNodeWithTag("polar-fullscreen-preview").assertDoesNotExist()
         compose.runOnIdle { assertFalse(cancelled.get()) }
         release.complete(PlateSolveResult(false, "ASTAP failed with exit code 1.", log = "Detected 7 stars.\nNot enough stars to solve the image."))
         compose.waitUntil(15_000) { compose.onAllNodesWithTag("polar-current-failure").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithTag("polar-current-failure").assertIsDisplayed().assert(hasText("7", substring = true))
+        compose.onNodeWithTag("polar-diagnostics-expand").assertIsDisplayed()
     }
 
     @Test fun cameraFailureIsShownInTheMainWorkflowWithoutOpeningPointDetails() {

@@ -5,6 +5,7 @@
     <string name="polar_exposure_capture_busy">请先停止录制或实时叠加，再修改极轴拍摄曝光。</string>
     <string name="polar_exposure_not_applied">相机未应用 %1$.3f 秒曝光，实际读数为 %2$.3f 秒。请检查相机后重试。</string>
     <string name="polar_previous_image">上一张图像 · %1$s</string>
+    <string name="polar_image_inspection">采样图像</string>
     <string name="polar_exposure_actual">相机当前 %1$s 秒 · 下次拍摄应用设置</string>
     <string name="polar_exposure_applied_on_capture">下次拍摄时应用到相机。</string>
     <string name="polar_exposure_locked">停止流程后可调整曝光时间。</string>

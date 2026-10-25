@@ -12,6 +12,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -169,6 +170,10 @@ internal fun PolarWorkflowPreview(
                 if (busy) OutlinedButton(onClick = onStop) { Text(stringResource(R.string.stop)) }
                 TextButton(onClick = { source?.let { onInspect(it) } }, enabled = source?.isFile == true,
                     modifier = Modifier.testTag("polar-preview-expand")) { Text(stringResource(R.string.polar_view_sample)) }
+                if (details != null || error != null) IconButton(onClick = { showLog = true },
+                    modifier = Modifier.testTag("polar-diagnostics-expand")) {
+                    Icon(Icons.Default.Info, stringResource(R.string.show_log))
+                }
             }
             Box(Modifier.weight(1f).fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center) {
@@ -197,8 +202,6 @@ internal fun PolarWorkflowPreview(
                             Text(details.nativeMessage, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                             Text(stringResource(failureAdvice(details.reason)), style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         } else Text(error.orEmpty(), style = MaterialTheme.typography.bodySmall, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                        TextButton(onClick = { showLog = true }, contentPadding = PaddingValues(0.dp),
-                            modifier = Modifier.heightIn(min = 32.dp)) { Text(stringResource(R.string.show_log)) }
                     }
                 }
             }
@@ -222,11 +225,11 @@ internal fun PolarWorkflowPreview(
     if (inspectFile != null) {
         val navigation = remember { MediaInspectionNavigation() }
         Dialog(onDismissRequest = { if (!navigation.onBack()) onInspect(null) },
-            properties = DialogProperties(usePlatformDefaultWidth = false)) {
+            properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnBackPress = false)) {
             Surface(Modifier.fillMaxSize().testTag("polar-fullscreen-preview")) {
                 Column {
                     Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(stringResource(R.string.polar_sample_preview), Modifier.weight(1f))
+                        Text(stringResource(R.string.polar_image_inspection), Modifier.weight(1f))
                         if (busy) TextButton(onClick = onStop) { Text(stringResource(R.string.stop)) }
                         TextButton(onClick = { onInspect(null) }, modifier = Modifier.testTag("polar-preview-close")) { Text(stringResource(R.string.close)) }
                     }

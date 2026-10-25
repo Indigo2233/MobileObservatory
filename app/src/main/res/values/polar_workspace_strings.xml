@@ -5,6 +5,7 @@
     <string name="polar_exposure_capture_busy">Stop recording or live stacking before changing the polar exposure.</string>
     <string name="polar_exposure_not_applied">Camera did not apply %1$.3f s. Actual exposure: %2$.3f s. Check the camera and retry.</string>
     <string name="polar_previous_image">Previous image · %1$s</string>
+    <string name="polar_image_inspection">Sample image</string>
     <string name="polar_exposure_actual">Camera: %1$s s · applied at next capture</string>
     <string name="polar_exposure_applied_on_capture">Applied to the camera at the next capture.</string>
     <string name="polar_exposure_locked">Stop the workflow to adjust exposure.</string>
