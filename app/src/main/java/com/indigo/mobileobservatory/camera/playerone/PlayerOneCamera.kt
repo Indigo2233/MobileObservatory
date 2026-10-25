@@ -87,9 +87,10 @@ class PlayerOneCamera : Camera, CameraSingleExposureCapable, CameraOffsetCapable
 
     private val _isCapturing = MutableStateFlow(false)
     override val isCapturing: StateFlow<Boolean> = _isCapturing.asStateFlow()
-    override val isCaptureStopped: Boolean get() = !_isCapturing.value && !running.get() && !captureStopFailed &&
+    override val isCaptureStopped: Boolean get() = !_isCapturing.value && !running.get() && !captureStopFailed && !singleExposureNeedsCleanup &&
         captureThread?.isAlive != true && deliveryThread?.isAlive != true
     @Volatile private var singleFrameCompleted = false
+    @Volatile private var singleExposureNeedsCleanup = false
     @Volatile override var lastCaptureError: String? = null
         private set
 
@@ -229,6 +230,7 @@ class PlayerOneCamera : Camera, CameraSingleExposureCapable, CameraOffsetCapable
             }
 
             captureStopFailed = false
+            singleExposureNeedsCleanup = false
             _isOpen.value = true
             acceptRecycledBuffers.set(true)
             FileLogger.i(
@@ -325,7 +327,7 @@ class PlayerOneCamera : Camera, CameraSingleExposureCapable, CameraOffsetCapable
     @Synchronized override fun startCapture(callback: FrameCallback) {
         val cam = poa ?: return
         if (!_isOpen.value || disconnected) return
-        if (running.get() || captureThread?.isAlive == true || deliveryThread?.isAlive == true || captureStopFailed) {
+        if (running.get() || captureThread?.isAlive == true || deliveryThread?.isAlive == true || captureStopFailed || singleExposureNeedsCleanup) {
             FileLogger.w(TAG, "Cannot start while the previous capture has not stopped")
             return
         }
@@ -380,12 +382,13 @@ class PlayerOneCamera : Camera, CameraSingleExposureCapable, CameraOffsetCapable
         val threads = synchronized(this) {
             captureGeneration.stop()
             if (!_isCapturing.value && !running.get() && captureThread?.isAlive != true &&
-                deliveryThread?.isAlive != true && !captureStopFailed) return
+                deliveryThread?.isAlive != true && !captureStopFailed && !singleExposureNeedsCleanup) return
             running.set(false)
             _isCapturing.value = false
             frameCallback = null
             captureStopFailed = if (disconnected) true else runCatching {
                 if (!singleFrameCompleted) checkNotNull(poa).stopExposure()
+                singleExposureNeedsCleanup = false
                 false
             }.getOrDefault(true)
             (captureThread to deliveryThread).also { (reader, delivery) ->
@@ -423,6 +426,8 @@ class PlayerOneCamera : Camera, CameraSingleExposureCapable, CameraOffsetCapable
         singleFrameCompleted = false
         lastCaptureError = null
         // The old queue is empty before this trigger; the sole new frame must be retained.
+        // Reader exit alone never proves that an interrupted/failed SDK exposure stopped.
+        singleExposureNeedsCleanup = true
         cam.startExposure(true)
         val generation = captureGeneration.begin(true)
         frameCallback = callback

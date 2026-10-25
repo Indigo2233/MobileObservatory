@@ -91,6 +91,19 @@ class SingleExposureCaptureTest {
         assertTrue(camera.isCaptureStopped)
     }
 
+    @Test fun readerExitWithoutAnImageStillRequiresSdkStop(): Unit = runTest {
+        val camera = SingleCamera()
+        val task = async { runCatching { captureSingleExposureFrame(camera, 2000, { currentTime }) } }
+        runCurrent()
+        camera.isCapturing.value = false
+        assertFalse(camera.isCaptureStopped)
+        advanceTimeBy(1000); runCurrent()
+        assertTrue(task.await().exceptionOrNull()?.message.orEmpty().contains("stopped before delivering an image"))
+        assertEquals(1, camera.stops)
+        assertTrue(camera.isCaptureStopped)
+        assertEquals(1, camera.singleStarts)
+    }
+
     private open class StreamCamera : Camera {
         override val isOpen = MutableStateFlow(true)
         override val isCapturing = MutableStateFlow(false)
