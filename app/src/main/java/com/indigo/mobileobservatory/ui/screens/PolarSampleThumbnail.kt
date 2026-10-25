@@ -13,6 +13,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.media.*
+import com.indigo.mobileobservatory.polar.PolarImagePreview
 import kotlinx.coroutines.*
 import java.io.File
 
@@ -27,11 +28,8 @@ internal fun PolarSampleThumbnail(file: File, onOpen: () -> Unit) {
         var published = false
         try {
             withContext(Dispatchers.IO) {
-                val decoded = MediaImageEditing.readSource(file, 480) { !task.isActive }
-                val prepared = PreparedMediaImage(file, MediaImageEditing.fingerprint(file), decoded.originalWidth,
-                    decoded.originalHeight, decoded.image, MediaImageProcessing.window(decoded.image),
-                    floatArrayOf(1f, 1f, 1f), decoded.header)
-                owned = MediaImageEditing.renderPreview(prepared, MediaImageEditSettings(gamma = 2.2f)) { !task.isActive }
+                val prepared = PolarImagePreview.prepare(file, 480) { !task.isActive }
+                owned = MediaImageEditing.renderPreview(prepared, PolarImagePreview.settings) { !task.isActive }
             }
             ensureActive()
             bitmap = owned

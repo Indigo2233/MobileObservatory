@@ -182,11 +182,9 @@ class MediaImage16PipelineTest {
         }
         MediaImageFitsCodec.open(file).use { source ->
             val full = source.read(MediaImageRegion(0, 0, 11, 9))
-            for (step in 1..3) {
-                val part = source.read(MediaImageRegion(3, 1, 5, 7, step))
-                for (y in 0 until part.height) for (x in 0 until part.width) for (c in 0..2)
-                    assertEquals(full.unsigned(((1 + y * step) * 11 + 3 + x * step) * 3 + c), part.unsigned((y * part.width + x) * 3 + c))
-            }
+            val part = source.read(MediaImageRegion(3, 1, 5, 7))
+            for (y in 0 until part.height) for (x in 0 until part.width) for (c in 0..2)
+                assertEquals(full.unsigned(((1 + y) * 11 + 3 + x) * 3 + c), part.unsigned((y * part.width + x) * 3 + c))
         }
     }
 

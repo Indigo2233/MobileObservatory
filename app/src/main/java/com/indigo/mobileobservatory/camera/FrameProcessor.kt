@@ -135,9 +135,6 @@ class FrameProcessor {
         awbPending = false
     }
 
-    private val stretchPercentileLow = 0.001f
-    private val stretchPercentileHigh = 0.999f
-
     private var cachedBitmaps: Array<Bitmap>? = null
     private var cachedPixels: IntArray? = null
     private var cachedBayerRaw8: IntArray? = null
@@ -775,8 +772,8 @@ class FrameProcessor {
         maxCount: Int,
         totalPixels: Int
     ): HistogramData {
-        val lowThreshold = (totalPixels * stretchPercentileLow).toInt()
-        val highThreshold = (totalPixels * stretchPercentileHigh).toInt()
+        val lowThreshold = (totalPixels * PreviewStretch.LOW_FRACTION).toInt()
+        val highThreshold = (totalPixels * PreviewStretch.HIGH_FRACTION).toInt()
 
         var cumulative = 0
         var blackPoint = 0

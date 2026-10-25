@@ -39,6 +39,8 @@ class GuideWorkbenchInstrumentedTest {
         val selections = mutableListOf<Pair<Float, Float>>()
         compose.setContent { MaterialTheme { GuideImage(frame, emptyList(), { x, y -> selections += x to y }, Modifier.size(320.dp, 200.dp)) } }
         compose.onNodeWithTag("guide-image").performTouchInput { click(center) }
+        // A single tap is delivered after the double-tap recognition window.
+        compose.mainClock.advanceTimeBy(500)
         compose.runOnIdle {
             assertEquals(320f, selections.single().first, 1f)
             assertEquals(240f, selections.single().second, 1f)

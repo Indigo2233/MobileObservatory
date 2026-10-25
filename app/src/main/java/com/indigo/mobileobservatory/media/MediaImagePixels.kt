@@ -46,7 +46,8 @@ data class MediaImageRegion(val left: Int, val top: Int, val width: Int, val hei
 }
 
 object MediaImageProcessing {
-    fun window(image: MediaImagePixels): MediaImageWindow {
+    fun window(image: MediaImagePixels, lowFraction: Double = .002, highFraction: Double = .998): MediaImageWindow {
+        require(lowFraction >= 0 && highFraction <= 1 && lowFraction < highFraction)
         val histogram = IntArray(65536)
         val step = (image.pixels.size / 65_536).coerceAtLeast(1)
         var count = 0
@@ -59,9 +60,9 @@ object MediaImageProcessing {
             }
             return image.range.white
         }
-        val black = percentile(.002); val white = percentile(.998)
-        return if (white > black) MediaImageWindow(black, white) else
-            MediaImageWindow(minOf(0f, black), maxOf(1f, white + 1f))
+        val black = percentile(lowFraction); val white = percentile(highFraction)
+        // Keep the measured sky at black even if sparse stars lie above the high percentile.
+        return MediaImageWindow(black, maxOf(white, black + 1f))
     }
 
     fun lp700Gains(image: MediaImagePixels, window: MediaImageWindow = image.range): FloatArray {

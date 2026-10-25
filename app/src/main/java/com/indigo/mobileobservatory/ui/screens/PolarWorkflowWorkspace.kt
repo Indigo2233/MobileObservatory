@@ -138,7 +138,7 @@ internal fun PolarWorkflowPreview(
     var bitmap by remember(key) { mutableStateOf<Bitmap?>(null) }
     var loading by remember(key) { mutableStateOf(source != null) }
     var previewError by remember(key) { mutableStateOf<String?>(null) }
-    val settings = remember { MediaImageEditSettings(gamma = 2.2f) }
+    val settings = PolarImagePreview.settings
     LaunchedEffect(key) {
         if (source == null) return@LaunchedEffect
         val task = currentCoroutineContext()
@@ -146,7 +146,7 @@ internal fun PolarWorkflowPreview(
         var published = false
         try {
             val image = withContext(Dispatchers.IO) {
-                val decoded = MediaImageEditing.prepare(source, cancelled = { !task.isActive })
+                val decoded = PolarImagePreview.prepare(source, cancelled = { !task.isActive })
                 owned = MediaImageEditing.renderPreview(decoded, settings) { !task.isActive }
                 decoded
             }

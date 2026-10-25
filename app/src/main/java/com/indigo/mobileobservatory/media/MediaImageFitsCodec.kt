@@ -88,6 +88,7 @@ object MediaImageFitsCodec {
         }
         override fun read(region: MediaImageRegion, check: () -> Unit): MediaImagePixels {
             require(region.left.toLong() + region.width <= width && region.top.toLong() + region.height <= height)
+            if (region.step > 1) return readReduced(region, check)
             val count = region.outputWidth.toLong() * region.outputHeight * channels
             require(count <= Int.MAX_VALUE) { "memory_budget" }
             val x0 = (region.left - 1).coerceAtLeast(0)
@@ -134,6 +135,61 @@ object MediaImageFitsCodec {
                         pixels[i] = range.encode(when { red -> center; blue -> diagonal; sy and 1 == redY -> horizontal; else -> vertical })
                         pixels[i + 1] = range.encode(if (red || blue) (horizontal + vertical) * .5 else center)
                         pixels[i + 2] = range.encode(when { blue -> center; red -> diagonal; sy and 1 == redY -> vertical; else -> horizontal })
+                    }
+                }
+            }
+            return MediaImagePixels(region.outputWidth, region.outputHeight, channels, pixels, range)
+        }
+
+        /** Area averages include every source sample; small stars survive between preview pixels.
+         * Bayer channel means retain the original CFA phase, including odd crop origins. Only
+         * UInt16 output and a row of integer accumulators are retained. Native 1:1 stays exact. */
+        private fun readReduced(region: MediaImageRegion, check: () -> Unit): MediaImagePixels {
+            val rowSamples = Math.multiplyExact(region.outputWidth, channels)
+            val count = rowSamples.toLong() * region.outputHeight
+            require(count <= Int.MAX_VALUE) { "memory_budget" }
+            val rowBytes = Math.multiplyExact(region.width, bytesPerSample)
+            MediaImageMemory.check(count * 2 + rowBytes + rowSamples * 12L)
+            val pixels = ShortArray(count.toInt())
+            val sums = LongArray(rowSamples)
+            val counts = IntArray(rowSamples)
+            val buffer = ByteBuffer.allocate(rowBytes).order(ByteOrder.BIG_ENDIAN)
+            val redX = ((if (pattern == "GRBG" || pattern == "BGGR") 1 else 0) - (h.intValue("XBAYROFF") ?: 0)) and 1
+            val redY = ((if (pattern == "GBRG" || pattern == "BGGR") 1 else 0) - (h.intValue("YBAYROFF") ?: 0)) and 1
+            for (y in 0 until region.outputHeight) {
+                sums.fill(0); counts.fill(0)
+                val y0 = region.top + y * region.step
+                val y1 = minOf(y0.toLong() + region.step, region.top.toLong() + region.height).toInt()
+                for (plane in 0 until planes) for (sy in y0 until y1) {
+                    check(); buffer.clear()
+                    val offset = h.dataOffset + ((plane.toLong() * height + sy) * width + region.left) * bytesPerSample
+                    while (buffer.hasRemaining()) {
+                        check()
+                        require(input.channel.read(buffer, offset + buffer.position()) > 0) { "Truncated FITS row" }
+                    }
+                    for (x in 0 until region.width) {
+                        val sx = region.left + x
+                        val channel = if (pattern == null) plane else when {
+                            sx and 1 == redX && sy and 1 == redY -> 0
+                            sx and 1 != redX && sy and 1 != redY -> 2
+                            else -> 1
+                        }
+                        val i = (x / region.step) * channels + channel
+                        sums[i] += (range.encode(value(buffer, x * bytesPerSample)).toInt() and 65535).toLong()
+                        counts[i]++
+                    }
+                }
+                for (x in 0 until region.outputWidth) {
+                    var edge: MediaImagePixels? = null
+                    for (c in 0 until channels) {
+                        val i = x * channels + c
+                        pixels[y * rowSamples + i] = if (counts[i] > 0) {
+                            ((sums[i] + counts[i] / 2) / counts[i]).toShort()
+                        } else {
+                            // A one-pixel edge of a Bayer tile needs neighbouring CFA colours.
+                            val full = edge ?: read(MediaImageRegion(region.left + x * region.step, y0, 1, 1), check).also { edge = it }
+                            full.pixels[c]
+                        }
                     }
                 }
             }
