@@ -2,9 +2,6 @@ package com.indigo.mobileobservatory.ui
 
 import android.content.Context
 import android.os.ParcelFileDescriptor
-import android.view.View
-import android.view.ViewGroup
-import android.webkit.WebView
 import androidx.activity.ComponentActivity
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.mutableStateOf
@@ -26,9 +23,6 @@ import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicReference
 
 /** Exercises native source selection, the WebView bridge and actual projected FOV polygons. */
 class StarMapCurrentFovInstrumentedTest {
@@ -37,7 +31,7 @@ class StarMapCurrentFovInstrumentedTest {
     private val prefs get() = context.getSharedPreferences("mobile_observatory", Context.MODE_PRIVATE)
     private var saved: Map<String, *> = emptyMap<String, Any>()
     private var initialized = false
-    private lateinit var web: WebView
+    private lateinit var web: StarMapWebViewProbe
     private var clock = System.currentTimeMillis()
     private val coordinates = mutableStateOf<MountCoordinates?>(MountCoordinates(5.0, 20.0))
     private val connected = mutableStateOf(true)
@@ -77,30 +71,22 @@ class StarMapCurrentFovInstrumentedTest {
         edit.commit()
     }
 
-    private fun findWeb(view: View): WebView? {
-        if (view is WebView) return view
-        if (view is ViewGroup) for (index in 0 until view.childCount) findWeb(view.getChildAt(index))?.let { return it }
-        return null
-    }
-
-    private fun eval(script: String): String {
-        val value = AtomicReference<String>()
-        val done = CountDownLatch(1)
-        InstrumentationRegistry.getInstrumentation().runOnMainSync {
-            web.evaluateJavascript(script) { value.set(it); done.countDown() }
-        }
-        assertTrue("WebView evaluation timed out", done.await(10, TimeUnit.SECONDS))
-        return value.get()
-    }
+    private fun eval(script: String) = web.evaluate(script)
 
     private fun snapshot(): JSONObject = JSONObject(JSONTokener(eval("""
         JSON.stringify((function () {
             function layer(id) {
                 var e = document.getElementById(id), p = e.querySelector('polygon');
+                var box = p ? p.getBBox() : {x: parseFloat(e.style.left) - parseFloat(e.style.width)/2,
+                    y: parseFloat(e.style.top) - parseFloat(e.style.height)/2,
+                    width: parseFloat(e.style.width), height: parseFloat(e.style.height)};
                 return {display: getComputedStyle(e).display, text: e.textContent,
-                    points: p ? p.getAttribute('points') : '', left: e.style.left, top: e.style.top};
+                    points: p ? p.getAttribute('points') : '', left: e.style.left, top: e.style.top,
+                    inside: getComputedStyle(e).display === 'block' && box.x >= 0 && box.y >= 0 &&
+                        box.x + box.width <= innerWidth && box.y + box.height <= innerHeight};
             }
             return {current: layer('fov-current'), target: layer('fov-target'),
+                centered: Boolean(window.__fovTestCentered), targetAngle: window.__targetFovAngle || 0,
                 currentArgs: window.__currentFovArgs || null, targetArgs: window.__targetFovArgs || null};
         })())
     """.trimIndent())).nextValue() as String)
@@ -138,7 +124,7 @@ class StarMapCurrentFovInstrumentedTest {
             compose.mainClock.advanceTimeBy(32)
             compose.onAllNodesWithText(context.getString(R.string.star_map_use_center)).fetchSemanticsNodes().isNotEmpty()
         }
-        compose.runOnIdle { web = requireNotNull(findWeb(compose.activity.window.decorView)) }
+        compose.runOnIdle { web = StarMapWebViewProbe(compose.activity.window.decorView) }
         eval("""
             ['Current', 'Target'].forEach(function (role) {
                 ['Rect', 'Circle'].forEach(function (shape) {
@@ -149,25 +135,39 @@ class StarMapCurrentFovInstrumentedTest {
                     };
                 });
             });
-            MercStarMap.setLandscapeVisible(false);
-            MercStarMap.centerOnRaDec(5.0, 20.0, 0, 'JNOW');
-            MercStarMap.setFovDegrees(8.0, 0);
+            var rotation = MercStarMap.setTargetFovRotation;
+            MercStarMap.setTargetFovRotation = function (angle) {
+                window.__targetFovAngle = angle; return rotation.apply(this, arguments);
+            };
+            window.__fovTestCentered = false;
+            // Native Ready effects update observer/time asynchronously. Center after an engine frame.
+            requestAnimationFrame(function () { requestAnimationFrame(function () {
+                MercStarMap.setLandscapeVisible(false);
+                MercStarMap.centerOnRaDec(5.0, 20.0, 0, 'JNOW');
+                MercStarMap.setFovDegrees(8.0, 0);
+                requestAnimationFrame(function () { requestAnimationFrame(function () {
+                    window.__fovTestCentered = true;
+                }); });
+            }); });
         """.trimIndent())
-        compose.mainClock.advanceTimeBy(128)
+        awaitState { it.getBoolean("centered") }
     }
 
     @Test fun mountReadbackDrawsBothFramesWithoutSiteAndMotionKeepsTargetPinned() {
         start()
-        val initial = awaitState { it.getJSONObject("current").getString("points").isNotEmpty() &&
-            it.getJSONObject("target").getString("points").isNotEmpty() }
+        val initial = awaitState { it.getJSONObject("current").getBoolean("inside") &&
+            it.getJSONObject("target").getBoolean("inside") }
         assertTrue(initial.getJSONObject("current").getString("text").contains(context.getString(R.string.wf_fov_mount_estimate)))
         assertTrue(initial.getJSONObject("current").getString("text").contains(context.getString(R.string.wf_fov_north_up_reference)))
         screenshot("current-and-target-reference")
         compose.runOnIdle { coordinates.value = MountCoordinates(5.03, 20.1) }
-        val moved = awaitState { !it.isNull("currentArgs") && it.getJSONArray("currentArgs").getDouble(4) == 5.03 }
+        val moved = awaitState { !it.isNull("currentArgs") && it.getJSONArray("currentArgs").getDouble(4) == 5.03 &&
+            it.getJSONObject("current").getBoolean("inside") &&
+            it.getJSONObject("current").getString("points") != initial.getJSONObject("current").getString("points") }
         assertNotEquals(initial.getJSONObject("current").getString("points"), moved.getJSONObject("current").getString("points"))
         assertEquals(initial.getJSONObject("target").getString("points"), moved.getJSONObject("target").getString("points"))
         assertEquals(0.0, moved.getJSONArray("currentArgs").getDouble(7), 0.0)
+        assertEquals(74.0, moved.getDouble("targetAngle"), 0.0)
         assertEquals(5.01, moved.getJSONArray("targetArgs").getDouble(3), 0.0)
         assertEquals("ICRF", moved.getJSONArray("targetArgs").getString(5))
         compose.onNodeWithContentDescription(context.getString(R.string.star_map_observing_panel)).performClick()
@@ -187,16 +187,21 @@ class StarMapCurrentFovInstrumentedTest {
             sources.value = listOf(FovPointingCandidate("primary", FovSkyAnchor(5.005, 20.005, "J2000"),
                 "camera", FovPointingKind.DIRECT_OPTICAL, clock, clock, .005, true, positionAngleDeg = 37.0))
         }
-        val optical = awaitState { !it.isNull("currentArgs") && it.getJSONArray("currentArgs").getDouble(7) == 37.0 }
+        val optical = awaitState { !it.isNull("currentArgs") && it.getJSONArray("currentArgs").getDouble(7) == 37.0 &&
+            it.getJSONObject("current").getBoolean("inside") &&
+            !it.getJSONObject("current").getString("text").contains(context.getString(R.string.wf_fov_mount_estimate)) }
         assertEquals("ICRF", optical.getJSONArray("currentArgs").getString(6))
         assertFalse(optical.getJSONObject("current").getString("text").contains(context.getString(R.string.wf_fov_mount_estimate)))
         assertTrue(optical.getJSONObject("current").getString("points").isNotEmpty())
         compose.runOnIdle { sources.value = listOf(sources.value.single().copy(positionAngleDeg = null)) }
-        val unknown = awaitState { it.getJSONArray("currentArgs").getDouble(7) == 0.0 }
+        val unknown = awaitState { it.getJSONArray("currentArgs").getDouble(7) == 0.0 &&
+            it.getJSONObject("current").getBoolean("inside") &&
+            it.getJSONObject("current").getString("text").contains(context.getString(R.string.wf_fov_north_up_reference)) }
         assertTrue(unknown.getJSONObject("current").getString("text").contains(context.getString(R.string.wf_fov_north_up_reference)))
         assertEquals(optical.getJSONObject("target").getString("points"), unknown.getJSONObject("target").getString("points"))
         compose.runOnIdle { offsetCrop.value = true }
-        val crop = awaitState { it.getJSONObject("current").getString("text").contains(context.getString(R.string.wf_fov_current_reference)) }
+        val crop = awaitState { it.getJSONObject("current").getBoolean("inside") &&
+            it.getJSONObject("current").getString("text").contains(context.getString(R.string.wf_fov_current_reference)) }
         assertFalse(crop.getJSONObject("current").getString("text").contains(context.getString(R.string.wf_fov_mount_estimate)))
         screenshot("optical-position-crop-reference")
         compose.runOnIdle { clock += 31_000 }
@@ -208,7 +213,7 @@ class StarMapCurrentFovInstrumentedTest {
     @Test fun eyepieceReferenceClearsOnCapabilityLossAndMissingCoordinates() {
         prefs.edit().putString("star_map_fov_mode", "EYEPIECE").commit()
         start()
-        awaitState { it.getJSONObject("current").getString("display") == "block" &&
+        awaitState { it.getJSONObject("current").getBoolean("inside") &&
             it.getJSONObject("current").getString("text").contains(context.getString(R.string.wf_fov_mount_estimate)) }
         compose.runOnIdle { readable.value = false }
         awaitState { it.getJSONObject("current").getString("display") == "none" }

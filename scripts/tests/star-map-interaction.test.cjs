@@ -94,7 +94,7 @@ test('mouse click works but mouse pan does not dismiss', () => {
     assert.equal(f.taps, 1);
 });
 
-function integrationFixture({beforeReady = () => {}, observer = true, landscape = null} = {}) {
+function integrationFixture({beforeReady = () => {}, observer = true, landscape = null, deferFrames = false} = {}) {
     let now = 1700000000000;
     const ClockDate = class extends Date { constructor(...args) { super(...(args.length ? args : [now])); } static now() { return now; } };
     const elements = new Map();
@@ -111,11 +111,12 @@ function integrationFixture({beforeReady = () => {}, observer = true, landscape 
     let ready;
     let changed;
     const deferred = [];
+    const animationFrames = [];
     const doc = {getElementById: id => elements.get(id), documentElement: {clientWidth: 400, clientHeight: 600}};
     const window = {
         innerWidth: 400, innerHeight: 600, location: {href: 'https://example.test/index.html' +
             (landscape == null ? '' : '?landscape=' + (landscape ? '1' : '0'))},
-        addEventListener() {}, requestAnimationFrame: fn => fn(),
+        addEventListener() {}, requestAnimationFrame: fn => deferFrames ? animationFrames.push(fn) : fn(),
         IndigoSkyTap: {install: (element, callback) => install(element, callback, Date.now, fn => deferred.push(fn))},
         AndroidStarMap: new Proxy({}, {get: (_, method) => value => messages.push({method, value})}),
         StelWebEngine: options => { ready = options.onReady; }
@@ -142,7 +143,8 @@ function integrationFixture({beforeReady = () => {}, observer = true, landscape 
     beforeReady(window.MercStarMap);
     ready(engine);
     if (observer) window.MercStarMap.setObserver(31, 121, now);
-    return {window, engine, messages, looksAt, frames,
+    return {window, engine, messages, looksAt, frames, elements,
+        renderFrame() { const callbacks = animationFrames.splice(0); callbacks.forEach(fn => fn()); },
         get now() { return now; }, advance(ms) { now += ms; },
         get looks() { return looks; },
         touch(name, touches, changedTouches = touches) {
@@ -156,6 +158,30 @@ function integrationFixture({beforeReady = () => {}, observer = true, landscape 
         }
     };
 }
+
+test('sky overlays refresh after the renderer updates its view matrix without another property change', () => {
+    const f = integrationFixture({deferFrames: true});
+    let matrixRa = 5 * Math.PI / 12;
+    let matrixDec = 20 * Math.PI / 180;
+    f.engine.convertFrame = (_, from, to, v) => to === 'VIEW'
+        ? [v[0] - matrixRa, v[1] - matrixDec, 1] : v;
+    f.window.MercStarMap.setCurrentCircleFovOverlay(1, false, '', 5, 20, 'JNOW');
+    f.window.MercStarMap.setTargetCircleFovOverlay(1, '', 5.1, 20, 'JNOW');
+    const current = f.elements.get('fov-current');
+    const target = f.elements.get('fov-target');
+    const before = [current.style.left, target.style.left];
+    // The engine publishes yaw/pitch changes before its next _core_render updates VIEW.
+    f.engine.core.observer.yaw = .1;
+    f.refresh();
+    f.renderFrame();
+    matrixRa += .1;
+    matrixDec += .05;
+    f.renderFrame();
+    assert.notEqual(current.style.left, before[0]);
+    assert.notEqual(target.style.left, before[1]);
+    assert.equal(current.style.display, 'block');
+    assert.equal(target.style.display, 'block');
+});
 
 test('engine coordinate refreshes never become explicit target selections', () => {
     const f = integrationFixture();
