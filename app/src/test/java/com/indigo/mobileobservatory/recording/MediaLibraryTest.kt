@@ -6,6 +6,24 @@ import java.io.File
 import java.nio.file.Files
 
 class MediaLibraryTest {
+    @Test fun imagePickerIncludesIndividualFitsFramesAndExcludesRunningAndUnfinishedFiles() = withLibrary { recordings, captures ->
+        val photo = file(captures, "JPG/moon.png", 1000)
+        val raw = file(captures, "FITS/raw.fits", 2000)
+        val frame = file(recordings, "FITS/session/frame-001.fit", 3000)
+        val active = file(recordings, "FITS/session/frame-002.fits", 4000)
+        file(recordings, "FITS/session/frame-003.partial.fits", 5000)
+        file(recordings, "FITS/session/.frame-004.fits", 6000)
+        file(recordings, "FITS/session/notes.json", 7000)
+        file(recordings, "SER/movie.ser", 8000)
+        file(captures, "JPG/.hidden.jpg", 9000)
+        file(captures, "JPG/stack-M42.png", 10000)
+        val images = MediaLibrary.listImages(recordings, captures, active)
+        assertEquals(listOf("stack-M42.png", "session / frame-001.fit", raw.name, photo.name), images.map { it.name })
+        assertTrue(images.all { it.file.isFile })
+        assertEquals(frame, images[1].file)
+        assertFalse(MediaLibrary.listImages(recordings, captures, active.parentFile).any { it.file.parentFile == active.parentFile })
+    }
+
     private fun withLibrary(test: (File, File) -> Unit) {
         val root = Files.createTempDirectory("media-library").toFile()
         try { test(File(root, "recordings").apply { mkdirs() }, File(root, "captures").apply { mkdirs() }) }
