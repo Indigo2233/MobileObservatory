@@ -36,6 +36,8 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
 
     private val _isCapturing = MutableStateFlow(false)
     override val isCapturing: StateFlow<Boolean> = _isCapturing.asStateFlow()
+    override val isCaptureStopped: Boolean get() = !_isCapturing.value &&
+        !captureStopFailed && captureThread?.isAlive != true
 
     override var cameraInfo: CameraInfo? = null; private set
     override var exposureRange = FloatRange(1f, 3600_000_000f, 20_000f); private set

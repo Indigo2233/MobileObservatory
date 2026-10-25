@@ -16,6 +16,8 @@ interface Camera {
     val roiSensorScale: Int get() = 1
     val isOpen: StateFlow<Boolean>
     val isCapturing: StateFlow<Boolean>
+    /** Confirm both the SDK stop and reader shutdown before a task can move the mount. */
+    val isCaptureStopped: Boolean get() = !isCapturing.value
     /** Latest SDK acquisition failure; cleared when a complete image is received. */
     val lastCaptureError: String? get() = null
     val cameraInfo: CameraInfo?
@@ -85,6 +87,11 @@ interface Camera {
 
     /** This adapter currently needs a high-bit single-frame path to verify capture provenance. */
     val requiresHighBitScienceCapture: Boolean get() = false
+}
+
+/** Optional native single-exposure mode. It starts one exposure and never retriggers it. */
+interface CameraSingleExposureCapable {
+    fun startSingleExposure(callback: FrameCallback)
 }
 
 enum class DslrStillFormat { JPEG, RAW, JPEG_PLUS_RAW }

@@ -1,6 +1,7 @@
 package com.indigo.mobileobservatory.camera.playerone
 
 import com.indigo.mobileobservatory.camera.Camera
+import com.indigo.mobileobservatory.camera.CameraSingleExposureCapable
 import com.indigo.mobileobservatory.camera.CaptureGeneration
 import com.indigo.mobileobservatory.camera.CaptureStartupBarrier
 import com.indigo.mobileobservatory.camera.CameraScienceLayouts
@@ -42,7 +43,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToInt
 
-class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBandwidthCapable,
+class PlayerOneCamera : Camera, CameraSingleExposureCapable, CameraOffsetCapable, CoolingCapable, CameraUsbBandwidthCapable,
     CameraEnvironmentControlCapable, CameraBinningCapable {
 
     override val sciencePixelTraits get() = CameraScienceLayouts.fullContainer(currentPixelFormat)
@@ -86,6 +87,10 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
 
     private val _isCapturing = MutableStateFlow(false)
     override val isCapturing: StateFlow<Boolean> = _isCapturing.asStateFlow()
+    override val isCaptureStopped: Boolean get() = !_isCapturing.value && !running.get() && !captureStopFailed && !singleExposureNeedsCleanup &&
+        captureThread?.isAlive != true && deliveryThread?.isAlive != true
+    @Volatile private var singleFrameCompleted = false
+    @Volatile private var singleExposureNeedsCleanup = false
     @Volatile override var lastCaptureError: String? = null
         private set
 
@@ -225,6 +230,7 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
             }
 
             captureStopFailed = false
+            singleExposureNeedsCleanup = false
             _isOpen.value = true
             acceptRecycledBuffers.set(true)
             FileLogger.i(
@@ -321,7 +327,7 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
     @Synchronized override fun startCapture(callback: FrameCallback) {
         val cam = poa ?: return
         if (!_isOpen.value || disconnected) return
-        if (running.get() || captureThread?.isAlive == true || deliveryThread?.isAlive == true || captureStopFailed) {
+        if (running.get() || captureThread?.isAlive == true || deliveryThread?.isAlive == true || captureStopFailed || singleExposureNeedsCleanup) {
             FileLogger.w(TAG, "Cannot start while the previous capture has not stopped")
             return
         }
@@ -335,6 +341,7 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
             else { currentExposureUs = exposure; currentGain = gain; true }
         }.getOrDefault(false)
         frameCallback = callback
+        singleFrameCompleted = false
         ensureDirectBuffers()
 
         try {
@@ -375,12 +382,14 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
         val threads = synchronized(this) {
             captureGeneration.stop()
             if (!_isCapturing.value && !running.get() && captureThread?.isAlive != true &&
-                deliveryThread?.isAlive != true && !captureStopFailed) return
+                deliveryThread?.isAlive != true && !captureStopFailed && !singleExposureNeedsCleanup) return
             running.set(false)
             _isCapturing.value = false
             frameCallback = null
             captureStopFailed = if (disconnected) true else runCatching {
-                checkNotNull(poa).stopExposure(); false
+                if (!singleFrameCompleted) checkNotNull(poa).stopExposure()
+                singleExposureNeedsCleanup = false
+                false
             }.getOrDefault(true)
             (captureThread to deliveryThread).also { (reader, delivery) ->
                 reader?.interrupt(); delivery?.interrupt()
@@ -394,6 +403,69 @@ class PlayerOneCamera : Camera, CameraOffsetCapable, CoolingCapable, CameraUsbBa
             if (deliveryThread === delivery && delivery?.isAlive != true) deliveryThread = null
         }
         FileLogger.i(TAG, "Capture stopped")
+    }
+
+    @Synchronized override fun startSingleExposure(callback: FrameCallback) {
+        val cam = poa ?: error("Player One camera is not connected")
+        check(_isOpen.value && !disconnected && isCaptureStopped) { "Previous Player One acquisition has not stopped" }
+        val exposureConfig = cam.getConfig(PoaConfig.EXPOSURE_MICROSECONDS)
+        val gainConfig = cam.getConfig(PoaConfig.GAIN)
+        val exposure = exposureConfig.value.asInteger().toFloat()
+        val gain = gainConfig.value.asInteger().toFloat()
+        check(!exposureConfig.isAuto && !gainConfig.isAuto && exposure in exposureRange.min..hwExposureMaxUs &&
+            gain in gainRange.min..gainRange.max) { "Player One single exposure requires verified manual settings" }
+        currentExposureUs = exposure; currentGain = gain
+        ensureDirectBuffers()
+        val buffer = checkNotNull(directBuffers).first()
+        val startup = CaptureStartupBarrier()
+        check(startup.drain {
+            if (!cam.isImageReady) CaptureStartupBarrier.Read.EMPTY else {
+                buffer.clear(); cam.getImageData(buffer, 0); CaptureStartupBarrier.Read.BUFFERED_FRAME
+            }
+        }) { "Player One previous image queue could not be cleared" }
+        singleFrameCompleted = false
+        lastCaptureError = null
+        // The old queue is empty before this trigger; the sole new frame must be retained.
+        // Reader exit alone never proves that an interrupted/failed SDK exposure stopped.
+        singleExposureNeedsCleanup = true
+        cam.startExposure(true)
+        val generation = captureGeneration.begin(true)
+        frameCallback = callback
+        running.set(true); _isCapturing.value = true
+        captureThread = Thread({
+            var handedOff = false
+            var output: ByteArray? = null
+            try {
+                while (running.get() && !disconnected && captureGeneration.isActive(generation)) {
+                    try { buffer.clear(); cam.getImageData(buffer, GRAB_TIMEOUT_MS) }
+                    catch (error: PoaException) {
+                        if (error.error == com.playeroneastronomy.camera.PoaError.TIMEOUT) continue
+                        throw error
+                    }
+                    if (!running.get() || !captureGeneration.isActive(generation)) break
+                    singleFrameCompleted = true
+                    val width = currentRoi.width; val height = currentRoi.height
+                    val size = width * height * currentPixelFormat.bytesPerPixel
+                    val owned = bufferPool.acquire(size)
+                    output = owned
+                    buffer.position(0); buffer.get(owned, 0, size)
+                    callback.onFrame(FrameData(owned, width, height, currentPixelFormat, 1,
+                        System.currentTimeMillis(), generation))
+                    handedOff = true
+                    break
+                }
+            } catch (error: Throwable) {
+                if (running.get() && !disconnected) {
+                    lastCaptureError = error.message ?: error.javaClass.simpleName
+                    FileLogger.e(TAG, "Single exposure failed", error)
+                }
+            } finally {
+                if (!handedOff) output?.let(::recycleBuffer)
+                frameCallback = null
+                running.set(false); _isCapturing.value = false
+            }
+        }, "PlayerOneSingleExposure").apply { start() }
+        FileLogger.i(TAG, "Single exposure started exposureUs=$exposure")
     }
 
     @Synchronized override fun setExposureTime(us: Float) {

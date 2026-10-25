@@ -88,6 +88,7 @@ import com.indigo.mobileobservatory.settings.CoverDefaults
 import com.indigo.mobileobservatory.settings.DeviceSettingsRepository
 import com.indigo.mobileobservatory.settings.FocuserDefaults
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancelChildren
@@ -2482,6 +2483,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun resumeCaptureForStacking() {
+        if (pointingCaptureOwned.get()) { _statusMessage.value = app.getString(R.string.polar_capture_busy); return }
         val cam = cameraManager.activeCamera ?: return
         _previewPaused.value = false
         synchronizePreviewCapture(cam)
@@ -3171,6 +3173,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun togglePreviewPause() {
         val cam = cameraManager.activeCamera ?: return
         val newPaused = !_previewPaused.value
+        if (!newPaused && pointingCaptureOwned.get()) { _statusMessage.value = app.getString(R.string.polar_capture_busy); return }
         _previewPaused.value = newPaused
         if (newPaused) {
             stacking.live.pause("capture_paused")
@@ -3741,82 +3744,105 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 app.getString(R.string.polar_capture_busy)
             }
             check(autoExposureController.mode == AutoExposureMode.OFF) { app.getString(R.string.polar_capture_manual_exposure) }
+            check(!_isRecording.value && currentRecordingFile == null && stacking.live.state.value.phase != LiveStackPhase.RUNNING) {
+                app.getString(R.string.polar_exposure_capture_busy)
+            }
             if (requestedExposureUs != null) {
                 check(requestedExposureUs.isFinite() && requestedExposureUs in cam.exposureRange.min..cam.hwExposureMaxUs) {
                     app.getString(R.string.polar_exposure_out_of_range, cam.exposureRange.min / 1_000_000f, cam.hwExposureMaxUs / 1_000_000f)
                 }
-                if (requestedExposureUs != cam.currentExposureUs) {
-                    check(!_isRecording.value && stacking.live.state.value.phase != LiveStackPhase.RUNNING) {
-                        app.getString(R.string.polar_exposure_capture_busy)
-                    }
-                    invalidateStackSettings()
-                    previewEpoch.invalidate()
-                    val restart = cam.isCapturing.value
-                    val previousLongExposure = cam.longExposureEnabled
-                    var applied = false
-                    if (restart) cam.stopCapture()
-                    try {
-                        currentCoroutineContext().ensureActive()
-                        exposureWriteMutex.withLock {
-                            val longExposure = requestedExposureUs > ExposureLimits.SHORT_MAX_US
-                            cam.longExposureEnabled = longExposure
-                            _longExposureEnabled.value = longExposure
-                            cam.setExposureTime(requestedExposureUs)
-                            check(cameraManager.activeCamera === cam) { app.getString(R.string.polar_capture_no_camera) }
-                            _exposureUs.value = cam.currentExposureUs
-                            check(com.indigo.mobileobservatory.polar.PolarExposure.matchesReadback(requestedExposureUs, cam.currentExposureUs)) {
-                                app.getString(R.string.polar_exposure_not_applied, requestedExposureUs / 1_000_000f, cam.currentExposureUs / 1_000_000f)
+            }
+            check(pendingCaptureChanges.get() == 0 && pointingCaptureOwned.compareAndSet(false, true)) {
+                app.getString(R.string.polar_capture_busy)
+            }
+            try {
+                _previewPaused.value = true
+                previewEpoch.invalidate()
+                previewPipeline.stop(clearFrame = false)
+                stopExposureTimer()
+                scienceProvenance.clear()
+                _scienceCaptureReady.value = false
+                withContext(NonCancellable) { cam.stopCapture() }
+                check(cam.isCaptureStopped) { app.getString(R.string.polar_capture_stop_failed) }
+                currentCoroutineContext().ensureActive()
+                if (requestedExposureUs != null) {
+                    if (requestedExposureUs != cam.currentExposureUs) {
+                        invalidateStackSettings()
+                        val previousLongExposure = cam.longExposureEnabled
+                        var applied = false
+                        try {
+                            currentCoroutineContext().ensureActive()
+                            exposureWriteMutex.withLock {
+                                val longExposure = requestedExposureUs > ExposureLimits.SHORT_MAX_US
+                                cam.longExposureEnabled = longExposure
+                                _longExposureEnabled.value = longExposure
+                                cam.setExposureTime(requestedExposureUs)
+                                check(cameraManager.activeCamera === cam) { app.getString(R.string.polar_capture_no_camera) }
+                                _exposureUs.value = cam.currentExposureUs
+                                check(com.indigo.mobileobservatory.polar.PolarExposure.matchesReadback(requestedExposureUs, cam.currentExposureUs)) {
+                                    app.getString(R.string.polar_exposure_not_applied, requestedExposureUs / 1_000_000f, cam.currentExposureUs / 1_000_000f)
+                                }
+                                applied = true
                             }
-                            applied = true
+                        } finally {
+                            if (!applied) {
+                                cam.longExposureEnabled = previousLongExposure
+                                _longExposureEnabled.value = previousLongExposure
+                            }
+                            refreshExposureUiLimits()
                         }
-                    } finally {
-                        if (!applied) {
-                            cam.longExposureEnabled = previousLongExposure
-                            _longExposureEnabled.value = previousLongExposure
-                        }
-                        refreshExposureUiLimits()
-                        if (restart && cameraManager.activeCamera === cam && !_previewPaused.value) startPreview()
                     }
                 }
-            }
-            if (_previewPaused.value || !cam.isCapturing.value) {
-                _previewPaused.value = false
-                startPreview()
-            }
-            check(cam.isCapturing.value) { app.getString(R.string.polar_capture_start_failed) }
-            val exposure = cam.currentExposureUs
-            val gain = cam.currentGain
-            val roi = cam.currentRoi
-            val bin = _binning.value
-            val format = cam.currentPixelFormat
-            val requestedAt = System.currentTimeMillis()
-            val timeout = com.indigo.mobileobservatory.astrometry.plateSolveFrameWaitMs(exposure)
-            FileLogger.i("PolarCapture", "Waiting for fresh frame camera=${cam.cameraInfo?.name} exposureUs=$exposure gain=$gain roi=$roi format=$format waitMs=$timeout")
-            val frame = com.indigo.mobileobservatory.astrometry.awaitFreshPlateSolveFrame(
-                exposure, requestedAt, android.os.SystemClock::elapsedRealtime,
-                checkCamera = {
-                    check(cameraManager.activeCamera === cam && cam.isOpen.value) { app.getString(R.string.polar_capture_no_camera) }
-                    check(cam.isCapturing.value && !_previewPaused.value) { app.getString(R.string.polar_capture_interrupted) }
-                    check(cam.currentExposureUs == exposure && cam.currentGain == gain && cam.currentRoi == roi &&
-                        cam.currentPixelFormat == format && _binning.value == bin) { app.getString(R.string.polar_capture_settings_changed) }
-                },
-                read = { wait -> awaitFrameSnapshot(wait) }
-            ) ?: error(app.getString(R.string.polar_capture_timeout, timeout / 1000, exposure / 1_000_000f,
-                cam.lastCaptureError ?: app.getString(R.string.polar_capture_no_sdk_error)))
-            val dir = File(app.cacheDir, "polar_align").also { check(it.isDirectory || it.mkdirs()) }
-            val file = File(dir, "polar_${System.currentTimeMillis()}_${java.util.UUID.randomUUID().toString().take(8)}.fits")
-            val info = cam.cameraInfo
-            try {
-                fitsWriter.write(file = file, frame = frame, exposureSeconds = exposure / 1_000_000f,
-                    gain = gain, gainKind = cam.gainCapability.kind, gainLabel = cam.gainCapability.label,
-                    gainUnit = cam.gainCapability.unit, gainDbEquivalent = cam.gainDbEquivalent(gain),
-                    cameraName = info?.name, filterName = currentFilterName(), configuredFormat = frame.pixelFormat,
-                    pixelSizeUm = info?.pixelSizeUm,
-                    focalLengthMm = prefs.getFloat("plate_focal_length_mm", 0f).takeIf { it > 0f }, binning = bin)
-                currentCoroutineContext().ensureActive()
-                FileLogger.i("PolarCapture", "Captured file=${file.absolutePath} bytes=${file.length()} frame=${frame.width}x${frame.height} timestamp=${frame.timestamp}")
-                file
-            } catch (failure: Throwable) { file.delete(); throw failure }
+                val exposure = cam.currentExposureUs
+                val gain = cam.currentGain
+                val roi = cam.currentRoi
+                val bin = _binning.value
+                val format = cam.currentPixelFormat
+                val requestedAt = System.currentTimeMillis()
+                val timeout = com.indigo.mobileobservatory.astrometry.plateSolveFrameWaitMs(exposure)
+                val earliestEnd = requestedAt + kotlin.math.ceil(exposure / 1000.0).toLong()
+                val selection = loadCameraCfa(cam)
+                FileLogger.i("PolarCapture", "Single exposure camera=${cam.cameraInfo?.name} native=${cam is CameraSingleExposureCapable} exposureUs=$exposure gain=$gain roi=$roi format=$format waitMs=$timeout")
+                val captured = captureSingleExposureFrame(
+                    camera = cam, timeoutMs = timeout, elapsedMs = android.os.SystemClock::elapsedRealtime,
+                    checkCamera = {
+                        check(cameraManager.activeCamera === cam && cam.isOpen.value) { app.getString(R.string.polar_capture_no_camera) }
+                        check(cam.currentExposureUs == exposure && cam.currentGain == gain && cam.currentRoi == roi &&
+                            cam.currentPixelFormat == format && _binning.value == bin) { app.getString(R.string.polar_capture_settings_changed) }
+                    },
+                    acceptFrame = { frame ->
+                        val generation = cam.scienceCaptureGeneration
+                        frame.timestamp >= earliestEnd &&
+                            (generation == null || frame.captureGeneration == null || frame.captureGeneration == generation)
+                    },
+                    snapshot = { frame ->
+                        val interpreted = CameraCfaLayout.interpret(frame, selection)
+                        val traits = cameraCfaTraits(cam, selection)
+                        val processed = softwareBinning.apply(interpreted, traits)
+                        try { CameraCfaLayout.ownedSnapshot(processed, traits) }
+                        finally { if (processed.data !== interpreted.data) softwareBinning.release(processed.data) }
+                    }
+                ) ?: error(app.getString(R.string.polar_capture_timeout, timeout / 1000, exposure / 1_000_000f,
+                    cam.lastCaptureError ?: app.getString(R.string.polar_capture_no_sdk_error)))
+                val frame = captured.frame
+                FileLogger.i("PolarCapture", "Single exposure complete; camera stopped before FITS/solve")
+                val dir = File(app.cacheDir, "polar_align").also { check(it.isDirectory || it.mkdirs()) }
+                val file = File(dir, "polar_${System.currentTimeMillis()}_${java.util.UUID.randomUUID().toString().take(8)}.fits")
+                val info = cam.cameraInfo
+                try {
+                    fitsWriter.write(file = file, frame = frame, exposureSeconds = exposure / 1_000_000f,
+                        gain = gain, gainKind = cam.gainCapability.kind, gainLabel = cam.gainCapability.label,
+                        gainUnit = cam.gainCapability.unit, gainDbEquivalent = cam.gainDbEquivalent(gain),
+                        cameraName = info?.name, filterName = currentFilterName(), configuredFormat = frame.pixelFormat,
+                        pixelSizeUm = info?.pixelSizeUm,
+                        focalLengthMm = prefs.getFloat("plate_focal_length_mm", 0f).takeIf { it > 0f }, binning = bin,
+                        exposureStartedAt = java.time.Instant.ofEpochMilli(frame.timestamp)
+                            .minusNanos((exposure.toDouble() * 1000).toLong()))
+                    currentCoroutineContext().ensureActive()
+                    FileLogger.i("PolarCapture", "Captured file=${file.absolutePath} bytes=${file.length()} frame=${frame.width}x${frame.height} timestamp=${frame.timestamp}")
+                    file
+                } catch (failure: Throwable) { file.delete(); throw failure }
+            } finally { pointingCaptureOwned.set(false) }
         }
     }
 
