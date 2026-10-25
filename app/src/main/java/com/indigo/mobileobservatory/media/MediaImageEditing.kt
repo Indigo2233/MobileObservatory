@@ -183,7 +183,7 @@ object MediaImageEditing {
     }
 
     internal fun checkMemory(bytes: Long) = MediaImageMemory.check(nativeBytes = bytes)
-    private fun checkCancelled(cancelled: () -> Boolean) { if (cancelled()) throw CancellationException("Image edit cancelled") }
+    internal fun checkCancelled(cancelled: () -> Boolean) { if (cancelled()) throw CancellationException("Image edit cancelled") }
     fun fingerprint(file: File): String {
         require(file.isFile && file.length() > 0) { "source_changed" }
         return "${file.absolutePath}:${file.length()}:${file.lastModified()}"

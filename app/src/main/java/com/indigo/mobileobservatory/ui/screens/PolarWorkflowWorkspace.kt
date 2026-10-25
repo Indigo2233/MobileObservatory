@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.indigo.mobileobservatory.R
+import com.indigo.mobileobservatory.camera.CameraPreviewSettings
 import com.indigo.mobileobservatory.media.*
 import com.indigo.mobileobservatory.polar.*
 import kotlinx.coroutines.*
@@ -127,27 +128,27 @@ internal fun PolarWorkflowPreview(
     inspectFile: File?,
     onInspect: (File?) -> Unit,
     adjustment: PolarAdjustmentSnapshot? = null,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    previewSettings: CameraPreviewSettings = CameraPreviewSettings()
 ) {
     val source = inspectFile ?: file
     val pinnedAdjustment = remember(inspectFile) { adjustment?.takeIf { it.file == inspectFile } }
     val imageAdjustment = (if (inspectFile != null) pinnedAdjustment else adjustment)?.takeIf { it.file == source }
     val overlayColors = polarOverlayColors()
     val key = source?.let { "${it.absolutePath}:${it.length()}:${it.lastModified()}" }
-    var prepared by remember(key) { mutableStateOf<PreparedMediaImage?>(null) }
-    var bitmap by remember(key) { mutableStateOf<Bitmap?>(null) }
-    var loading by remember(key) { mutableStateOf(source != null) }
-    var previewError by remember(key) { mutableStateOf<String?>(null) }
-    val settings = PolarImagePreview.settings
-    LaunchedEffect(key) {
+    var prepared by remember(key, previewSettings) { mutableStateOf<PreparedCameraPreview?>(null) }
+    var bitmap by remember(key, previewSettings) { mutableStateOf<Bitmap?>(null) }
+    var loading by remember(key, previewSettings) { mutableStateOf(source != null) }
+    var previewError by remember(key, previewSettings) { mutableStateOf<String?>(null) }
+    LaunchedEffect(key, previewSettings) {
         if (source == null) return@LaunchedEffect
         val task = currentCoroutineContext()
         var owned: Bitmap? = null
         var published = false
         try {
             val image = withContext(Dispatchers.IO) {
-                val decoded = PolarImagePreview.prepare(source, cancelled = { !task.isActive })
-                owned = MediaImageEditing.renderPreview(decoded, settings) { !task.isActive }
+                val decoded = CameraImagePreview.prepare(source, previewSettings, cancelled = { !task.isActive })
+                owned = decoded.bitmap
                 decoded
             }
             ensureActive()
@@ -245,10 +246,10 @@ internal fun PolarWorkflowPreview(
                     val image = bitmap; val decoded = prepared
                     if (image != null && decoded != null) MediaImageInspection(
                         image = image, before = null, imageKey = key.orEmpty(), originalWidth = decoded.originalWidth,
-                        originalHeight = decoded.originalHeight, nativeKey = key.orEmpty(),
+                        originalHeight = decoded.originalHeight, nativeKey = decoded.settings to decoded.window,
                         renderNative = { region, _ ->
                             val task = currentCoroutineContext()
-                            withContext(Dispatchers.IO) { MediaImageEditing.renderRegion(decoded, settings, region) { !task.isActive } }
+                            withContext(Dispatchers.IO) { CameraImagePreview.renderRegion(decoded, region) { !task.isActive } }
                         }, navigation = navigation, modifier = Modifier.weight(1f).fillMaxWidth()
                             .then(if (pinnedAdjustment?.geometry != null) Modifier.testTag("polar-correction-inspection") else Modifier),
                         overlay = pinnedAdjustment?.geometry?.let { geometry ->

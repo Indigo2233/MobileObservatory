@@ -13,23 +13,22 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.media.*
-import com.indigo.mobileobservatory.polar.PolarImagePreview
+import com.indigo.mobileobservatory.camera.CameraPreviewSettings
 import kotlinx.coroutines.*
 import java.io.File
 
 /** Small UInt16 source preview; opening the image uses the existing full image viewer. */
 @Composable
-internal fun PolarSampleThumbnail(file: File, onOpen: () -> Unit) {
-    var bitmap by remember(file) { mutableStateOf<Bitmap?>(null) }
-    var failure by remember(file) { mutableStateOf<String?>(null) }
-    LaunchedEffect(file) {
+internal fun PolarSampleThumbnail(file: File, onOpen: () -> Unit, settings: CameraPreviewSettings = CameraPreviewSettings()) {
+    var bitmap by remember(file, settings) { mutableStateOf<Bitmap?>(null) }
+    var failure by remember(file, settings) { mutableStateOf<String?>(null) }
+    LaunchedEffect(file, settings) {
         val task = currentCoroutineContext()
         var owned: Bitmap? = null
         var published = false
         try {
             withContext(Dispatchers.IO) {
-                val prepared = PolarImagePreview.prepare(file, 480) { !task.isActive }
-                owned = MediaImageEditing.renderPreview(prepared, PolarImagePreview.settings) { !task.isActive }
+                owned = CameraImagePreview.prepare(file, settings, 480) { !task.isActive }.bitmap
             }
             ensureActive()
             bitmap = owned

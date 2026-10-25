@@ -361,6 +361,7 @@ private fun ObservatoryContent(
                 cameraConnected = connection is ConnectionState.Connected, cameraPreviewBitmap = preview,
                 cameraExposureUs = exposure, cameraExposureMinUs = camera?.exposureRange?.min ?: 1000f,
                 cameraExposureMaxUs = camera?.hwExposureMaxUs ?: 30_000_000f,
+                cameraPreviewSettings = vm.cameraPreviewSettings(),
                 onReadMountSite = vm::readMountSite, onSyncPhoneSiteToMount = vm::syncPhoneSiteToMount,
                 onMoveMountRaBy = vm::moveMountRaBy, onStopMountRaMove = vm::stopMountRaMove,
                 onCaptureFits = { requested -> vm.captureTempFitsForPlateSolve(requested) }, onBack = back)

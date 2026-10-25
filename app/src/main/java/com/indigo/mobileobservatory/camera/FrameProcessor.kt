@@ -11,6 +11,7 @@ import java.nio.ByteOrder
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlin.math.roundToInt
 
 data class HistogramData(
     val bins: IntArray,
@@ -83,9 +84,18 @@ internal class HighBitLayoutDetector(
     }
 }
 
-class FrameProcessor {
+/** One display recipe shared by live frames, saved frames and their native regions. */
+data class CameraPreviewSettings(
+    val autoStretch: Boolean = true, val blackPoint: Int = 0, val whitePoint: Int = 255,
+    val redGain: Float = 1f, val greenGain: Float = 1f, val blueGain: Float = 1f,
+    val lp700: Boolean = false, val focusAssist: Boolean = false
+)
+
+/** Fraction of the delivered sample range; native regions retain the overview's stretch. */
+data class PreviewWindow(val black: Float, val white: Float)
+
+class FrameProcessor(private val bitmapBufferCount: Int = 2, private val downsample: Boolean = true) {
     private companion object {
-        const val PREVIEW_BITMAP_BUFFER_COUNT = 2
         const val HISTOGRAM_PUBLISH_INTERVAL_MS = 200L
         const val HIGH_BIT_LAYOUT_STABLE_FRAMES = 12
         const val HIGH_BIT_LAYOUT_MAX_SAMPLE_FRAMES = 30
@@ -117,6 +127,22 @@ class FrameProcessor {
     var wbGreenGain: Float = 1.0f
     var wbBlueGain: Float = 1.0f
 
+    var fixedWindow: PreviewWindow? = null
+    var renderedWindow: PreviewWindow = PreviewWindow(0f, 1f)
+        private set
+    var fixedLpRecipe: Lp700PreviewMapping.ArgbRecipe? = null
+    var renderedLpRecipe: Lp700PreviewMapping.ArgbRecipe? = null
+        private set
+
+    fun previewSettings() = CameraPreviewSettings(autoStretchEnabled, manualBlackPoint, manualWhitePoint,
+        wbRedGain, wbGreenGain, wbBlueGain, lp750Enabled, focusAssistEnabled)
+
+    fun applyPreviewSettings(settings: CameraPreviewSettings) {
+        autoStretchEnabled = settings.autoStretch; manualBlackPoint = settings.blackPoint; manualWhitePoint = settings.whitePoint
+        wbRedGain = settings.redGain; wbGreenGain = settings.greenGain; wbBlueGain = settings.blueGain
+        lp750Enabled = settings.lp700; focusAssistEnabled = settings.focusAssist
+    }
+
     enum class AwbMode { OFF, ONCE, CONTINUOUS }
     var awbMode: AwbMode = AwbMode.OFF
     private var awbPending = false
@@ -145,7 +171,7 @@ class FrameProcessor {
     private var lastPreviewScaleLogKey: String? = null
 
     fun frameToBitmap(frame: FrameData, traits: PixelTraits? = null): Bitmap {
-        val preview = downsampleForPreview(frame)
+        val preview = if (downsample) downsampleForPreview(frame) else frame
         val w = preview.width
         val h = preview.height
         if (w <= 0 || h <= 0 || w > 20000 || h > 20000) {
@@ -171,7 +197,7 @@ class FrameProcessor {
                 pixels = cachedPixels!!
                 nextBitmapIndex = (nextBitmapIndex + 1) % buffers.size
             } else {
-                val created = Array(PREVIEW_BITMAP_BUFFER_COUNT) {
+                val created = Array(bitmapBufferCount.coerceAtLeast(1)) {
                     Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
                 }
                 bitmap = created.first()
@@ -180,7 +206,7 @@ class FrameProcessor {
                 cachedPixels = pixels
                 cachedW = w
                 cachedH = h
-                nextBitmapIndex = 1
+                nextBitmapIndex = 1 % created.size
             }
         } catch (e: OutOfMemoryError) {
             FileLogger.e("FrameProcessor", "OOM creating bitmap ${w}x${h}", e)
@@ -198,8 +224,8 @@ class FrameProcessor {
             fillMonoPixels(preview, pixels, w, h, traits)
         }
 
-        if (lp750Enabled && preview.pixelFormat.isBayer) {
-            Lp700PreviewMapping.applyToArgb(pixels)
+        if (lp750Enabled && !rawMonochrome && (preview.pixelFormat.isBayer || preview.pixelFormat == PixelFormat.RGB48)) {
+            renderedLpRecipe = Lp700PreviewMapping.applyToArgb(pixels, recipe = fixedLpRecipe)
         }
 
         bitmap.setPixels(pixels, 0, w, 0, 0, w, h)
@@ -387,16 +413,14 @@ class FrameProcessor {
         val hist = computeStretchPoints(bins, numBins, maxCount, si)
         publishHistogram(hist)
 
-        val (bp, wp) = if (autoStretchEnabled) {
-            (hist.blackPoint shl 6) to (hist.whitePoint shl 6)
-        } else {
-            (manualBlackPoint * 65535 / 255) to (manualWhitePoint * 65535 / 255)
-        }
+        val (bp, wp) = displayBounds(hist, 65535, 6)
         val range = (wp - bp).coerceAtLeast(1)
 
         for (i in 0 until totalPixels) {
             val base = i * 6
-            if (base + 5 >= data.size) break
+            if (base + 5 >= data.size) {
+                break
+            }
             var r = (data[base].toInt() and 0xFF) or ((data[base + 1].toInt() and 0xFF) shl 8)
             var g = (data[base + 2].toInt() and 0xFF) or ((data[base + 3].toInt() and 0xFF) shl 8)
             var b = (data[base + 4].toInt() and 0xFF) or ((data[base + 5].toInt() and 0xFF) shl 8)
@@ -444,15 +468,7 @@ class FrameProcessor {
         publishHistogram(hist)
 
         val maxVal = if (frame.pixelFormat.is10bit) 1023 else 255
-        val bp: Int
-        val wp: Int
-        if (autoStretchEnabled) {
-            bp = hist.blackPoint
-            wp = hist.whitePoint
-        } else {
-            bp = manualBlackPoint * maxVal / 255
-            wp = manualWhitePoint * maxVal / 255
-        }
+        val (bp, wp) = displayBounds(hist, maxVal)
         val range = (wp - bp).coerceAtLeast(1)
 
         if (frame.pixelFormat.is10bit) {
@@ -480,15 +496,7 @@ class FrameProcessor {
         }
 
         val maxVal = if (frame.pixelFormat.is10bit) 1023 else 255
-        val bp: Int
-        val wp: Int
-        if (autoStretchEnabled) {
-            bp = hist.blackPoint
-            wp = hist.whitePoint
-        } else {
-            bp = manualBlackPoint * maxVal / 255
-            wp = manualWhitePoint * maxVal / 255
-        }
+        val (bp, wp) = displayBounds(hist, maxVal)
         val range = (wp - bp).coerceAtLeast(1)
 
         val is10 = frame.pixelFormat.is10bit
@@ -522,6 +530,17 @@ class FrameProcessor {
             if (focusAssistEnabled) BayerDemosaic.Mode.DIRECTIONAL else BayerDemosaic.Mode.BILINEAR,
             pixels
         )
+    }
+
+    private fun displayBounds(histogram: HistogramData, maximum: Int, histogramShift: Int = 0): Pair<Int, Int> {
+        val fixed = fixedWindow
+        val bounds = when {
+            fixed != null -> (fixed.black * maximum).roundToInt() to (fixed.white * maximum).roundToInt()
+            autoStretchEnabled -> (histogram.blackPoint shl histogramShift) to (histogram.whitePoint shl histogramShift)
+            else -> (manualBlackPoint * maximum / 255) to (manualWhitePoint * maximum / 255)
+        }
+        renderedWindow = PreviewWindow(bounds.first / maximum.toFloat(), bounds.second / maximum.toFloat())
+        return bounds
     }
 
     private fun getRawPixelFast(data: ByteArray, idx: Int, is10: Boolean): Int {
