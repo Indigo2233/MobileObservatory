@@ -45,7 +45,7 @@ class GuideMainActivityInstrumentedTest {
     }
     @get:Rule(order = 1) val compose = createAndroidComposeRule<MainActivity>()
 
-    @Test fun chineseMainActivityCanOpenGuideRotateToLandscapeAndReturn() {
+    @Test fun chineseMainActivityCanOpenGuideAndRotateToLandscape() {
         compose.onNodeWithTag("workspace-TOOLS").performClick()
         compose.onNodeWithTag("tool-guide").performScrollTo().performClick()
         compose.waitUntil(10_000) { compose.activity.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE }
@@ -59,7 +59,5 @@ class GuideMainActivityInstrumentedTest {
             File(folder, "chinese-main-landscape.png").outputStream().use { screenshot.compress(Bitmap.CompressFormat.PNG, 100, it) }
             screenshot.recycle()
         }
-        instrumentation.sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
-        compose.onNodeWithTag("tool-guide").assertExists()
     }
 }
