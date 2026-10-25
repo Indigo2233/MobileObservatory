@@ -15,6 +15,8 @@ import com.indigo.mobileobservatory.stacking.PixelTraits
 import com.indigo.mobileobservatory.stacking.SampleAlignment
 import com.indigo.mobileobservatory.stacking.SerCfaInterpretation
 import com.indigo.mobileobservatory.ui.viewmodel.CameraViewModel
+import com.indigo.mobileobservatory.polar.PolarSampleSession
+import com.indigo.mobileobservatory.astrometry.PlateSolveResult
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -143,7 +145,7 @@ class CameraCfaPipelineInstrumentedTest {
             val pending = vm.javaClass.getDeclaredField("pendingFrameSnapshot").apply { isAccessible = true }
             fun awaitingFrame() = (pending.get(vm) as AtomicReference<*>).get() != null
             val fitsTask = async(Dispatchers.IO) { vm.captureTempFitsForPlateSolve() }
-            await(::awaitingFrame)
+            await { camera.singleStarts == 1 }
             main { assertFalse(vm.applyCameraCfa(SerCfaInterpretation.RGGB)) }
             // The polar sample must belong to an exposure started after the request.
             kotlinx.coroutines.delay((camera.currentExposureUs / 1000).toLong() + 20)
@@ -154,6 +156,8 @@ class CameraCfaPipelineInstrumentedTest {
                 assertTrue("Polar acquisition must leave preview paused", vm.previewPaused.value)
                 val header = fits.readBytes().copyOfRange(0, 2880).toString(Charsets.US_ASCII)
                 assertTrue(header.contains("BAYERPAT= 'BGGR'")); assertTrue(Regex("VALIDBIT=\\s+12").containsMatchIn(header))
+                val actualStart = java.time.Instant.parse(com.indigo.mobileobservatory.util.FitsHeaderParser.read(fits)["DATE-OBS"])
+                assertEquals(camera.lastFrameTimestamp - (camera.currentExposureUs / 1000).toLong(), actualStart.toEpochMilli())
             } finally { fits.delete() }
             main { vm.togglePreviewPause() }
             await { camera.isCapturing.value }
@@ -178,6 +182,81 @@ class CameraCfaPipelineInstrumentedTest {
                         "${MediaStore.Images.Media.DISPLAY_NAME} = ?", arrayOf(file.name))
                     file.delete()
                 }
+            }
+        }
+    }
+
+    @Test fun polarSamplesKeepTheCameraIdleThroughoutSolveAndBetweenPoints() = runBlocking {
+        workspace(tokens = true) { vm, camera ->
+            val session = PolarSampleSession()
+            val outputs = mutableListOf<File>()
+            try {
+                repeat(3) { point ->
+                    val enteredSolve = CompletableDeferred<Unit>()
+                    val finishSolve = CompletableDeferred<Unit>()
+                    val task = async(Dispatchers.IO) {
+                        session.execute(point,
+                            capture = { vm.captureTempFitsForPlateSolve() }, fieldOfView = { .8 },
+                            solve = { file, _ ->
+                                outputs += file
+                                assertFalse(camera.isCapturing.value)
+                                assertTrue(vm.previewPaused.value)
+                                enteredSolve.complete(Unit)
+                                finishSolve.await()
+                                assertFalse(camera.isCapturing.value)
+                                PlateSolveResult(true, "Solved fixture", raDeg = 30.0 + point, decDeg = 20.0)
+                            })
+                    }
+                    try {
+                        await { camera.singleStarts == point + 1 }
+                        delay(20); camera.emitLatest()
+                        withTimeout(10_000) { enteredSolve.await() }
+                        delay(80)
+                        assertEquals(point + 1, camera.singleStarts)
+                        assertFalse(camera.isCapturing.value)
+                        finishSolve.complete(Unit)
+                        assertTrue(task.await().success)
+                        // The caller can now move the mount before explicitly requesting the next point.
+                        assertFalse(camera.isCapturing.value)
+                    } finally { finishSolve.complete(Unit); task.cancelAndJoin() }
+                }
+            } finally { outputs.forEach { it.delete() } }
+        }
+    }
+
+    @Test fun cancellingAPolarExposureStopsItAndLeavesPreviewPaused() = runBlocking {
+        workspace(tokens = true) { vm, camera ->
+            val task = async(Dispatchers.IO) { vm.captureTempFitsForPlateSolve() }
+            await { camera.singleStarts == 1 }
+            task.cancelAndJoin()
+            assertFalse(camera.isCapturing.value)
+            assertTrue(vm.previewPaused.value)
+            val stale = camera.emitLatest()
+            assertEquals(1, camera.releases[stale]?.get())
+            delay(100)
+            assertEquals(1, camera.singleStarts)
+            assertFalse(camera.isCapturing.value)
+        }
+    }
+
+    @Test fun polarExposureCannotInterruptAnActiveRecordingEvenWithTheSameExposure() = runBlocking {
+        workspace(tokens = true) { vm, camera ->
+            await { camera.emitLatest(); vm.scienceCaptureReady.value }
+            var output: File? = null
+            try {
+                main { vm.setRecordFormat("SER"); vm.startRecording() }
+                assertTrue(vm.isRecording.value)
+                output = vm.getActiveRecordingFile()
+                val error = runCatching { vm.captureTempFitsForPlateSolve(camera.currentExposureUs) }.exceptionOrNull()
+                assertNotNull(error)
+                assertEquals(0, camera.singleStarts)
+                assertTrue(camera.isCapturing.value)
+                assertTrue(vm.isRecording.value)
+                assertFalse(vm.previewPaused.value)
+            } finally {
+                main { vm.stopRecording() }
+                await { vm.getActiveRecordingFile() == null }
+                output?.let { it.delete(); File(it.parentFile, "${it.name}.capture.json").delete() }
             }
         }
     }
@@ -231,7 +310,7 @@ class CameraCfaPipelineInstrumentedTest {
     }
     private suspend fun await(test: () -> Boolean) = withTimeout(15_000) { while (!test()) delay(20) }
 
-    private class CameraFixture(private val tokens: Boolean) : Camera {
+    private class CameraFixture(private val tokens: Boolean) : Camera, CameraSingleExposureCapable {
         override val isOpen = MutableStateFlow(true)
         override val isCapturing = MutableStateFlow(false)
         override val cameraInfo = CameraInfo("CFA${UUID.randomUUID().toString().take(8)}", UUID.randomUUID().toString(), 32,32,12)
@@ -249,11 +328,14 @@ class CameraCfaPipelineInstrumentedTest {
         @Volatile private var activeRun: Long? = null
         override val scienceCaptureGeneration get() = if (tokens) activeRun else null
         @Volatile var starts = 0
+        @Volatile var singleStarts = 0
+        @Volatile var lastFrameTimestamp = 0L
         @Volatile var pixelFormatWrites = 0
         private val callbacks = CopyOnWriteArrayList<FrameCallback>()
         private val ids = java.util.concurrent.atomic.AtomicLong()
         val releases = ConcurrentHashMap<ByteArray, AtomicInteger>()
         override fun startCapture(callback: FrameCallback) { callbacks.add(callback); starts++; activeRun=starts.toLong(); isCapturing.value=true }
+        override fun startSingleExposure(callback: FrameCallback) { startCapture(callback); singleStarts++ }
         override fun stopCapture() { activeRun=null; isCapturing.value=false }
         fun emitLatest() = emit(callbacks.lastIndex, scienceCaptureGeneration)
         fun emit(index: Int, run: Long?, white: Boolean = false): ByteArray {
@@ -263,7 +345,9 @@ class CameraCfaPipelineInstrumentedTest {
                 val value = (fraction * 4095).toInt() shl 4
                 val p = (y*24+x)*2; bytes[p]=value.toByte(); bytes[p+1]=(value ushr 8).toByte()
             }
-            callbacks[index].onFrame(FrameData(bytes,24,24,currentPixelFormat,ids.incrementAndGet(),System.currentTimeMillis(),run))
+            val timestamp = System.currentTimeMillis()
+            lastFrameTimestamp = timestamp
+            callbacks[index].onFrame(FrameData(bytes,24,24,currentPixelFormat,ids.incrementAndGet(),timestamp,run))
             return bytes
         }
         override fun recycleBuffer(buf: ByteArray) { releases.computeIfAbsent(buf) { AtomicInteger() }.incrementAndGet() }

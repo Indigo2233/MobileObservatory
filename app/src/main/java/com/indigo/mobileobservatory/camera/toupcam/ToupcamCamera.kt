@@ -35,6 +35,8 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
 
     private val _isCapturing = MutableStateFlow(false)
     override val isCapturing: StateFlow<Boolean> = _isCapturing.asStateFlow()
+    override val isCaptureStopped: Boolean get() = !_isCapturing.value && !running.get() &&
+        !captureStopFailed && captureThread?.isAlive != true
 
     override var cameraInfo: CameraInfo? = null
         private set

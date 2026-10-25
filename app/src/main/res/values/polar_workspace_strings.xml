@@ -2,7 +2,8 @@
 <resources>
     <string name="polar_exposure_seconds">Exposure (s)</string>
     <string name="polar_exposure_out_of_range">Enter an exposure between %1$.6f and %2$.3f s.</string>
-    <string name="polar_exposure_capture_busy">Stop recording or live stacking before changing the polar exposure.</string>
+    <string name="polar_exposure_capture_busy">Stop recording or live stacking before taking a polar alignment exposure.</string>
+    <string name="polar_capture_stop_failed">Camera acquisition could not be stopped. Check the connection before taking another exposure.</string>
     <string name="polar_exposure_not_applied">Camera did not apply %1$.3f s. Actual exposure: %2$.3f s. Check the camera and retry.</string>
     <string name="polar_previous_image">Previous image · %1$s</string>
     <string name="polar_image_inspection">Sample image</string>

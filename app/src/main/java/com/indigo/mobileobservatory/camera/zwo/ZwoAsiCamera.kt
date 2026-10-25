@@ -98,6 +98,8 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
 
     private val _isCapturing = MutableStateFlow(false)
     override val isCapturing: StateFlow<Boolean> = _isCapturing.asStateFlow()
+    override val isCaptureStopped: Boolean get() = !_isCapturing.value && !running.get() &&
+        !captureStopFailed && captureThread?.isAlive != true
 
     override var cameraInfo: CameraInfo? = null; private set
     override var exposureRange: FloatRange = FloatRange(32f, 2_000_000_000f, 10_000f); private set
