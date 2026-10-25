@@ -50,10 +50,17 @@ import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.media.LibraryImportViewModel
 import com.indigo.mobileobservatory.media.ExternalMediaImportError
 import com.indigo.mobileobservatory.media.MediaImageEditSettings
+import com.indigo.mobileobservatory.media.MediaImageMemory
 import com.indigo.mobileobservatory.media.MediaImageEditing
 import com.indigo.mobileobservatory.media.MediaImageExportFormat
 import com.indigo.mobileobservatory.media.PreparedMediaImage
 import com.indigo.mobileobservatory.media.MediaImageEditViewModel
+import com.indigo.mobileobservatory.media.MediaEditRecipe
+import com.indigo.mobileobservatory.media.MediaEditRecipeStore
+import com.indigo.mobileobservatory.media.MediaLineage
+import com.indigo.mobileobservatory.media.MediaTrash
+import com.indigo.mobileobservatory.media.MediaGroup
+import com.indigo.mobileobservatory.media.MediaRole
 import com.indigo.mobileobservatory.ui.components.Lp750Credit
 import com.indigo.mobileobservatory.mount.MountCoordinates
 import com.indigo.mobileobservatory.recording.SERReader
@@ -184,6 +191,7 @@ fun PlayerScreen(
 ) {
     // Orientation belongs to CameraScreen's navigation owner. Mutating it again here,
     // especially during disposal, can request a second Activity configuration change.
+    val context = LocalContext.current
     val fileSaver = listSaver<VideoFileInfo?, String>(
         save = { info -> info?.let { listOf(it.file.absolutePath, it.name, it.size.toString(), it.format) } ?: emptyList() },
         restore = { if (it.isEmpty()) null else VideoFileInfo(File(it[0]), it[1], it[2].toLong(), it[3]) })
@@ -275,6 +283,8 @@ fun PlayerScreen(
             PlaybackView(
                 fileInfo = info,
                 capturesDir = capturesDir,
+                recordingsDir = recordingsDir,
+                excludeFile = excludeFile,
                 onBack = leaveFile,
                 onNavigateUp = onNavigateUp,
                 onImageExported = { refreshTrigger++ },
@@ -288,8 +298,10 @@ fun PlayerScreen(
                 onDelete = {
                     val currentIndex = currentFiles.indexOfFirst { it.file.absolutePath == info.file.absolutePath }
                     if (trashDir != null && info.file.exists()) {
-                        val targetFile = File(trashDir, info.file.name)
-                        info.file.renameTo(targetFile)
+                        if (!MediaTrash.move(info.file, trashDir)) {
+                            Toast.makeText(context, R.string.media_trash_failed, Toast.LENGTH_LONG).show()
+                            return@PlaybackView
+                        }
                     }
                     refreshTrigger++
                     val newFiles = currentFiles.filter { it.file.absolutePath != info.file.absolutePath }
@@ -343,6 +355,11 @@ private fun FilePickerView(
     BackHandler(enabled = showTrash) { showTrash = false }
     var fileToDelete by remember { mutableStateOf<VideoFileInfo?>(null) }
     var refreshTrigger by remember { mutableIntStateOf(0) }
+    var grouped by rememberSaveable { mutableStateOf(true) }
+    var selecting by rememberSaveable { mutableStateOf(false) }
+    var selectedPaths by rememberSaveable { mutableStateOf(emptyList<String>()) }
+    var mediaGroups by remember { mutableStateOf(emptyList<MediaGroup>()) }
+    BackHandler(enabled = selecting && !showTrash) { selectedPaths = emptyList(); selecting = false }
     
     val trashDir = remember(recordingsDir) {
         recordingsDir?.let { File(it, ".trash").also { d -> d.mkdirs() } }
@@ -352,14 +369,19 @@ private fun FilePickerView(
     val files by produceState<List<VideoFileInfo>>(emptyList(), recordingsDir, capturesDir, selectedCategory, refreshTrigger, refreshVersion, excludeFile) {
         loading = true
         value = emptyList()
-        value = withContext(Dispatchers.IO) { MediaLibrary.list(recordingsDir, capturesDir, selectedCategory, excludeFile) }
+        val snapshot = withContext(Dispatchers.IO) {
+            MediaLibrary.list(recordingsDir, capturesDir, selectedCategory, excludeFile) to
+                MediaLineage.groups(MediaLibrary.list(recordingsDir, capturesDir, MediaCategory.RECENT, excludeFile)) { ensureActive() }
+        }
+        value = snapshot.first
+        mediaGroups = snapshot.second
         loading = false
     }
     
     val trashFiles by produceState<List<VideoFileInfo>>(emptyList(), trashDir, showTrash, refreshTrigger) {
         value = withContext(Dispatchers.IO) {
             if (showTrash && trashDir != null && trashDir.exists()) {
-                trashDir.listFiles()?.map { f ->
+                trashDir.listFiles()?.filter { !it.name.startsWith('.') && it.extension.lowercase() != "json" }?.map { f ->
                     VideoFileInfo(f, f.name, f.length(), f.extension.uppercase())
                 }?.sortedByDescending { it.file.lastModified() } ?: emptyList()
             } else emptyList()
@@ -375,7 +397,7 @@ private fun FilePickerView(
                 TextButton(onClick = {
                     fileToDelete?.let { info ->
                         trashDir?.let { trash ->
-                            info.file.renameTo(File(trash, info.name))
+                            if (!MediaTrash.move(info.file, trash)) Toast.makeText(context, R.string.media_trash_failed, Toast.LENGTH_LONG).show()
                             refreshTrigger++
                         }
                     }
@@ -419,6 +441,16 @@ private fun FilePickerView(
         }
         
         if (!showTrash) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(selected = grouped, onClick = { grouped = !grouped }, label = { Text(stringResource(R.string.media_group_related)) })
+                TextButton(onClick = { selecting = !selecting; if (!selecting) selectedPaths = emptyList() }) {
+                    Text(stringResource(if (selecting) R.string.cancel else R.string.media_batch_select))
+                }
+            }
+            if (selecting) MediaBatchActions(
+                selected = mediaGroups.flatMap { it.members }.filter { it.file.absolutePath in selectedPaths },
+                onClear = { selectedPaths = emptyList(); selecting = false })
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (onImport != null) TextButton(onClick = onImport, enabled = importState?.busy != true,
@@ -466,7 +498,11 @@ private fun FilePickerView(
             }
         }
 
-        val displayFiles = if (showTrash) trashFiles else files
+        val included = files.map { it.file.absolutePath }.toSet()
+        val visibleGroups = if (showTrash || !grouped) emptyList() else mediaGroups.filter { group -> group.members.any { it.file.absolutePath in included } }
+        val displayFiles = if (showTrash) trashFiles else if (grouped) visibleGroups.flatMap { it.members } else files
+        val headings = visibleGroups.filter { it.members.size > 1 }.associateBy { it.members.first().file.absolutePath }
+        val roles = mediaGroups.flatMap { it.roles.entries }.associate { it.key to it.value }
         
         if (displayFiles.isEmpty()) {
             Box(
@@ -510,8 +546,8 @@ private fun FilePickerView(
                                         File(if (info.name.startsWith("stack-", true)) capturesDir else recordingsDir, "FITS")
                                     else -> File(capturesDir, "JPG")
                                 }
-                                originalDir.mkdirs()
-                                info.file.renameTo(File(originalDir, info.name))
+                                if (!MediaTrash.restore(info.file, originalDir, listOfNotNull(recordingsDir, capturesDir)))
+                                    Toast.makeText(context, R.string.media_trash_failed, Toast.LENGTH_LONG).show()
                             }
                             refreshTrigger++
                         },
@@ -523,7 +559,7 @@ private fun FilePickerView(
                     }
                     Button(
                         onClick = {
-                            trashFiles.forEach { it.file.deleteRecursively() }
+                            trashFiles.forEach { MediaTrash.delete(it.file) }
                             refreshTrigger++
                         },
                         colors = ButtonDefaults.buttonColors(
@@ -544,11 +580,27 @@ private fun FilePickerView(
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 items(displayFiles, key = { it.file.absolutePath }) { info ->
+                    headings[info.file.absolutePath]?.let { group ->
+                        Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(stringResource(R.string.media_group_count, group.members.size), Modifier.weight(1f),
+                                style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                            if (selecting) TextButton(onClick = {
+                                val paths = group.members.map { it.file.absolutePath }
+                                selectedPaths = if (paths.all { it in selectedPaths }) selectedPaths - paths.toSet()
+                                else (selectedPaths + paths).distinct()
+                            }) { Text(stringResource(R.string.media_group_select)) }
+                        }
+                    }
                     Surface(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable { 
                                 if (!showTrash) {
+                                    if (selecting) {
+                                        val path = info.file.absolutePath
+                                        selectedPaths = if (path in selectedPaths) selectedPaths - path else selectedPaths + path
+                                        return@clickable
+                                    }
                                     if (info.format.equals("MP4", true)) {
                                         openMp4(context, info.file)
                                         return@clickable
@@ -585,6 +637,14 @@ private fun FilePickerView(
                             )
                             Spacer(Modifier.width(12.dp))
                             Column(modifier = Modifier.weight(1f)) {
+                                if (!showTrash) roles[info.file.absolutePath]?.let { role ->
+                                    Text(stringResource(when (role) {
+                                        MediaRole.ORIGINAL -> R.string.media_role_original
+                                        MediaRole.STACK_LINEAR -> R.string.media_role_linear
+                                        MediaRole.STACK_DISPLAY -> R.string.media_role_stack_display
+                                        MediaRole.EDITED -> R.string.media_role_edited
+                                    }), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                                }
                                 Text(
                                     info.name,
                                     style = MaterialTheme.typography.bodyMedium,
@@ -606,30 +666,35 @@ private fun FilePickerView(
                                             File(if (info.name.startsWith("stack-", true)) capturesDir else recordingsDir, "FITS")
                                         else -> File(capturesDir, "JPG")
                                     }
-                                    originalDir.mkdirs()
-                                    info.file.renameTo(File(originalDir, info.name))
+                                    if (!MediaTrash.restore(info.file, originalDir, listOfNotNull(recordingsDir, capturesDir)))
+                                        Toast.makeText(context, R.string.media_trash_failed, Toast.LENGTH_LONG).show()
                                     refreshTrigger++
                                 }) {
                                     Icon(Icons.Default.Restore, stringResource(R.string.restore), modifier = Modifier.size(20.dp))
                                 }
                             } else {
-                                if (onStackFile != null && (info.format.equals("SER", true) || info.format.equals("PSER", true))) {
-                                    val description = stringResource(R.string.stack_process_file)
-                                    TextButton(onClick = { onStackFile(info.file) },
-                                        modifier = Modifier.semantics { contentDescription = description }) {
-                                        Icon(Icons.Default.Layers, null,
-                                            tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
-                                        Spacer(Modifier.width(4.dp))
-                                        Text(stringResource(R.string.media_stack_action))
+                                if (selecting) Checkbox(checked = info.file.absolutePath in selectedPaths,
+                                    onCheckedChange = { checked -> selectedPaths = if (checked) (selectedPaths + info.file.absolutePath).distinct()
+                                        else selectedPaths - info.file.absolutePath })
+                                else {
+                                    if (onStackFile != null && (info.format.equals("SER", true) || info.format.equals("PSER", true))) {
+                                        val description = stringResource(R.string.stack_process_file)
+                                        TextButton(onClick = { onStackFile(info.file) },
+                                            modifier = Modifier.semantics { contentDescription = description }) {
+                                            Icon(Icons.Default.Layers, null,
+                                                tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
+                                            Spacer(Modifier.width(4.dp))
+                                            Text(stringResource(R.string.media_stack_action))
+                                        }
                                     }
-                                }
-                                IconButton(onClick = { fileToDelete = info }) {
-                                    Icon(
-                                        Icons.Default.Delete, 
-                                        stringResource(R.string.delete),
-                                        tint = MaterialTheme.colorScheme.error,
-                                        modifier = Modifier.size(20.dp)
-                                    )
+                                    IconButton(onClick = { fileToDelete = info }) {
+                                        Icon(
+                                            Icons.Default.Delete,
+                                            stringResource(R.string.delete),
+                                            tint = MaterialTheme.colorScheme.error,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -644,6 +709,8 @@ private fun FilePickerView(
 private fun PlaybackView(
     fileInfo: VideoFileInfo,
     capturesDir: File?,
+    recordingsDir: File?,
+    excludeFile: File?,
     onBack: () -> Unit,
     onSolve: () -> Unit = {},
     onStackFile: ((File) -> Unit)? = null,
@@ -662,6 +729,8 @@ private fun PlaybackView(
         ImageViewScreen(
             fileInfo = fileInfo,
             capturesDir = capturesDir,
+            recordingsDir = recordingsDir,
+            excludeFile = excludeFile,
             onBack = onNavigateUp ?: onBack,
             onSolve = onSolve,
             onDelete = onDelete,
@@ -692,19 +761,19 @@ private fun PlaybackView(
     LaunchedEffect(Unit) {
         openJob = scope.launch(Dispatchers.IO) {
             try {
-            val opened = reader.open()
-            withContext(Dispatchers.Main) { if (!readerClosed) isOpened = opened }
-            if (opened && isActive && !readerClosed) {
-                withContext(Dispatchers.Main) {
-                    totalFrames = reader.header?.frameCount ?: 0
-                }
-                val bmp = reader.readPreviewBitmap(currentFrame.coerceIn(0, (totalFrames - 1).coerceAtLeast(0))) { ensureActive() }
-                if (bmp != null) {
+                val opened = reader.open()
+                withContext(Dispatchers.Main) { if (!readerClosed) isOpened = opened }
+                if (opened && isActive && !readerClosed) {
                     withContext(Dispatchers.Main) {
-                        if (!readerClosed) bitmap = bmp
+                        totalFrames = reader.header?.frameCount ?: 0
+                    }
+                    val bmp = reader.readPreviewBitmap(currentFrame.coerceIn(0, (totalFrames - 1).coerceAtLeast(0))) { ensureActive() }
+                    if (bmp != null) {
+                        withContext(Dispatchers.Main) {
+                            if (!readerClosed) bitmap = bmp
+                        }
                     }
                 }
-            }
             } finally {
                 if (!isActive || readerClosed) reader.close()
             }
@@ -1014,6 +1083,8 @@ private fun PlaybackView(
 private fun ImageViewScreen(
     fileInfo: VideoFileInfo,
     capturesDir: File?,
+    recordingsDir: File?,
+    excludeFile: File?,
     onBack: () -> Unit,
     onSolve: () -> Unit,
     onDelete: () -> Unit,
@@ -1042,28 +1113,17 @@ private fun ImageViewScreen(
     val savedFile = exportState.result
     var showDiscard by remember { mutableStateOf(false) }
     var discardAction by remember { mutableStateOf<(() -> Unit)?>(null) }
-    val editSettingsSaver = listSaver<MediaImageEditSettings, Float>(
-        save = { settings -> listOf(
-            if (settings.lp700) 1f else 0f,
-            settings.redGain, settings.greenGain, settings.blueGain,
-            settings.blackPoint, settings.whitePoint, settings.gamma, settings.exposureStops
-        ) },
-        restore = { values -> MediaImageEditSettings(
-            lp700 = values[0] >= 0.5f,
-            redGain = values[1], greenGain = values[2], blueGain = values[3],
-            blackPoint = values[4], whitePoint = values[5], gamma = values[6], exposureStops = values.getOrElse(7) { 0f }
-        ) }
-    )
-    var editSettings by rememberSaveable(fileInfo.file.absolutePath, stateSaver = editSettingsSaver) {
-        mutableStateOf(MediaImageEditSettings())
-    }
-    var savedSettings by rememberSaveable(fileInfo.file.absolutePath, stateSaver = editSettingsSaver) {
-        mutableStateOf(MediaImageEditSettings())
-    }
+    val history by editor.history.collectAsStateWithPageLifecycle()
+    val editSettings = history.current
+    val savedSettings by editor.checkpoint.collectAsStateWithPageLifecycle()
     val dirty = editSettings != savedSettings
     val context = LocalContext.current
+    val recipeStore = remember(context) { MediaEditRecipeStore(File(context.filesDir, "image-recipes")) }
+    var recipeSaving by remember { mutableStateOf(false) }
+    var beforeBitmap by remember(fileInfo) { mutableStateOf<Bitmap?>(null) }
+    val inspectionNavigation = remember(fileInfo) { MediaInspectionNavigation() }
+    val nativePreview = remember(fileInfo) { MediaNativePreview() }
     val scope = rememberCoroutineScope()
-    val failedToDecodeImage = stringResource(R.string.failed_to_decode_image)
     val unknownError = stringResource(R.string.unknown_error)
     val editorMaximumHeight = minOf(340.dp, (LocalConfiguration.current.screenHeightDp * .45f).dp)
 
@@ -1071,6 +1131,7 @@ private fun ImageViewScreen(
         if (dirty || exporting) { discardAction = action; showDiscard = true } else action()
     }
     fun navigateImageBack() {
+        if (inspectionNavigation.onBack()) return
         if (editing && !exporting) editing = false else leaveImage(onBack)
     }
     BackHandler(enabled = editing || dirty || exporting) { navigateImageBack() }
@@ -1080,11 +1141,30 @@ private fun ImageViewScreen(
             onDismissRequest = { showDiscard = false; discardAction = null },
             title = { Text(stringResource(if (exporting) R.string.media_edit_cancel_save_title else R.string.media_edit_discard_title)) },
             text = { Text(stringResource(if (exporting) R.string.media_edit_cancel_save_hint else R.string.media_edit_discard_hint)) },
-            confirmButton = { TextButton(onClick = {
-                showDiscard = false
-                val action = discardAction; discardAction = null
-                scope.launch { editor.cancelAndJoin(); action?.invoke() }
-            }) { Text(stringResource(R.string.media_edit_discard)) } },
+            confirmButton = { Column {
+                if (!exporting && preparedImage != null) TextButton(enabled = !recipeSaving, onClick = {
+                    val prepared = preparedImage ?: return@TextButton
+                    val settings = editSettings
+                    recipeSaving = true
+                    scope.launch {
+                        try {
+                            withContext(Dispatchers.IO) { recipeStore.save(prepared, settings) }
+                            editor.markSaved(settings)
+                            showDiscard = false
+                            val action = discardAction; discardAction = null; action?.invoke()
+                        } catch (cancelled: CancellationException) { throw cancelled
+                        } catch (_: Exception) {
+                            exportMessage = context.getString(R.string.media_recipe_save_failed)
+                            showDiscard = false; editing = true
+                        } finally { recipeSaving = false }
+                    }
+                }) { Text(stringResource(R.string.media_recipe_save_leave)) }
+                TextButton(enabled = !recipeSaving, onClick = {
+                    showDiscard = false
+                    val action = discardAction; discardAction = null
+                    scope.launch { editor.cancelAndJoin(); editor.resetHistory(savedSettings); action?.invoke() }
+                }) { Text(stringResource(R.string.media_edit_discard)) }
+            } },
             dismissButton = { TextButton(onClick = { showDiscard = false; discardAction = null; editing = true }) {
                 Text(stringResource(R.string.media_edit_continue))
             } }
@@ -1137,17 +1217,16 @@ private fun ImageViewScreen(
                     val startedAt = SystemClock.elapsedRealtime()
                     val source = firstFitsIn(fileInfo.file) ?: throw IllegalArgumentException("Empty FITS session")
                     val sourceHeader = FitsHeaderParser.read(source)
-                    val displayImage = sourceHeader["EDITED"] == "T" && sourceHeader["BUNIT"] == "normalized display"
+                    val displayImage = MediaImageEditing.isEditedFits(source)
                     val largeImage = (sourceHeader.intValue("NAXIS1") ?: 0).toLong() *
                         (sourceHeader.intValue("NAXIS2") ?: 0) > 4_194_304L
-                    if (displayImage || largeImage) {
+                    if (displayImage || largeImage || !StackFitsReader.isNormalizedStack(source)) {
                         val prepared = MediaImageEditing.prepare(source) { !taskContext.isActive }
                         val viewSettings = if (displayImage) MediaImageEditSettings() else
                             MediaImageEditSettings(gamma = 1f / FitsDisplayStretch.DISPLAY_GAMMA)
                         val decoded = MediaImageEditing.renderPreview(prepared, viewSettings) { !taskContext.isActive }
                         val metadata = StackFitsReader.readMetadata(source)
                         withContext(Dispatchers.Main) {
-                            preparedImage = prepared
                             sourceBitmap = decoded; bitmap = decoded
                             fitsInfo = "${prepared.originalWidth}×${prepared.originalHeight} ${sourceHeader["BITPIX"]}bit ${if (prepared.preview.channels == 3) "RGB" else "Mono"}"
                             colorSource = prepared.preview.channels == 3
@@ -1219,13 +1298,8 @@ private fun ImageViewScreen(
                         error = null
                     }
                 } else {
-                    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                    BitmapFactory.decodeFile(fileInfo.file.absolutePath, bounds)
-                    var sample = 1
-                    while (maxOf(bounds.outWidth, bounds.outHeight) / sample > 2048) sample *= 2
-                    val bmp = BitmapFactory.decodeFile(fileInfo.file.absolutePath, BitmapFactory.Options().apply {
-                        inSampleSize = sample; inScaled = false
-                    })
+                    val prepared = MediaImageEditing.prepare(fileInfo.file) { !taskContext.isActive }
+                    val bmp = MediaImageEditing.renderPreview(prepared, MediaImageEditSettings()) { !taskContext.isActive }
                     val sidecar = File(fileInfo.file.parentFile, "${fileInfo.file.nameWithoutExtension}.json")
                     val metadata = if (sidecar.isFile && sidecar.length() <= 16 * 1024 * 1024) {
                         runCatching { JSONObject(sidecar.readText()).toString(2).take(20000) }.getOrDefault("")
@@ -1235,7 +1309,7 @@ private fun ImageViewScreen(
                         bitmap = bmp
                         colorSource = true
                         resultMetadata = metadata
-                        if (bmp == null) error = failedToDecodeImage
+                        error = null
                     }
                 }
             } catch (e: CancellationException) {
@@ -1248,15 +1322,28 @@ private fun ImageViewScreen(
         }
     }
 
-    LaunchedEffect(fileInfo, editing, editPreviewActive, editSettings != MediaImageEditSettings(), sourceBitmap, prepareRetry) {
-        if ((!editing && !editPreviewActive && editSettings == MediaImageEditSettings()) || preparedImage != null || sourceBitmap == null) return@LaunchedEffect
+    LaunchedEffect(fileInfo, prepareRetry) {
+        MediaImageMemory.configure(context)
         preparing = true
         try {
             val taskContext = currentCoroutineContext()
-            val prepared = withContext(Dispatchers.IO) {
-                MediaImageEditing.prepare(firstFitsIn(fileInfo.file) ?: fileInfo.file) { !taskContext.isActive }
+            val restored = withContext(Dispatchers.IO) {
+                val opened = firstFitsIn(fileInfo.file) ?: fileInfo.file
+                val indexed = MediaLibrary.list(recordingsDir, capturesDir, MediaCategory.RECENT, excludeFile)
+                val exportedRecipe = MediaEditRecipe.parse(MediaLineage.metadata(opened))
+                val original = exportedRecipe?.let { MediaLineage.recipeSource(it, indexed) }
+                val source = original ?: opened
+                val recipe = exportedRecipe?.takeIf { original != null } ?: recipeStore.load(source)
+                val prepared = MediaImageEditing.prepare(source, recipe) { !taskContext.isActive }
+                Triple(prepared, recipe, exportedRecipe != null && original == null)
             }
+            val prepared = restored.first
+            editor.bind(prepared.sourceFingerprint, restored.second?.settings ?: MediaImageEditSettings())
+            if (restored.second != null && !restored.third) editPreviewActive = true
             preparedImage = prepared
+            beforeBitmap = withContext(Dispatchers.Default) { MediaImageEditing.renderPreview(prepared, MediaImageEditSettings()) { !taskContext.isActive } }
+            if (restored.third) exportMessage = context.getString(R.string.media_recipe_missing_source)
+            else if (restored.second != null) exportMessage = context.getString(R.string.media_recipe_restored)
             colorSource = prepared.preview.channels == 3
             error = null
         } catch (cancelled: CancellationException) { throw cancelled
@@ -1267,7 +1354,7 @@ private fun ImageViewScreen(
 
     LaunchedEffect(sourceBitmap, preparedImage, editSettings, editing, editPreviewActive) {
         val source = sourceBitmap ?: return@LaunchedEffect
-        if (!editing && !editPreviewActive && editSettings == MediaImageEditSettings()) {
+        if (!editing && !editPreviewActive) {
             bitmap = source
             return@LaunchedEffect
         }
@@ -1297,7 +1384,7 @@ private fun ImageViewScreen(
             return
         }
         exportMessage = null
-        editor.export(prepared, library, format, settings)
+        editor.export(prepared, library, format, settings, recipeStore)
     }
 
     LaunchedEffect(exportState.completionId) {
@@ -1306,8 +1393,9 @@ private fun ImageViewScreen(
             exportMessage = mediaEditError(context, IllegalStateException(exportState.error))
         } else {
             exportState.result?.let { output ->
-                exportState.savedSettings?.let { savedSettings = it }
+                exportState.savedSettings?.let { editor.markSaved(it) }
                 exportMessage = context.getString(R.string.media_edit_saved, output.name)
+                if (exportState.recipeError) exportMessage += "\n" + context.getString(R.string.media_recipe_save_failed)
                 onExported()
                 Toast.makeText(context, exportMessage, Toast.LENGTH_LONG).show()
             }
@@ -1349,7 +1437,7 @@ private fun ImageViewScreen(
             if (!editing && colorSource && (fileInfo.format.equals("FIT", true) || fileInfo.format.equals("FITS", true))) {
                 FilterChip(
                     selected = editSettings.lp700,
-                    onClick = { editPreviewActive = true; editSettings = editSettings.copy(lp700 = !editSettings.lp700) },
+                    onClick = { editPreviewActive = true; editor.change(editSettings.copy(lp700 = !editSettings.lp700)) },
                     label = { Text("LP700", fontSize = 11.sp) },
                     modifier = Modifier.padding(horizontal = 2.dp)
                 )
@@ -1365,7 +1453,7 @@ private fun ImageViewScreen(
                 Icon(Icons.Default.Search, stringResource(R.string.plate_solve), tint = ObservatoryTheme.colors.onImage)
             }
             if (fileInfo.file.isFile) {
-                TextButton(onClick = { editPreviewActive = true; editing = !editing }, enabled = sourceBitmap != null && !exporting) {
+                    TextButton(onClick = { editPreviewActive = true; editing = !editing }, enabled = preparedImage != null && sourceBitmap != null && !exporting) {
                     Text(stringResource(if (editing) R.string.media_edit_done else R.string.media_edit_action), color = ObservatoryTheme.colors.onImage,
                         modifier = Modifier.semantics { contentDescription = context.getString(if (editing) R.string.media_edit_done else R.string.media_edit_action) })
                 }
@@ -1390,12 +1478,21 @@ private fun ImageViewScreen(
             val bmp = bitmap
             val err = error
             if (bmp != null) {
-                Image(
-                    bitmap = bmp.asImageBitmap(),
-                    contentDescription = stringResource(R.string.image_desc),
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxSize()
-                )
+                val prepared = preparedImage
+                if (prepared != null) MediaImageInspection(
+                    image = bmp, before = if (editPreviewActive || editing) beforeBitmap else null,
+                    imageKey = fileInfo.file.absolutePath, navigation = inspectionNavigation, originalWidth = prepared.originalWidth,
+                    originalHeight = prepared.originalHeight, nativeKey = listOf(editSettings, editPreviewActive, editing, prepared.sourceFingerprint),
+                    renderNative = { region, before ->
+                        val taskContext = currentCoroutineContext()
+                        withContext(Dispatchers.IO) {
+                            if (editing || editPreviewActive) MediaImageEditing.renderRegion(prepared,
+                                if (before) MediaImageEditSettings() else editSettings, region) { !taskContext.isActive }
+                            else nativePreview.render(prepared, bmp, region) { !taskContext.isActive }
+                        }
+                    }, modifier = Modifier.fillMaxSize())
+                else Image(bitmap = bmp.asImageBitmap(), contentDescription = stringResource(R.string.image_desc),
+                    contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
             } else if (err != null) {
                 Text(err, color = Color.Red, fontSize = 14.sp)
             } else {
@@ -1431,6 +1528,27 @@ private fun ImageViewScreen(
                 } }
                 Column(Modifier.fillMaxWidth().weight(1f, fill = false).verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = { editor.undo() }, enabled = !exporting && (history.past.isNotEmpty() || history.gestureStart != null)) {
+                        Text(stringResource(R.string.media_edit_undo))
+                    }
+                    TextButton(onClick = { editor.redo() }, enabled = !exporting && history.future.isNotEmpty()) {
+                        Text(stringResource(R.string.media_edit_redo))
+                    }
+                    TextButton(enabled = !exporting && !recipeSaving && preparedImage != null, onClick = {
+                        val prepared = preparedImage ?: return@TextButton
+                        val settings = editSettings
+                        recipeSaving = true
+                        scope.launch {
+                            try {
+                                withContext(Dispatchers.IO) { recipeStore.save(prepared, settings) }
+                                editor.markSaved(settings)
+                                exportMessage = context.getString(R.string.media_recipe_saved)
+                            } catch (failure: Exception) { exportMessage = context.getString(R.string.media_recipe_save_failed)
+                            } finally { recipeSaving = false }
+                        }
+                    }) { Text(stringResource(R.string.media_recipe_save)) }
+                }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1439,7 +1557,7 @@ private fun ImageViewScreen(
                     if (colorSource) {
                         FilterChip(
                             selected = editSettings.lp700,
-                            onClick = { editSettings = editSettings.copy(lp700 = !editSettings.lp700) },
+                            onClick = { editor.change(editSettings.copy(lp700 = !editSettings.lp700)) },
                             enabled = !exporting && preparedImage != null,
                             label = { Text("LP700") }
                         )
@@ -1448,35 +1566,35 @@ private fun ImageViewScreen(
                             val requested = editSettings
                             scope.launch {
                                 val gains = withContext(Dispatchers.Default) { MediaImageEditing.estimateWhiteBalance(prepared, requested) }
-                                if (editSettings == requested) editSettings = requested.copy(
-                                    redGain = gains[0], greenGain = gains[1], blueGain = gains[2])
+                                if (editor.history.value.current == requested) editor.change(requested.copy(
+                                    redGain = gains[0], greenGain = gains[1], blueGain = gains[2]))
                             }
                         }) { Text(stringResource(R.string.media_edit_auto_wb)) }
                     }
                     Spacer(Modifier.weight(1f))
-                    TextButton(enabled = !exporting, onClick = { editSettings = MediaImageEditSettings() }) {
+                    TextButton(enabled = !exporting, onClick = { editor.change(MediaImageEditSettings()) }) {
                         Text(stringResource(R.string.media_edit_reset))
                     }
                 }
                 if (colorSource) {
                     Text(stringResource(R.string.media_edit_white_balance), color = ObservatoryTheme.colors.onImage, style = MaterialTheme.typography.labelLarge)
                     EditSlider(stringResource(R.string.media_edit_red), editSettings.redGain, 0.5f..2f,
-                        { editSettings = editSettings.copy(redGain = it) }, !exporting)
+                        { editor.update(editSettings.copy(redGain = it)) }, !exporting, editor::commitGesture)
                     EditSlider(stringResource(R.string.media_edit_green), editSettings.greenGain, 0.5f..2f,
-                        { editSettings = editSettings.copy(greenGain = it) }, !exporting)
+                        { editor.update(editSettings.copy(greenGain = it)) }, !exporting, editor::commitGesture)
                     EditSlider(stringResource(R.string.media_edit_blue), editSettings.blueGain, 0.5f..2f,
-                        { editSettings = editSettings.copy(blueGain = it) }, !exporting)
+                        { editor.update(editSettings.copy(blueGain = it)) }, !exporting, editor::commitGesture)
                 }
                 Text(stringResource(R.string.media_edit_curve), color = ObservatoryTheme.colors.onImage, style = MaterialTheme.typography.labelLarge)
                 ImageEditCurve(editSettings)
                 EditSlider(stringResource(R.string.media_edit_exposure), editSettings.exposureStops, -3f..3f,
-                    { editSettings = editSettings.copy(exposureStops = it) }, !exporting)
+                    { editor.update(editSettings.copy(exposureStops = it)) }, !exporting, editor::commitGesture)
                 EditSlider(stringResource(R.string.media_edit_black_point), editSettings.blackPoint, 0f..0.30f,
-                    { editSettings = editSettings.copy(blackPoint = it) }, !exporting)
+                    { editor.update(editSettings.copy(blackPoint = it)) }, !exporting, editor::commitGesture)
                 EditSlider(stringResource(R.string.media_edit_white_point), editSettings.whitePoint, 0.70f..1f,
-                    { editSettings = editSettings.copy(whitePoint = it) }, !exporting)
+                    { editor.update(editSettings.copy(whitePoint = it)) }, !exporting, editor::commitGesture)
                 EditSlider(stringResource(R.string.media_edit_gamma), editSettings.gamma, 0.5f..2f,
-                    { editSettings = editSettings.copy(gamma = it) }, !exporting)
+                    { editor.update(editSettings.copy(gamma = it)) }, !exporting, editor::commitGesture)
                 Text(stringResource(R.string.media_edit_fits_note), color = ObservatoryTheme.colors.onImage.copy(alpha = 0.72f), style = MaterialTheme.typography.bodySmall)
                 if (colorSource) TextButton(onClick = { showLp750Help = true }) { Text(stringResource(R.string.lp750_help_button)) }
                 exportMessage?.let { Text(it, color = ObservatoryTheme.colors.onImage, style = MaterialTheme.typography.bodySmall) }
@@ -1494,11 +1612,11 @@ private fun ImageViewScreen(
 
 @Composable
 private fun EditSlider(label: String, value: Float, range: ClosedFloatingPointRange<Float>, onValue: (Float) -> Unit,
-                       enabled: Boolean = true) {
+                       enabled: Boolean = true, onFinished: () -> Unit = {}) {
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
         Text(label, color = ObservatoryTheme.colors.onImage.copy(alpha = 0.85f), style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.width(82.dp))
-        Slider(value = value, onValueChange = onValue, valueRange = range, enabled = enabled,
+        Slider(value = value, onValueChange = onValue, valueRange = range, enabled = enabled, onValueChangeFinished = onFinished,
             modifier = Modifier.weight(1f).height(48.dp))
         Text(String.format("%.2f", value), color = ObservatoryTheme.colors.onImage, style = MaterialTheme.typography.labelSmall,
             modifier = Modifier.width(38.dp))
@@ -1547,6 +1665,14 @@ private fun decodeNormalizedFits(
     applyLp750: Boolean,
     cancelled: () -> Boolean
 ): Pair<Bitmap, String> {
+    if (!applyLp750) stackDisplayFile(file)?.let { display ->
+        val prepared = MediaImageEditing.prepare(display, cancelled = cancelled)
+        val header = FitsHeaderParser.read(file)
+        if (prepared.originalWidth == header.intValue("NAXIS1") && prepared.originalHeight == header.intValue("NAXIS2")) {
+            return MediaImageEditing.renderPreview(prepared, MediaImageEditSettings(), cancelled) to
+                "${prepared.originalWidth}×${prepared.originalHeight} Float32 ${if (header.intValue("NAXIS3") == 3) "RGB" else "Mono"}"
+        }
+    }
     val result = StackFitsPreview.read(file, applyLp750, cancelled)
     val image = result.image
     val bitmap = StackBitmap.create(image, 2048) {

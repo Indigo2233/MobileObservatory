@@ -39,7 +39,8 @@ class FitsIntegerPreview(
 object FitsIntegerPreviewDecoder {
     private const val MAX_BAYER_SIDE = 1600
 
-    fun read(file: File, cancelled: () -> Boolean = { false }): FitsIntegerPreview {
+    fun read(file: File, maximumBayerSide: Int = MAX_BAYER_SIDE, cancelled: () -> Boolean = { false }): FitsIntegerPreview {
+        require(maximumBayerSide > 0)
         RandomAccessFile(file, "r").use { input ->
             val header = readHeader(input)
             require(header.width > 0 && header.height > 0) {
@@ -66,7 +67,7 @@ object FitsIntegerPreviewDecoder {
                 dataBytes
             ).order(ByteOrder.BIG_ENDIAN)
 
-            return decode(header, channels, bytesPerSample, data, cancelled)
+            return decode(header, channels, bytesPerSample, data, maximumBayerSide, cancelled)
         }
     }
 
@@ -75,13 +76,14 @@ object FitsIntegerPreviewDecoder {
         channels: Int,
         bytesPerSample: Int,
         data: ByteBuffer,
+        maximumBayerSide: Int,
         cancelled: () -> Boolean
     ): FitsIntegerPreview {
         val sourceWidth = header.width
         val sourceHeight = header.height
         // An even scale preserves the Bayer phase at every preview pixel.
         val bayerScale = if (header.bayerPattern != null) {
-            val initial = ceil(maxOf(sourceWidth, sourceHeight) / MAX_BAYER_SIDE.toDouble())
+            val initial = ceil(maxOf(sourceWidth, sourceHeight) / maximumBayerSide.toDouble())
                 .toInt().coerceAtLeast(1)
             if (initial > 1 && initial % 2 != 0) initial + 1 else initial
         } else {

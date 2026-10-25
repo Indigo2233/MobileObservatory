@@ -5,4 +5,5 @@
     <external-files-path name="logs" path="logs/" />
     <files-path name="sequences" path="sequences/" />
     <cache-path name="updates" path="updates/" />
+    <cache-path name="media_share" path="media-share/" />
 </paths>

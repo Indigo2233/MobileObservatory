@@ -29,7 +29,7 @@
     <string name="media_edit_black_point">黑场</string>
     <string name="media_edit_white_point">白场</string>
     <string name="media_edit_gamma">伽马</string>
-    <string name="media_edit_fits_note">按原始分辨率另存副本。FIT 以 Float32 保存处理结果，彩色图像使用 RGB 三平面。</string>
+    <string name="media_edit_fits_note">按原始分辨率另存副本：JPG 为每通道 8 位，PNG 和 FIT 保留每通道 16 位；彩色 FIT 使用 RGB 三平面。</string>
     <string name="media_edit_exposure">亮度 · EV</string>
     <string name="media_edit_preparing">正在准备图像调整…</string>
     <string name="media_edit_retry">重试</string>
@@ -38,7 +38,7 @@
     <string name="media_edit_storage">存储空间不足，无法保存图像。请释放空间后重试。</string>
     <string name="media_edit_source_changed">原图已发生变化或不可用，请重新打开后编辑。</string>
     <string name="media_edit_discard_title">离开当前调整？</string>
-    <string name="media_edit_discard_hint">当前调整尚未保存，另存副本后可保留处理结果。</string>
+    <string name="media_edit_discard_hint">当前调整尚未保存。保存配方后，可从原片恢复这些参数。</string>
     <string name="media_edit_discard">放弃并继续</string>
     <string name="media_edit_continue">继续编辑</string>
     <string name="media_edit_cancel_save_title">取消保存？</string>

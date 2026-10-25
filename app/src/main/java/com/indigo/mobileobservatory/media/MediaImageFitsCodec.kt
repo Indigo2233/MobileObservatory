@@ -1,13 +1,10 @@
 package com.indigo.mobileobservatory.media
 
 import com.indigo.mobileobservatory.util.FitsHeaderParser
-import java.io.BufferedOutputStream
-import java.io.DataOutputStream
 import java.io.File
-import java.io.FileOutputStream
 import java.io.RandomAccessFile
+import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.nio.channels.FileChannel
 import java.time.Instant
 import kotlin.math.abs
 import kotlin.math.ceil
@@ -22,95 +19,149 @@ data class DecodedMediaImage(
 
 /** Uncompressed primary FITS images; Bayer samples are demosaiced at their original CFA positions. */
 object MediaImageFitsCodec {
-    fun read(file: File, maximumSide: Int = Int.MAX_VALUE, check: () -> Unit = {},
-             admit: (Long) -> Unit = {}): DecodedMediaImage = RandomAccessFile(file, "r").use { input ->
-        val h = FitsHeaderParser.read(input)
-        val width = h.intValue("NAXIS1") ?: 0
-        val height = h.intValue("NAXIS2") ?: 0
-        val axes = h.intValue("NAXIS") ?: 0
-        val planes = if (axes == 3) h.intValue("NAXIS3") ?: 0 else 1
-        val bitpix = h.intValue("BITPIX") ?: 0
-        require(h["SIMPLE"] == "T" && axes in 2..3 && width > 0 && height > 0 && planes in listOf(1, 3)) {
-            "Unsupported FITS image geometry"
-        }
-        require(bitpix in listOf(8, 16, 32, -32) && maximumSide > 0) { "Unsupported FITS sample type" }
-        val bytesPerSample = abs(bitpix) / 8
-        val samples = Math.multiplyExact(Math.multiplyExact(width.toLong(), height.toLong()), planes.toLong())
-        val dataBytes = Math.multiplyExact(samples, bytesPerSample.toLong())
-        require(dataBytes <= Int.MAX_VALUE && dataBytes <= input.length() - h.dataOffset) { "Truncated or oversized FITS image" }
-        val scale = h.doubleValue("BSCALE") ?: 1.0
-        val zero = h.doubleValue("BZERO") ?: 0.0
-        require(scale.isFinite() && zero.isFinite()) { "Invalid FITS scaling" }
-        val pattern = h["BAYERPAT"]?.trim()?.uppercase()?.takeIf { it.isNotEmpty() }
-        require(pattern == null || (planes == 1 && width >= 2 && height >= 2 && pattern in listOf("RGGB", "GRBG", "GBRG", "BGGR"))) {
-            "Unsupported Bayer pattern"
-        }
-        val channels = if (pattern != null || planes == 3) 3 else 1
-        val step = ceil(maxOf(width, height).toDouble() / maximumSide).toInt().coerceAtLeast(1)
-        val outWidth = ((width.toLong() + step - 1) / step).toInt()
-        val outHeight = ((height.toLong() + step - 1) / step).toInt()
-        val outputSamples = Math.multiplyExact(outWidth.toLong() * outHeight, channels.toLong())
-        require(outputSamples <= Int.MAX_VALUE) { "Image buffer exceeds the supported size" }
-        admit(outputSamples * 4)
-        check()
-        val values = FloatArray(outputSamples.toInt())
-        val data = input.channel.map(FileChannel.MapMode.READ_ONLY, h.dataOffset, dataBytes).order(ByteOrder.BIG_ENDIAN)
-        fun sample(x: Int, y: Int, plane: Int = 0): Float {
-            val index = (plane.toLong() * width * height + y.toLong() * width + x) * bytesPerSample
-            val offset = index.toInt()
-            val raw = when (bitpix) {
-                8 -> (data.get(offset).toInt() and 255).toDouble()
-                16 -> data.getShort(offset).toDouble()
-                32 -> data.getInt(offset).toDouble()
-                else -> data.getFloat(offset).toDouble()
-            }
-            val value = (raw * scale + zero).toFloat()
-            require(value.isFinite()) { "Non-finite FITS sample" }
-            return value
-        }
-        fun reflect(value: Int, size: Int) = when {
-            value < 0 -> -value
-            value >= size -> 2 * size - 2 - value
-            else -> value
-        }.coerceIn(0, size - 1)
-        fun raw(x: Int, y: Int) = sample(reflect(x, width), reflect(y, height))
-        val redX = ((if (pattern == "GRBG" || pattern == "BGGR") 1 else 0) - (h.intValue("XBAYROFF") ?: 0)) and 1
-        val redY = ((if (pattern == "GBRG" || pattern == "BGGR") 1 else 0) - (h.intValue("YBAYROFF") ?: 0)) and 1
-        for (y in 0 until outHeight) {
-            check()
-            val sourceY = y * step
-            for (x in 0 until outWidth) {
-                val sourceX = x * step
-                val i = (y * outWidth + x) * channels
-                if (pattern == null) {
-                    for (c in 0 until channels) values[i + c] = sample(sourceX, sourceY, c)
-                } else {
-                    val center = raw(sourceX, sourceY)
-                    val horizontal = (raw(sourceX - 1, sourceY) + raw(sourceX + 1, sourceY)) * .5f
-                    val vertical = (raw(sourceX, sourceY - 1) + raw(sourceX, sourceY + 1)) * .5f
-                    val diagonal = (raw(sourceX - 1, sourceY - 1) + raw(sourceX + 1, sourceY - 1) +
-                        raw(sourceX - 1, sourceY + 1) + raw(sourceX + 1, sourceY + 1)) * .25f
-                    val isRed = (sourceX and 1) == redX && (sourceY and 1) == redY
-                    val isBlue = (sourceX and 1) != redX && (sourceY and 1) != redY
-                    values[i] = when { isRed -> center; isBlue -> diagonal; (sourceY and 1) == redY -> horizontal; else -> vertical }
-                    values[i + 1] = if (isRed || isBlue) (horizontal + vertical) * .5f else center
-                    values[i + 2] = when { isBlue -> center; isRed -> diagonal; (sourceY and 1) == redY -> vertical; else -> horizontal }
-                }
-            }
-        }
-        DecodedMediaImage(MediaImagePixels(outWidth, outHeight, channels, values), width, height,
-            h.cards, h["BUNIT"] == "normalized display" && h["EDITED"] == "T")
+    fun open(file: File, rangeHint: MediaImageWindow? = null, check: () -> Unit = {}): MediaPixelSource {
+        val input = RandomAccessFile(file, "r")
+        return try { FitsSource(input, rangeHint, check) } catch (failure: Throwable) { input.close(); throw failure }
     }
 
-    /** Float32 planar RGB is a true-color FITS cube. Mono stays a two-dimensional image. */
-    fun write(file: File, image: MediaImagePixels, metadata: Map<String, String>, check: () -> Unit = {}) {
+    fun read(file: File, maximumSide: Int = Int.MAX_VALUE, check: () -> Unit = {},
+             admit: (Long) -> Unit = {}, rangeHint: MediaImageWindow? = null): DecodedMediaImage =
+        open(file, rangeHint, check).use { source ->
+            require(maximumSide > 0)
+            val step = ceil(maxOf(source.width, source.height).toDouble() / maximumSide).toInt().coerceAtLeast(1)
+            val region = MediaImageRegion(0, 0, source.width, source.height, step)
+            admit(region.outputWidth.toLong() * region.outputHeight * source.channels * 2)
+            DecodedMediaImage(source.read(region, check), source.width, source.height, source.header, source.displayNormalized)
+        }
+
+    private class FitsSource(private val input: RandomAccessFile, hint: MediaImageWindow?, check: () -> Unit) : MediaPixelSource {
+        private val h = FitsHeaderParser.read(input)
+        override val header = h.cards
+        override val width = h.intValue("NAXIS1") ?: 0
+        override val height = h.intValue("NAXIS2") ?: 0
+        private val axes = h.intValue("NAXIS") ?: 0
+        private val planes = if (axes == 3) h.intValue("NAXIS3") ?: 0 else 1
+        private val bitpix = h.intValue("BITPIX") ?: 0
+        private val bytesPerSample = abs(bitpix) / 8
+        private val scale = h.doubleValue("BSCALE") ?: 1.0
+        private val zero = h.doubleValue("BZERO") ?: 0.0
+        private val pattern = h["BAYERPAT"]?.trim()?.uppercase()?.takeIf { it.isNotEmpty() }
+        override val channels = if (pattern != null || planes == 3) 3 else 1
+        override val displayNormalized = h["EDITED"] == "T" && h["BUNIT"] in listOf("normalized display", "display intensity")
+        override val range: MediaImageWindow
+        init {
+            require(h["SIMPLE"] == "T" && axes in 2..3 && width > 0 && height > 0 && planes in listOf(1, 3)) { "Unsupported FITS image geometry" }
+            require(bitpix in listOf(8, 16, 32, -32)) { "Unsupported FITS sample type" }
+            val bytes = Math.multiplyExact(Math.multiplyExact(width.toLong(), height.toLong()), planes * bytesPerSample.toLong())
+            require(bytes <= input.length() - h.dataOffset) { "Truncated FITS image" }
+            require(scale.isFinite() && zero.isFinite()) { "Invalid FITS scaling" }
+            require(pattern == null || (planes == 1 && width >= 2 && height >= 2 && pattern in listOf("RGGB", "GRBG", "GBRG", "BGGR"))) { "Unsupported Bayer pattern" }
+            range = hint ?: when {
+                bitpix == 8 -> physicalRange(0.0 * scale + zero, 255.0 * scale + zero)
+                bitpix == 16 -> physicalRange(-32768.0 * scale + zero, 32767.0 * scale + zero)
+                displayNormalized && bitpix == -32 -> MediaImageWindow(0f, 1f)
+                else -> scanRange(bytes, check)
+            }
+        }
+        private fun physicalRange(first: Double, second: Double): MediaImageWindow {
+            val low = minOf(first, second).toFloat(); val high = maxOf(first, second).toFloat()
+            require(low.isFinite() && high.isFinite()) { "Non-finite FITS sample" }
+            return if (high > low) MediaImageWindow(low, high) else MediaImageWindow(minOf(0f, low), maxOf(1f, high + 1))
+        }
+        private fun value(data: ByteBuffer, offset: Int): Double {
+            val raw = when (bitpix) { 8 -> (data.get(offset).toInt() and 255).toDouble()
+                16 -> data.getShort(offset).toDouble(); 32 -> data.getInt(offset).toDouble(); else -> data.getFloat(offset).toDouble() }
+            val result = raw * scale + zero
+            require(result.isFinite()) { "Non-finite FITS sample" }
+            return result
+        }
+        private fun scanRange(bytes: Long, check: () -> Unit): MediaImageWindow {
+            val block = ByteArray(64 * 1024); val view = ByteBuffer.wrap(block).order(ByteOrder.BIG_ENDIAN)
+            var remaining = bytes; var low = Double.POSITIVE_INFINITY; var high = Double.NEGATIVE_INFINITY
+            input.seek(h.dataOffset)
+            while (remaining > 0) {
+                check(); val length = minOf(remaining, block.size.toLong()).toInt(); input.readFully(block, 0, length)
+                for (i in 0 until length step bytesPerSample) { val v = value(view, i); low = minOf(low, v); high = maxOf(high, v) }
+                remaining -= length
+            }
+            return physicalRange(low, high)
+        }
+        override fun read(region: MediaImageRegion, check: () -> Unit): MediaImagePixels {
+            require(region.left.toLong() + region.width <= width && region.top.toLong() + region.height <= height)
+            val count = region.outputWidth.toLong() * region.outputHeight * channels
+            require(count <= Int.MAX_VALUE) { "memory_budget" }
+            val x0 = (region.left - 1).coerceAtLeast(0)
+            val x1 = (region.left.toLong() + region.width + 1).coerceAtMost(width.toLong()).toInt()
+            val rowBytes = Math.multiplyExact(x1 - x0, bytesPerSample)
+            MediaImageMemory.check(count * 2 + rowBytes.toLong() * 12)
+            val pixels = ShortArray(count.toInt())
+            val rowKeys = LongArray(12) { -1 }
+            val rowBuffers = arrayOfNulls<ByteBuffer>(12)
+            var replacement = 0
+            fun row(plane: Int, y: Int): ByteBuffer {
+                val key = plane.toLong() * height + y
+                for (i in rowKeys.indices) if (rowKeys[i] == key) return rowBuffers[i]!!
+                val slot = replacement; replacement = (replacement + 1) % rowKeys.size
+                val buffer = rowBuffers[slot] ?: ByteBuffer.allocate(rowBytes).order(ByteOrder.BIG_ENDIAN).also { rowBuffers[slot] = it }
+                buffer.clear()
+                val offset = h.dataOffset + (key * width + x0) * bytesPerSample
+                while (buffer.hasRemaining()) { check(); require(input.channel.read(buffer, offset + buffer.position()) > 0) { "Truncated FITS row" } }
+                rowKeys[slot] = key
+                return buffer
+            }
+            fun reflect(v: Int, size: Int) = when { v < 0 -> -v; v >= size -> 2 * size - 2 - v; else -> v }.coerceIn(0, size - 1)
+            fun raw(buffer: ByteBuffer, x: Int) = value(buffer, (reflect(x, width) - x0) * bytesPerSample)
+            val redX = ((if (pattern == "GRBG" || pattern == "BGGR") 1 else 0) - (h.intValue("XBAYROFF") ?: 0)) and 1
+            val redY = ((if (pattern == "GBRG" || pattern == "BGGR") 1 else 0) - (h.intValue("YBAYROFF") ?: 0)) and 1
+            for (y in 0 until region.outputHeight) {
+                check(); val sy = region.top + y * region.step
+                val centerRow = row(0, sy)
+                val firstRow = if (pattern != null) row(0, reflect(sy - 1, height)) else if (channels == 3) row(1, sy) else centerRow
+                val lastRow = if (pattern != null) row(0, reflect(sy + 1, height)) else if (channels == 3) row(2, sy) else centerRow
+                for (x in 0 until region.outputWidth) {
+                    val sx = region.left + x * region.step; val i = (y * region.outputWidth + x) * channels
+                    if (pattern == null) {
+                        pixels[i] = range.encode(raw(centerRow, sx))
+                        if (channels == 3) { pixels[i + 1] = range.encode(raw(firstRow, sx)); pixels[i + 2] = range.encode(raw(lastRow, sx)) }
+                    }
+                    else {
+                        val center = raw(centerRow, sx)
+                        val horizontal = (raw(centerRow, sx - 1) + raw(centerRow, sx + 1)) * .5
+                        val vertical = (raw(firstRow, sx) + raw(lastRow, sx)) * .5
+                        val diagonal = (raw(firstRow, sx - 1) + raw(firstRow, sx + 1) + raw(lastRow, sx - 1) + raw(lastRow, sx + 1)) * .25
+                        val red = sx and 1 == redX && sy and 1 == redY
+                        val blue = sx and 1 != redX && sy and 1 != redY
+                        pixels[i] = range.encode(when { red -> center; blue -> diagonal; sy and 1 == redY -> horizontal; else -> vertical })
+                        pixels[i + 1] = range.encode(if (red || blue) (horizontal + vertical) * .5 else center)
+                        pixels[i + 2] = range.encode(when { blue -> center; red -> diagonal; sy and 1 == redY -> vertical; else -> horizontal })
+                    }
+                }
+            }
+            return MediaImagePixels(region.outputWidth, region.outputHeight, channels, pixels, range)
+        }
+        override fun close() = input.close()
+    }
+
+    /** UInt16 FITS uses the standard signed storage + BZERO=32768 convention, planar RGB. */
+    fun write(file: File, image: MediaImagePixels, metadata: Map<String, String>, check: () -> Unit = {}) =
+        writeBands(file, image.width, image.height, image.channels, metadata, check) { region ->
+            MediaImagePixels(region.width, region.height, image.channels, image.pixels.copyOfRange(
+                region.top * image.width * image.channels, (region.top + region.height) * image.width * image.channels))
+        }
+
+    fun writeBands(file: File, width: Int, height: Int, channels: Int, metadata: Map<String, String>,
+                   check: () -> Unit = {}, read: (MediaImageRegion) -> MediaImagePixels) {
         val sourceHeader = metadata.filterKeys { it.startsWith("fits.") }.mapKeys { it.key.removePrefix("fits.") }
-        val cards = mutableListOf(card("SIMPLE", "T"), card("BITPIX", "-32"),
-            card("NAXIS", if (image.channels == 3) "3" else "2"), card("NAXIS1", image.width.toString()), card("NAXIS2", image.height.toString()))
-        if (image.channels == 3) cards += card("NAXIS3", "3")
+        val cards = mutableListOf(card("SIMPLE", "T"), card("BITPIX", "16"),
+            card("NAXIS", if (channels == 3) "3" else "2"), card("NAXIS1", width.toString()), card("NAXIS2", height.toString()))
+        if (channels == 3) cards += card("NAXIS3", "3")
         cards += card("EXTEND", "T")
-        cards += card("BUNIT", quote("normalized display"))
-        cards += card("COLORSPC", quote(if (image.channels == 3) "RGB" else "MONO"))
+        cards += card("BSCALE", "1")
+        cards += card("BZERO", "32768")
+        cards += card("DATAMIN", "0")
+        cards += card("DATAMAX", "65535")
+        cards += card("BUNIT", quote("display intensity"))
+        cards += card("COLORSPC", quote(if (channels == 3) "RGB" else "MONO"))
         cards += card("EDITED", "T")
         cards += card("DATE", quote(Instant.now().toString()))
         cards += card("SOFTWARE", quote("Indigo Observatory"))
@@ -123,26 +174,43 @@ object MediaImageFitsCodec {
                 if (value.replace('D', 'E', ignoreCase = true).toDoubleOrNull()?.isFinite() == true) cards += card(key, value.replace('d', 'D'))
             }
         }
-        cards += "HISTORY  Image-library edits are baked into the floating-point display values.".padEnd(80).take(80)
+        cards += "HISTORY  Image-library edits are baked into the 16-bit display values.".padEnd(80).take(80)
         val json = metadataJson(metadata).toByteArray(Charsets.UTF_8)
         require(json.size <= 16 * 1024 * 1024)
-        FileOutputStream(file).use { fileOut ->
-            val out = DataOutputStream(BufferedOutputStream(fileOut, 64 * 1024))
-            writeHeader(out, cards)
-            for (channel in 0 until image.channels) for (y in 0 until image.height) {
-                check()
-                for (x in 0 until image.width) {
-                    val value = image.pixels[(y * image.width + x) * image.channels + channel]
-                    require(value.isFinite()) { "Non-finite FITS output sample" }
-                    out.writeFloat(value)
-                }
-            }
-            pad(out, image.pixels.size.toLong() * 4)
-            writeHeader(out, listOf(card("XTENSION", quote("IMAGE   ")), card("BITPIX", "8"), card("NAXIS", "1"),
+        RandomAccessFile(file, "rw").use { output ->
+            val header = headerBytes(cards)
+            output.write(header)
+            val start = output.filePointer
+            val dataBytes = Math.multiplyExact(width.toLong() * height, channels * 2L)
+            val padding = (2880 - dataBytes % 2880) % 2880
+            val extension = headerBytes(listOf(card("XTENSION", quote("IMAGE   ")), card("BITPIX", "8"), card("NAXIS", "1"),
                 card("NAXIS1", json.size.toString()), card("PCOUNT", "0"), card("GCOUNT", "1"),
                 card("EXTNAME", quote("EDITMETA")), card("ENCODING", quote("UTF-8 JSON"))))
-            out.write(json); pad(out, json.size.toLong()); out.flush(); fileOut.fd.sync()
+            output.setLength(start + dataBytes + padding)
+            val row = ByteArray(Math.multiplyExact(width, 2))
+            for (top in 0 until height step 32) {
+                check()
+                val bandHeight = minOf(32, height - top)
+                val band = read(MediaImageRegion(0, top, width, bandHeight))
+                require(band.width == width && band.height == bandHeight && band.channels == channels)
+                for (c in 0 until channels) for (y in 0 until bandHeight) {
+                    check()
+                    for (x in 0 until width) {
+                        val signed = band.unsigned((y * width + x) * channels + c) - 32768
+                        row[x * 2] = (signed shr 8).toByte(); row[x * 2 + 1] = signed.toByte()
+                    }
+                    output.seek(start + ((c.toLong() * height + top + y) * width) * 2)
+                    output.write(row)
+                }
+            }
+            check(); output.seek(start + dataBytes + padding); output.write(extension); output.write(json)
+            output.write(ByteArray(((2880 - json.size % 2880) % 2880))); output.fd.sync()
         }
+    }
+
+    private fun headerBytes(cards: List<String>): ByteArray {
+        val text = (cards + "END".padEnd(80)).joinToString("")
+        return text.padEnd(((text.length + 2879) / 2880) * 2880).toByteArray(Charsets.US_ASCII)
     }
 
     fun metadataJson(values: Map<String, String>): String = values.entries.sortedBy { it.key }.joinToString(",", "{", "}") {
@@ -167,12 +235,4 @@ object MediaImageFitsCodec {
     }
     private fun card(key: String, value: String) =
         (key.padEnd(8).take(8) + "= " + if (value.startsWith("'")) value else value.padStart(20)).padEnd(80).take(80)
-    private fun writeHeader(out: DataOutputStream, cards: List<String>) {
-        val text = (cards + "END".padEnd(80)).joinToString("")
-        out.write(text.padEnd(((text.length + 2879) / 2880) * 2880).toByteArray(Charsets.US_ASCII))
-    }
-    private fun pad(out: DataOutputStream, bytes: Long) {
-        val count = ((2880 - bytes % 2880) % 2880).toInt()
-        if (count > 0) out.write(ByteArray(count))
-    }
 }

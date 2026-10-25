@@ -18,7 +18,6 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
-import kotlin.math.roundToInt
 
 @RunWith(AndroidJUnit4::class)
 class MediaImageEditingInstrumentedTest {
@@ -30,9 +29,7 @@ class MediaImageEditingInstrumentedTest {
 
     @Test fun allFormatsRetainOriginalDimensionsAndFitsPrecisionWithMatchingPreview() {
         val source = File(root, "source.fit")
-        val original = MediaImagePixels(1801, 3, 3, FloatArray(1801 * 3 * 3) { index ->
-            .10001f + (index % 179) * .003317f
-        })
+        val original = MediaImagePixels(1801, 3, 3, ShortArray(1801 * 3 * 3) { index -> (6554 + (index % 179) * 217).toShort() })
         MediaImageFitsCodec.write(source, original, mapOf("schema" to "indigo-image-edit-1"))
         val hash = digest(source)
         val prepared = MediaImageEditing.prepare(source)
@@ -43,16 +40,17 @@ class MediaImageEditingInstrumentedTest {
         val fit = MediaImageEditing.export(prepared, root, MediaImageExportFormat.FIT, settings)
         val actual = MediaImageFitsCodec.read(fit).image
         assertEquals(1801, actual.width); assertEquals(3, actual.height); assertEquals(3, actual.channels)
-        assertArrayEquals(expected.pixels, actual.pixels, 0f)
+        assertArrayEquals(expected.pixels, actual.pixels)
         for (format in listOf(MediaImageExportFormat.JPG, MediaImageExportFormat.PNG)) {
             val output = MediaImageEditing.export(prepared, root, format, settings)
             val bitmap = checkNotNull(BitmapFactory.decodeFile(output.absolutePath))
             try {
                 assertEquals(original.width, bitmap.width); assertEquals(original.height, bitmap.height)
                 if (format == MediaImageExportFormat.PNG) for (x in listOf(0, 15, 1000, 1800)) {
-                    val pixel = bitmap.getPixel(x, 1)
-                    for (c in 0..2) assertEquals((expected.pixels[(1801 + x) * 3 + c] * 255).roundToInt(),
-                        (pixel ushr (16 - c * 8)) and 255)
+                    MediaPng16Codec.open(output).use { source16 ->
+                        val sample = source16.read(MediaImageRegion(x, 1, 1, 1))
+                        for (c in 0..2) assertEquals(expected.unsigned((1801 + x) * 3 + c), sample.unsigned(c))
+                    }
                 }
             } finally { bitmap.recycle() }
         }
@@ -60,7 +58,7 @@ class MediaImageEditingInstrumentedTest {
         try {
             val x = 7
             val pixel = preview.getPixel(x, 0)
-            for (c in 0..2) assertEquals((expected.pixels[x * 2 * 3 + c] * 255).roundToInt(),
+            for (c in 0..2) assertEquals((expected.unsigned(x * 2 * 3 + c) + 128) / 257,
                 (pixel ushr (16 - c * 8)) and 255)
         } finally { preview.recycle() }
         assertArrayEquals(hash, digest(source))
@@ -68,7 +66,7 @@ class MediaImageEditingInstrumentedTest {
 
     @Test fun cancellationCleansTemporaryOutputsAndChangedSourcesCannotBeSaved() {
         val source = File(root, "source.fit")
-        MediaImageFitsCodec.write(source, MediaImagePixels(8, 8, 1, FloatArray(64) { .250001f }), emptyMap())
+        MediaImageFitsCodec.write(source, MediaImagePixels(8, 8, 1, ShortArray(64) { 16384 }), emptyMap())
         val prepared = MediaImageEditing.prepare(source)
         val outputDirectory = File(root, "FITS")
         assertThrows(CancellationException::class.java) {
@@ -83,17 +81,43 @@ class MediaImageEditingInstrumentedTest {
         }
     }
 
+    @Test fun nativeViewingAndSavedRecipesUseTheOriginalPixels() {
+        val source = File(root, "native-source.fit")
+        val pixels = MediaImagePixels(1801, 4, 3, ShortArray(1801 * 4 * 3) { (6554 + (it % 211) * 197).toShort() })
+        MediaImageFitsCodec.write(source, pixels, emptyMap())
+        val prepared = MediaImageEditing.prepare(source)
+        val settings = MediaImageEditSettings(gamma = 1.6f, redGain = 1.2f)
+        val store = MediaEditRecipeStore(File(root, "recipes"))
+        store.save(prepared, settings)
+        val recipe = checkNotNull(store.load(source))
+        val reopened = MediaImageEditing.prepare(source, recipe)
+        val native = MediaImageEditing.renderFullResolution(reopened, recipe.settings)
+        val exported = MediaImageEditing.export(prepared, root, MediaImageExportFormat.PNG, settings)
+        val saved = checkNotNull(BitmapFactory.decodeFile(exported.absolutePath))
+        try {
+            assertEquals(1801, native.width); assertEquals(4, native.height)
+            assertTrue(native.width > prepared.preview.width)
+            MediaPng16Codec.open(exported).use { source16 ->
+                val samples = source16.read(MediaImageRegion(0, 0, 1801, 4))
+                for (x in listOf(0, 1000, 1800)) for (c in 0..2) assertEquals((samples.unsigned(x * 3 + c) + 128) / 257,
+                    native.getPixel(x, 0) ushr (16 - c * 8) and 255)
+            }
+            val region = MediaImageEditing.renderRegion(reopened, recipe.settings, MediaImageRegion(100, 1, 512, 2))
+            try { assertEquals(512, region.width); assertEquals(native.getPixel(211, 2), region.getPixel(111, 1)) } finally { region.recycle() }
+            assertEquals(source, MediaLineage.recipeSource(recipe, listOf(checkNotNull(com.indigo.mobileobservatory.recording.MediaLibrary.describe(source)))))
+        } finally { native.recycle(); saved.recycle() }
+    }
+
+
     @Test fun imageViewerExposesEditingAndOpensSavedRgbFits() {
         val captures = File(root, "captures")
         val source = File(captures, "FITS/fixture.fit").apply { parentFile!!.mkdirs() }
-        MediaImageFitsCodec.write(source, MediaImagePixels(16, 12, 3, FloatArray(16 * 12 * 3) {
-            when (it % 3) { 0 -> .3f; 1 -> .4f; else -> .6f }
-        }), mapOf("schema" to "indigo-image-edit-1"))
+        MediaImageFitsCodec.write(source, MediaImagePixels(16, 12, 3, ShortArray(16 * 12 * 3) { when (it % 3) { 0 -> 19661; 1 -> 26214; else -> 39321.toShort() } }), mapOf("schema" to "indigo-image-edit-1"))
         compose.setContent { MaterialTheme {
             PlayerScreen(File(root, "recordings"), captures, initialFile = source, onBack = {})
         } }
         val edit = context.getString(R.string.media_edit_action)
-        compose.waitUntil(15_000) { compose.onAllNodesWithContentDescription(edit).fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(15_000) { compose.onAllNodes(hasContentDescription(edit) and isEnabled()).fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithContentDescription(edit).performClick()
         val save = context.getString(R.string.media_edit_export_fit)
         compose.waitUntil(15_000) { compose.onAllNodesWithText(save).fetchSemanticsNodes().isNotEmpty() }

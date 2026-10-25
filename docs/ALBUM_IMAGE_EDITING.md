@@ -12,11 +12,11 @@
 
 ## 像素和 FITS 契约
 
-FITS 输入支持 BITPIX 8、16、32、-32，应用 BSCALE/BZERO。单通道、RGB 三平面和带明确 BAYERPAT 的相机图像均可读取；RGGB、GRBG、GBRG、BGGR 及 XBAYROFF/YBAYROFF 保持传感器相位，彩色 Bayer 使用双线性去马赛克。素材类型取自文件头。
+FITS 输入支持 BITPIX 8、16、32、-32，应用 BSCALE/BZERO。整数 8/16 位输入按其物理范围编码为 UInt16；32 位整数和浮点输入先以固定大小的缓冲扫描数值范围，再量化到 16 位工作精度。单通道、RGB 三平面和带明确 BAYERPAT 的相机图像均可读取；RGGB、GRBG、GBRG、BGGR 及 XBAYROFF/YBAYROFF 保持传感器相位，彩色 Bayer 使用双线性去马赛克。素材类型取自文件头。
 
-编辑使用浮点样本。普通 FITS 以预览抽样得到公共黑白窗口，窗口和 LP700 增益固定后供全分辨率保存复用；JPG/PNG 及本功能导出的显示 FITS 使用 0–1 范围。亮度、白平衡、转色和曲线都在最终 JPG/PNG 量化之前计算。
+当前工作区的相册后期使用 ShortArray 保存无符号 16 位样本，mono 为每像素 2 字节、RGB 为每像素 6 字节。归一化采用整数查找表，LP700 和白平衡使用 Int/Long 定点运算，曲线使用 65536 级 UInt16 查找表；参数与小规模统计保留浮点标量。公共黑白窗口和 LP700 增益固定后供预览、区域查看及全尺寸导出复用。原始范围与显示窗口分别记录，避免在 LP700 前提前裁掉窗口外的通道值。
 
-FIT 输出为大端 Float32。彩色输出采用 `NAXIS=3`、`NAXIS3=3`，按 R、G、B 平面存储；单色输出为二维。`BUNIT='normalized display'`、`EDITED=T` 和 `COLORSPC` 标识处理域，处理后的非线性显示值写入新文件。原始输入文件保留。
+当前 FIT 输出为大端 UInt16，采用标准 `BITPIX=16`、`BSCALE=1`、`BZERO=32768` 约定。彩色输出采用 `NAXIS=3`、`NAXIS3=3`，按 R、G、B 平面存储；单色输出为二维。`BUNIT='display intensity'`、`EDITED=T`、`COLORSPC` 以及 `DATAMIN=0` / `DATAMAX=65535` 标识显示数据。PNG 输出为每通道 16 位；JPG 使用每通道 8 位。旧 Float32 显示 FITS 的读取与配方继续兼容。原始输入文件保留，后期输出属于经过非线性处理的显示数据。
 
 保存文件包含来源、归一化窗口、处理参数、LP700 署名和源 FITS 头信息的 JSON 元数据；FIT 同时嵌入 `EDITMETA` 扩展。主头保留适用的曝光、器材和几何信息。原始科学数据继续由输入文件保管。再次打开显示 FITS 时按其显示域读取。
 
@@ -32,3 +32,59 @@ JPG/PNG 保存于既有 captures/JPG，FIT 保存于 captures/FITS，素材库�
 - 当前没有连接 Android 设备；界面操作、旋转保存、内存峰值和外部软件的 RGB FITS 显示仍需设备验收。
 
 本功能的分发版本为 `v1.0.9` / build 50 预发布，状态和安装附件以 GitHub Release 为准。稳定通道继续使用 `v1.0.8` / build 49。
+
+## 相册检查、编辑恢复与关联管理（后续开发）
+
+本次变更扩展当前相册流程，版本号和发布附件保持原有状态。已发布 v1.0.9 / build 50 使用先前的 Float32 实现，下面的后续改进仍为工作区代码。
+
+### 图像检查
+
+- 查看页支持双指缩放、拖动、双击和显式适应画面 / 1:1 按钮。1:1 加载成功后，一个源像素对应一个屏幕物理像素，放大后系统返回和工具栏返回均先恢复适应画面。
+- 进入编辑后提供原片与调整结果的分界对比，分界位置通过滑块调整；两侧共用缩放和平移。
+- RGB 直方图采用对数计数，并显示预览中任一通道达到 255 的抽样比例。高亮溢出遮罩覆盖当前显示结果。这些指标描述显示预览，传感器饱和度须根据原始科学数据判断。
+- 细节查看按当前可见区域及少量边缘读取，并根据缩放选取采样级别。1:1 读取源像素；区域块缓存限制为 4 项 / 24 MiB，当前显示与在途分配另计。失败保留预览并可重试。
+- JPG/PNG 的预览与导出共用 EXIF 方向处理。缩放、分界和检查开关在旋转后恢复。
+
+### 可恢复编辑
+
+- 撤销 / 重做由图像任务的 ViewModel 持有，保留最多 80 步。一次连续滑块手势记为一步，创建新分支时清除旧的重做分支。
+- 保存配方将来源指纹、归一化窗口、LP700 增益及全部编辑参数原子写入应用私有 `files/image-recipes/`。保存图像时同时更新原片配方。退出有未保存参数时，可保存配方并离开。
+- 重新打开原片恢复最近保存的配方；重新打开导出版本使用该版本记录的配方。恢复从已索引的原片读取样本，校验路径、长度和修改时间。原片不可用时提示，并将当前导出图作为新的编辑来源。
+- 导出参数文件和 FITS `EDITMETA` 均包含配方。既有版本的导出缺少 `lpGains` 时，从原片重新估计该值。
+- 已保存配方可跨应用进程重启恢复；未保存的历史由当前 ViewModel 保持，进程被系统回收时可能丢失。卸载应用会删除私有配方。
+
+### 素材关联与批量操作
+
+- 素材库默认按关联分组，可切回平铺。原始录像、线性 FITS、叠加显示 PNG 和编辑版本在同一组显示，并标注素材角色。分类筛选命中组内任一成员时，显示该组全部关联素材。
+- 来源关系只解析到当前可见媒体索引；活动录制、隐藏文件和临时文件继续排除。同名且来源不明确的文件保持独立。
+- 多选支持选择整组、导出 ZIP 和 Android 系统分享。ZIP 保留所选原文件、图像参数 JSON 和 `manifest.json` 组关系清单；FITS 录像目录包含其 FIT/FITS 帧。导出保持所选文件格式。
+- 归档采用流式读写和隐藏临时文件；来源变化、失败或取消时清理临时输出。系统保存选择器指定目标，任务由 ViewModel 持有并可取消；目标文档写入中断时请求文档提供方删除未完成文件。
+- 普通文件通过只读 FileProvider URI 分享；包含目录时先生成 ZIP 再打开系统选择器。归档缓存限定为 `cache/media-share/`，48 小时后在后续归档时清理。
+- 回收站同时移动参数文件，记录原始位置；恢复时检查应用媒体根目录和同名冲突，编辑 FITS 可恢复到原 captures/FITS 目录。
+
+本批自动化结果与设备验收记录在下方追加；触控、横竖屏、系统选择器、接收应用和大图内存仍需 Android 设备验证。
+
+### 本批验证记录
+
+- 29 项相关 JVM 回归通过，0 失败、0 错误、0 跳过：包含 9 项新增相册流程测试，以及既有媒体导入、数值编辑、媒体索引和 FITS 检查。
+- 新增覆盖：滑块手势撤销与分支历史、任务检查点恢复、配方数值域及非法参数、配方原子替换和来源变更、原片 / 叠加 / 编辑关联、同名歧义、ZIP 内容与关系清单、取消与来源变化、回收站参数和原位置恢复、显示直方图。
+- 主代码和 Android 测试源码编译通过；新增 Android 原始像素查看 / 配方恢复与 PNG 全分辨率像素一致性检查。Android 测试尚未在设备上执行。
+- 最终 `lintDebug` 通过：0 错误、250 警告、13 条信息，未添加 suppression 或 baseline。
+- 最终回归命令：`gradlew.bat :app:testDebugUnitTest --tests com.indigo.mobileobservatory.media.* --tests com.indigo.mobileobservatory.recording.MediaLibraryTest --tests com.indigo.mobileobservatory.util.FitsIntegerPreviewTest --tests com.indigo.mobileobservatory.stacking.StackFitsWriterTest --tests com.indigo.mobileobservatory.stacking.StackFitsPreviewTest :app:compileDebugAndroidTestKotlin :app:lintDebug -PstellariumNonCommercial=true -PsequenceEnabled=false -PemulatorTest=false`。
+- `adb devices -l` 当前为空。真机验收应覆盖双指 / 双击 / 拖动和两种返回、编辑对比与夜间直方图、旋转期间的历史与保存、系统保存取消与分享接收、多种尺寸 FITS/JPG/PNG 内存边界。
+
+## 16 位与内存改进
+
+- 相册后期移除整图 FloatArray。16 位工作缓冲中的 RGB 每像素 6 字节，较 RGB Float32 的 12 字节减半；统计、增益和 UI 参数使用少量浮点标量。
+- FITS 读取通过有界行缓存读取区域，Bayer 在源图坐标处理并读取区域外的插值邻域。24 MP 源图的 512×512 RGB 区域缓冲为 1.5 MiB。
+- 1:1 / 缩放只解码可见区域和边缘。JPG / 8 位 PNG 使用 BitmapRegionDecoder；16 位 PNG 支持灰度、RGB、Alpha、五种行滤波和 Adam7。区域通过 EXIF 映射，处理器使用与整图相同的窗口和系数。
+- PNG / FIT 输出分 32 行处理，保持原始尺寸和 16 位通道精度。FIT 通过定位写入 R/G/B 三平面，PNG 通过分块 IDAT 流式压缩。JPG 仅保留编码所需的全尺寸原生 ARGB 位图和小工作带。
+- 内存检查分别计算 ART 托管缓冲和原生 Bitmap，原生预算参考系统可用内存及保留阈值。`Runtime.maxMemory()` 仅用于托管堆预算。
+- 小尺寸历史叠加 FITS 的只读显示优先打开同组已保存的显示 PNG；缺少对应 PNG 时继续复用叠加模块保存的高级配方。叠加累积及该历史显示回退路径沿用原有科学处理精度；进入相册编辑后使用本节的 16 位链路。
+- 新增 JDK ImageIO 独立编码的 PNG16 灰度 / RGB 普通及 Adam7 样本，生成命令见 `app/src/test/resources/media-u16/README.md`。
+
+数值量化与实际内存峰值分别验收：自动化检查位深、码值、来源保持和区域一致性，设备验收继续覆盖峰值内存、触控拖动、旋转、取消与外部 FITS/PNG 软件打开。
+
+本轮数值检查包含 16 位全码值 FITS 往返、独立解析 PNG 输出与外部 ImageIO 样本、透明度 / tRNS / Adam7、定点颜色与窄窗口亮星比例、Bayer 区域边界、EXIF 仿射映射、24 MP 源的有界读取和托管 / 原生预算隔离。预览副本、直方图和高亮遮罩同样检查分配预算；内存不足时保留画面并显示可恢复错误。
+
+本轮最终验证：41 项相关 JVM 回归通过，0 失败 / 错误 / 跳过；主代码及 Android 测试源码编译通过；`lintDebug` 通过，0 错误、250 警告、13 条信息。保留原片、三格式全尺寸导出、区域与 PNG 像素一致性及旋转 / 编辑流程的 Android 测试源码同步更新。当前未连接设备，Android 用例执行和实际峰值内存仍待真机验收。本轮未调整版本号或重新分发 APK。

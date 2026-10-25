@@ -27,7 +27,7 @@ object StackFitsReader {
     /** Reads the optional lossless recipe extension without loading image pixels. */
     fun readMetadata(file: File): Map<String, String> = RandomAccessFile(file, "r").use { reader ->
         val h = FitsHeaderParser.read(reader)
-        if (h["BITPIX"] != "-32") return@use emptyMap()
+        val bytesPerSample = when (h["BITPIX"]) { "8" -> 1L; "16" -> 2L; "32", "-32" -> 4L; else -> return@use emptyMap() }
         val axes = h["NAXIS"]?.toIntOrNull() ?: return@use emptyMap()
         require(axes in 2..3)
         var samples = 1L
@@ -36,7 +36,7 @@ object StackFitsReader {
             require(dimension > 0)
             samples = Math.multiplyExact(samples, dimension)
         }
-        val primaryBytes = Math.multiplyExact(samples, 4L)
+        val primaryBytes = Math.multiplyExact(samples, bytesPerSample)
         val primaryEnd = Math.addExact(reader.filePointer, primaryBytes)
         val extensionOffset = Math.multiplyExact(Math.addExact(primaryEnd, 2879L) / 2880L, 2880L)
         if (extensionOffset >= reader.length()) return@use emptyMap()

@@ -29,7 +29,7 @@
     <string name="media_edit_black_point">Black point</string>
     <string name="media_edit_white_point">White point</string>
     <string name="media_edit_gamma">Gamma</string>
-    <string name="media_edit_fits_note">Save a full-resolution copy. FIT stores the processed values as Float32; color images use RGB planes.</string>
+    <string name="media_edit_fits_note">Save a full-resolution copy: JPG uses 8-bit channels; PNG and FIT retain 16-bit channels. Color FIT uses RGB planes.</string>
     <string name="media_edit_exposure">Brightness · EV</string>
     <string name="media_edit_preparing">Preparing image adjustments…</string>
     <string name="media_edit_retry">Retry</string>
@@ -38,7 +38,7 @@
     <string name="media_edit_storage">There is insufficient space to save the image. Free storage and retry.</string>
     <string name="media_edit_source_changed">The source image has changed or is unavailable. Reopen it before editing.</string>
     <string name="media_edit_discard_title">Leave these adjustments?</string>
-    <string name="media_edit_discard_hint">The current adjustments have not been saved. Save a copy to keep them.</string>
+    <string name="media_edit_discard_hint">The current adjustments have not been saved. Save the recipe to recover them from the original image later.</string>
     <string name="media_edit_discard">Discard and continue</string>
     <string name="media_edit_continue">Continue editing</string>
     <string name="media_edit_cancel_save_title">Cancel saving?</string>

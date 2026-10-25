@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="media_inspect_fit">Fit</string>
+    <string name="media_inspect_compare">Compare</string>
+    <string name="media_inspect_histogram">RGB histogram</string>
+    <string name="media_inspect_clipping">Highlight clipping</string>
+    <string name="media_inspect_native_failed">The detail region could not be loaded. Check available memory and the source file, then tap 1:1 to retry.</string>
+    <string name="media_inspect_preview">Preview</string>
+    <string name="media_inspect_before">Original</string>
+    <string name="media_inspect_after">Adjusted</string>
+    <string name="media_inspect_display_samples">Display preview · any channel at 255: %1$.2f%% · R/G/B, logarithmic counts</string>
+    <string name="media_edit_undo">Undo</string>
+    <string name="media_edit_redo">Redo</string>
+    <string name="media_recipe_save">Save recipe</string>
+    <string name="media_recipe_save_leave">Save recipe and leave</string>
+    <string name="media_recipe_saved">Recipe saved. Reopening Edit restores the original image and these adjustments.</string>
+    <string name="media_recipe_restored">Editing recipe restored from the original image.</string>
+    <string name="media_recipe_save_failed">The recipe could not be saved. Your adjustments remain available here.</string>
+    <string name="media_recipe_missing_source">The original image is unavailable. Editing uses the displayed export as a new source.</string>
+    <string name="media_group_related">Group related media</string>
+    <string name="media_group_count">Related media · %1$d files</string>
+    <string name="media_group_select">Select group</string>
+    <string name="media_role_original">Original capture</string>
+    <string name="media_role_linear">Linear stack</string>
+    <string name="media_role_stack_display">Stack display image</string>
+    <string name="media_role_edited">Edited version</string>
+    <string name="media_batch_select">Select</string>
+    <string name="media_batch_selected">Clear selection (%1$d)</string>
+    <string name="media_batch_export">Export ZIP</string>
+    <string name="media_batch_share">Share</string>
+    <string name="media_batch_working">Exporting selected media · %1$d/%2$d</string>
+    <string name="media_batch_failed">Export or sharing failed. Check the source files and storage, then retry.</string>
+    <string name="media_batch_saved">ZIP saved, including image sidecars and a relationship manifest.</string>
+    <string name="media_trash_failed">The file could not be moved or restored. A file with the same name may already exist.</string>
+</resources>

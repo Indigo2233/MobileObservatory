@@ -1,9 +1,6 @@
 package com.indigo.mobileobservatory.media
 
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.graphics.ColorSpace
-import androidx.exifinterface.media.ExifInterface
 import com.indigo.mobileobservatory.util.FitsHeaderParser
 import java.io.File
 import java.io.FileOutputStream
@@ -11,7 +8,6 @@ import java.io.IOException
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.CancellationException
-import kotlin.math.roundToInt
 
 data class PreparedMediaImage(
     val source: File,
@@ -24,52 +20,91 @@ data class PreparedMediaImage(
     val sourceHeader: Map<String, String>
 )
 
-/** Preview is bounded; saving decodes the original resolution and retains floating-point FITS samples. */
+/** UInt16 previews and bounded source regions; PNG/FITS exports are streamed in 32-row bands. */
 object MediaImageEditing {
-    fun prepare(source: File, cancelled: () -> Boolean = { false }): PreparedMediaImage {
+    fun prepare(source: File, recipe: MediaEditRecipe? = null, cancelled: () -> Boolean = { false }): PreparedMediaImage {
         val key = fingerprint(source)
+        require(recipe == null || recipe.sourceFingerprint == key) { "source_changed" }
         val decoded = readSource(source, 1600, cancelled)
-        val window = if (decoded.displayNormalized) MediaImageWindow(0f, 1f) else MediaImageProcessing.window(decoded.image)
-        MediaImageProcessing.normalize(decoded.image, window) { checkCancelled(cancelled) }
+        val window = recipe?.window ?: if (decoded.displayNormalized) decoded.image.range else MediaImageProcessing.window(decoded.image)
         require(key == fingerprint(source)) { "source_changed" }
         return PreparedMediaImage(source, key, decoded.originalWidth, decoded.originalHeight,
-            decoded.image, window, MediaImageProcessing.lp700Gains(decoded.image), decoded.header)
+            decoded.image, window, recipe?.lpGains?.takeIf { it.size == 3 }?.toFloatArray()
+                ?: MediaImageProcessing.lp700Gains(decoded.image, window), decoded.header)
     }
 
     fun isEditedFits(file: File): Boolean {
         val header = FitsHeaderParser.read(file)
-        return header["EDITED"] == "T" && header["BUNIT"] == "normalized display"
+        return header["EDITED"] == "T" && header["BUNIT"] in listOf("normalized display", "display intensity")
     }
 
     fun renderPreview(prepared: PreparedMediaImage, settings: MediaImageEditSettings,
                       cancelled: () -> Boolean = { false }): Bitmap {
         checkCancelled(cancelled)
         val result = prepared.preview.deepCopy()
-        MediaImageProcessing.apply(result, settings, prepared.lpGains) { checkCancelled(cancelled) }
+        MediaImageProcessing.apply(result, settings, prepared.lpGains, prepared.window) { checkCancelled(cancelled) }
         return bitmap(result) { checkCancelled(cancelled) }
     }
 
     fun estimateWhiteBalance(prepared: PreparedMediaImage, settings: MediaImageEditSettings): FloatArray =
-        MediaImageProcessing.whiteBalance(prepared.preview, settings.lp700, prepared.lpGains)
+        MediaImageProcessing.whiteBalance(prepared.preview, settings.lp700, prepared.lpGains, prepared.window)
+
+    /** Used for JPEG encoding and tests; only the ARGB bitmap is full-sized. */
+    fun renderFullResolution(prepared: PreparedMediaImage, settings: MediaImageEditSettings,
+                             cancelled: () -> Boolean = { false }): Bitmap {
+        require(prepared.sourceFingerprint == fingerprint(prepared.source)) { "source_changed" }
+        return openSource(prepared, cancelled).use { source ->
+            renderBitmap(prepared, settings, source, cancelled)
+        }
+    }
+
+    fun renderRegion(prepared: PreparedMediaImage, settings: MediaImageEditSettings, region: MediaImageRegion,
+                     cancelled: () -> Boolean = { false }): Bitmap = openSource(prepared, cancelled).use { source ->
+        val pixels = source.read(region) { checkCancelled(cancelled) }
+        MediaImageProcessing.apply(pixels, settings, prepared.lpGains, prepared.window) { checkCancelled(cancelled) }
+        require(prepared.sourceFingerprint == fingerprint(prepared.source)) { "source_changed" }
+        bitmap(pixels) { checkCancelled(cancelled) }
+    }
+
+    private fun openSource(prepared: PreparedMediaImage, cancelled: () -> Boolean): MediaPixelSource {
+        require(prepared.sourceFingerprint == fingerprint(prepared.source)) { "source_changed" }
+        val source = openMediaSource(prepared.source, prepared.preview.range) { checkCancelled(cancelled) }
+        if (source.width != prepared.originalWidth || source.height != prepared.originalHeight || source.channels != prepared.preview.channels) {
+            source.close(); error("source_changed")
+        }
+        return source
+    }
+
+    private fun renderBitmap(prepared: PreparedMediaImage, settings: MediaImageEditSettings,
+                             source: MediaPixelSource, cancelled: () -> Boolean): Bitmap {
+        val width = source.width; val height = source.height
+        MediaImageMemory.check(width.toLong() * 32 * source.channels * 2 + width * 4L + 512 * 1024,
+            width.toLong() * height * 4)
+        val result = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        try {
+            val row = IntArray(width)
+            val kernel = MediaImage16Kernel(source.range, prepared.window, settings, prepared.lpGains, source.channels == 1)
+            for (top in 0 until height step 32) {
+                checkCancelled(cancelled)
+                val band = source.read(MediaImageRegion(0, top, width, minOf(32, height - top))) { checkCancelled(cancelled) }
+                kernel.apply(band) { checkCancelled(cancelled) }
+                for (y in 0 until band.height) {
+                    for (x in 0 until width) row[x] = argb(band, (y * width + x) * band.channels)
+                    result.setPixels(row, 0, width, 0, top + y, width, 1)
+                }
+            }
+            require(prepared.sourceFingerprint == fingerprint(prepared.source)) { "source_changed" }
+            return result
+        } catch (failure: Throwable) { result.recycle(); throw failure }
+    }
 
     fun export(prepared: PreparedMediaImage, capturesDir: File, format: MediaImageExportFormat,
                settings: MediaImageEditSettings, cancelled: () -> Boolean = { false }): File {
         require(prepared.sourceFingerprint == fingerprint(prepared.source)) { "source_changed" }
         val pixels = prepared.originalWidth.toLong() * prepared.originalHeight
-        val floats = Math.multiplyExact(pixels, prepared.preview.channels * 4L)
-        val rasterSource = prepared.source.extension.lowercase(Locale.ROOT) !in listOf("fit", "fits")
-        // Raster source and encoded-result Bitmaps exist at separate stages.
-        checkMemory(floats + if (rasterSource || format != MediaImageExportFormat.FIT) pixels * 4L else 0L)
-        val decoded = readSource(prepared.source, Int.MAX_VALUE, cancelled)
-        require(decoded.originalWidth == prepared.originalWidth && decoded.originalHeight == prepared.originalHeight &&
-            decoded.image.width == prepared.originalWidth && decoded.image.height == prepared.originalHeight &&
-            decoded.image.channels == prepared.preview.channels) { "source_changed" }
-        MediaImageProcessing.normalize(decoded.image, prepared.window) { checkCancelled(cancelled) }
-        MediaImageProcessing.apply(decoded.image, settings, prepared.lpGains) { checkCancelled(cancelled) }
-        require(prepared.sourceFingerprint == fingerprint(prepared.source)) { "source_changed" }
         val directory = File(capturesDir, if (format == MediaImageExportFormat.FIT) "FITS" else "JPG")
         if (!directory.isDirectory && !directory.mkdirs()) throw IOException("Could not create the image library folder")
-        val required = if (format == MediaImageExportFormat.FIT) floats + 32_768 else pixels * 4 + 32_768
+        val required = pixels * (if (format == MediaImageExportFormat.JPG) 4L else prepared.preview.channels * 2L) + 1024 * 1024
         if (directory.usableSpace in 1 until required + 8 * 1024 * 1024) throw IOException("storage_budget")
         val destination = nextOutputFile(prepared.source, directory, format.extension)
         val sidecar = File(directory, "${destination.nameWithoutExtension}.json")
@@ -81,16 +116,23 @@ object MediaImageEditing {
         var committed = false
         try {
             checkCancelled(cancelled)
-            if (format == MediaImageExportFormat.FIT) {
-                MediaImageFitsCodec.write(temporary, decoded.image, metadata) { checkCancelled(cancelled) }
-            } else {
-                encoded = bitmap(decoded.image) { checkCancelled(cancelled) }
-                FileOutputStream(temporary).use { stream ->
-                    val compression = if (format == MediaImageExportFormat.JPG) Bitmap.CompressFormat.JPEG else Bitmap.CompressFormat.PNG
-                    if (!encoded.compress(compression, if (format == MediaImageExportFormat.JPG) 95 else 100, stream)) {
-                        throw IOException("Image encoding failed")
+            openSource(prepared, cancelled).use { source ->
+                val kernel = MediaImage16Kernel(source.range, prepared.window, settings, prepared.lpGains, source.channels == 1)
+                val readBand: (MediaImageRegion) -> MediaImagePixels = { region ->
+                    source.read(region) { checkCancelled(cancelled) }.also { band -> kernel.apply(band) { checkCancelled(cancelled) } }
+                }
+                when (format) {
+                    MediaImageExportFormat.FIT -> MediaImageFitsCodec.writeBands(temporary, source.width, source.height,
+                        source.channels, metadata, { checkCancelled(cancelled) }, readBand)
+                    MediaImageExportFormat.PNG -> MediaPng16Codec.write(temporary, source.width, source.height,
+                        source.channels, { checkCancelled(cancelled) }, readBand)
+                    MediaImageExportFormat.JPG -> {
+                        encoded = renderBitmap(prepared, settings, source, cancelled)
+                        FileOutputStream(temporary).use { stream ->
+                            if (!encoded!!.compress(Bitmap.CompressFormat.JPEG, 95, stream)) throw IOException("Image encoding failed")
+                            stream.fd.sync()
+                        }
                     }
-                    stream.fd.sync()
                 }
             }
             FileOutputStream(temporaryMetadata).use { stream ->
@@ -111,57 +153,20 @@ object MediaImageEditing {
     }
 
     internal fun readSource(source: File, maximumSide: Int, cancelled: () -> Boolean): DecodedMediaImage =
-        if (source.extension.lowercase(Locale.ROOT) in listOf("fit", "fits")) {
-            MediaImageFitsCodec.read(source, maximumSide, { checkCancelled(cancelled) }, ::checkMemory)
-        } else readRaster(source, maximumSide, cancelled)
-
-    private fun readRaster(source: File, maximumSide: Int, cancelled: () -> Boolean): DecodedMediaImage {
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeFile(source.absolutePath, bounds)
-        require(bounds.outWidth > 0 && bounds.outHeight > 0 && bounds.outMimeType in listOf("image/jpeg", "image/png")) {
-            "Unsupported raster image"
+        openMediaSource(source, check = { checkCancelled(cancelled) }).use { input ->
+            val step = kotlin.math.ceil(maxOf(input.width, input.height).toDouble() / maximumSide).toInt().coerceAtLeast(1)
+            DecodedMediaImage(input.read(MediaImageRegion(0, 0, input.width, input.height, step)) { checkCancelled(cancelled) },
+                input.width, input.height, input.header, input.displayNormalized)
         }
-        val orientation = runCatching { ExifInterface(source.absolutePath).getAttributeInt(ExifInterface.TAG_ORIENTATION, 1) }.getOrDefault(1)
-        val swap = orientation in 5..8
-        var sample = 1
-        while ((maxOf(bounds.outWidth, bounds.outHeight).toLong() + sample - 1) / sample > maximumSide) sample *= 2
-        val decodedWidth = (bounds.outWidth.toLong() + sample - 1) / sample
-        val decodedHeight = (bounds.outHeight.toLong() + sample - 1) / sample
-        checkMemory(decodedWidth * decodedHeight * 16)
-        checkCancelled(cancelled)
-        val input = BitmapFactory.decodeFile(source.absolutePath, BitmapFactory.Options().apply {
-            inSampleSize = sample; inScaled = false; inPreferredConfig = Bitmap.Config.ARGB_8888
-            inPreferredColorSpace = ColorSpace.get(ColorSpace.Named.SRGB)
-        }) ?: throw IOException("Could not decode the source image")
-        try {
-            val width = if (swap) input.height else input.width
-            val height = if (swap) input.width else input.height
-            val count = width.toLong() * height * 3
-            require(count <= Int.MAX_VALUE) { "memory_budget" }
-            val values = FloatArray(count.toInt())
-            val row = IntArray(input.width)
-            for (y in 0 until input.height) {
-                checkCancelled(cancelled)
-                input.getPixels(row, 0, input.width, 0, y, input.width, 1)
-                for (x in row.indices) {
-                    val dx = when (orientation) { 2, 3 -> input.width - 1 - x; 5, 8 -> y; 6, 7 -> input.height - 1 - y; else -> x }
-                    val dy = when (orientation) { 3, 4 -> input.height - 1 - y; 5, 6 -> x; 7, 8 -> input.width - 1 - x; else -> y }
-                    val i = (dy * width + dx) * 3
-                    val pixel = row[x]
-                    val alpha = ((pixel ushr 24) and 255) / 255f
-                    values[i] = ((pixel ushr 16) and 255) / 255f * alpha
-                    values[i + 1] = ((pixel ushr 8) and 255) / 255f * alpha
-                    values[i + 2] = (pixel and 255) / 255f * alpha
-                }
-            }
-            return DecodedMediaImage(MediaImagePixels(width, height, 3, values),
-                if (swap) bounds.outHeight else bounds.outWidth, if (swap) bounds.outWidth else bounds.outHeight,
-                displayNormalized = true)
-        } finally { input.recycle() }
+
+    private fun argb(image: MediaImagePixels, index: Int): Int {
+        fun byte(channel: Int) = (image.unsigned(index + channel) + 128) / 257
+        return (0xff shl 24) or (byte(0) shl 16) or (byte(if (image.channels == 3) 1 else 0) shl 8) or byte(if (image.channels == 3) 2 else 0)
     }
 
     private fun bitmap(image: MediaImagePixels, check: () -> Unit): Bitmap {
         check()
+        MediaImageMemory.check(image.width * 4L, image.width.toLong() * image.height * 4)
         val output = Bitmap.createBitmap(image.width, image.height, Bitmap.Config.ARGB_8888)
         try {
             val row = IntArray(image.width)
@@ -169,9 +174,7 @@ object MediaImageEditing {
                 check()
                 for (x in 0 until image.width) {
                     val i = (y * image.width + x) * image.channels
-                    fun byte(channel: Int) = (image.pixels[i + channel].coerceIn(0f, 1f) * 255f).roundToInt()
-                    row[x] = (0xff shl 24) or (byte(0) shl 16) or
-                        (byte(if (image.channels == 3) 1 else 0) shl 8) or byte(if (image.channels == 3) 2 else 0)
+                    row[x] = argb(image, i)
                 }
                 output.setPixels(row, 0, image.width, 0, y, image.width, 1)
             }
@@ -179,14 +182,9 @@ object MediaImageEditing {
         } catch (failure: Throwable) { output.recycle(); throw failure }
     }
 
-    private fun checkMemory(bytes: Long) {
-        val runtime = Runtime.getRuntime()
-        val available = runtime.maxMemory() - (runtime.totalMemory() - runtime.freeMemory())
-        val budget = minOf((runtime.maxMemory() * .60).toLong(), (available * .80).toLong())
-        require(bytes > 0 && bytes <= budget) { "memory_budget" }
-    }
+    internal fun checkMemory(bytes: Long) = MediaImageMemory.check(nativeBytes = bytes)
     private fun checkCancelled(cancelled: () -> Boolean) { if (cancelled()) throw CancellationException("Image edit cancelled") }
-    private fun fingerprint(file: File): String {
+    fun fingerprint(file: File): String {
         require(file.isFile && file.length() > 0) { "source_changed" }
         return "${file.absolutePath}:${file.length()}:${file.lastModified()}"
     }
@@ -201,11 +199,12 @@ object MediaImageEditing {
             "schema" to "indigo-image-edit-1", "source" to prepared.source.name,
             "sourceFingerprint" to prepared.sourceFingerprint, "width" to prepared.originalWidth.toString(),
             "height" to prepared.originalHeight.toString(), "channels" to prepared.preview.channels.toString(),
-            "sampleDomain" to "normalized display", "normalizationBlack" to prepared.window.black.toString(),
+            "sampleDomain" to "display uint16", "workingPrecision" to "uint16", "normalizationBlack" to prepared.window.black.toString(),
             "normalizationWhite" to prepared.window.white.toString(), "lp700" to settings.lp700.toString(),
             "redGain" to settings.redGain.toString(), "greenGain" to settings.greenGain.toString(),
             "blueGain" to settings.blueGain.toString(), "blackPoint" to settings.blackPoint.toString(),
             "whitePoint" to settings.whitePoint.toString(), "gamma" to settings.gamma.toString(),
             "exposureStops" to settings.exposureStops.toString(),
-            "lp700Credit" to "奎木娘HIP5447 https://space.bilibili.com/455218677")
+            "lp700Credit" to "奎木娘HIP5447 https://space.bilibili.com/455218677") +
+            MediaEditRecipe.from(prepared, settings).metadata()
 }

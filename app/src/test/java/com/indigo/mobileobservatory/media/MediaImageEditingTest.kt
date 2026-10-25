@@ -12,8 +12,7 @@ import org.junit.Test
 
 class MediaImageEditingTest {
     @Test fun trueColorFitsPreservesSubEightBitPrecisionAndPlanarOrder() = directory { root ->
-        val values = floatArrayOf(.500001f, .500009f, .100013f, .02f, .4f, .91f,
-            .13f, .27f, .81f, .500015f, .500024f, .000003f)
+        val values = intArrayOf(32768, 32769, 6560, 1311, 26214, 59637, 8520, 17694, 53083, 32770, 32771, 1).map(Int::toShort).toShortArray()
         val image = MediaImagePixels(2, 2, 3, values)
         val output = File(root, "edited.fit")
         val metadata = mapOf("schema" to "indigo-image-edit-1", "source" to "原图'相机.fit",
@@ -23,7 +22,8 @@ class MediaImageEditingTest {
         MediaImageFitsCodec.write(output, image, metadata)
         val header = FitsHeaderParser.read(output)
         assertEquals("3", header["NAXIS"]); assertEquals("3", header["NAXIS3"])
-        assertEquals("RGB", header["COLORSPC"]); assertEquals("normalized display", header["BUNIT"])
+        assertEquals("RGB", header["COLORSPC"]); assertEquals("display intensity", header["BUNIT"])
+        assertEquals("16", header["BITPIX"]); assertEquals("32768", header["BZERO"])
         assertNull(header["BAYERPAT"]); assertEquals("1.5", header["CRPIX1"])
         assertEquals("RA---TAN-SIP", header["CTYPE1"]); assertEquals("2", header["A_ORDER"])
         assertEquals("0.00002", header["A_2_0"])
@@ -31,11 +31,11 @@ class MediaImageEditingTest {
         assertEquals(metadata, StackFitsReader.readMetadata(output))
         RandomAccessFile(output, "r").use { input ->
             input.seek(header.dataOffset)
-            for (c in 0..2) for (pixel in 0..3) assertEquals(values[pixel * 3 + c].toRawBits(), input.readInt())
+            for (c in 0..2) for (pixel in 0..3) assertEquals((values[pixel * 3 + c].toInt() and 65535) - 32768, input.readShort().toInt())
         }
         val reopened = MediaImageFitsCodec.read(output)
         assertTrue(reopened.displayNormalized)
-        assertArrayEquals(values, reopened.image.pixels, 0f)
+        assertArrayEquals(values, reopened.image.pixels)
         assertEquals(0L, output.length() % 2880)
     }
 
@@ -53,11 +53,15 @@ class MediaImageEditingTest {
             }
             val decoded = MediaImageFitsCodec.read(file).image
             assertEquals(7, decoded.width); assertEquals(5, decoded.height); assertEquals(3, decoded.channels)
-            for (pixel in 0 until 35) assertArrayEquals(floatArrayOf(12001f, 28002f, 42003f),
-                decoded.pixels.copyOfRange(pixel * 3, pixel * 3 + 3), 0f)
+            for (pixel in 0 until 35) assertArrayEquals(shortArrayOf(12001, 28002, 42003.toShort()),
+                decoded.pixels.copyOfRange(pixel * 3, pixel * 3 + 3))
             val preview = MediaImageFitsCodec.read(file, maximumSide = 3).image
             assertEquals(3, preview.width); assertEquals(2, preview.height)
-            for (i in preview.pixels.indices) assertEquals(floatArrayOf(12001f, 28002f, 42003f)[i % 3], preview.pixels[i], 0f)
+            for (i in preview.pixels.indices) assertEquals(intArrayOf(12001, 28002, 42003)[i % 3], preview.unsigned(i))
+            MediaImageFitsCodec.open(file).use { source ->
+                val tile = source.read(MediaImageRegion(1, 1, 5, 3))
+                for (i in tile.pixels.indices) assertEquals(intArrayOf(12001, 28002, 42003)[i % 3], tile.unsigned(i))
+            }
         }
     }
 
@@ -71,25 +75,25 @@ class MediaImageEditingTest {
             val read = MediaImageFitsCodec.read(source).image
             val expected = if (bitpix == 32) floatArrayOf(-.24999f, .37501f)
                 else floatArrayOf((.10001f * .125 + .00001).toFloat(), (.10003f * .125 + .00001).toFloat())
-            assertArrayEquals(expected, read.pixels, 1e-8f)
+            for (i in expected.indices) assertEquals(expected[i].toDouble(), read.sample(i), read.range.span / 65535 + 1e-8)
         }
     }
 
     @Test fun numericCurveAndWhiteBalanceOperateWithoutEightBitQuantization() {
-        val neutral = MediaImagePixels(3, 1, 1, floatArrayOf(.250001f, .250019f, .81f))
+        val neutral = MediaImagePixels(3, 1, 1, shortArrayOf(16384, 16386, 53084.toShort()))
         MediaImageProcessing.apply(neutral, MediaImageEditSettings(gamma = 2f), floatArrayOf(1f, 1f, 1f))
-        assertEquals(kotlin.math.sqrt(.250001f), neutral.pixels[0], 1e-7f)
+        assertEquals(kotlin.math.sqrt(16384.0 / 65535), neutral.sample(0), 2.0 / 65535)
         assertNotEquals(neutral.pixels[0], neutral.pixels[1])
-        val original = MediaImagePixels(2, 1, 3, floatArrayOf(.3f, .4f, .6f, .15001f, .20001f, .30001f))
+        val original = MediaImagePixels(2, 1, 3, shortArrayOf(19661, 26214, 39321.toShort(), 9831, 13108, 19662))
         val gains = MediaImageProcessing.whiteBalance(original, false, floatArrayOf(1f, 1f, 1f))
         val balanced = original.deepCopy()
         MediaImageProcessing.apply(balanced, MediaImageEditSettings(redGain = gains[0], greenGain = gains[1], blueGain = gains[2]), floatArrayOf(1f, 1f, 1f))
-        assertEquals(balanced.pixels[0], balanced.pixels[1], 1e-5f)
-        assertEquals(balanced.pixels[1], balanced.pixels[2], 1e-5f)
-        assertEquals(.3f, original.pixels[0], 0f)
+        assertEquals(balanced.unsigned(0).toDouble(), balanced.unsigned(1).toDouble(), 3.0)
+        assertEquals(balanced.unsigned(1).toDouble(), balanced.unsigned(2).toDouble(), 3.0)
+        assertEquals(19661, original.unsigned(0))
         val identity = original.deepCopy()
         MediaImageProcessing.apply(identity, MediaImageEditSettings(), floatArrayOf(1f, 1f, 1f))
-        assertArrayEquals(original.pixels, identity.pixels, 1e-7f)
+        assertArrayEquals(original.pixels, identity.pixels)
     }
 
     @Test fun cancelledMalformedAndNonFiniteInputsAreRejected() = directory { root ->

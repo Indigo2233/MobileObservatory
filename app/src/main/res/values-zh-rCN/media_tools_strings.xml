@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="media_inspect_fit">适应画面</string>
+    <string name="media_inspect_compare">前后对比</string>
+    <string name="media_inspect_histogram">RGB 直方图</string>
+    <string name="media_inspect_clipping">高亮溢出</string>
+    <string name="media_inspect_native_failed">细节区域加载失败。请检查内存和原文件，然后点 1:1 重试。</string>
+    <string name="media_inspect_preview">预览</string>
+    <string name="media_inspect_before">原片</string>
+    <string name="media_inspect_after">调整后</string>
+    <string name="media_inspect_display_samples">显示预览 · 任一通道达 255：%1$.2f%% · R/G/B，对数计数</string>
+    <string name="media_edit_undo">撤销</string>
+    <string name="media_edit_redo">重做</string>
+    <string name="media_recipe_save">保存配方</string>
+    <string name="media_recipe_save_leave">保存配方并离开</string>
+    <string name="media_recipe_saved">配方已保存。重新进入编辑时会恢复原片和这些调整。</string>
+    <string name="media_recipe_restored">已从原片恢复编辑配方。</string>
+    <string name="media_recipe_save_failed">配方保存失败，当前调整仍保留在页面中。</string>
+    <string name="media_recipe_missing_source">原片已不可用，将以当前导出图作为新的编辑来源。</string>
+    <string name="media_group_related">关联分组</string>
+    <string name="media_group_count">关联素材 · %1$d 个文件</string>
+    <string name="media_group_select">选择整组</string>
+    <string name="media_role_original">原始拍摄</string>
+    <string name="media_role_linear">线性叠加结果</string>
+    <string name="media_role_stack_display">叠加显示图</string>
+    <string name="media_role_edited">编辑版本</string>
+    <string name="media_batch_select">多选</string>
+    <string name="media_batch_selected">清除选择（%1$d）</string>
+    <string name="media_batch_export">导出 ZIP</string>
+    <string name="media_batch_share">系统分享</string>
+    <string name="media_batch_working">正在导出所选素材 · %1$d/%2$d</string>
+    <string name="media_batch_failed">导出或分享失败，请检查原文件和存储空间后重试。</string>
+    <string name="media_batch_saved">ZIP 已保存，包含图像参数文件和素材关联清单。</string>
+    <string name="media_trash_failed">文件移动或恢复失败，请检查是否已有同名文件。</string>
+</resources>
