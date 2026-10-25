@@ -5,6 +5,7 @@ import com.indigo.mobileobservatory.R
 import androidx.compose.ui.res.stringResource
 
 import android.Manifest
+import android.graphics.Bitmap
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
@@ -50,6 +51,7 @@ import com.indigo.mobileobservatory.astrometry.FitsSolveHintReader
 import com.indigo.mobileobservatory.astrometry.FitsSolveHints
 import com.indigo.mobileobservatory.astrometry.PlateSolveOptics
 import com.indigo.mobileobservatory.astrometry.PlateSolveResult
+import com.indigo.mobileobservatory.astrometry.ImagePlateSolver
 import com.indigo.mobileobservatory.astro.ObserverSite
 import com.indigo.mobileobservatory.astro.OpticsEquipment
 import com.indigo.mobileobservatory.astro.RefractionParameters
@@ -96,11 +98,17 @@ fun PolarAlignmentScreen(
     mountMoveStatus: String = "",
     mountStopSignal: Long = 0L,
     cameraPixelSizeUm: Float? = null,
+    cameraConnected: Boolean = false,
+    cameraPreviewBitmap: Bitmap? = null,
+    cameraExposureUs: Float? = null,
+    cameraExposureMinUs: Float = 1_000f,
+    cameraExposureMaxUs: Float = 30_000_000f,
+    solver: ImagePlateSolver? = null,
     onReadMountSite: () -> Unit = {},
     onSyncPhoneSiteToMount: (Double, Double) -> Unit = { _, _ -> },
     onMoveMountRaBy: (Double, Boolean, Double) -> Unit = { _, _, _ -> },
     onStopMountRaMove: () -> Unit = {},
-    onCaptureFits: suspend () -> File? = { null },
+    onCaptureFits: suspend (Float) -> File? = { null },
     onViewImage: (File) -> Unit = {},
     onBack: () -> Unit
 ) {
@@ -124,6 +132,7 @@ fun PolarAlignmentScreen(
     val noCameraFrame = stringResource(R.string.no_camera_frame)
     val threeSolvesRequired = stringResource(R.string.three_solves_required)
     val runner = remember { AstapRunner(context.applicationContext) }
+    val solveEngine = solver ?: runner
     val d50Manager = remember { D50Manager(context.applicationContext) }
     val prefs = remember { context.applicationContext.getSharedPreferences("mobile_observatory", android.content.Context.MODE_PRIVATE) }
 
@@ -222,7 +231,7 @@ fun PolarAlignmentScreen(
             },
             solve = { file, fov ->
                 val hint = latestMountCoordinates.value.takeIf { configuration.useMountHint }
-                runner.solve(file, fov, hint, if (hint == null) 180.0 else configuration.searchRadiusDeg)
+                solveEngine.solve(file, fov, hint, if (hint == null) 180.0 else configuration.searchRadiusDeg)
             },
             noFrame = noCameraFrame, missingOptics = context.getString(R.string.plate_solve_need_optics),
             exposureTime = ::exposureTimeOf)
@@ -232,7 +241,7 @@ fun PolarAlignmentScreen(
             reportFailure(context.getString(R.string.polar_recapture_current_only))
             return
         }
-        if (!d50Manager.status().installed) { reportFailure(context.getString(R.string.database_required)); return }
+        if (!solveEngine.ready) { reportFailure(context.getString(R.string.database_required)); return }
         val file = files.getOrNull(index) ?: samples.getOrNull(index)?.file
         if (!recapture && file == null) return
         if (recapture && index != sampleModel.positionedPoint || index < sampleModel.positionedPoint) sampleModel.canResume = false
@@ -246,7 +255,7 @@ fun PolarAlignmentScreen(
             determination = null
             currentResult = null
             try {
-                val solved = executeSample(index, configuration) { if (recapture) onCaptureFits() else file }
+                val solved = executeSample(index, configuration) { if (recapture) onCaptureFits(5_000_000f) else file }
                 workflowStatus = context.getString(if (solved.success) R.string.polar_point_solved else R.string.tppa_failed, index + 1)
                 if (!solved.success) error = solved.message
             } catch (cancel: CancellationException) { throw cancel }
@@ -638,7 +647,7 @@ fun PolarAlignmentScreen(
                                     reportFailure(context.getString(R.string.invalid_coordinates), exposeSettings = true)
                                     return@Button
                                 }
-                                if (!d50Manager.status().installed) {
+                                if (!solveEngine.ready) {
                                     reportFailure(context.getString(R.string.database_required))
                                     return@Button
                                 }
@@ -730,7 +739,7 @@ fun PolarAlignmentScreen(
                                             previousMountRaDeg = latestMountCoordinates.value?.raDeg
                                             workflowStatus = context.getString(R.string.capturing_point, index + 1)
                                             solvingSlot = index
-                                            val solved = executeSample(index, configuration, onCaptureFits)
+                                            val solved = executeSample(index, configuration) { onCaptureFits(5_000_000f) }
                                             val capturedAt = requireNotNull(sampleSession.samples.value[index].capturedAt)
                                             solvingSlot = null
                                             if (!solved.success) error(solved.message)
@@ -761,7 +770,7 @@ fun PolarAlignmentScreen(
                                                 toleranceArcMin = tolerance,
                                                 capture = {
                                                     workflowStatus = context.getString(R.string.polar_correction_capturing)
-                                                    val result = executeSample(3, configuration, onCaptureFits)
+                                                    val result = executeSample(3, configuration) { onCaptureFits(5_000_000f) }
                                                     val at = requireNotNull(sampleSession.samples.value[3].capturedAt)
                                                     if (result.success && result.raDeg != null && result.decDeg != null) {
                                                         PolarSolvePoint(result.raDeg, result.decDeg, at)
@@ -796,6 +805,7 @@ fun PolarAlignmentScreen(
                                     }
                                 }
                             },
+                            modifier = Modifier.testTag("polar-run"),
                             enabled = !taskBusy && !mountBusy && solvingSlot == null
                         ) {
                             Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))

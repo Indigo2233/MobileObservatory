@@ -352,7 +352,7 @@ private fun ObservatoryContent(
                 mountMoveStatus = moveStatus, mountStopSignal = stopSignal, cameraPixelSizeUm = cameraPixelSize,
                 onReadMountSite = vm::readMountSite, onSyncPhoneSiteToMount = vm::syncPhoneSiteToMount,
                 onMoveMountRaBy = vm::moveMountRaBy, onStopMountRaMove = vm::stopMountRaMove,
-                onCaptureFits = { vm.captureTempFitsForPlateSolve() },
+                onCaptureFits = { _ -> vm.captureTempFitsForPlateSolve() },
                 onViewImage = { onPlayer(it, MediaCategory.RECENT) }, onBack = back)
         }
         ObservatoryDestination.GUIDE -> GuideScreen(vm, back)

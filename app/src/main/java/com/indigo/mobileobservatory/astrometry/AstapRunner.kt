@@ -15,13 +15,14 @@ import java.util.Locale
 import java.util.concurrent.TimeUnit
 import kotlin.math.absoluteValue
 
-class AstapRunner(private val context: Context) {
+class AstapRunner(private val context: Context) : ImagePlateSolver {
     companion object {
         // ASTAP instances share the catalog work directory and output discovery. Serialize all
         // callers, including covered image tasks, so one result cannot consume another's WCS.
         private val solveLock = Mutex()
     }
     private val d50Manager = D50Manager(context)
+    override val ready: Boolean get() = d50Manager.status().installed
 
     suspend fun copyUriToCache(uri: Uri): File = withContext(Dispatchers.IO) {
         val name = displayName(uri).sanitizeFileName()
@@ -33,11 +34,11 @@ class AstapRunner(private val context: Context) {
         target
     }
 
-    suspend fun solve(
+    override suspend fun solve(
         inputFile: File,
         fovDeg: Double,
-        mountCoordinates: MountCoordinates? = null,
-        searchRadiusDeg: Double? = null
+        mountCoordinates: MountCoordinates?,
+        searchRadiusDeg: Double?
     ): PlateSolveResult = solveLock.withLock {
         solveExclusive(inputFile, fovDeg, mountCoordinates, searchRadiusDeg)
     }
