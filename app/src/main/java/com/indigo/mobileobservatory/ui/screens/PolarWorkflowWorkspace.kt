@@ -159,43 +159,47 @@ internal fun PolarWorkflowPreview(
     val failed = sample?.takeIf { it.phase == PolarSamplePhase.FAILED }
     val details = failed?.failureDetails()
     val clipboard = LocalClipboardManager.current
-    Column(modifier.padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(label, Modifier.weight(1f), style = MaterialTheme.typography.labelLarge, maxLines = 1,
-                overflow = TextOverflow.Ellipsis)
-            TextButton(onClick = { source?.let { onInspect(it) } }, enabled = source?.isFile == true,
-                modifier = Modifier.testTag("polar-preview-expand")) { Text(stringResource(R.string.polar_view_sample)) }
-        }
-        Box(Modifier.weight(1f).fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant),
-            contentAlignment = Alignment.Center) {
-            val image = bitmap ?: livePreview?.takeIf { source == null && !it.isRecycled }
-            if (image != null) Image(image.asImageBitmap(), stringResource(R.string.polar_sample_preview),
-                Modifier.fillMaxSize().testTag("polar-main-preview").clickable(enabled = source != null) { onInspect(source) },
-                contentScale = ContentScale.Fit)
-            else Text(stringResource(R.string.polar_preview_empty), Modifier.padding(16.dp), style = MaterialTheme.typography.bodySmall)
-            if (loading) CircularProgressIndicator(Modifier.size(28.dp))
-            previewError?.let {
-                Text(stringResource(R.string.polar_preview_failed, it), Modifier.padding(12.dp), color = MaterialTheme.colorScheme.error)
+    BoxWithConstraints(modifier.padding(horizontal = 12.dp)) {
+        // Limit the error panel using the actual viewport, including large font layouts.
+        val failureMaxHeight = minOf(144.dp, maxHeight * .52f)
+        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(label, Modifier.weight(1f), style = MaterialTheme.typography.labelLarge, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis)
+                if (busy) OutlinedButton(onClick = onStop) { Text(stringResource(R.string.stop)) }
+                TextButton(onClick = { source?.let { onInspect(it) } }, enabled = source?.isFile == true,
+                    modifier = Modifier.testTag("polar-preview-expand")) { Text(stringResource(R.string.polar_view_sample)) }
             }
-        }
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(status.ifBlank { stringResource(R.string.polar_preview_ready) }, Modifier.weight(1f),
-                style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            if (busy) OutlinedButton(onClick = onStop) { Text(stringResource(R.string.stop)) }
-        }
-        if (details != null || error != null) {
-            Surface(color = MaterialTheme.colorScheme.errorContainer, shape = MaterialTheme.shapes.small,
-                modifier = Modifier.fillMaxWidth().testTag("polar-current-failure").semantics(mergeDescendants = true) {}) {
-                Column(Modifier.heightIn(max = 144.dp).verticalScroll(rememberScrollState())
-                    .padding(horizontal = 10.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    if (details != null) {
-                        Text(stringResource(failureTitle(details.reason)), style = MaterialTheme.typography.labelLarge)
-                        details.detectedStars?.let { Text(stringResource(R.string.polar_detected_stars, it), style = MaterialTheme.typography.bodySmall) }
-                        Text(details.nativeMessage, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        Text(stringResource(failureAdvice(details.reason)), style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    } else Text(error.orEmpty(), style = MaterialTheme.typography.bodySmall, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                    TextButton(onClick = { showLog = true }, contentPadding = PaddingValues(0.dp),
-                        modifier = Modifier.heightIn(min = 32.dp)) { Text(stringResource(R.string.show_log)) }
+            Box(Modifier.weight(1f).fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center) {
+                val image = bitmap ?: livePreview?.takeIf { source == null && !it.isRecycled }
+                if (image != null) Image(image.asImageBitmap(), stringResource(R.string.polar_sample_preview),
+                    Modifier.fillMaxSize().testTag("polar-main-preview").clickable(enabled = source != null) { onInspect(source) },
+                    contentScale = ContentScale.Fit)
+                else Text(stringResource(R.string.polar_preview_empty), Modifier.padding(16.dp), style = MaterialTheme.typography.bodySmall)
+                if (loading) CircularProgressIndicator(Modifier.size(28.dp))
+                previewError?.let {
+                    Text(stringResource(R.string.polar_preview_failed, it), Modifier.padding(12.dp), color = MaterialTheme.colorScheme.error)
+                }
+            }
+            if (details == null && error == null) {
+                Text(status.ifBlank { stringResource(R.string.polar_preview_ready) },
+                    style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+            if (details != null || error != null) {
+                Surface(color = MaterialTheme.colorScheme.errorContainer, shape = MaterialTheme.shapes.small,
+                    modifier = Modifier.fillMaxWidth().testTag("polar-current-failure").semantics(mergeDescendants = true) {}) {
+                    Column(Modifier.heightIn(max = failureMaxHeight).verticalScroll(rememberScrollState())
+                        .padding(horizontal = 10.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        if (details != null) {
+                            Text(stringResource(failureTitle(details.reason)), style = MaterialTheme.typography.labelLarge)
+                            details.detectedStars?.let { Text(stringResource(R.string.polar_detected_stars, it), style = MaterialTheme.typography.bodySmall) }
+                            Text(details.nativeMessage, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            Text(stringResource(failureAdvice(details.reason)), style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        } else Text(error.orEmpty(), style = MaterialTheme.typography.bodySmall, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                        TextButton(onClick = { showLog = true }, contentPadding = PaddingValues(0.dp),
+                            modifier = Modifier.heightIn(min = 32.dp)) { Text(stringResource(R.string.show_log)) }
+                    }
                 }
             }
         }

@@ -15,7 +15,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.graphics.asAndroidBitmap
+import android.os.ParcelFileDescriptor
+import android.view.KeyEvent
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.indigo.mobileobservatory.astrometry.*
@@ -60,11 +61,17 @@ class PolarWorkflowScreenInstrumentedTest {
     }
 
     private fun screenshot(suffix: String = "") {
-        runCatching {
-            val directory = File(context.getExternalFilesDir(null), "polar-ui-screenshots").apply { mkdirs() }
-            val bitmap = compose.onAllNodes(isRoot()).onLast().captureToImage().asAndroidBitmap()
-            File(directory, "${testName.methodName}$suffix.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        compose.waitForIdle()
+        fun shell(command: String): String {
+            val descriptor = InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command)
+            return ParcelFileDescriptor.AutoCloseInputStream(descriptor).bufferedReader().use { it.readText() }
         }
+        // connectedAndroidTest uninstalls the app before the workflow can pull app-scoped files.
+        val directory = "/sdcard/Download/polar-ui-screenshots"
+        val path = "$directory/${testName.methodName}$suffix.png"
+        shell("mkdir -p $directory")
+        shell("screencap -p $path")
+        assertEquals(path, shell("ls $path").trim())
     }
 
     @After fun restore() {
@@ -133,6 +140,10 @@ class PolarWorkflowScreenInstrumentedTest {
         screenshot("-fullscreen")
         compose.onNodeWithTag("polar-preview-close").performClick()
         compose.runOnIdle { assertFalse(cancelled.get()) }
+        compose.onNodeWithTag("polar-preview-expand").performClick()
+        InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+        compose.onNodeWithTag("polar-fullscreen-preview").assertDoesNotExist()
+        compose.runOnIdle { assertFalse(cancelled.get()) }
         release.complete(PlateSolveResult(false, "ASTAP failed with exit code 1.", log = "Detected 7 stars.\nNot enough stars to solve the image."))
         compose.waitUntil(15_000) { compose.onAllNodesWithTag("polar-current-failure").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithTag("polar-current-failure").assertIsDisplayed().assert(hasText("7", substring = true))
@@ -178,7 +189,7 @@ class PolarWorkflowScreenInstrumentedTest {
         compose.waitUntil(15_000) { compose.onAllNodesWithTag("polar-main-preview").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithTag("polar-main-preview").assertIsDisplayed()
         compose.onNodeWithTag("polar-exposure-seconds").assertIsDisplayed()
-        screenshot()
+        screenshot("-landscape")
         compose.activityRule.scenario.onActivity { it.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
     }
 }
