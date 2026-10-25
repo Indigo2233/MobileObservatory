@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="polar_recapture_current_only">Only the current sample position can be recaptured. Start a new set to capture other positions again.</string>
     <string name="polar_setup_summary">Lat %1$s°, Lon %2$s° · Focal length %3$s mm · Pixel %4$s μm</string>
     <string name="polar_point_solved">Point %1$d solved</string>
     <string name="polar_calculating">Calculating polar alignment error</string>

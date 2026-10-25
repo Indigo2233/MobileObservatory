@@ -228,6 +228,10 @@ fun PolarAlignmentScreen(
             exposureTime = ::exposureTimeOf)
 
     fun runSingleSample(index: Int, recapture: Boolean, blind: Boolean = false) {
+        if (recapture && index < 3 && index != sampleModel.positionedPoint) {
+            reportFailure(context.getString(R.string.polar_recapture_current_only))
+            return
+        }
         if (!d50Manager.status().installed) { reportFailure(context.getString(R.string.database_required)); return }
         val file = files.getOrNull(index) ?: samples.getOrNull(index)?.file
         if (!recapture && file == null) return
@@ -847,6 +851,7 @@ fun PolarAlignmentScreen(
                     solving = solvingSlot == index,
                     sample = samples[index],
                     actionsEnabled = !taskBusy && !mountBusy,
+                    canRecapture = index == 3 || index == sampleModel.positionedPoint,
                     onSelect = {
                         selectedSlot = index
                         picker.launch(arrayOf("image/*", "application/fits", "application/octet-stream", "*/*"))
@@ -1019,6 +1024,7 @@ internal fun MeasurementCard(
     onSolve: () -> Unit,
     sample: PolarSample = PolarSample(file = file, result = solve),
     actionsEnabled: Boolean = true,
+    canRecapture: Boolean = true,
     onViewImage: () -> Unit = {},
     onRecapture: () -> Unit = {},
     onBlindRetry: () -> Unit = {}
@@ -1055,7 +1061,7 @@ internal fun MeasurementCard(
                 Button(onClick = onSolve, modifier = Modifier.testTag("polar-retry-$index"), enabled = available && actionsEnabled && !solving) { Text(stringResource(R.string.solve)) }
             }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = onRecapture, modifier = Modifier.testTag("polar-recapture-$index"), enabled = actionsEnabled) { Text(stringResource(R.string.polar_recapture_sample)) }
+                if (canRecapture) OutlinedButton(onClick = onRecapture, modifier = Modifier.testTag("polar-recapture-$index"), enabled = actionsEnabled) { Text(stringResource(R.string.polar_recapture_sample)) }
                 TextButton(onClick = onSelect, enabled = actionsEnabled) { Text(stringResource(R.string.select)) }
             }
             if (sample.phase == PolarSamplePhase.FAILED && sample.failedPhase == PolarSamplePhase.SOLVING &&

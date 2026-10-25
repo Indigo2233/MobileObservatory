@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="polar_recapture_current_only">当前只可重拍所在位置的采样点；如需重拍其他位置，请重新开始一组采样。</string>
     <string name="polar_setup_summary">纬度 %1$s°，经度 %2$s°；焦距 %3$s mm，像元 %4$s μm</string>
     <string name="polar_point_solved">第 %1$d 点解算完成</string>
     <string name="polar_calculating">正在计算极轴误差</string>
