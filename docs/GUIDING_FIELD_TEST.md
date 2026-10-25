@@ -9,7 +9,7 @@
 - 设备型号包含 `OnStep` 时，使用有应答的 `:MGd[n]#` 定时导星指令，由控制器负责脉冲截止时间。指令拒绝会报告失败。其余 LX200 / iOptron / SynScan 路径继续使用各自原有运动协议。
 - 发脉冲前设置 `:R2#`，采用 1× 导星速率。RA/DEC 校准和后续修正使用相同路径，矩阵以实际测量位移建立。
 - 校准中每次运动后等待新的完整曝光，并把处理结果与实际采集回调的帧标识、时间绑定。旧处理队列帧不能借用新回调的时间。
-- 加入 SNR、星点半径、峰值饱和过滤，以及多星位移离群点过滤；低质量帧和失配时取消当前修正并重置滤波状态。
+- 加入 SNR、星点半径、峰值饱和过滤，以及多星位移离群点过滤；低质量帧和失配时取消当前修正并重置滤波状态。热像素等被拒绝峰值不占用可用星点的候选名额。
 - 校准采用归一化轴夹角检查，允许位移速率较小且条件良好的矩阵；相机/架台重连、画幅改变清除校准。预览标记按源图坐标映射。
 - 只读连接在开始校准/导星前给出提示；导星页提供停止校准操作。
 
@@ -41,7 +41,7 @@ OnStep 指令依据：[Command.ino](https://github.com/hjd1964/OnStep/blob/maste
 
 本轮以 JVM 算法/协议回环回归、主代码和 Android 测试源码编译、lint 为自动化证据；设备现场测试单独记录。此前发布的 v1.0.9 / build 50 APK 不含本轮修复，GitHub 推送不会更新手机安装包。候选 APK 应核对构建提交后安装，版本号与 build 号沿用当前开发版本。
 
-本轮导星、架台、叠加和相册共 301 项 JVM 回归通过，0 失败、0 错误、0 跳过；Android 测试源码编译通过。执行命令：
+本轮导星、架台、叠加和相册共 302 项 JVM 回归通过，0 失败、0 错误、0 跳过；Android 测试源码编译通过。执行命令：
 
 ```powershell
 .\gradlew.bat :app:testDebugUnitTest --tests 'com.indigo.mobileobservatory.guide.*' --tests 'com.indigo.mobileobservatory.mount.*' --tests 'com.indigo.mobileobservatory.stacking.*' --tests 'com.indigo.mobileobservatory.media.*' :app:compileDebugAndroidTestKotlin :app:lintDebug -PstellariumNonCommercial=true -PsequenceEnabled=false -PemulatorTest=false

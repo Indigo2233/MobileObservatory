@@ -101,4 +101,17 @@ class GuideSafetyTest {
         val stars = module.usableStars(module.detectStars(FrameData(pixels, width, width, PixelFormat.RGB24, 1, 0)))
         assertEquals(1, stars.size); assertEquals(32f, stars.single().x, .2f); assertEquals(32f, stars.single().y, .2f)
     }
+
+    @Test fun manyHotPixelsCannotConsumeAllUsableStarSlots() {
+        val width = 256
+        val pixels = ByteArray(width * width) { 10 }
+        for (y in 12..112 step 25) for (x in 12..112 step 25) pixels[y * width + x] = 240.toByte()
+        for (y in 204..236) for (x in 204..236) pixels[y * width + x] =
+            (10 + 180 * kotlin.math.exp(-((x - 220) * (x - 220) + (y - 220) * (y - 220)) / 8.0)).toInt().toByte()
+        val module = GuideModule()
+        val stars = module.usableStars(module.detectStars(FrameData(pixels, width, width, PixelFormat.MONO8, 1, 0)))
+        assertEquals(1, stars.size)
+        assertEquals(220f, stars.single().x, .2f)
+        assertEquals(220f, stars.single().y, .2f)
+    }
 }

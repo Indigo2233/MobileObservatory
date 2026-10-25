@@ -107,6 +107,7 @@ class GuideModule {
         }
 
         val stars = ArrayList<GuideStar>()
+        val rejected = ArrayList<GuideStar>()
         for (candidate in candidates.sortedByDescending { it.value }) {
             if (stars.size >= maxStars) break
             if (stars.any { hypot(it.x - candidate.x, it.y - candidate.y) < 24f }) continue
@@ -124,7 +125,7 @@ class GuideModule {
                 }
             }
             if (weightSum > 0.0) {
-                stars += GuideStar(
+                val star = GuideStar(
                     x = (xSum / weightSum).toFloat(),
                     y = (ySum / weightSum).toFloat(),
                     snr = ((candidate.value - mean) / sigma.coerceAtLeast(1.0)).toFloat(),
@@ -138,9 +139,11 @@ class GuideModule {
                         peak >= maximum - maxOf(1, maximum / 1000)
                     }
                 )
+                // Rejected peaks must not consume the slots reserved for usable guide stars.
+                if (isUsableStar(star)) stars += star else if (rejected.size < maxStars) rejected += star
             }
         }
-        return stars.sortedByDescending { it.flux }
+        return stars.ifEmpty { rejected }.sortedByDescending { it.flux }
     }
 
     fun matchShift(reference: List<GuideStar>, current: List<GuideStar>): GuideVector? {
@@ -239,10 +242,11 @@ class GuideModule {
         lastDecError = 0f
     }
 
-    fun usableStars(stars: List<GuideStar>): List<GuideStar> = stars.filter {
-        it.x.isFinite() && it.y.isFinite() && it.snr.isFinite() && it.snr >= 5f &&
-            it.flux.isFinite() && it.flux > 0 && !it.saturated && (it.radiusPx.isNaN() || it.radiusPx in .6f..8f)
-    }
+    fun usableStars(stars: List<GuideStar>): List<GuideStar> = stars.filter(::isUsableStar)
+
+    private fun isUsableStar(star: GuideStar): Boolean =
+        star.x.isFinite() && star.y.isFinite() && star.snr.isFinite() && star.snr >= 5f &&
+            star.flux.isFinite() && star.flux > 0 && !star.saturated && (star.radiusPx.isNaN() || star.radiusPx in .6f..8f)
 
     private fun rawValue(frame: FrameData, x: Int, y: Int): Int {
         val index = y * frame.width + x
