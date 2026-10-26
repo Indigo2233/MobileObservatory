@@ -15,8 +15,9 @@ object FitsWcsParser {
     }
 
     private fun parse(header: Map<String, String>, fallbackWidth: Int, fallbackHeight: Int, source: File): ParsedWcs? {
-        val ra = header.doubleValue("CRVAL1") ?: return null
-        val dec = header.doubleValue("CRVAL2") ?: return null
+        if (header["PLTSOLVD"].equals("F", true)) return null
+        val ra = header.doubleValue("CRVAL1")?.takeIf { it.isFinite() } ?: return null
+        val dec = header.doubleValue("CRVAL2")?.takeIf { it.isFinite() && it in -90.0..90.0 } ?: return null
         val width = header.intValue("NAXIS1") ?: fallbackWidth
         val height = header.intValue("NAXIS2") ?: fallbackHeight
 

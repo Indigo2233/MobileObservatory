@@ -18,8 +18,8 @@ import kotlin.math.absoluteValue
 
 class AstapRunner(private val context: Context) : ImagePlateSolver {
     companion object {
-        // ASTAP instances share the catalog work directory and output discovery. Serialize all
-        // callers, including covered image tasks, so one result cannot consume another's WCS.
+        // ASTAP instances share catalog/configuration state. Serialize all callers,
+        // including image tasks that are temporarily covered by another screen.
         private val solveLock = Mutex()
     }
     private val d50Manager = D50Manager(context)
@@ -79,7 +79,7 @@ class AstapRunner(private val context: Context) : ImagePlateSolver {
         deleteStaleCopiedAstapExecutables(workDir)
 
         val start = System.currentTimeMillis()
-        val before = workDir.listFiles()?.associateWith { it.lastModified() }.orEmpty()
+        val outputBase = createAstapOutputBase(context.cacheDir)
         val dbFiles = workDir.listFiles { file ->
             file.isFile && file.name.startsWith(database.filePrefix, true) && file.name.endsWith(".1476", true)
         }.orEmpty()
@@ -91,7 +91,8 @@ class AstapRunner(private val context: Context) : ImagePlateSolver {
             databaseDir = workDir,
             database = database,
             mountCoordinates = mountCoordinates,
-            searchRadiusDeg = effectiveSearchRadiusDeg
+            searchRadiusDeg = effectiveSearchRadiusDeg,
+            outputBase = outputBase
         )
         val diagHeader = buildString {
             appendLine("ABIs=${Build.SUPPORTED_ABIS.joinToString()}")
@@ -99,6 +100,7 @@ class AstapRunner(private val context: Context) : ImagePlateSolver {
             appendLine("workDir=${workDir.absolutePath}")
             appendLine("${database.displayName} files=${dbFiles.size} bytes=${dbFiles.sumOf { it.length() }}")
             appendLine("input=${inputFile.absolutePath} bytes=${inputFile.length()}")
+            appendLine("outputBase=${outputBase.absolutePath}")
             if (mountCoordinates != null) {
                 appendLine("mountHint=raHours=${mountCoordinates.raHours} decDeg=${mountCoordinates.decDeg} radiusDeg=$effectiveSearchRadiusDeg")
             }
@@ -138,11 +140,14 @@ class AstapRunner(private val context: Context) : ImagePlateSolver {
         readerThread.join(1000)
 
         val dims = imageDimensions(inputFile)
-        val candidates = candidateWcsFiles(inputFile, workDir, before)
-        output.appendLine("exitCode=${process.exitValue()}")
+        val exitCode = process.exitValue()
+        val candidates = astapOutputFiles(outputBase)
+        output.appendLine("exitCode=$exitCode")
         output.appendLine("imageDims=${dims.first}x${dims.second}")
         output.appendLine("candidateWcsFiles=${candidates.joinToString { "${it.name}:${it.length()}" }}")
-        val parsed = FitsWcsParser.parseCandidates(candidates, dims.first, dims.second)
+        output.appendLine("PLTSOLVD=${candidates.firstOrNull { it.extension == "ini" }?.let { FitsHeaderReader.read(it)["PLTSOLVD"] } ?: "missing"}")
+        val parsed = parseAstapSolution(exitCode, candidates, dims.first, dims.second)
+        output.appendLine("solutionSource=${parsed?.source?.absolutePath ?: "none"}")
         val log = output.toString()
         if (parsed != null) {
             return@withContext PlateSolveResult(
@@ -163,7 +168,6 @@ class AstapRunner(private val context: Context) : ImagePlateSolver {
             )
         }
 
-        val exitCode = process.exitValue()
         return@withContext PlateSolveResult(
             success = false,
             message = if (exitCode == 0) "ASTAP finished but no WCS solution was found." else "ASTAP failed with exit code $exitCode.",
@@ -172,23 +176,6 @@ class AstapRunner(private val context: Context) : ImagePlateSolver {
         )
     }
 
-
-    private fun candidateWcsFiles(inputFile: File, workDir: File, before: Map<File, Long>): List<File> {
-        val stem = inputFile.nameWithoutExtension
-        val dirs = listOf(inputFile.parentFile, workDir).filterNotNull().distinctBy { it.absolutePath }
-        val candidates = mutableListOf<File>()
-        dirs.forEach { dir ->
-            dir.listFiles()?.forEach { file ->
-                val wasModified = file.lastModified() > (before[file] ?: 0L)
-                val related = file.nameWithoutExtension.equals(stem, true) ||
-                    file.name.contains(stem, ignoreCase = true)
-                val usefulExt = file.extension.lowercase(Locale.US) in setOf("fit", "fits", "wcs", "ini", "txt")
-                if (file.isFile && usefulExt && (related || wasModified)) candidates.add(file)
-            }
-        }
-        if (inputFile.extension.lowercase(Locale.US) in setOf("fit", "fits")) candidates.add(inputFile)
-        return candidates.distinctBy { it.absolutePath }.sortedByDescending { it.lastModified() }
-    }
 
     private fun imageDimensions(file: File): Pair<Int, Int> {
         if (file.extension.equals("fit", true) || file.extension.equals("fits", true)) {
@@ -269,11 +256,13 @@ internal fun buildAstapCommand(
     databaseDir: File,
     database: AstapDatabase,
     mountCoordinates: MountCoordinates?,
-    searchRadiusDeg: Double
+    searchRadiusDeg: Double,
+    outputBase: File
 ): List<String> {
     val command = mutableListOf(
         executable.absolutePath,
         "-f", inputFile.absolutePath,
+        "-o", outputBase.absolutePath,
         "-d", databaseDir.absolutePath,
         "-D", database.displayName.lowercase(Locale.US),
         "-r", "%.6f".format(Locale.US, searchRadiusDeg.coerceIn(0.0, 180.0)),

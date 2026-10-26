@@ -13,6 +13,7 @@ class AstapCliCommandTest {
     private val filesAstap = File("/data/user/0/com.indigo.mobileobservatory/files/astap")
     private val filesDir = File("/data/user/0/com.indigo.mobileobservatory/files")
     private val cacheDir = File("/data/user/0/com.indigo.mobileobservatory/cache")
+    private val outputBase = File(cacheDir, "astap_solve_unique/solution")
 
     @Test
     fun `native executable is libastap_cli in nativeLibraryDir not filesDir`() {
@@ -44,7 +45,7 @@ class AstapCliCommandTest {
             databaseDir = filesAstap,
             database = AstapDatabase.D20,
             mountCoordinates = null,
-            searchRadiusDeg = astapSearchRadiusDeg(null, null)
+            searchRadiusDeg = astapSearchRadiusDeg(null, null), outputBase = outputBase
         )
 
         assertEquals(nativeLib.absolutePath, command.first())
@@ -54,6 +55,8 @@ class AstapCliCommandTest {
         assertEquals(filesAstap.absolutePath, valueAfter(command, "-d"))
         assertEquals("d20", valueAfter(command, "-D"))
         assertEquals(input.absolutePath, valueAfter(command, "-f"))
+        assertEquals(outputBase.absolutePath, valueAfter(command, "-o"))
+        assertFalse(command.contains("-update"))
         assertEquals("1.200000", valueAfter(command, "-fov"))
         assertEquals("180.000000", valueAfter(command, "-r"))
         assertFalse(command.contains("-ra"))
@@ -69,7 +72,7 @@ class AstapCliCommandTest {
             databaseDir = filesAstap,
             database = AstapDatabase.D50,
             mountCoordinates = mount,
-            searchRadiusDeg = astapSearchRadiusDeg(mount, null)
+            searchRadiusDeg = astapSearchRadiusDeg(mount, null), outputBase = outputBase
         )
 
         assertEquals("d50", valueAfter(command, "-D"))
@@ -95,7 +98,7 @@ class AstapCliCommandTest {
             databaseDir = filesAstap,
             database = AstapDatabase.D20,
             mountCoordinates = null,
-            searchRadiusDeg = 400.0
+            searchRadiusDeg = 400.0, outputBase = outputBase
         )
         val narrow = buildAstapCommand(
             executable = nativeLib,
@@ -104,7 +107,7 @@ class AstapCliCommandTest {
             databaseDir = filesAstap,
             database = AstapDatabase.D20,
             mountCoordinates = null,
-            searchRadiusDeg = -5.0
+            searchRadiusDeg = -5.0, outputBase = outputBase
         )
         assertEquals("90.000000", valueAfter(wide, "-fov"))
         assertEquals("180.000000", valueAfter(wide, "-r"))
