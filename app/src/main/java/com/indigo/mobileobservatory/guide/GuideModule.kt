@@ -83,7 +83,8 @@ class GuideModule {
     private var lastRaError = 0f
     private var lastDecError = 0f
 
-    fun detectStars(frame: FrameData, maxStars: Int = 16, saturationLevel: Int? = null): List<GuideStar> {
+    fun detectStars(frame: FrameData, maxStars: Int = 16, saturationLevel: Int? = null,
+        preferred: GuideStar? = null): List<GuideStar> {
         val width = frame.width
         val height = frame.height
         if (width < 16 || height < 16) return emptyList()
@@ -124,7 +125,13 @@ class GuideModule {
 
         val stars = ArrayList<GuideStar>()
         val rejected = ArrayList<GuideStar>()
-        for (candidate in candidates.sortedByDescending { it.value }) {
+        // Reserve the selected target before the global brightness limit is applied.
+        val ordered = if (preferred == null) candidates.sortedByDescending { it.value } else candidates.sortedWith(
+            compareBy<Candidate> {
+                val distance = hypot(it.x - preferred.x, it.y - preferred.y)
+                if (distance <= 24f) distance else Float.MAX_VALUE
+            }.thenByDescending { it.value })
+        for (candidate in ordered) {
             if (stars.size >= maxStars) break
             if (candidate.x < 12 || candidate.y < 12 || candidate.x >= width - 12 || candidate.y >= height - 12) continue
             if (stars.any { hypot(it.x - candidate.x, it.y - candidate.y) < 24f }) continue

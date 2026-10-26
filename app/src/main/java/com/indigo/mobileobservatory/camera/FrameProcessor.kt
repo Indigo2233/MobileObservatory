@@ -116,7 +116,7 @@ class FrameProcessor(private val bitmapBufferCount: Int = 2, private val downsam
     private var lastFocusComputeMs = 0L
 
     var autoStretchEnabled: Boolean = true
-    /** Guide cameras render the original single-channel samples without CFA interpolation. */
+    /** Guide raw samples bypass CFA interpolation; delivered RGB uses unbalanced luminance. */
     var rawMonochrome: Boolean = false
     /** Infrared LP750 is an explicit display conversion, never the normal visible-light path. */
     var lp750Enabled: Boolean = false
@@ -377,12 +377,19 @@ class FrameProcessor(private val bitmapBufferCount: Int = 2, private val downsam
         publishHistogram(hist)
         val data = frame.data
         val totalPixels = w * h
+        val monoBounds = if (rawMonochrome) displayBounds(hist, 255) else null
         for (i in 0 until totalPixels) {
             val base = i * 3
             if (base + 2 >= data.size) break
-            val r = data[base].toInt() and 0xFF
-            val g = data[base + 1].toInt() and 0xFF
-            val b = data[base + 2].toInt() and 0xFF
+            var r = data[base].toInt() and 0xFF
+            var g = data[base + 1].toInt() and 0xFF
+            var b = data[base + 2].toInt() and 0xFF
+            if (rawMonochrome) {
+                val bounds = requireNotNull(monoBounds)
+                val luminance = (r * 299 + g * 587 + b * 114) / 1000
+                val value = ((luminance - bounds.first) * 255 / (bounds.second - bounds.first).coerceAtLeast(1)).coerceIn(0, 255)
+                r = value; g = value; b = value
+            }
             pixels[i] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
         }
     }
@@ -424,16 +431,21 @@ class FrameProcessor(private val bitmapBufferCount: Int = 2, private val downsam
             var r = (data[base].toInt() and 0xFF) or ((data[base + 1].toInt() and 0xFF) shl 8)
             var g = (data[base + 2].toInt() and 0xFF) or ((data[base + 3].toInt() and 0xFF) shl 8)
             var b = (data[base + 4].toInt() and 0xFF) or ((data[base + 5].toInt() and 0xFF) shl 8)
-            r = (r * wbRedGain).toInt()
-            g = (g * wbGreenGain).toInt()
-            b = (b * wbBlueGain).toInt()
+            if (rawMonochrome) {
+                val luminance = (r * 299 + g * 587 + b * 114) / 1000
+                r = luminance; g = luminance; b = luminance
+            } else {
+                r = (r * wbRedGain).toInt()
+                g = (g * wbGreenGain).toInt()
+                b = (b * wbBlueGain).toInt()
+            }
             r = ((r - bp) * 255 / range).coerceIn(0, 255)
             g = ((g - bp) * 255 / range).coerceIn(0, 255)
             b = ((b - bp) * 255 / range).coerceIn(0, 255)
             pixels[i] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
         }
 
-        if (awbPending || awbMode == AwbMode.CONTINUOUS) {
+        if (!rawMonochrome && (awbPending || awbMode == AwbMode.CONTINUOUS)) {
             computeRgb48Wb(frame, w, h)
             awbPending = false
         }

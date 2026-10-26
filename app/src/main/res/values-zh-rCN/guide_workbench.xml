@@ -22,19 +22,19 @@
     <string name="gw_algorithms">算法</string>
     <string name="gw_optics">光学</string>
     <string name="gw_focal_mm">导星焦距（mm，留空使用 px）</string>
-    <string name="gw_scale_help">填写导星镜焦距并读取有效像元尺寸后，曲线、散点和 HFR 使用角秒。焦距缺省或像元未知时使用 px。</string>
+    <string name="gw_scale_help">填写导星镜焦距并读取有效像元尺寸后，导星曲线与散点使用角秒。HFR 与星点剖面固定使用传感器像素 px。</string>
     <string name="gw_pixel_um">有效像元：%1$.2f μm</string>
     <string name="gw_peak">峰值 %1$.0f ADU</string>
     <string name="gw_flux">背景扣除流量 %1$.0f ADU</string>
     <string name="gw_profile">星点能量分布</string>
-    <string name="gw_profile_legend" formatted="false">蓝：环带平均强度 · 黄：包围能量 0–100%</string>
+    <string name="gw_profile_legend" formatted="false">蓝：横向 · 黄：纵向 · 中心 0 px · 白：±HFR · 红：饱和线</string>
     <string name="gw_profile_radius">半径 0–%1$.1f %2$s · 竖线 HFR</string>
     <string name="gw_rms">RMS  RA %1$.2f · DEC %2$.2f · 总计 %3$.2f %4$s  |  %5$d / %6$d 点</string>
     <string name="gw_bit_depth">原始格式 / 位深</string>
     <string name="gw_readout">相机读出模式</string>
     <string name="gw_apply_exposure">应用曝光（0.05–5 s）</string>
     <string name="gw_raw_help">导星显示与测量使用原始单通道数据。相机格式和读出模式改变后需要重新校准。</string>
-    <string name="gw_calibration_help">先消除空程，测量不少于指定步数和位移，拟合双轴响应并在返回时测量回差。首步脉冲决定初始测量，后续步长根据响应调整。</string>
+    <string name="gw_calibration_help">导星速率须与架台设置一致。已知焦距与像元时，根据目标位移、步数及赤纬计算初始脉冲；否则使用备用脉冲。RA 直接采样，DEC 先消除空程。返回距离相对该轴最初标记点计算，并按实测响应合并返回脉冲。</string>
     <string name="gw_steps">每轴最少步数</string>
     <string name="gw_distance">每轴最小位移（px）</string>
     <string name="gw_backlash">DEC 换向回差补偿</string>

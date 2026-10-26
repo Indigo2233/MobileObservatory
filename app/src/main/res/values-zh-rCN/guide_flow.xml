@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="gw_guide_rate">计算用导星速率（恒星时倍率）</string>
+    <string name="gw_guide_rate_help">初值为 0.5×，请与架台设置核对。该数值用于估算初始脉冲，后续脉冲按实测响应调整。</string>
+    <string name="gw_auto_pulse">自动计算初始脉冲：RA %1$d ms · DEC %2$d ms</string>
+    <string name="gw_star_saturated">检测到饱和采样</string>
+    <string name="gw_star_not_saturated">未检测到饱和采样</string>
+</resources>
