@@ -88,6 +88,7 @@ import com.indigo.mobileobservatory.settings.CoverDefaults
 import com.indigo.mobileobservatory.settings.DeviceSettingsRepository
 import com.indigo.mobileobservatory.settings.FocuserDefaults
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -1533,43 +1534,98 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun autoSelectAndGuide() {
-        if (_guideRunning.value || _guideCalibrating.value || guideAutoStartJob?.isActive == true) {
-            stopGuideOperations(); return
+    fun autoSelectGuideStar() {
+        synchronized(guideOperationLock) {
+            if (auxiliaryCaptureOwned.get() || _guideRunning.value || _guideCalibrating.value ||
+                _guideAutoStarting.value || pendingGuideSettings > 0 || guideTasks.busy) {
+                _guideStatus.value = app.getString(R.string.guide_operation_busy); return
+            }
+            val star = _guideStars.value.firstOrNull() ?: run {
+                _guideStatus.value = app.getString(R.string.no_guide_stars_detected); return
+            }
+            applyGuideStarSelection(star, _guideStars.value)
         }
-        if (guideCameraManager.activeCamera == null) { requestGuideConnect(); return }
-        if (!mountModule.isConnected) { _guideStatus.value = app.getString(R.string.connect_mount_before_guiding); return }
-        if (pendingGuideSettings > 0 || guideTasks.busy) { _guideStatus.value = app.getString(R.string.guide_operation_busy); return }
-        guideAutoStartJob = viewModelScope.launch {
+    }
+
+    fun startGuiding() {
+        synchronized(guideOperationLock) {
+            if (_guideRunning.value || _guideCalibrating.value || _guideAutoStarting.value ||
+                auxiliaryCaptureOwned.get() || pendingGuideSettings > 0 || guideTasks.busy) {
+                _guideStatus.value = app.getString(R.string.guide_operation_busy); return
+            }
+            val selected = _guideReferenceStar.value ?: run {
+                _guideStatus.value = app.getString(R.string.gw_select_star_first); return
+            }
+            if (!_guideExposing.value || !guideAcquisition.requested) {
+                _guideStatus.value = app.getString(R.string.gw_start_exposure_first); return
+            }
+            if (guideCameraManager.activeCamera == null) {
+                _guideStatus.value = app.getString(R.string.connect_guide_camera_first); return
+            }
+            if (!mountModule.isConnected) { _guideStatus.value = app.getString(R.string.connect_mount_before_guiding); return }
+            if (mountAccessMode.value != com.indigo.mobileobservatory.mount.MountAccessMode.READ_WRITE) {
+                _guideStatus.value = app.getString(R.string.guide_mount_read_only); return
+            }
             _guideAutoStarting.value = true
-            try {
-                setGuideExposureRunning(true)
-                val stars = awaitGuideStars(afterSequence = guideMeasurements.boundary(), notBeforeMs = android.os.SystemClock.elapsedRealtime())
-                if (stars.isEmpty()) { _guideStatus.value = app.getString(R.string.no_guide_stars_detected); return@launch }
-                _guideStar.value = stars.first()
-                lockGuideStar()
-                if (_guideCalibration.value == null) {
-                    startGuideCalibration()
+            val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
+                try {
+                    val startupContext = currentCoroutineContext()
+                    val stars = awaitGuideStars(afterSequence = guideMeasurements.boundary(), notBeforeMs = android.os.SystemClock.elapsedRealtime())
+                    startupContext.ensureActive()
+                    val primary = guideModule.matchStar(selected, stars) ?: run {
+                        _guideStatus.value = app.getString(R.string.guide_star_lost); return@launch
+                    }
+                    synchronized(guideOperationLock) {
+                        startupContext.ensureActive()
+                        applyGuideStarSelection(primary, stars)
+                        val calibration = _guideCalibration.value
+                        if (_guideCalibrationState.value != GuideCalibrationState.COMPLETE || calibration == null ||
+                            guideModule.projectError(calibration, 0f, 0f) == null) startGuideCalibration()
+                    }
                     while (_guideCalibrating.value || guideTasks.busy) delay(50)
                     if (_guideCalibrationState.value != GuideCalibrationState.COMPLETE) return@launch
+                    synchronized(guideOperationLock) {
+                        startupContext.ensureActive()
+                        setGuideRunning(true)
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (failure: Exception) {
+                    _guideStatus.value = app.getString(R.string.gw_start_failed, failure.message.orEmpty())
+                } finally {
+                    val completedJob = currentCoroutineContext()[Job]
+                    synchronized(guideOperationLock) {
+                        if (guideAutoStartJob === completedJob) {
+                            _guideAutoStarting.value = false
+                            guideAutoStartJob = null
+                        }
+                    }
                 }
-                currentCoroutineContext().ensureActive()
-                setGuideRunning(true)
-            } finally { _guideAutoStarting.value = false }
+            }
+            guideAutoStartJob = job
+            job.start()
         }
     }
 
     fun selectGuideStar(x: Float, y: Float) {
-        if (_guideRunning.value || _guideCalibrating.value) return
+        if (_guideRunning.value || _guideCalibrating.value || _guideAutoStarting.value || auxiliaryCaptureOwned.get()) return
         val nearest = _guideStars.value.minByOrNull { hypot(it.x - x, it.y - y) } ?: return
         if (hypot(nearest.x - x, nearest.y - y) > 30f) return
-        _guideStar.value = nearest
-        _guideReferenceStar.value = nearest
-        _guideReferenceStars.value = if (_guideMultiStarEnabled.value) listOf(nearest) + _guideStars.value.filter { it != nearest }.take(11) else listOf(nearest)
+        applyGuideStarSelection(nearest, _guideStars.value)
+    }
+
+    private fun applyGuideStarSelection(star: GuideStar, stars: List<GuideStar>) {
+        _guideStar.value = star
+        _guideReferenceStar.value = star
+        _guideReferenceStars.value = guideModule.referenceStars(star, stars, _guideMultiStarEnabled.value)
+        _guideCorrection.value = null
+        resetGuideAlgorithmState()
         _guideDisplayFrame.value?.let { frame ->
-            _guideProfile.value = frame.profiles[nearest]
-            _guideDisplayFrame.value = frame.copy(primary = nearest, profile = frame.profiles[nearest])
+            val displayed = guideModule.matchStar(star, frame.stars)
+            _guideProfile.value = frame.profiles[displayed]
+            _guideDisplayFrame.value = frame.copy(primary = displayed, profile = _guideProfile.value)
         }
+        _guideStatus.value = app.getString(R.string.guide_lock_set, _guideReferenceStars.value.size)
     }
 
     fun setGuideExposure(us: Float) {
@@ -1635,11 +1691,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             _guideStatus.value = app.getString(R.string.no_star_detected)
             return
         }
-        val refs = if (_guideMultiStarEnabled.value) {
-            _guideStars.value.take(12).ifEmpty { listOf(star) }
-        } else {
-            listOf(star)
-        }
+        val refs = guideModule.referenceStars(star, _guideStars.value, _guideMultiStarEnabled.value)
         _guideReferenceStar.value = star
         _guideReferenceStars.value = refs
         _guideCorrection.value = null
@@ -1819,6 +1871,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             if (_guideCalibrating.value || _guideRunning.value || guideTasks.busy || pendingGuideSettings > 0 || _guideGainWriteInProgress.value) {
                 _guideStatus.value = app.getString(R.string.guide_operation_busy); return
             }
+            var primary = _guideReferenceStar.value ?: run {
+                _guideStatus.value = app.getString(R.string.gw_select_star_first); return
+            }
+            val multiStar = _guideMultiStarEnabled.value
             _guideCalibrating.value = true
             val started = guideTasks.launch {
                 _guideRunning.value = false
@@ -1831,7 +1887,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         com.indigo.mobileobservatory.guide.GuideCalibrationConfig(_guideCalibrationSteps.value,
                             _guideCalibrationDistance.value, _guideCalibrationPulseMs.value),
                         pulse = { direction, duration -> pulseMount(direction, duration) },
-                        measure = { awaitGuideStarsAfterMotion() },
+                        measure = {
+                            val stars = awaitGuideStarsAfterMotion()
+                            primary = guideModule.matchStar(primary, stars) ?: error(app.getString(R.string.guide_star_lost))
+                            guideModule.referenceStars(primary, stars, multiStar)
+                        },
                         progress = { value ->
                             val phase = when (value.phase) {
                                 com.indigo.mobileobservatory.guide.GuideCalibrationPhase.CLEAR_EAST -> R.string.gw_clear_east
@@ -1903,9 +1963,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 if (guideMeasurements.processed(frame.captureGeneration, frame.frameId, usable, measurementRun) == null) return@processed
                 _guideStars.value = usable
                 val primary = _guideReferenceStar.value
-                _guideStar.value = if (primary == null) usable.firstOrNull() else usable
-                    .filter { hypot(it.x - primary.x, it.y - primary.y) <= 60f && it.flux / primary.flux in .2f..5f }
-                    .minByOrNull { hypot(it.x - primary.x, it.y - primary.y) }
+                _guideStar.value = if (primary == null) usable.firstOrNull() else guideModule.matchStar(primary, usable)
                 val profiles = usable.mapNotNull { star ->
                     com.indigo.mobileobservatory.guide.GuideStarAnalysis.measure(frame, star)?.let { star to it }
                 }.toMap()
@@ -1991,7 +2049,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             kotlinx.coroutines.currentCoroutineContext().ensureActive()
             val measurement = guideMeasurements.fresh(afterSequence, notBeforeMs)
             if (measurement != null && measurement.stars.isNotEmpty()) {
-                return if (_guideMultiStarEnabled.value) measurement.stars.take(12) else measurement.stars.take(1)
+                return measurement.stars
             }
             kotlinx.coroutines.delay(100)
         }

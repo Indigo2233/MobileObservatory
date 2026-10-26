@@ -68,6 +68,8 @@ class GuideEntryInstrumentedTest {
         compose.onNodeWithTag("guide-scatter").assertExists()
         compose.onNodeWithText(app.getString(R.string.gw_devices)).assertIsDisplayed()
         compose.onNodeWithText(app.getString(R.string.gw_start_exposure)).assertIsNotEnabled()
+        compose.onNodeWithText(app.getString(R.string.gw_auto_select)).assertIsNotEnabled()
+        compose.onNodeWithText(app.getString(R.string.gw_start_guiding)).assertIsNotEnabled()
     }
 
     @Test fun wideGuidePageRendersTheEmptyStarPanelBeforeConnecting() {

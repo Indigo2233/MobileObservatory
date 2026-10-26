@@ -57,6 +57,7 @@ fun GuideScreen(viewModel: CameraViewModel, onBack: () -> Unit) {
     val status by viewModel.guideStatus.collectAsStateWithPageLifecycle()
     val display by viewModel.guideDisplayFrame.collectAsStateWithPageLifecycle()
     val references by viewModel.guideReferenceStars.collectAsStateWithPageLifecycle()
+    val selectedStar by viewModel.guideReferenceStar.collectAsStateWithPageLifecycle()
     val history by viewModel.guideHistory.collectAsStateWithPageLifecycle()
     val focal by viewModel.guideFocalLength.collectAsStateWithPageLifecycle()
     val geometry by viewModel.guideCameraGeometry.collectAsStateWithPageLifecycle()
@@ -110,17 +111,31 @@ fun GuideScreen(viewModel: CameraViewModel, onBack: () -> Unit) {
             })
     }
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-            verticalAlignment = Alignment.CenterVertically) {
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val stacked = maxWidth < 480.dp
+            val busy = running || calibrating || autoStarting
+            Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, stringResource(R.string.back)) }
-            GuideAction(R.string.gw_devices, Icons.Default.Link, true, Modifier.weight(1f)) { panel = "devices" }
+            GuideAction(R.string.gw_devices, Icons.Default.Link, true, Modifier.weight(1f), stacked) { panel = "devices" }
             GuideAction(if (exposing || exposureRequested) R.string.gw_stop_exposure else R.string.gw_start_exposure,
-                if (exposing || exposureRequested) Icons.Default.Stop else Icons.Default.PlayArrow, connected, Modifier.weight(1f)) {
+                if (exposing || exposureRequested) Icons.Default.Stop else Icons.Default.Loop, connected,
+                Modifier.weight(1f).testTag("guide-exposure"), stacked) {
                 viewModel.setGuideExposureRunning(!(exposing || exposureRequested))
             }
-            GuideAction(if (running || calibrating || autoStarting) R.string.gw_stop_guiding else R.string.gw_auto_guide,
-                if (running || calibrating || autoStarting) Icons.Default.Stop else Icons.Default.GpsFixed, connected && !writing, Modifier.weight(1f)) { viewModel.autoSelectAndGuide() }
-            GuideAction(R.string.settings, Icons.Default.Settings, true, Modifier.weight(1f)) { panel = "settings" }
+            GuideAction(R.string.gw_auto_select, Icons.Default.StarBorder,
+                connected && !busy && !writing && display?.stars?.isNotEmpty() == true,
+                Modifier.weight(1f).testTag("guide-auto-select"), stacked, viewModel::autoSelectGuideStar)
+            GuideAction(when {
+                calibrating -> R.string.gw_stop_calibration
+                busy -> R.string.gw_stop_guiding
+                else -> R.string.gw_start_guiding
+            }, if (busy) Icons.Default.Stop else Icons.Default.GpsFixed,
+                busy || connected && exposing && selectedStar != null && !writing,
+                Modifier.weight(1f).testTag("guide-start-stop"), stacked) {
+                if (busy) viewModel.setGuideRunning(false) else viewModel.startGuiding()
+            }
+            GuideAction(R.string.settings, Icons.Default.Settings, true, Modifier.weight(1f), stacked) { panel = "settings" }
+            }
         }
         Text(status, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp))
@@ -225,10 +240,16 @@ private fun GuidePlotSettings(samples: Int, onSamples: (Int) -> Unit, pulses: Bo
 }
 
 @Composable
-private fun GuideAction(label: Int, icon: androidx.compose.ui.graphics.vector.ImageVector, enabled: Boolean, modifier: Modifier, action: () -> Unit) {
+private fun GuideAction(label: Int, icon: androidx.compose.ui.graphics.vector.ImageVector, enabled: Boolean,
+    modifier: Modifier, stacked: Boolean, action: () -> Unit) {
     TextButton(onClick = action, enabled = enabled, modifier = modifier) {
-        Icon(icon, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp))
-        Text(stringResource(label), fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        if (stacked) Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(icon, null, Modifier.size(18.dp))
+            Text(stringResource(label), fontSize = 13.sp, lineHeight = 18.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        } else {
+            Icon(icon, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp))
+            Text(stringResource(label), fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
     }
 }
 

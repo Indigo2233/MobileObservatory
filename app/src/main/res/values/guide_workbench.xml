@@ -5,8 +5,12 @@
     <string name="gw_stop_exposure">Stop exposures</string>
     <string name="gw_exposure_stopped">Exposures stopped; camera settings can be adjusted</string>
     <string name="gw_start_exposure_first">Start exposures first</string>
-    <string name="gw_auto_guide">Auto-select and guide</string>
-    <string name="gw_stop_guiding">Stop guiding / calibration</string>
+    <string name="gw_auto_select">Auto-select</string>
+    <string name="gw_start_guiding">Start guiding</string>
+    <string name="gw_stop_guiding">Stop guiding</string>
+    <string name="gw_stop_calibration">Stop calibration</string>
+    <string name="gw_select_star_first">Select a guide star first</string>
+    <string name="gw_start_failed">Could not start guiding: %1$s</string>
     <string name="gw_corrections">Corrections</string>
     <string name="gw_plot_settings">Graph settings</string>
     <string name="gw_samples">History samples</string>

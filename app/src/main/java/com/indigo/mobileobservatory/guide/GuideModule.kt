@@ -168,6 +168,17 @@ class GuideModule {
         return stars.ifEmpty { rejected }.sortedByDescending { it.flux }
     }
 
+    /** Track an explicitly selected star without replacing it with a brighter neighbour. */
+    fun matchStar(reference: GuideStar, current: List<GuideStar>): GuideStar? {
+        if (!reference.flux.isFinite() || reference.flux <= 0f) return null
+        return current.filter { it.flux / reference.flux in .2f..5f &&
+            hypot(it.x - reference.x, it.y - reference.y) <= 60f }
+            .minByOrNull { hypot(it.x - reference.x, it.y - reference.y) }
+    }
+
+    fun referenceStars(primary: GuideStar, stars: List<GuideStar>, multiStar: Boolean): List<GuideStar> =
+        if (multiStar) (listOf(primary) + stars.filter { it != primary }).take(12) else listOf(primary)
+
     fun matchShift(reference: List<GuideStar>, current: List<GuideStar>): GuideVector? {
         if (reference.isEmpty() || current.isEmpty()) return null
         data class Shift(val dx: Float, val dy: Float, val weight: Double)
