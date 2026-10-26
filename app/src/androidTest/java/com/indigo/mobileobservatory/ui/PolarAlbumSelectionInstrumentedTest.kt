@@ -189,6 +189,23 @@ class PolarAlbumSelectionInstrumentedTest {
         assertTrue(photo.isFile); assertNull(solves.get()); assertEquals(0, back.get())
     }
 
+    @Test fun repeatedlyReplacingAnAlbumSampleKeepsPreviewBitmapsDrawable() {
+        start()
+        repeat(6) { index ->
+            val previous = model.session.samples.value[1].file
+            choosePoint(1)
+            selectAlbumImage(if (index % 2 == 0) nestedFits else photo)
+            compose.waitUntil(10_000) {
+                val selected = model.session.samples.value[1].file
+                selected != null && selected != previous
+            }
+            compose.waitUntil(15_000) { compose.onAllNodesWithTag("polar-main-preview").fetchSemanticsNodes().isNotEmpty() }
+            val rendered = compose.onNodeWithTag("polar-main-preview").captureToImage()
+            assertTrue(rendered.width > 0 && rendered.height > 0)
+        }
+        assertEquals(0, captures.get())
+    }
+
     @Test fun externalFitsAndAppPngUseTheSameSampleImportWithoutCapturing() {
         start(); choosePoint(2)
         compose.onNodeWithTag("app-image-files").performClick()

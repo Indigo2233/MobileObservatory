@@ -37,7 +37,7 @@ internal fun PolarSampleThumbnail(file: File, onOpen: () -> Unit, settings: Came
         catch (error: Exception) { failure = error.message }
         finally { if (!published) owned?.recycle() }
     }
-    DisposableEffect(bitmap) { val owned = bitmap; onDispose { owned?.recycle() } }
+    // Compose/render-thread references can outlive disposal; published images are GC-owned.
     bitmap?.let { image ->
         Image(image.asImageBitmap(), stringResource(R.string.polar_sample_preview),
             Modifier.fillMaxWidth().heightIn(max = 160.dp).clickable(onClick = onOpen), contentScale = ContentScale.Fit)

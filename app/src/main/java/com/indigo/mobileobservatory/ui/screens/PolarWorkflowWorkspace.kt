@@ -158,7 +158,8 @@ internal fun PolarWorkflowPreview(
         } catch (failure: Exception) { previewError = failure.message ?: failure.javaClass.simpleName
         } finally { loading = false; if (!published) owned?.recycle() }
     }
-    DisposableEffect(bitmap) { val owned = bitmap; onDispose { owned?.recycle() } }
+    // Published bitmaps can still be referenced by a Compose draw node/render thread
+    // after disposal. Let the runtime release them once those references disappear.
     var showLog by remember { mutableStateOf(false) }
     val failed = sample?.takeIf { it.phase == PolarSamplePhase.FAILED }
     val details = failed?.failureDetails()
