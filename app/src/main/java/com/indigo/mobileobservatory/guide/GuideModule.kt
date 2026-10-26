@@ -84,7 +84,7 @@ class GuideModule {
     private var lastDecError = 0f
 
     fun detectStars(frame: FrameData, maxStars: Int = 16, saturationLevel: Int? = null,
-        preferred: GuideStar? = null): List<GuideStar> {
+        preferred: GuideStar? = null, includeRejected: Boolean = false): List<GuideStar> {
         val width = frame.width
         val height = frame.height
         if (width < 16 || height < 16) return emptyList()
@@ -172,7 +172,7 @@ class GuideModule {
                 if (isUsableStar(star)) stars += star else if (rejected.size < maxStars) rejected += star
             }
         }
-        return stars.ifEmpty { rejected }.sortedByDescending { it.flux }
+        return (if (includeRejected) stars + rejected else stars.ifEmpty { rejected }).sortedByDescending { it.flux }
     }
 
     /** Track an explicitly selected star without replacing it with a brighter neighbour. */

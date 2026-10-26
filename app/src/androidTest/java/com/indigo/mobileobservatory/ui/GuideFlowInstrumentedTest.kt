@@ -38,6 +38,11 @@ class GuideFlowInstrumentedTest {
         compose.onNodeWithTag("guide-profile-axis").assertExists()
         instrumentation.sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
         compose.onNodeWithTag("guide-start-stop").performClick()
+        compose.waitUntil(15_000) { vm.guideDisplayFrame.value?.profile?.saturated == true ||
+            vm.guideCalibrationState.value == GuideCalibrationState.FAILED }
+        assertNotNull("A temporarily saturated selected star remains visible", vm.guideDisplayFrame.value?.primary)
+        assertTrue("Calibration waits for target reacquisition", vm.guideCalibrating.value)
+        assertTrue(requireNotNull(vm.guideDisplayFrame.value?.profile).saturated)
         compose.waitUntil(45_000) { vm.guideRunning.value || vm.guideCalibrationState.value == GuideCalibrationState.FAILED }
         assertEquals(vm.guideStatus.value, GuideCalibrationState.COMPLETE, vm.guideCalibrationState.value)
         assertTrue(vm.guideStatus.value, vm.guideRunning.value)
@@ -112,8 +117,9 @@ class GuideFlowInstrumentedTest {
                     val cx = x + position.first; val cy = y + position.second
                     for (py in cy.roundToInt() - 8..cy.roundToInt() + 8) for (px in cx.roundToInt() - 8..cx.roundToInt() + 8) {
                         if (px !in 0 until frame.width || py !in 0 until frame.height) continue
+                        val strength = if (amplitude == 120 && endpoint.temporarilySaturated()) 400 else amplitude
                         pixels[py * frame.width + px] =
-                            (10 + amplitude * exp(-((px - cx).pow(2) + (py - cy).pow(2)) / 8)).roundToInt().toByte()
+                            (10 + strength * exp(-((px - cx).pow(2) + (py - cy).pow(2)) / 8)).roundToInt().coerceIn(0, 255).toByte()
                     }
                 }
                 callback.onFrame(frame.copy(data = pixels, pixelFormat = PixelFormat.MONO8))
@@ -128,8 +134,10 @@ class GuideFlowInstrumentedTest {
         @Volatile var pulses = 0
         @Volatile private var client: Socket? = null
         private var x = 0f; private var y = 0f
+        @Volatile private var saturatedUntil = 0L
         private var offset = "+00"; private var date = "10/27/26"; private var time = "00:00:00"
         @Synchronized fun position() = x to y
+        fun temporarilySaturated() = android.os.SystemClock.elapsedRealtime() < saturatedUntil
         @Synchronized fun drift(dx: Float, dy: Float) { x += dx; y += dy }
         @Synchronized private fun pulse(command: String): String {
             val duration = command.substring(4).dropLast(1).toInt()
@@ -140,6 +148,8 @@ class GuideFlowInstrumentedTest {
                 's' -> y -= duration * .009f
             }
             pulses++
+            // Reject several completed frames once, then reacquire the same visible target.
+            if (pulses == 3) saturatedUntil = android.os.SystemClock.elapsedRealtime() + duration + 1200
             return "1"
         }
         private val worker = Thread {

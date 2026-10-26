@@ -1956,6 +1956,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun startGuidePreview() {
         val cam = guideCameraManager.activeCamera ?: return
+        FileLogger.i("GuideCapture", "Start camera=${cam.cameraInfo?.name} format=${cam.currentPixelFormat} " +
+            "mode=${cam.currentReadoutMode} exposureUs=${cam.currentExposureUs} traits=${cam.sciencePixelTraits}")
         synchronized(guideDeliveryLock) {
             guideDeliveryTimes.clear(); guideDeliveryElapsedMs = android.os.SystemClock.elapsedRealtime()
             guideDeliveryGeneration = null
@@ -1975,26 +1977,28 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 _guideFrameSize.value = frame.width to frame.height
                 _guidePreviewBitmap.value = guidePreviewPipeline.frame.value?.bitmap
                 val locked = _guideReferenceStar.value
-                val trackingAnchor = _guideStar.value?.takeIf { locked != null } ?: locked
+                val trackingAnchor = _guideDisplayFrame.value?.primary?.takeIf { locked != null } ?: locked
                 val stars = detectGuideStars(frame, preferred = trackingAnchor)
-                observeAuxiliaryMotionFrame(cam, frame, stars)
                 val usable = guideModule.usableStars(stars)
+                observeAuxiliaryMotionFrame(cam, frame, usable.ifEmpty { stars })
                 if (guideMeasurements.processed(frame.captureGeneration, frame.frameId, usable, measurementRun) == null) return@processed
                 _guideStars.value = usable
                 _guideStar.value = if (trackingAnchor == null) usable.firstOrNull() else guideModule.matchStar(trackingAnchor, usable)
+                val displayedPrimary = if (trackingAnchor == null) _guideStar.value else guideModule.matchStar(trackingAnchor, stars)
                 if ((_guideCalibrating.value || _guideAutoStarting.value) && locked != null && _guideStar.value == null) {
                     val rejected = stars.filterNot { it in usable }
                     FileLogger.w("GuideTrack", "Selected target not detected: frame=${frame.frameId} format=${frame.pixelFormat} " +
                         "detected=${stars.size} usable=${usable.size} saturated=${rejected.count { it.saturated }} " +
                         "anchor=$trackingAnchor nearest=${stars.minByOrNull { hypot(it.x - locked.x, it.y - locked.y) }}")
                 }
-                val profiles = usable.mapNotNull { star ->
+                val displayStars = (usable + listOfNotNull(displayedPrimary)).distinct()
+                val profiles = displayStars.mapNotNull { star ->
                     com.indigo.mobileobservatory.guide.GuideStarAnalysis.measure(frame, star, guideSaturationLevel(frame))?.let { star to it }
                 }.toMap()
-                _guideProfile.value = profiles[_guideStar.value]
+                _guideProfile.value = profiles[displayedPrimary]
                 guidePreviewPipeline.frame.value?.bitmap?.let { bitmap ->
                     _guideDisplayFrame.value = com.indigo.mobileobservatory.guide.GuideDisplayFrame(bitmap, frame.width, frame.height,
-                        usable, _guideStar.value, _guideProfile.value, guidePreviewPipeline.frame.value?.sequence ?: 0, profiles)
+                        displayStars, displayedPrimary, _guideProfile.value, guidePreviewPipeline.frame.value?.sequence ?: 0, profiles)
                 }
                 processGuideCorrection(usable, badQuality = stars.isNotEmpty() && usable.isEmpty())
             },
@@ -2064,7 +2068,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun detectGuideStars(frame: FrameData, maxStars: Int = 16, preferred: GuideStar? = null): List<GuideStar> {
-        return guideModule.detectStars(frame, maxStars, guideSaturationLevel(frame), preferred)
+        return guideModule.detectStars(frame, maxStars, guideSaturationLevel(frame), preferred, includeRejected = true)
     }
 
     private suspend fun awaitGuideStars(
