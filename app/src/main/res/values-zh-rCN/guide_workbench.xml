@@ -18,7 +18,7 @@
     <string name="gw_sample_count">%1$d / %2$d</string>
     <string name="gw_rms_compact">RMS RA %1$.2f · DEC %2$.2f · 总计\u00a0%3$.2f\u00a0%4$s</string>
     <string name="gw_star_details">查看星点详情与能量分布</string>
-    <string name="gw_image">导星原始灰度图像，可平移缩放与点选星点</string>
+    <string name="gw_image">导星灰度图像，可平移缩放与点选星点</string>
     <string name="gw_algorithms">算法</string>
     <string name="gw_optics">光学</string>
     <string name="gw_focal_mm">导星焦距（mm，留空使用 px）</string>
@@ -30,10 +30,10 @@
     <string name="gw_profile_legend" formatted="false">蓝：横向 · 黄：纵向 · 中心 0 px · 白：±HFR · 红：饱和线</string>
     <string name="gw_profile_radius">半径 0–%1$.1f %2$s · 竖线 HFR</string>
     <string name="gw_rms">RMS  RA %1$.2f · DEC %2$.2f · 总计 %3$.2f %4$s  |  %5$d / %6$d 点</string>
-    <string name="gw_bit_depth">原始格式 / 位深</string>
+    <string name="gw_bit_depth">图像格式 / 位深</string>
     <string name="gw_readout">相机读出模式</string>
     <string name="gw_apply_exposure">应用曝光（0.05–5 s）</string>
-    <string name="gw_raw_help">导星显示与测量使用原始单通道数据。相机格式和读出模式改变后需要重新校准。</string>
+    <string name="gw_raw_help">导星使用灰度显示与测量。Bayer 输入不执行去马赛克，相机提供 RGB 时使用亮度通道。更改格式或读出模式后需要重新校准。</string>
     <string name="gw_calibration_help">导星速率须与架台设置一致。已知焦距与像元时，根据目标位移、步数及赤纬计算初始脉冲；否则使用备用脉冲。RA 直接采样，DEC 先消除空程。返回距离相对该轴最初标记点计算，并按实测响应合并返回脉冲。</string>
     <string name="gw_steps">每轴最少步数</string>
     <string name="gw_distance">每轴最小位移（px）</string>
