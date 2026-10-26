@@ -7,6 +7,7 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -30,6 +31,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.indigo.mobileobservatory.R
@@ -55,6 +57,7 @@ fun GuideScreen(viewModel: CameraViewModel, onBack: () -> Unit) {
     val status by viewModel.guideStatus.collectAsStateWithPageLifecycle()
     val display by viewModel.guideDisplayFrame.collectAsStateWithPageLifecycle()
     val references by viewModel.guideReferenceStars.collectAsStateWithPageLifecycle()
+    val selectedStar by viewModel.guideReferenceStar.collectAsStateWithPageLifecycle()
     val history by viewModel.guideHistory.collectAsStateWithPageLifecycle()
     val focal by viewModel.guideFocalLength.collectAsStateWithPageLifecycle()
     val geometry by viewModel.guideCameraGeometry.collectAsStateWithPageLifecycle()
@@ -89,11 +92,20 @@ fun GuideScreen(viewModel: CameraViewModel, onBack: () -> Unit) {
         GuideSettingsDialog(viewModel, onDismiss = { panel = "" },
             guiding = running || calibrating || autoStarting, exposing = exposing || exposureRequested)
     }
-    if (panel == "devices" && foreground) {
+    if (panel in listOf("devices", "star", "plots") && foreground) {
         AlertDialog(onDismissRequest = { panel = "" },
-            title = { Text(stringResource(R.string.gw_devices)) },
+            title = { Text(stringResource(when (panel) {
+                "devices" -> R.string.gw_devices
+                "star" -> R.string.guide_star
+                else -> R.string.gw_plot_settings
+            })) },
             text = { Box(Modifier.fillMaxWidth().heightIn(max = 440.dp)) {
-                GuideDevices(viewModel) { panel = "" }
+                when (panel) {
+                    "devices" -> GuideDevices(viewModel) { panel = "" }
+                    "star" -> GuideStarPanel(display, factor, unit, Modifier.fillMaxWidth())
+                    "plots" -> GuidePlotSettings(samples, { samples = it }, showPulses, { showPulses = it },
+                        plotRange, { plotRange = it }, unit)
+                }
             } }, confirmButton = {
                 if (running || calibrating || autoStarting) TextButton(onClick = { viewModel.setGuideRunning(false) }) { Text(stringResource(R.string.gw_stop_guiding)) }
                 if (exposing || exposureRequested) TextButton(onClick = { viewModel.setGuideExposureRunning(false) }) { Text(stringResource(R.string.gw_stop_exposure)) }
@@ -101,64 +113,157 @@ fun GuideScreen(viewModel: CameraViewModel, onBack: () -> Unit) {
             })
     }
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-            verticalAlignment = Alignment.CenterVertically) {
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val stacked = maxWidth < 480.dp
+            val busy = running || calibrating || autoStarting
+            Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, stringResource(R.string.back)) }
-            GuideAction(R.string.gw_devices, Icons.Default.Link, true, Modifier.weight(1f)) { panel = "devices" }
+            GuideAction(R.string.gw_devices, Icons.Default.Link, true, Modifier.weight(1f), stacked) { panel = "devices" }
             GuideAction(if (exposing || exposureRequested) R.string.gw_stop_exposure else R.string.gw_start_exposure,
-                if (exposing || exposureRequested) Icons.Default.Stop else Icons.Default.PlayArrow, connected, Modifier.weight(1f)) {
+                if (exposing || exposureRequested) Icons.Default.Stop else Icons.Default.Loop, connected,
+                Modifier.weight(1f).testTag("guide-exposure"), stacked) {
                 viewModel.setGuideExposureRunning(!(exposing || exposureRequested))
             }
-            GuideAction(if (running || calibrating || autoStarting) R.string.gw_stop_guiding else R.string.gw_auto_guide,
-                if (running || calibrating || autoStarting) Icons.Default.Stop else Icons.Default.GpsFixed, connected && !writing, Modifier.weight(1f)) { viewModel.autoSelectAndGuide() }
-            GuideAction(R.string.settings, Icons.Default.Settings, true, Modifier.weight(1f)) { panel = "settings" }
+            GuideAction(R.string.gw_auto_select, Icons.Default.StarBorder,
+                connected && !busy && !writing && display?.stars?.isNotEmpty() == true,
+                Modifier.weight(1f).testTag("guide-auto-select"), stacked, viewModel::autoSelectGuideStar)
+            GuideAction(when {
+                calibrating -> R.string.gw_stop_calibration
+                busy -> R.string.gw_stop_guiding
+                else -> R.string.gw_start_guiding
+            }, if (busy) Icons.Default.Stop else Icons.Default.GpsFixed,
+                busy || connected && exposing && selectedStar != null && !writing,
+                Modifier.weight(1f).testTag("guide-start-stop"), stacked) {
+                if (busy) viewModel.setGuideRunning(false) else viewModel.startGuiding()
+            }
+            GuideAction(R.string.settings, Icons.Default.Settings, true, Modifier.weight(1f), stacked) { panel = "settings" }
+            }
         }
-        Text(status, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp))
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
-            val wide = maxWidth >= 640.dp
-            if (wide) Row(Modifier.fillMaxSize()) {
-                GuideImage(display, references, viewModel::selectGuideStar, Modifier.weight(1f).fillMaxHeight(), foreground && panel.isEmpty())
-                GuideStarPanel(display, factor, unit, Modifier.width(210.dp).fillMaxHeight())
-            } else Column(Modifier.fillMaxSize()) {
-                GuideImage(display, references, viewModel::selectGuideStar, Modifier.weight(1f).fillMaxWidth(), foreground && panel.isEmpty())
-                Text(display?.profile?.let { "HFR ${number(it.hfrPx * factor)} $unit · SNR ${number(display?.primary?.snr ?: 0f)}" }
-                    ?: stringResource(R.string.no_star_detected), Modifier.padding(4.dp), fontSize = 11.sp)
+            val landscape = maxWidth >= 480.dp && maxWidth > maxHeight
+            val diagnosticsWidth = (maxWidth * .36f).coerceIn(228.dp, 320.dp)
+            val plotHeight = (maxHeight * if (landscape) .3f else .14f).coerceIn(64.dp, 96.dp)
+            if (landscape) {
+                Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    GuidePreview(display, references, viewModel::selectGuideStar, status,
+                        Modifier.weight(1f).fillMaxHeight(), foreground && panel.isEmpty())
+                    Column(Modifier.width(diagnosticsWidth).fillMaxHeight()
+                        .verticalScroll(rememberScrollState())) {
+                        GuideStarSummary(display, factor, unit) { panel = "star" }
+                        GuidePlots(window, factor, unit, plotRange, showPulses, plotHeight,
+                            onSettings = { panel = "plots" }, onClear = viewModel::clearGuideHistory)
+                    }
+                }
+            } else {
+                Column(Modifier.fillMaxSize()) {
+                    GuidePreview(display, references, viewModel::selectGuideStar, status,
+                        Modifier.weight(1f).fillMaxWidth(), foreground && panel.isEmpty())
+                    GuideStarSummary(display, factor, unit) { panel = "star" }
+                    GuidePlots(window, factor, unit, plotRange, showPulses, plotHeight,
+                        onSettings = { panel = "plots" }, onClear = viewModel::clearGuideHistory)
+                }
             }
         }
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
-            Text("RA", color = raColor, modifier = Modifier.padding(start = 8.dp), fontSize = 11.sp)
-            Text(" / DEC", color = decColor, fontSize = 11.sp)
-            listOf(50, 100, 200).forEach { count ->
-                TextButton(onClick = { samples = count }) { Text(if (samples == count) "[$count]" else "$count", fontSize = 11.sp) }
-            }
-            Checkbox(checked = showPulses, onCheckedChange = { showPulses = it }, modifier = Modifier.size(36.dp))
-            Text(stringResource(R.string.gw_corrections), fontSize = 11.sp)
-            GuideChoice(listOf(1f, 2f, 4f, 8f, 16f), plotRange, { "±${number(it, 0)} $unit" }, { plotRange = it })
-            TextButton(onClick = viewModel::clearGuideHistory) { Text(stringResource(R.string.clear_graph), fontSize = 11.sp) }
-        }
-        Row(Modifier.fillMaxWidth().height(128.dp).padding(horizontal = 4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            Box(Modifier.weight(1f).fillMaxHeight()) {
-                GuideGraph(window, factor, plotRange, showPulses, Modifier.fillMaxSize())
-                Text("+${number(plotRange, 0)} $unit", color = Color.LightGray, fontSize = 9.sp, modifier = Modifier.align(Alignment.TopEnd))
-                Text("−${number(plotRange, 0)} $unit", color = Color.LightGray, fontSize = 9.sp, modifier = Modifier.align(Alignment.BottomEnd))
-            }
-            Box(Modifier.size(128.dp)) {
-                GuideScatter(window, factor, plotRange, Modifier.fillMaxSize())
-                Text("RA / DEC · $unit", color = Color.LightGray, fontSize = 9.sp, modifier = Modifier.align(Alignment.TopCenter))
-            }
-        }
-        val rms = remember(window.points) { GuideModule().rms(window.points) }
-        Text(stringResource(R.string.gw_rms, rms.raPx * factor, rms.decPx * factor, rms.totalPx * factor, unit, window.points.size, samples),
-            Modifier.padding(horizontal = 8.dp, vertical = 2.dp), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
 @Composable
-private fun GuideAction(label: Int, icon: androidx.compose.ui.graphics.vector.ImageVector, enabled: Boolean, modifier: Modifier, action: () -> Unit) {
+private fun GuidePreview(frame: GuideDisplayFrame?, references: List<GuideStar>, onSelect: (Float, Float) -> Unit,
+    status: String, modifier: Modifier, active: Boolean) {
+    Box(modifier) {
+        GuideImage(frame, references, onSelect, Modifier.fillMaxSize(), active)
+        if (status.isNotBlank()) Text(status,
+            modifier = Modifier.align(Alignment.TopStart).padding(8.dp).widthIn(max = 320.dp)
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .84f), RoundedCornerShape(6.dp))
+                .padding(horizontal = 8.dp, vertical = 4.dp).testTag("guide-status"),
+            color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp, lineHeight = 18.sp,
+            maxLines = 2, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
+private fun GuideStarSummary(frame: GuideDisplayFrame?, factor: Float, unit: String, onDetails: () -> Unit) {
+    val description = stringResource(R.string.gw_star_details)
+    Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant)
+        .clickable(onClickLabel = description, onClick = onDetails).testTag("guide-star-summary")
+        .padding(horizontal = 8.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        val profile = frame?.profile
+        if (profile != null) GuideStarThumbnail(profile, Modifier.size(40.dp))
+        else Box(Modifier.size(40.dp).background(Color.Black), contentAlignment = Alignment.Center) {
+            Icon(Icons.Default.StarOutline, null, Modifier.size(22.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Column(Modifier.weight(1f)) {
+            Text(stringResource(R.string.guide_star), fontSize = 13.sp, lineHeight = 18.sp)
+            Text(if (profile == null) stringResource(R.string.no_star_detected) else
+                "HFR ${number(profile.hfrPx * factor)} $unit · SNR ${number(frame.primary?.snr ?: 0f)}",
+                fontSize = 13.sp, lineHeight = 18.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Icon(Icons.Default.ChevronRight, description, Modifier.size(20.dp))
+    }
+}
+
+@Composable
+private fun GuidePlots(window: GuidePlotWindow, factor: Float, unit: String, range: Float,
+    pulses: Boolean, plotHeight: Dp, onSettings: () -> Unit, onClear: () -> Unit) {
+    Column(Modifier.fillMaxWidth().testTag("guide-plots")) {
+        Row(Modifier.fillMaxWidth().padding(start = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.weight(1f)) {
+                Text("RA", color = raColor, fontSize = 13.sp)
+                Text(" / DEC", color = decColor, fontSize = 13.sp, maxLines = 1)
+            }
+            Text(stringResource(R.string.gw_sample_count, window.points.size, window.capacity),
+                fontSize = 12.sp, maxLines = 1, modifier = Modifier.testTag("guide-sample-count"))
+            IconButton(onClick = onSettings) { Icon(Icons.Default.Tune, stringResource(R.string.gw_plot_settings), Modifier.size(20.dp)) }
+            IconButton(onClick = onClear) { Icon(Icons.Default.DeleteOutline, stringResource(R.string.clear_graph), Modifier.size(20.dp)) }
+        }
+        Row(Modifier.fillMaxWidth().height(plotHeight).padding(horizontal = 4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Box(Modifier.weight(1f).fillMaxHeight()) {
+                GuideGraph(window, factor, range, pulses, Modifier.fillMaxSize())
+                Text("+${number(range, 0)} $unit", color = Color.LightGray, fontSize = 10.sp, modifier = Modifier.align(Alignment.TopEnd))
+                Text("−${number(range, 0)} $unit", color = Color.LightGray, fontSize = 10.sp, modifier = Modifier.align(Alignment.BottomEnd))
+            }
+            GuideScatter(window, factor, range, Modifier.size(plotHeight))
+        }
+        val rms = remember(window.points) { GuideModule().rms(window.points) }
+        Text(stringResource(R.string.gw_rms_compact, rms.raPx * factor, rms.decPx * factor, rms.totalPx * factor, unit),
+            Modifier.padding(horizontal = 8.dp, vertical = 4.dp), fontSize = 13.sp, lineHeight = 18.sp)
+    }
+}
+
+@Composable
+@OptIn(ExperimentalMaterial3Api::class)
+private fun GuidePlotSettings(samples: Int, onSamples: (Int) -> Unit, pulses: Boolean, onPulses: (Boolean) -> Unit,
+    range: Float, onRange: (Float) -> Unit, unit: String) {
+    Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(stringResource(R.string.gw_samples))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(50, 100, 200).forEach { count ->
+                FilterChip(selected = samples == count, onClick = { onSamples(count) },
+                    label = { Text(count.toString()) }, modifier = Modifier.testTag("guide-samples-$count"))
+            }
+        }
+        Text(stringResource(R.string.gw_plot_range))
+        GuideChoice(listOf(1f, 2f, 4f, 8f, 16f), range, { "±${number(it, 0)} $unit" }, onRange)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(checked = pulses, onCheckedChange = onPulses, modifier = Modifier.testTag("guide-pulses"))
+            Text(stringResource(R.string.gw_corrections))
+        }
+    }
+}
+
+@Composable
+private fun GuideAction(label: Int, icon: androidx.compose.ui.graphics.vector.ImageVector, enabled: Boolean,
+    modifier: Modifier, stacked: Boolean, action: () -> Unit) {
     TextButton(onClick = action, enabled = enabled, modifier = modifier) {
-        Icon(icon, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp))
-        Text(stringResource(label), fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        if (stacked) Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(icon, null, Modifier.size(18.dp))
+            Text(stringResource(label), fontSize = 13.sp, lineHeight = 18.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        } else {
+            Icon(icon, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp))
+            Text(stringResource(label), fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
     }
 }
 
@@ -216,7 +321,8 @@ internal fun GuideImage(frame: GuideDisplayFrame?, references: List<GuideStar>, 
 
 @Composable
 private fun GuideStarPanel(frame: GuideDisplayFrame?, factor: Float, unit: String, modifier: Modifier) {
-    Column(modifier.background(MaterialTheme.colorScheme.surfaceVariant).verticalScroll(rememberScrollState()).padding(8.dp)) {
+    Column(modifier.background(MaterialTheme.colorScheme.surfaceVariant).verticalScroll(rememberScrollState())
+        .testTag("guide-star-details").padding(8.dp)) {
         Text(stringResource(R.string.guide_star), style = MaterialTheme.typography.labelMedium)
         val profile = frame?.profile
         if (profile == null) {
@@ -230,14 +336,7 @@ private fun GuideStarPanel(frame: GuideDisplayFrame?, factor: Float, unit: Strin
 @Composable
 private fun GuideStarDetails(profile: GuideStarProfile, primary: GuideStar?, factor: Float, unit: String) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Canvas(Modifier.size(64.dp).background(Color.Black)) {
-                val peak = (profile.peak - profile.background).coerceAtLeast(1f)
-                profile.pixels.forEachIndexed { index, value ->
-                    val level = ((value - profile.background) / peak).coerceIn(0f, 1f)
-                    drawRect(Color(level, level, level), Offset(index % profile.width * size.width / profile.width,
-                        index / profile.width * size.height / profile.height), Size(size.width / profile.width + .1f, size.height / profile.height + .1f))
-                }
-            }
+            GuideStarThumbnail(profile, Modifier.size(64.dp))
             Column(Modifier.padding(start = 6.dp)) {
                 Text("HFR ${number(profile.hfrPx * factor)} $unit", fontSize = 11.sp)
                 Text("SNR ${number(primary?.snr ?: 0f)}", fontSize = 11.sp)
@@ -261,6 +360,19 @@ private fun GuideStarDetails(profile: GuideStarProfile, primary: GuideStar?, fac
         }
         Text(stringResource(R.string.gw_profile_legend), fontSize = 10.sp)
         Text(stringResource(R.string.gw_profile_radius, (profile.radialIntensity.size - 1) * factor, unit), fontSize = 10.sp)
+}
+
+@Composable
+private fun GuideStarThumbnail(profile: GuideStarProfile, modifier: Modifier) {
+    Canvas(modifier.background(Color.Black)) {
+        val peak = (profile.peak - profile.background).coerceAtLeast(1f)
+        profile.pixels.forEachIndexed { index, value ->
+            val level = ((value - profile.background) / peak).coerceIn(0f, 1f)
+            drawRect(Color(level, level, level), Offset(index % profile.width * size.width / profile.width,
+                index / profile.width * size.height / profile.height),
+                Size(size.width / profile.width + .1f, size.height / profile.height + .1f))
+        }
+    }
 }
 
 @Composable
