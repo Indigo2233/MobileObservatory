@@ -221,7 +221,7 @@ private fun GuideNumberSetting(label: String, value: Float, spec: GuideNumberSpe
     onApply: (Float) -> Unit, enabled: Boolean = true) {
     var text by rememberSaveable(value) { mutableStateOf(spec.format(value)) }
     val parsed = spec.parse(text)
-    val dirty = text != spec.format(value)
+    val dirty = text != spec.format(value) || parsed?.toFloat() != value
     val invalid = dirty && parsed == null
     val focus = LocalFocusManager.current
     fun apply() {
