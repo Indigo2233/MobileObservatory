@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="gw_settings_title">导星设置</string>
+    <string name="gw_travel_label">每轴最小位移</string>
+    <string name="gw_pulse_label">初始校准脉冲</string>
+    <string name="gw_min_move_label">最小修正量</string>
+    <string name="gw_focal_label">导星镜焦距</string>
+    <string name="gw_focal_optional">设为 0 或留空时使用像素单位。</string>
+    <string name="gw_number_range">%1$s–%2$s · 步长 %3$s</string>
+    <string name="gw_integer_invalid">请输入 %1$s–%2$s 之间的整数。</string>
+    <string name="gw_decimal_invalid">请输入 %1$s–%2$s 之间的数值，最多 %3$d 位小数。</string>
+    <string name="gw_decrease_value">减小%1$s</string>
+    <string name="gw_increase_value">增大%1$s</string>
+    <string name="gw_apply_value">应用</string>
+</resources>

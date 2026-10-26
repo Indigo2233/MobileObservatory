@@ -3,7 +3,6 @@ package com.indigo.mobileobservatory.ui
 import android.app.LocaleManager
 import android.content.Context
 import android.content.res.Configuration
-import android.graphics.Bitmap
 import android.os.Build
 import android.os.LocaleList
 import androidx.compose.ui.test.*
@@ -15,7 +14,6 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.ExternalResource
 import org.junit.runner.RunWith
-import java.io.File
 
 /** Exercises the production Activity, app-scoped Chinese resources and landscape transition. */
 @RunWith(AndroidJUnit4::class)
@@ -53,11 +51,14 @@ class GuideMainActivityInstrumentedTest {
         compose.onNodeWithTag("guide-graph").assertExists()
         compose.onNodeWithTag("guide-scatter").assertExists()
         compose.onNodeWithText("设备连接").assertIsDisplayed()
-        val screenshot = instrumentation.uiAutomation.takeScreenshot()
-        if (screenshot != null) {
-            val folder = File(app.getExternalFilesDir(null), "guide-entry").apply { mkdirs() }
-            File(folder, "chinese-main-landscape.png").outputStream().use { screenshot.compress(Bitmap.CompressFormat.PNG, 100, it) }
-            screenshot.recycle()
-        }
+        saveGuideScreenshot("chinese-main-landscape")
+        compose.onNodeWithText("设置").performClick()
+        compose.onNodeWithText("校准").performScrollTo().performClick()
+        compose.onNodeWithTag("guide-steps-input").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("guide-steps-increase").assertIsDisplayed()
+        compose.onNodeWithTag("guide-settings-close").assertIsDisplayed()
+        saveGuideScreenshot("settings-chinese-landscape")
+        compose.onNodeWithTag("guide-settings-close").performClick()
+        compose.onNodeWithTag("guide-image").assertIsDisplayed()
     }
 }

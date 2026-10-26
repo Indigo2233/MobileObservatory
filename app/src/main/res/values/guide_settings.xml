@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="gw_settings_title">Guide settings</string>
+    <string name="gw_travel_label">Minimum travel per axis</string>
+    <string name="gw_pulse_label">Initial calibration pulse</string>
+    <string name="gw_min_move_label">Minimum move</string>
+    <string name="gw_focal_label">Guide focal length</string>
+    <string name="gw_focal_optional">Set to 0 or leave blank to use pixels.</string>
+    <string name="gw_number_range">%1$s–%2$s · step %3$s</string>
+    <string name="gw_integer_invalid">Enter a whole number from %1$s to %2$s.</string>
+    <string name="gw_decimal_invalid">Enter %1$s–%2$s, with up to %3$d decimal places.</string>
+    <string name="gw_decrease_value">Decrease %1$s</string>
+    <string name="gw_increase_value">Increase %1$s</string>
+    <string name="gw_apply_value">Apply</string>
+</resources>
