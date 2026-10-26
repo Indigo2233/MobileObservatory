@@ -19,15 +19,16 @@ enum class MediaCategory(val extensions: List<String>) {
  * File-system work is synchronous: UI callers must use Dispatchers.IO.
  */
 object MediaLibrary {
+    /** Single-image tasks expand FITS sessions; the media browser keeps its grouped entries by default. */
     fun list(recordingsDir: File?, capturesDir: File?, category: MediaCategory,
-             excludeFile: File? = null): List<VideoFileInfo> {
+             excludeFile: File? = null, expandFitsFolders: Boolean = false): List<VideoFileInfo> {
         val groups = when (category) {
             MediaCategory.RECENT -> listOf(MediaCategory.JPG, MediaCategory.FITS, MediaCategory.SER_PSER, MediaCategory.MP4)
             MediaCategory.PHOTOS -> listOf(MediaCategory.JPG, MediaCategory.FITS)
             MediaCategory.VIDEOS -> listOf(MediaCategory.SER_PSER, MediaCategory.MP4)
             else -> emptyList()
         }
-        if (groups.isNotEmpty()) return groups.flatMap { list(recordingsDir, capturesDir, it, excludeFile) }
+        if (groups.isNotEmpty()) return groups.flatMap { list(recordingsDir, capturesDir, it, excludeFile, expandFitsFolders) }
             .distinctBy { it.file.absoluteFile.normalize().path }
             .sortedWith(compareByDescending<VideoFileInfo> { it.file.lastModified() }.thenBy { it.name })
         val excluded = excludeFile?.absoluteFile?.normalize()?.path
@@ -44,15 +45,17 @@ object MediaLibrary {
             MediaCategory.STACK_RESULTS -> listOfNotNull(capturesDir?.resolve("JPG"), capturesDir?.resolve("FITS"))
             else -> emptyList()
         }
-        return directories.flatMap { it.listFiles().orEmpty().toList() }.filter(::visible).mapNotNull { file ->
+        return directories.flatMap { it.listFiles().orEmpty().toList() }.filter(::visible).flatMap { file ->
             when {
-                category == MediaCategory.STACK_RESULTS && !file.name.startsWith("stack-", ignoreCase = true) -> null
-                matches(file) -> describe(file)
+                category == MediaCategory.STACK_RESULTS && !file.name.startsWith("stack-", ignoreCase = true) -> emptyList()
+                matches(file) -> listOfNotNull(describe(file))
                 category == MediaCategory.FITS && file.isDirectory -> {
                     val frames = file.listFiles().orEmpty().filter(::matches)
-                    if (frames.isEmpty()) null else VideoFileInfo(file, file.name, frames.sumOf(File::length), "FITS")
+                    if (expandFitsFolders) frames.mapNotNull(::describe)
+                    else if (frames.isEmpty()) emptyList()
+                    else listOf(VideoFileInfo(file, file.name, frames.sumOf(File::length), "FITS"))
                 }
-                else -> null
+                else -> emptyList()
             }
         }.distinctBy { it.file.absoluteFile.normalize().path }
             .sortedWith(compareByDescending<VideoFileInfo> { it.file.lastModified() }.thenBy { it.name })

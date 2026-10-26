@@ -76,6 +76,8 @@ import com.indigo.mobileobservatory.polar.advice
 import com.indigo.mobileobservatory.ui.viewmodel.PolarSamplesViewModel
 import com.indigo.mobileobservatory.util.FileLogger
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.Dispatchers
@@ -122,13 +124,17 @@ fun PolarAlignmentScreen(
     val samples by sampleSession.samples.collectAsStateWithPageLifecycle()
     val stopMotion = rememberUpdatedState(onStopMountRaMove)
     val workflowTask = remember(scope) { PolarWorkflowTask(scope) { stopMotion.value() } }
-    val taskBusy by workflowTask.busy.collectAsStateWithPageLifecycle()
+    val workflowBusy by workflowTask.busy.collectAsStateWithPageLifecycle()
+    var importJob by remember { mutableStateOf<Job?>(null) }
+    val taskBusy = workflowBusy || importJob != null
+    fun stopTask() { importJob?.cancel(); workflowTask.stop() }
     var inspectFile by remember { mutableStateOf<File?>(null) }
     val pageForeground = rememberPageForeground()
-    DisposableEffect(workflowTask) { onDispose { workflowTask.stop() } }
-    LaunchedEffect(mountStopSignal) { workflowTask.stop() }
+    DisposableEffect(workflowTask) { onDispose { stopTask() } }
+    LaunchedEffect(mountStopSignal) { stopTask() }
+    // Document results can arrive before onResume; the bounded file import is independent of device acquisition.
     LaunchedEffect(pageForeground) { if (!pageForeground) workflowTask.stop() }
-    BackHandler(enabled = taskBusy && pageForeground && inspectFile == null) { workflowTask.stop(); onBack() }
+    BackHandler(enabled = taskBusy && pageForeground && inspectFile == null) { stopTask(); onBack() }
     BackHandler(enabled = inspectFile != null && pageForeground) { inspectFile = null }
     val phoneLocationFailed = stringResource(R.string.phone_location_failed)
     val plateSolveFailed = stringResource(R.string.plate_solve_failed)
@@ -171,6 +177,7 @@ fun PolarAlignmentScreen(
     var continuousEstimator by rememberSaveable { mutableStateOf(prefs.getBoolean("polar_continuous_estimator", false)) }
     var useMountHint by rememberSaveable { mutableStateOf(prefs.getBoolean("polar_use_mount_hint", true)) }
     var selectedSlot by rememberSaveable { mutableIntStateOf(0) }
+    var imagePickerSlot by rememberSaveable { mutableStateOf<Int?>(null) }
     var solvingSlot by remember { mutableStateOf<Int?>(null) }
     var runningAuto by remember { mutableStateOf(false) }
     var workflowStatus by remember { mutableStateOf("") }
@@ -364,22 +371,37 @@ fun PolarAlignmentScreen(
         )
     }
 
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
-        if (uri != null) {
-            scope.launch {
-                error = null
-                determination = null
-                currentResult = null
-                sampleModel.adjustment = null
-                val slot = selectedSlot
-                try {
-                    val selected = withContext(Dispatchers.IO) { runner.copyUriToCache(uri) }
-                    sampleSession.import(slot, selected)
-                    sampleModel.canResume = false
-                } catch (cancel: CancellationException) { throw cancel }
-                catch (failure: Exception) { error = failure.message ?: plateSolveFailed }
-            }
+    fun importSample(slot: Int, uri: Uri, sourceLastModifiedMs: Long?) {
+        if (taskBusy || mountBusy) return
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            error = null
+            workflowStatus = context.getString(R.string.external_media_importing)
+            try {
+                val selected = runner.copyUriToCache(uri, sourceLastModifiedMs)
+                sampleSession.import(slot, selected)
+                if (slot < 3) {
+                    determination = null
+                    currentResult = null
+                    sampleModel.adjustment = null
+                }
+                correctionField = null
+                sampleModel.canResume = false
+                workflowStatus = context.getString(R.string.polar_sample_imported)
+            } catch (cancel: CancellationException) { throw cancel }
+            catch (failure: Exception) { error = failure.message ?: plateSolveFailed }
+            finally { importJob = null }
         }
+        importJob = job
+        job.start()
+    }
+
+    imagePickerSlot?.let { slot ->
+        AppImagePicker(
+            selectionLabel = if (slot == 3) stringResource(R.string.polar_correction_sample)
+                else stringResource(R.string.point_number, slot + 1),
+            onDismiss = { imagePickerSlot = null },
+            onSelect = { uri, modified -> imagePickerSlot = null; importSample(slot, uri, modified) }
+        )
     }
 
     val locationPermissionLauncher = rememberLauncherForActivityResult(
@@ -460,7 +482,7 @@ fun PolarAlignmentScreen(
                     .padding(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = { workflowTask.stop(); onBack() }) {
+                IconButton(onClick = { stopTask(); onBack() }) {
                     Icon(Icons.Default.ArrowBack, contentDescription = stringResource(R.string.back))
                 }
                 Text(stringResource(R.string.three_point_polar_alignment), style = MaterialTheme.typography.titleMedium)
@@ -477,7 +499,7 @@ fun PolarAlignmentScreen(
                         previewSettings = cameraPreviewSettings,
                         sample = latestSample, status = workflowStatus, error = error, busy = taskBusy || mountBusy,
                         onStop = {
-                            if (taskBusy) workflowTask.stop() else onStopMountRaMove()
+                            if (taskBusy) stopTask() else onStopMountRaMove()
                             workflowStatus = context.getString(R.string.stopped)
                         }, inspectFile = inspectFile, onInspect = { inspectFile = it }, adjustment = adjustment, modifier = modifier)
                 },
@@ -702,7 +724,7 @@ fun PolarAlignmentScreen(
                                     OutlinedButton(
                                         onClick = {
                                             FileLogger.i("PolarAlign", "User stop requested")
-                                            if (taskBusy) workflowTask.stop() else onStopMountRaMove()
+                                            if (taskBusy) stopTask() else onStopMountRaMove()
                                             workflowStatus = context.getString(R.string.stopped)
                                         },
                                         enabled = taskBusy || mountBusy,
@@ -975,7 +997,7 @@ fun PolarAlignmentScreen(
                                 canRecapture = index == 3 || index == sampleModel.positionedPoint,
                                 onSelect = {
                                     selectedSlot = index
-                                    picker.launch(arrayOf("image/*", "application/fits", "application/octet-stream", "*/*"))
+                                    imagePickerSlot = index
                                 },
                                 onSolve = { runSingleSample(index, false) },
                                 onRecapture = { runSingleSample(index, true) },
@@ -1182,7 +1204,7 @@ internal fun MeasurementCard(
             }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (canRecapture) OutlinedButton(onClick = onRecapture, modifier = Modifier.testTag("polar-recapture-$index"), enabled = actionsEnabled) { Text(stringResource(R.string.polar_recapture_sample)) }
-                TextButton(onClick = onSelect, enabled = actionsEnabled) { Text(stringResource(R.string.select)) }
+                TextButton(onClick = onSelect, modifier = Modifier.testTag("polar-select-$index"), enabled = actionsEnabled) { Text(stringResource(R.string.select)) }
             }
             if (sample.phase == PolarSamplePhase.FAILED && sample.failedPhase == PolarSamplePhase.SOLVING &&
                 sample.advice() !in listOf(PolarSampleAdvice.OPTICS, PolarSampleAdvice.DATABASE)) {
