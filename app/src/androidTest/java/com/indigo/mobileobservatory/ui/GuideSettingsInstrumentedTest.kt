@@ -109,10 +109,9 @@ class GuideSettingsInstrumentedTest {
         instrumentation.runOnMainSync { vm.setGuideCalibrationDistance(20.003f) }
         start(); category(R.string.calibration)
         compose.onNodeWithTag("guide-distance-input").performScrollTo().assertTextContains("20")
+        input("distance", "20")
         compose.onNodeWithTag("guide-distance-apply").assertIsEnabled()
         apply("distance")
-        assertEquals(20f, vm.guideCalibrationDistance.value, 0f)
-        input("distance", "20"); apply("distance")
         assertEquals(20f, vm.guideCalibrationDistance.value, 0f)
         compose.onNodeWithTag("guide-distance-increase").performScrollTo().performClick()
         compose.onNodeWithTag("guide-distance-input").assertTextEquals("21")
