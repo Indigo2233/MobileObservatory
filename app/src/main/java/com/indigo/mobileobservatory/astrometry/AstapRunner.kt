@@ -51,10 +51,31 @@ class AstapRunner(private val context: Context) : ImagePlateSolver {
     }
 
     private suspend fun solveExclusive(
+        inputFile: File, fovDeg: Double, mountCoordinates: MountCoordinates?, searchRadiusDeg: Double?
+    ): PlateSolveResult = withContext(Dispatchers.IO) {
+        val started = System.currentTimeMillis()
+        val original = solveAttempt(inputFile, fovDeg, mountCoordinates, searchRadiusDeg)
+        if (!astapNeedsSum2Retry(original)) return@withContext original
+        val sum = AstapSum2Input.inspect(inputFile) ?: return@withContext original
+        val base = createAstapOutputBase(context.cacheDir)
+        val temporary = File(base.parentFile, "input-sum2.fits")
+        try {
+            val task = kotlinx.coroutines.currentCoroutineContext()
+            sum.write(temporary) { task.ensureActive() }
+            val retry = solveAttempt(temporary, fovDeg, mountCoordinates, searchRadiusDeg, base, 1)
+            val restored = sum.restore(retry)
+            restored.copy(elapsedMs = elapsed(started), log = original.log +
+                "\nattempt=uint16_sum2 originalDims=${sum.width}x${sum.height} solverDims=${sum.width / 2}x${sum.height / 2}\n" + restored.log)
+        } finally { temporary.delete() }
+    }
+
+    private suspend fun solveAttempt(
         inputFile: File,
         fovDeg: Double,
         mountCoordinates: MountCoordinates?,
-        searchRadiusDeg: Double?
+        searchRadiusDeg: Double?,
+        outputOverride: File? = null,
+        solverBinning: Int? = null
     ): PlateSolveResult = withContext(Dispatchers.IO) {
         val status = d50Manager.status()
         val database = status.database
@@ -79,7 +100,7 @@ class AstapRunner(private val context: Context) : ImagePlateSolver {
         deleteStaleCopiedAstapExecutables(workDir)
 
         val start = System.currentTimeMillis()
-        val outputBase = createAstapOutputBase(context.cacheDir)
+        val outputBase = outputOverride ?: createAstapOutputBase(context.cacheDir)
         val dbFiles = workDir.listFiles { file ->
             file.isFile && file.name.startsWith(database.filePrefix, true) && file.name.endsWith(".1476", true)
         }.orEmpty()
@@ -92,7 +113,8 @@ class AstapRunner(private val context: Context) : ImagePlateSolver {
             database = database,
             mountCoordinates = mountCoordinates,
             searchRadiusDeg = effectiveSearchRadiusDeg,
-            outputBase = outputBase
+            outputBase = outputBase,
+            solverBinning = solverBinning
         )
         val diagHeader = buildString {
             appendLine("ABIs=${Build.SUPPORTED_ABIS.joinToString()}")
@@ -257,7 +279,8 @@ internal fun buildAstapCommand(
     database: AstapDatabase,
     mountCoordinates: MountCoordinates?,
     searchRadiusDeg: Double,
-    outputBase: File
+    outputBase: File,
+    solverBinning: Int? = null
 ): List<String> {
     val command = mutableListOf(
         executable.absolutePath,
@@ -268,6 +291,7 @@ internal fun buildAstapCommand(
         "-r", "%.6f".format(Locale.US, searchRadiusDeg.coerceIn(0.0, 180.0)),
         "-fov", "%.6f".format(Locale.US, if (fovDeg == 0.0) 0.0 else fovDeg.coerceIn(0.2, 90.0))
     )
+    solverBinning?.let { command += listOf("-z", it.toString()) }
     if (mountCoordinates != null) {
         command += listOf(
             "-ra", "%.6f".format(Locale.US, mountCoordinates.raHours),

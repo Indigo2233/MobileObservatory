@@ -8,8 +8,9 @@ data class PolarFailureDetails(val reason: PolarFailureReason, val detectedStars
 fun PolarSample.failureDetails(): PolarFailureDetails {
     val message = failure ?: result?.message.orEmpty()
     if (failedPhase == PolarSamplePhase.CAPTURING) return PolarFailureDetails(PolarFailureReason.CAPTURE, null, message)
-    val lines = result?.log.orEmpty().lineSequence().map(String::trim).filter { line ->
-        line.isNotBlank() && !Regex("^(ABIs|ASTAP|workDir|input|mountHint|command|exitCode|imageDims|candidateWcsFiles)=").containsMatchIn(line) &&
+    val attempts = result?.log.orEmpty().lineSequence().map(String::trim).toList()
+    val lines = attempts.drop(attempts.indexOfLast { it.startsWith("attempt=") } + 1).filter { line ->
+        line.isNotBlank() && !Regex("^(ABIs|ASTAP|workDir|input|mountHint|command|exitCode|imageDims|candidateWcsFiles|outputBase|PLTSOLVD|solutionSource|restoredOriginalDims)=").containsMatchIn(line) &&
             !Regex("^D(?:20|50) files=").containsMatchIn(line) && !line.startsWith("at ")
     }.toList()
     val native = lines.joinToString("\n")
@@ -17,8 +18,10 @@ fun PolarSample.failureDetails(): PolarFailureDetails {
     val countPatterns = listOf(
         Regex("(?:detected|found)\\s+(?:only\\s+)?(\\d+)\\s+stars?", RegexOption.IGNORE_CASE),
         Regex("(\\d+)\\s+stars?\\s+(?:found|detected)", RegexOption.IGNORE_CASE),
-        Regex("stars?\\s+(?:detected|found)\\s*[:=]\\s*(\\d+)", RegexOption.IGNORE_CASE))
-    val count = countPatterns.asSequence().mapNotNull { it.findAll(native).lastOrNull()?.groupValues?.get(1)?.toIntOrNull() }.firstOrNull()
+        Regex("stars?\\s+(?:detected|found)\\s*[:=]\\s*(\\d+)", RegexOption.IGNORE_CASE),
+        Regex("(\\d+)\\s+stars?,\\s*\\d+\\s+quads", RegexOption.IGNORE_CASE))
+    val count = countPatterns.asSequence().flatMap { it.findAll(native) }
+        .maxByOrNull { it.range.first }?.groupValues?.get(1)?.toIntOrNull()
     val reason = when {
         "could not start" in text || "cli is missing" in text || "permission denied" in text -> PolarFailureReason.EXECUTION
         "not enough memory" in text || "out of memory" in text -> PolarFailureReason.MEMORY
