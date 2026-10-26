@@ -87,7 +87,7 @@ class MountClockConnectionInstrumentedTest {
                     packet.append(next.toChar()); if (next.toChar() != '#') continue
                     val command = packet.toString(); packet.setLength(0); commands += command
                     val reply = when {
-                        command == ":GVP#" -> "OnStep test#"
+                        command == ":GVP#" -> "On-Step#"
                         command == ":GR#" -> "05:00:00#"
                         command == ":GD#" -> "+40*00:00#"
                         command == ":Gt#" -> "+30*00#"

@@ -75,7 +75,7 @@ class OnStepGuidePulseTest {
         }
     }
 
-    private class Endpoint(private val model: String = "OnStep test", private val acceptPulse: Boolean = true) : Closeable {
+    private class Endpoint(private val model: String = "On-Step", private val acceptPulse: Boolean = true) : Closeable {
         private val server = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
         val port: Int get() = server.localPort
         val commands = CopyOnWriteArrayList<String>()

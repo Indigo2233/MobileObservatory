@@ -112,7 +112,7 @@ class OnStepClockTest {
                     val reply = when {
                         command == ":GR#" -> "05:00:00#"
                         command == ":GD#" -> "+40*00:00#"
-                        command == ":GVP#" -> "OnStep test#"
+                        command == ":GVP#" -> "On-Step#"
                         command == ":GG#" -> "$offset#"
                         command == ":GC#" -> "$date#"
                         command == ":GL#" -> "$time#"

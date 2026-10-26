@@ -200,6 +200,9 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
         private set
     var mountModel: String? = null
         private set
+    private val isOnStepFirmware: Boolean
+        get() = activeProtocol == MountProtocolType.LX200_ONSTEP &&
+            mountModel?.filter(Char::isLetterOrDigit)?.contains("OnStep", ignoreCase = true) == true
     val supportsSync: Boolean
         get() = pointingCapabilities.value.sync
     val supportsTimeSync: Boolean
@@ -657,7 +660,7 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
             local.second
         )
         // OnStep returns one byte; classic LX200 returns a terminated planetary-data message.
-        val dateAccepted = if (mountModel?.contains("OnStep", ignoreCase = true) == true)
+        val dateAccepted = if (isOnStepFirmware)
             sendBooleanCommand(dateCommand) else sendCommand(dateCommand).trim().startsWith("1")
         require(dateAccepted) {
             "Mount rejected date."
@@ -789,7 +792,7 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
     suspend fun startGuidePulse(direction: MountDirection, durationMs: Int) = withContext(Dispatchers.IO) {
         require(durationMs in 1..5000)
         pointingAccess.requireWritable()
-        if (activeProtocol == MountProtocolType.LX200_ONSTEP && mountModel?.contains("OnStep", ignoreCase = true) == true) {
+        if (isOnStepFirmware) {
             val axis = when (direction) {
                 MountDirection.NORTH -> 'n'
                 MountDirection.SOUTH -> 's'
