@@ -16,7 +16,7 @@
     <string name="stack_roi_why">Why this limit?</string>
     <string name="stack_roi_memory">Current estimate: %1$d MiB / budget: %2$d MiB</string>
     <string name="stack_roi_estimated_max">Suggested range estimate: %1$d MiB</string>
-    <string name="stack_roi_explanation" formatted="false">The estimate includes accumulation, registration, snapshots, demosaicing and calibration. Software Bin runs after sensor calibration and demosaicing, so those buffers stay at input resolution. The budget is 40% of the actual app heap limit; there is no fixed 256 MiB cap. Processing also retains a 16.78 MP image ceiling and a 32 MiB live input-frame limit. These are estimates, not measured peak memory. ROI alignment follows the camera controls.</string>
+    <string name="stack_roi_explanation" formatted="false">The estimate includes accumulation, registration, snapshots, demosaicing and calibration. Software Bin runs after sensor calibration and demosaicing, so those buffers stay at input resolution. The budget is 60% of the actual app heap limit; there is no fixed 256 MiB cap. Processing also retains a 16.78 MP image ceiling and a 32 MiB live input-frame limit. These are estimates, not measured peak memory. ROI alignment follows the camera controls.</string>
     <string name="stack_roi_manual">Manual crop</string>
     <string name="stack_roi_changed">Settings changed. Review the range and try again.</string>
     <string name="stack_roi_capture_busy">Wait for the photo or reference capture to finish before applying the range.</string>

@@ -61,9 +61,11 @@ data class OfflineRegionPlan(
         // garbage collection. The band holds one row of tiles at native width.
         return calibrationOverheadBytes + 2 * decode + bandBytes + demosaicScratchBytes + 256 * 1024
     }
-    val workingBytes: Long get() = overheadBytes + if (target == StackTarget.PLANETARY)
-        PlanetaryStacker.estimatedPeakBytes(width, height, channels, boundedDecode = true, reusableInput = true)
-        else DeepSkyStacker.estimateOfflineWorkingBytes(width, height, channels)
+    internal fun deepSkyMemory() = OfflineDeepSkyMemory.estimate(width, height, channels, reusableInput = true,
+        decoderWorkingBytes = overheadBytes - calibrationBytes, retainedCalibrationBytes = calibrationBytes)
+    val workingBytes: Long get() = if (target == StackTarget.PLANETARY)
+        overheadBytes + PlanetaryStacker.estimatedPeakBytes(width, height, channels, boundedDecode = true, reusableInput = true)
+        else deepSkyMemory().peakBytes
     fun issue(budget: Long): String? = when {
         width < 12 || height < 12 -> "invalid_roi"
         width.toLong() * height > LinearImage.MAX_PIXELS -> "processing_size"
