@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="plate_image_library">应用内影像</string>
+    <string name="plate_image_device">设备文件</string>
+    <string name="plate_image_library_empty">暂无图像。可先拍摄，或在影像库中导入 JPG、PNG、FITS 图像。</string>
+    <string name="plate_image_load_failed">无法读取图像，请确认文件仍然可用后重试。</string>
+    <string name="media_share_preview">分享显示预览（PNG）</string>
+    <string name="media_share_original">分享原始文件</string>
+    <string name="media_share_preview_hint">PNG 使用当前显示效果、预览分辨率和每通道 8 位。完整分辨率及科学数据请分享原始文件。</string>
+    <string name="media_share_failed">无法分享文件，请确认文件仍然可用后重试。</string>
+</resources>

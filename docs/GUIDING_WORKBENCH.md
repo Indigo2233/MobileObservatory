@@ -64,3 +64,14 @@ JVM 回归覆盖多步校准、反向回差、无运动失败、原始 Bayer 星
 补充后的全量回归为 1145 项 JVM 测试全部通过、Android 测试源码编译通过、Lint 0 errors / 297 warnings；原始全幅 FITS 回放通过。
 
 2026-10-25 合并最新极轴改动后，全量 1152 项 JVM 测试通过（0 失败、0 错误、0 跳过），Android 测试源码编译与 Lint 通过；保留主分支 build 51。首次增量缓存缺失通过关闭 Kotlin 增量编译、完整重编译解决。
+
+## 宽屏入口崩溃修复（2026-10-26）
+
+现场日志记录 `ArrayIndexOutOfBoundsException`、`SlotTableKt.key` 和索引 `-5`。导星内容宽度达到 640 dp 时，会显示星点侧栏；尚无星点数据时，侧栏在内联 `Column` 中执行 `return@Column`，当前 Compose 编译器为该路径生成了额外的分组结束调用。此前常规手机尺寸用例进入窄屏分支，未覆盖侧栏的空状态。
+
+- [修复前强制宽屏回归](https://github.com/Indigo2233/MobileObservatory/actions/runs/40210203746)：将导星内容固定为 1100 × 500 dp，无连接、无星点，复现同一 `SlotTable` 负索引异常。
+- `85d5fdb` 将空状态改为完整的 `if/else`，有星点内容移至独立 `GuideStarDetails`，保持星点指标和图表绘制规则。
+- [修复后界面回归](https://github.com/Indigo2233/MobileObservatory/actions/runs/40210592174)：16 项通过，0 失败 / 错误 / 跳过，包含强制宽屏、窄屏、中文真实 MainActivity 横屏进入、设备/设置面板、选星缩放、媒体选图与分享的原片和 URI 授权检查。
+- 本地全量 1166 项 JVM 测试通过，0 失败 / 错误 / 跳过；Android 测试源码编译通过，Lint 为 0 错误、298 警告。
+
+修复分支 `codex/guide-layout-crash` 基于 `main` 的 build 53，保留该分支已有的极轴采样和崩溃诊断，并纳入此前的应用内选图与分享修复。正式签名候选包为 v1.0.9 build 54，代码提交 `85d5fdb`，SHA-256 为 `4641e5161b1ea5692526cce31e6081066336023c07d8b713a063641fe16785b2`。Android API 26–27、28–32、33–34 的签名与证书轮换验证通过，调试、序列和模拟器标志关闭；两份受保护的相机库与源文件逐字节一致。设备现场复测保留为后续确认。

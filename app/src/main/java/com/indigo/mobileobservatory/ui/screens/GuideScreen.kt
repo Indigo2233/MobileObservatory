@@ -216,7 +216,16 @@ private fun GuideStarPanel(frame: GuideDisplayFrame?, factor: Float, unit: Strin
     Column(modifier.background(MaterialTheme.colorScheme.surfaceVariant).verticalScroll(rememberScrollState()).padding(8.dp)) {
         Text(stringResource(R.string.guide_star), style = MaterialTheme.typography.labelMedium)
         val profile = frame?.profile
-        if (profile == null) { Text(stringResource(R.string.no_star_detected), fontSize = 11.sp); return@Column }
+        if (profile == null) {
+            Text(stringResource(R.string.no_star_detected), fontSize = 11.sp)
+        } else {
+            GuideStarDetails(profile, frame.primary, factor, unit)
+        }
+    }
+}
+
+@Composable
+private fun GuideStarDetails(profile: GuideStarProfile, primary: GuideStar?, factor: Float, unit: String) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Canvas(Modifier.size(64.dp).background(Color.Black)) {
                 val peak = (profile.peak - profile.background).coerceAtLeast(1f)
@@ -228,7 +237,7 @@ private fun GuideStarPanel(frame: GuideDisplayFrame?, factor: Float, unit: Strin
             }
             Column(Modifier.padding(start = 6.dp)) {
                 Text("HFR ${number(profile.hfrPx * factor)} $unit", fontSize = 11.sp)
-                Text("SNR ${number(frame.primary?.snr ?: 0f)}", fontSize = 11.sp)
+                Text("SNR ${number(primary?.snr ?: 0f)}", fontSize = 11.sp)
                 Text(stringResource(R.string.gw_peak, profile.peak), fontSize = 11.sp)
             }
         }
@@ -249,7 +258,6 @@ private fun GuideStarPanel(frame: GuideDisplayFrame?, factor: Float, unit: Strin
         }
         Text(stringResource(R.string.gw_profile_legend), fontSize = 10.sp)
         Text(stringResource(R.string.gw_profile_radius, (profile.radialIntensity.size - 1) * factor, unit), fontSize = 10.sp)
-    }
 }
 
 @Composable

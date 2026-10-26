@@ -8,7 +8,6 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.indigo.mobileobservatory.camera.FrameData
 import com.indigo.mobileobservatory.camera.PixelFormat
 import com.indigo.mobileobservatory.recording.FITSWriter
-import com.indigo.mobileobservatory.ui.screens.mediaShareIntent
 import com.indigo.mobileobservatory.update.UpdateInstaller
 import java.io.File
 import java.util.UUID

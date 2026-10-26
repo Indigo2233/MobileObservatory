@@ -19,6 +19,18 @@ enum class MediaCategory(val extensions: List<String>) {
  * File-system work is synchronous: UI callers must use Dispatchers.IO.
  */
 object MediaLibrary {
+    /** Individual still images, including completed frames within FITS recordings. */
+    fun listImages(recordingsDir: File?, capturesDir: File?, excludeFile: File? = null): List<VideoFileInfo> =
+        list(recordingsDir, capturesDir, MediaCategory.PHOTOS, excludeFile).flatMap { info ->
+            if (info.file.isDirectory) {
+                info.file.listFiles().orEmpty().filter {
+                    it.absoluteFile.normalize() != excludeFile?.absoluteFile?.normalize() &&
+                        (it.extension.equals("fit", true) || it.extension.equals("fits", true))
+                }.mapNotNull { describe(it)?.copy(name = "${info.name} / ${it.name}") }
+            } else listOf(info)
+        }.distinctBy { it.file.absoluteFile.normalize().path }
+            .sortedWith(compareByDescending<VideoFileInfo> { it.file.lastModified() }.thenBy { it.name })
+
     fun list(recordingsDir: File?, capturesDir: File?, category: MediaCategory,
              excludeFile: File? = null): List<VideoFileInfo> {
         val groups = when (category) {
