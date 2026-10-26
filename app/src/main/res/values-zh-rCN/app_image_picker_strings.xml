@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_image_album_hint">可选择已拍摄或导入的 FIT/FITS、JPG、PNG，以及连拍组内的单帧。</string>
     <string name="app_image_search">搜索文件名或拍摄会话</string>
     <string name="app_image_album_empty">应用相册暂无图像，也可从系统文件选择。</string>
     <string name="app_image_no_matches">没有匹配的图像。</string>

@@ -3,6 +3,8 @@ package com.indigo.mobileobservatory.ui
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.ParcelFileDescriptor
@@ -217,6 +219,21 @@ class PolarAlbumSelectionInstrumentedTest {
         assertEquals(photo, model.session.samples.value[0].file)
         assertArrayEquals(nestedFits.readBytes(), model.session.samples.value[3].file!!.readBytes())
         assertEquals(0, captures.get()); assertNull(solves.get())
+    }
+
+    @Test fun landscapePickerKeepsTheMatchingImageAndSystemFileActionVisible() {
+        compose.activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        compose.waitUntil(10_000) { context.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE }
+        start(); choosePoint(1)
+        compose.onNodeWithTag("app-image-search").performTextInput(nestedFits.name)
+        val row = hasText(nestedFits.name, substring = true) and hasAnyAncestor(hasTestTag("plate-image-list"))
+        compose.waitUntil(10_000) { compose.onAllNodes(row).fetchSemanticsNodes().isNotEmpty() }
+        val bounds = compose.onNode(row).fetchSemanticsNode().boundsInRoot
+        assertTrue("Image selection needs a full touch target in landscape", bounds.height >= 48 * context.resources.displayMetrics.density)
+        compose.onNodeWithTag("app-image-files").assertIsDisplayed()
+        compose.onNode(row).performClick()
+        compose.waitUntil(10_000) { model.session.samples.value[1].file != null }
+        assertArrayEquals(nestedFits.readBytes(), model.session.samples.value[1].file!!.readBytes())
     }
 
     private fun fits(file: File): File {

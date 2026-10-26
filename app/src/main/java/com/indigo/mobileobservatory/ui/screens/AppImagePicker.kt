@@ -67,7 +67,8 @@ internal fun AppImagePicker(
         onDismissRequest = onDismiss,
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(stringResource(R.string.plate_image_library), Modifier.weight(1f))
+                Text(listOfNotNull(stringResource(R.string.plate_image_library), selectionLabel).joinToString(" · "),
+                    Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
                 IconButton(onClick = { refresh++ }, enabled = !loading) {
                     Icon(Icons.Default.Refresh, stringResource(R.string.refresh))
                 }
@@ -75,8 +76,6 @@ internal fun AppImagePicker(
         },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                selectionLabel?.let { Text(it, style = MaterialTheme.typography.titleSmall) }
-                Text(stringResource(R.string.app_image_album_hint), style = MaterialTheme.typography.bodySmall)
                 OutlinedTextField(query, { query = it }, singleLine = true,
                     label = { Text(stringResource(R.string.app_image_search)) },
                     modifier = Modifier.fillMaxWidth().testTag("app-image-search"))
