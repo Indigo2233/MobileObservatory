@@ -54,6 +54,7 @@ jobs:
           path: |
             app/build/reports/androidTests/
             app/build/outputs/androidTest-results/
+            app/build/outputs/connected_android_test_additional_output/
             app/build/reports/polar-ui-screenshots/
             app/build/reports/ui-crash.log
             app/build/reports/ui-app.log
