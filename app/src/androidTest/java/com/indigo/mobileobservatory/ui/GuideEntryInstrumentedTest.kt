@@ -11,6 +11,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.height
+import androidx.compose.ui.unit.width
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -135,16 +137,16 @@ class GuideEntryInstrumentedTest {
         } }
         compose.onNodeWithContentDescription(app.getString(R.string.gw_plot_settings)).performClick()
         compose.onNodeWithTag("guide-samples-50").performClick().assertIsSelected()
-        compose.onNodeWithTag("guide-pulses").assertIsOn().performClick().assertIsOff()
-        compose.onNodeWithText("±4 px").performClick()
+        compose.onNodeWithTag("guide-pulses").performScrollTo().assertIsOn().performClick().assertIsOff()
+        compose.onNodeWithText("±4 px").performScrollTo().performClick()
         compose.onNodeWithText("±8 px").performClick()
         compose.onNodeWithText(app.getString(R.string.close)).performClick()
         restoration.emulateSavedInstanceStateRestore()
         compose.onNodeWithTag("guide-sample-count").assertTextEquals(app.getString(R.string.gw_sample_count, 0, 50))
         compose.onNodeWithContentDescription(app.getString(R.string.gw_plot_settings)).performClick()
         compose.onNodeWithTag("guide-samples-50").assertIsSelected()
-        compose.onNodeWithTag("guide-pulses").assertIsOff()
-        compose.onNodeWithText("±8 px").assertIsDisplayed()
+        compose.onNodeWithTag("guide-pulses").performScrollTo().assertIsOff()
+        compose.onNodeWithText("±8 px").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText(app.getString(R.string.close)).performClick()
         compose.onNodeWithTag("guide-star-summary").performClick()
         compose.onNodeWithTag("guide-star-details").assertIsDisplayed()
