@@ -6,9 +6,13 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.*
+import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
@@ -23,6 +27,7 @@ import org.junit.After
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
+import org.junit.Assert.assertTrue
 import org.junit.runner.RunWith
 
 /** Real guide page and navigation owner, before any camera or mount is connected. */
@@ -81,5 +86,69 @@ class GuideEntryInstrumentedTest {
         compose.onNodeWithTag("guide-graph").assertExists()
         compose.onNodeWithContentDescription(app.getString(R.string.back)).performClick()
         compose.onNodeWithTag("tool-guide").assertExists()
+    }
+
+    @Test fun shortLandscapeKeepsALargeCameraBesideCompactPlots() {
+        compose.setContent { MobileObservatoryTheme {
+            Box(Modifier.requiredSize(780.dp, 300.dp)) { GuideScreen(vm, onBack = {}) }
+        } }
+        val image = compose.onNodeWithTag("guide-image").getUnclippedBoundsInRoot()
+        val plots = compose.onNodeWithTag("guide-plots").getUnclippedBoundsInRoot()
+        val graph = compose.onNodeWithTag("guide-graph").getUnclippedBoundsInRoot()
+        assertTrue("The camera should retain most of the workbench width", image.width > plots.width * 1.4f)
+        assertTrue("Plots should sit beside the camera", plots.left >= image.right)
+        assertTrue("The camera must stay substantially taller than the graph", image.height > graph.height * 2.5f)
+        compose.onNodeWithTag("guide-star-summary").assertExists()
+    }
+
+    @Test fun portraitKeepsCompactPlotsBelowALargeCamera() {
+        compose.setContent { MobileObservatoryTheme {
+            Box(Modifier.requiredSize(360.dp, 720.dp)) { GuideScreen(vm, onBack = {}) }
+        } }
+        val image = compose.onNodeWithTag("guide-image").getUnclippedBoundsInRoot()
+        val plots = compose.onNodeWithTag("guide-plots").getUnclippedBoundsInRoot()
+        val graph = compose.onNodeWithTag("guide-graph").getUnclippedBoundsInRoot()
+        assertTrue("Portrait diagnostics must remain below the camera", plots.top >= image.bottom)
+        assertTrue("The preview should receive most of the available height", image.height > 360.dp)
+        assertTrue("The graph should remain compact", image.height > graph.height * 3f)
+    }
+
+    @Test fun largeFontLandscapeKeepsTheCameraAndAllDiagnostics() {
+        compose.setContent { MobileObservatoryTheme {
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale = 1.8f)) {
+                Box(Modifier.requiredSize(780.dp, 320.dp)) { GuideScreen(vm, onBack = {}) }
+            }
+        } }
+        val image = compose.onNodeWithTag("guide-image").getUnclippedBoundsInRoot()
+        val graph = compose.onNodeWithTag("guide-graph").getUnclippedBoundsInRoot()
+        assertTrue("Large text must leave the image usable", image.height > graph.height * 2f)
+        compose.onNodeWithContentDescription(app.getString(R.string.gw_plot_settings)).assertExists()
+        compose.onNodeWithContentDescription(app.getString(R.string.clear_graph)).assertExists()
+        compose.onNodeWithTag("guide-scatter").assertExists()
+    }
+
+    @Test fun plotSettingsAndStarDetailsRemainReachableAndRestoreTheirState() {
+        val restoration = StateRestorationTester(compose)
+        restoration.setContent { MobileObservatoryTheme {
+            Surface(Modifier.fillMaxSize()) { GuideScreen(vm, onBack = {}) }
+        } }
+        compose.onNodeWithContentDescription(app.getString(R.string.gw_plot_settings)).performClick()
+        compose.onNodeWithTag("guide-samples-50").performClick().assertIsSelected()
+        compose.onNodeWithTag("guide-pulses").assertIsOn().performClick().assertIsOff()
+        compose.onNodeWithText("±4 px").performClick()
+        compose.onNodeWithText("±8 px").performClick()
+        compose.onNodeWithText(app.getString(R.string.close)).performClick()
+        restoration.emulateSavedInstanceStateRestore()
+        compose.onNodeWithTag("guide-sample-count").assertTextEquals(app.getString(R.string.gw_sample_count, 0, 50))
+        compose.onNodeWithContentDescription(app.getString(R.string.gw_plot_settings)).performClick()
+        compose.onNodeWithTag("guide-samples-50").assertIsSelected()
+        compose.onNodeWithTag("guide-pulses").assertIsOff()
+        compose.onNodeWithText("±8 px").assertIsDisplayed()
+        compose.onNodeWithText(app.getString(R.string.close)).performClick()
+        compose.onNodeWithTag("guide-star-summary").performClick()
+        compose.onNodeWithTag("guide-star-details").assertIsDisplayed()
+        compose.onNodeWithText(app.getString(R.string.close)).performClick()
+        compose.onNodeWithTag("guide-star-summary").assertIsDisplayed()
     }
 }

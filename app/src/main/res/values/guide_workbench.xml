@@ -8,6 +8,12 @@
     <string name="gw_auto_guide">Auto-select and guide</string>
     <string name="gw_stop_guiding">Stop guiding / calibration</string>
     <string name="gw_corrections">Corrections</string>
+    <string name="gw_plot_settings">Graph settings</string>
+    <string name="gw_samples">History samples</string>
+    <string name="gw_plot_range">Graph and scatter range</string>
+    <string name="gw_sample_count">%1$d / %2$d</string>
+    <string name="gw_rms_compact">RMS RA %1$.2f · DEC %2$.2f · total %3$.2f %4$s</string>
+    <string name="gw_star_details">Star details and energy profile</string>
     <string name="gw_image">Raw monochrome guide image; pan, zoom and tap a star</string>
     <string name="gw_algorithms">Algorithms</string>
     <string name="gw_optics">Optics</string>
