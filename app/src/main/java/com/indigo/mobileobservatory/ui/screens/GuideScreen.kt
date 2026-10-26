@@ -126,12 +126,13 @@ fun GuideScreen(viewModel: CameraViewModel, onBack: () -> Unit) {
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp))
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
             val landscape = maxWidth >= 480.dp && maxWidth > maxHeight
+            val diagnosticsWidth = (maxWidth * .36f).coerceIn(228.dp, 320.dp)
             val plotHeight = (maxHeight * if (landscape) .3f else .14f).coerceIn(64.dp, 96.dp)
             if (landscape) {
                 Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     GuideImage(display, references, viewModel::selectGuideStar,
                         Modifier.weight(1f).fillMaxHeight(), foreground && panel.isEmpty())
-                    Column(Modifier.width((maxWidth * .36f).coerceIn(228.dp, 320.dp)).fillMaxHeight()
+                    Column(Modifier.width(diagnosticsWidth).fillMaxHeight()
                         .verticalScroll(rememberScrollState())) {
                         GuideStarSummary(display, factor, unit) { panel = "star" }
                         GuidePlots(window, factor, unit, plotRange, showPulses, plotHeight,
@@ -203,6 +204,7 @@ private fun GuidePlots(window: GuidePlotWindow, factor: Float, unit: String, ran
 }
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 private fun GuidePlotSettings(samples: Int, onSamples: (Int) -> Unit, pulses: Boolean, onPulses: (Boolean) -> Unit,
     range: Float, onRange: (Float) -> Unit, unit: String) {
     Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
