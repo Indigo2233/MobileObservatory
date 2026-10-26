@@ -53,7 +53,7 @@ android {
         applicationId = "com.indigo.mobileobservatory"
         minSdk = 26
         targetSdk = 34
-        versionCode = 61
+        versionCode = 62
         versionName = "1.0.9"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("boolean", "STELLARIUM_ENABLED", stellariumNonCommercial.toString())

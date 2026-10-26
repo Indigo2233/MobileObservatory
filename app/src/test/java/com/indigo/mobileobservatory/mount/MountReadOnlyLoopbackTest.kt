@@ -26,7 +26,7 @@ class MountReadOnlyLoopbackTest {
                     val text = command.toString(); command.setLength(0); sent += text
                     val reply = when (text) {
                         ":GR#" -> "05:00:00#"; ":GD#" -> "+40*00:00#"; ":GVP#" -> "OnStep local test#"
-                        ":GC#" -> "10/14/26#"; ":GL#" -> "00:00:00#"; ":Td#" -> "1"
+                        ":GC#" -> "10/14/26#"; ":GL#" -> "00:00:00#"; ":GG#" -> "+00#"; ":Td#" -> "1"
                         else -> ""
                     }
                     if (reply.isNotEmpty()) { output.write(reply.toByteArray()); output.flush() }

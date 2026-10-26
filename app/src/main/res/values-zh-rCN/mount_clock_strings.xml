@@ -1,0 +1,3 @@
+<resources>
+    <string name="mount_clock_sync_failed">赤道仪已连接，未能确认时间：%1$s。GoTo 前请检查赤道仪日期、时区和观测位置。</string>
+</resources>

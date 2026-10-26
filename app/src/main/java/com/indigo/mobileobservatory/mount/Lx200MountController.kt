@@ -29,6 +29,7 @@ import java.net.Socket
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneId
+import java.time.ZoneOffset
 import java.util.Locale
 import java.util.UUID
 import kotlin.math.absoluteValue
@@ -603,9 +604,10 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
                 ?: error("Invalid iOptron UTC time response: $response")
             return@withContext MountTime(IOPTRON_J2000_EPOCH_MILLIS + millisSinceJ2000)
         }
+        val utcOffset = parseLx200UtcOffset(sendCommand(":GG#"))
         val date = sendCommand(":GC#")
         val time = sendCommand(":GL#")
-        MountTime(parseLx200LocalTime(date, time))
+        MountTime(parseLx200LocalTime(date, time, utcOffset))
     }
 
     suspend fun setTime(time: MountTime) = withContext(Dispatchers.IO) {
@@ -633,7 +635,15 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
             }
             return@withContext
         }
-        val local = instant.atZone(ZoneId.systemDefault()).toLocalDateTime()
+        val zoned = instant.atZone(ZoneId.systemDefault())
+        val offsetMinutes = -zoned.offset.totalSeconds / 60 // LX200: UTC = local + offset.
+        val offsetRemainder = kotlin.math.abs(offsetMinutes) % 60
+        require(offsetRemainder in setOf(0, 30, 45)) { "LX200 UTC offset is unsupported." }
+        val offsetCommand = ":SG%s%02d%s#".format(Locale.US, if (offsetMinutes < 0) "-" else "+",
+            kotlin.math.abs(offsetMinutes) / 60,
+            if (offsetRemainder == 0) "" else ":%02d".format(Locale.US, offsetRemainder))
+        check(sendBooleanCommand(offsetCommand)) { "Mount rejected UTC offset." }
+        val local = zoned.toLocalDateTime()
         val dateCommand = ":SC%02d/%02d/%02d#".format(
             Locale.US,
             local.monthValue,
@@ -646,12 +656,30 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
             local.minute,
             local.second
         )
-        require(sendCommand(dateCommand).trim().startsWith("1")) {
+        // OnStep returns one byte; classic LX200 returns a terminated planetary-data message.
+        val dateAccepted = if (mountModel?.contains("OnStep", ignoreCase = true) == true)
+            sendBooleanCommand(dateCommand) else sendCommand(dateCommand).trim().startsWith("1")
+        require(dateAccepted) {
             "Mount rejected date."
         }
-        require(sendCommand(timeCommand).trim().startsWith("1")) {
+        require(sendBooleanCommand(timeCommand)) {
             "Mount rejected time."
         }
+    }
+
+    /** Called before connection readiness; read-only sessions only query their clock. */
+    internal suspend fun initializeTimeFromPhone(epochMillis: Long = System.currentTimeMillis()): MountTime? {
+        val capabilities = pointingCapabilities.value
+        if (!capabilities.readTime && !capabilities.writeTime) return null
+        val started = System.currentTimeMillis()
+        if (capabilities.writeTime) setTime(MountTime(epochMillis))
+        val actual = if (capabilities.readTime) readTime() else MountTime(epochMillis)
+        if (capabilities.writeTime && capabilities.readTime) {
+            check(kotlin.math.abs(actual.epochMillis - epochMillis - (System.currentTimeMillis() - started)) <= 10_000) {
+                "Mount clock verification failed after synchronization. Check mount date, time and UTC offset."
+            }
+        }
+        return actual
     }
 
     suspend fun slewTo(coordinates: MountCoordinates) = withContext(Dispatchers.IO) {
@@ -1335,7 +1363,7 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
         return "%s%0${degreeDigits}d*%02d".format(Locale.US, sign, degrees, minutes)
     }
 
-    private fun parseLx200LocalTime(dateResponse: String, timeResponse: String): Long {
+    private fun parseLx200LocalTime(dateResponse: String, timeResponse: String, offset: ZoneOffset): Long {
         val date = Regex("^(\\d{1,2})/(\\d{1,2})/(\\d{2,4})$")
             .matchEntire(dateResponse.trim())
             ?: error("Invalid LX200 date response: $dateResponse")
@@ -1352,7 +1380,19 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
             time.groupValues[2].toInt(),
             time.groupValues[3].toInt()
         )
-        return local.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        return local.toInstant(offset).toEpochMilli()
+    }
+
+    private fun parseLx200UtcOffset(response: String): ZoneOffset {
+        val text = response.trim()
+        val match = Regex("^([+-]?)(\\d{1,2})(?::(\\d{2})|(\\.\\d+))?$").matchEntire(text)
+            ?: error("Invalid LX200 UTC offset: $response")
+        val hours = match.groupValues[2].toInt()
+        val minutes = match.groupValues[3].toIntOrNull()
+            ?: (match.groupValues[4].toDoubleOrNull()?.times(60)?.roundToInt() ?: 0)
+        require(minutes in 0..59 && hours * 60 + minutes <= 18 * 60) { "Invalid LX200 UTC offset: $response" }
+        val lx200Minutes = (hours * 60 + minutes) * if (match.groupValues[1] == "-") -1 else 1
+        return ZoneOffset.ofTotalSeconds(-lx200Minutes * 60)
     }
 
     companion object {

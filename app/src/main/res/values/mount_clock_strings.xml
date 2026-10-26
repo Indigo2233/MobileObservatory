@@ -1,0 +1,3 @@
+<resources>
+    <string name="mount_clock_sync_failed">Mount connected; unable to confirm its time: %1$s. Check the mount date, UTC offset and site before GoTo.</string>
+</resources>

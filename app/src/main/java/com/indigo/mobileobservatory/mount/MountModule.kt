@@ -343,9 +343,10 @@ class MountModule(
                 _mountCoordinates.value = coordinates
                 runCatching { controller.readSite() }
                     .onSuccess { _mountSite.value = it }
+                val timeWarning = initializeMountTime()
                 _mountConnectionState.value = MountConnectionState.Connected
                 updateDetectedMountInfo()
-                _statusMessage.value = "Mount connected: ${coordinates.formatRa()} ${coordinates.formatDec()}"
+                _statusMessage.value = "Mount connected: ${coordinates.formatRa()} ${coordinates.formatDec()}" + timeWarning
             } catch (e: Throwable) {
                 controller.disconnect()
                 _activeUsbMountDeviceId.value = null
@@ -429,9 +430,10 @@ class MountModule(
                 _mountCoordinates.value = coordinates
                 runCatching { controller.readSite() }
                     .onSuccess { _mountSite.value = it }
+                val timeWarning = initializeMountTime()
                 _mountConnectionState.value = MountConnectionState.Connected
                 updateDetectedMountInfo()
-                _statusMessage.value = "Mount connected USB: ${coordinates.formatRa()} ${coordinates.formatDec()}"
+                _statusMessage.value = "Mount connected USB: ${coordinates.formatRa()} ${coordinates.formatDec()}" + timeWarning
                 FileLogger.i(TAG, "connectUsb ok ${_statusMessage.value} model=${controller.mountModel}")
             } catch (e: Throwable) {
                 FileLogger.e(TAG, "connectUsb failed", e)
@@ -495,11 +497,12 @@ class MountModule(
                 _mountCoordinates.value = coordinates
                 runCatching { controller.readSite() }
                     .onSuccess { _mountSite.value = it }
+                val timeWarning = initializeMountTime()
                 _mountConnectionState.value = MountConnectionState.Connected
                 _mountConnectionMessage.value = "\u84dd\u7259\u5df2\u8fde\u63a5"
                 updateDetectedMountInfo()
                 _statusMessage.value =
-                    "Mount connected Bluetooth: ${coordinates.formatRa()} ${coordinates.formatDec()}"
+                    "Mount connected Bluetooth: ${coordinates.formatRa()} ${coordinates.formatDec()}" + timeWarning
             } catch (cancelled: CancellationException) {
                 if (generation == mountConnectionGeneration) {
                     _mountConnectionState.value = MountConnectionState.Disconnected
@@ -564,11 +567,12 @@ class MountModule(
                 _mountCoordinates.value = coordinates
                 runCatching { controller.readSite() }
                     .onSuccess { _mountSite.value = it }
+                val timeWarning = initializeMountTime()
                 _mountConnectionState.value = MountConnectionState.Connected
                 updateDetectedMountInfo()
                 startMountCoordinatePolling()
                 _statusMessage.value =
-                    "Sky-Watcher connected: ${coordinates.formatRa()} ${coordinates.formatDec()}"
+                    "Sky-Watcher connected: ${coordinates.formatRa()} ${coordinates.formatDec()}" + timeWarning
             } catch (e: Throwable) {
                 FileLogger.e(TAG, "connectSynScan failed", e)
                 controller.disconnect()
@@ -646,6 +650,20 @@ class MountModule(
         }
     }
 
+    private suspend fun initializeMountTime(): String {
+        _mountTime.value = null
+        return try {
+            _mountTime.value = controller.initializeTimeFromPhone()
+            FileLogger.i(TAG, "Mount clock initialized epoch=${_mountTime.value?.epochMillis} writable=${controller.supportsTimeSync}")
+            ""
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Throwable) {
+            FileLogger.e(TAG, "Mount clock initialization failed", failure)
+            "\n" + application.getString(R.string.mount_clock_sync_failed, failure.message.orEmpty())
+        }
+    }
+
     fun readMountSite() {
         if (!controller.isConnected) return
         scope.launch {
@@ -708,9 +726,9 @@ class MountModule(
         scope.launch {
             _mountBusy.value = true
             try {
-                val time = MountTime(epochMillis)
-                controller.setTime(time)
-                _mountTime.value = time
+                check(controller.pointingCapabilities.value.writeTime) { "Mount time write is unsupported." }
+                _mountTime.value = null
+                _mountTime.value = controller.initializeTimeFromPhone(epochMillis)
                 _mountConnectionState.value = MountConnectionState.Connected
                 _statusMessage.value = "Mount time updated from phone"
             } catch (e: Throwable) {
