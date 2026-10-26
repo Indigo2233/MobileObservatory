@@ -39,4 +39,29 @@ class PolarAstapFailureTest {
         assertFalse(details.nativeMessage.contains("command="))
         assertFalse(details.nativeMessage.contains("input="))
     }
+
+    @Test fun sum2RetryReportsItsFinalStarCountAndFailure() {
+        val details = PolarSample(phase = PolarSamplePhase.FAILED, failedPhase = PolarSamplePhase.SOLVING,
+            result = PlateSolveResult(false, "ASTAP failed with exit code 1.", log =
+                "Only 4 stars found in image. Abort\nNo solution found!\n" +
+                    "attempt=uint16_sum2 originalDims=3856x2180 solverDims=1928x1090\n" +
+                    "7 stars, 35 quads\nNo solution found!\noutputBase=/cache/error/result\n" +
+                    "PLTSOLVD=F\nsolutionSource=/cache/failed.ini")).failureDetails()
+
+        assertEquals(PolarFailureReason.NO_SOLUTION, details.reason)
+        assertEquals(7, details.detectedStars)
+        assertEquals("No solution found!", details.nativeMessage)
+    }
+
+    @Test fun sum2RetryCanStillReportTooFewStars() {
+        val details = PolarSample(phase = PolarSamplePhase.FAILED, failedPhase = PolarSamplePhase.SOLVING,
+            result = PlateSolveResult(false, "ASTAP failed with exit code 1.", log =
+                "Only 4 stars found in image. Abort\n" +
+                    "attempt=uint16_sum2 originalDims=3856x2180 solverDims=1928x1090\n" +
+                    "Only 5 stars found in image. Abort\nNo solution found!")).failureDetails()
+
+        assertEquals(PolarFailureReason.STARS, details.reason)
+        assertEquals(5, details.detectedStars)
+        assertFalse(details.nativeMessage.contains("Only 4 stars"))
+    }
 }

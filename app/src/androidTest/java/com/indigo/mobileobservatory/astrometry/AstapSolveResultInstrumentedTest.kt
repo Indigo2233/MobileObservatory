@@ -13,7 +13,6 @@ import org.junit.Before
 import org.junit.Test
 import java.io.File
 import java.nio.file.Files
-import java.util.zip.GZIPInputStream
 import com.indigo.mobileobservatory.mount.MountCoordinates
 
 /** Executes the packaged native CLI against a starless FITS and seeds stale successful results. */
@@ -82,7 +81,8 @@ class AstapSolveResultInstrumentedTest {
 
     @Test fun weakCfaFrameUsesTheSameUInt16RetryAndFindsSevenStars(): Unit = runBlocking {
         val assets = InstrumentationRegistry.getInstrumentation().context.assets
-        GZIPInputStream(assets.open("weak-cfa.fits.gz")).use { source -> input.outputStream().use { source.copyTo(it) } }
+        // Android's asset merger expands .gz fixtures and removes their gzip extension.
+        assets.open("weak-cfa.fits").use { source -> input.outputStream().use { source.copyTo(it) } }
         val original = input.readBytes()
         val result = withTimeout(30_000) {
             AstapRunner(context).solve(input, .804943, MountCoordinates(26.33455630945 / 15, -13.69720215663), .2)
