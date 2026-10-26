@@ -36,7 +36,6 @@ import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.camera.ConnectionState
 import com.indigo.mobileobservatory.guide.*
 import com.indigo.mobileobservatory.mount.MountConnectionState
-import com.indigo.mobileobservatory.ui.components.GainControl
 import com.indigo.mobileobservatory.ui.viewmodel.CameraViewModel
 import java.util.Locale
 import kotlin.math.*
@@ -86,11 +85,15 @@ fun GuideScreen(viewModel: CameraViewModel, onBack: () -> Unit) {
                 } }
             }, confirmButton = {}, dismissButton = { TextButton(onClick = viewModel::hideGuideDevicePicker) { Text(stringResource(R.string.cancel)) } })
     }
-    if (panel.isNotEmpty() && foreground) {
+    if (panel == "settings" && foreground) {
+        GuideSettingsDialog(viewModel, onDismiss = { panel = "" },
+            guiding = running || calibrating || autoStarting, exposing = exposing || exposureRequested)
+    }
+    if (panel == "devices" && foreground) {
         AlertDialog(onDismissRequest = { panel = "" },
-            title = { Text(stringResource(if (panel == "devices") R.string.gw_devices else R.string.settings)) },
+            title = { Text(stringResource(R.string.gw_devices)) },
             text = { Box(Modifier.fillMaxWidth().heightIn(max = 440.dp)) {
-                if (panel == "devices") GuideDevices(viewModel) { panel = "" } else GuideSettings(viewModel)
+                GuideDevices(viewModel) { panel = "" }
             } }, confirmButton = {
                 if (running || calibrating || autoStarting) TextButton(onClick = { viewModel.setGuideRunning(false) }) { Text(stringResource(R.string.gw_stop_guiding)) }
                 if (exposing || exposureRequested) TextButton(onClick = { viewModel.setGuideExposureRunning(false) }) { Text(stringResource(R.string.gw_stop_exposure)) }
@@ -321,122 +324,6 @@ private fun GuideDevices(vm: CameraViewModel, close: () -> Unit) {
             Text(stringResource(if (mount is MountConnectionState.Connected) R.string.disconnect else R.string.connect))
         }
     }
-}
-
-@Composable
-private fun GuideSettings(vm: CameraViewModel) {
-    var tab by rememberSaveable { mutableIntStateOf(0) }
-    val labels = listOf(R.string.guide_camera, R.string.calibration, R.string.gw_algorithms, R.string.gw_optics)
-    Column {
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-            labels.forEachIndexed { index, label -> TextButton(onClick = { tab = index }) { Text(stringResource(label), color =
-                if (tab == index) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) } }
-        }
-        Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            when (tab) {
-                0 -> GuideCameraSettings(vm)
-                1 -> GuideCalibrationSettings(vm)
-                2 -> GuideAlgorithmSettings(vm)
-                3 -> {
-                    val focal by vm.guideFocalLength.collectAsStateWithPageLifecycle()
-                    val geometry by vm.guideCameraGeometry.collectAsStateWithPageLifecycle()
-                    var text by remember(focal) { mutableStateOf(if (focal > 0) focal.toInt().toString() else "") }
-                    OutlinedTextField(text, { text = it }, label = { Text(stringResource(R.string.gw_focal_mm)) }, singleLine = true)
-                    TextButton(onClick = { if (text.isBlank()) vm.setGuideFocalLength(0f) else text.toFloatOrNull()?.takeIf { it > 0 && it.isFinite() }?.let(vm::setGuideFocalLength) }) { Text(stringResource(R.string.save)) }
-                    Text(stringResource(R.string.gw_scale_help), fontSize = 12.sp)
-                    geometry?.let { Text(stringResource(R.string.gw_pixel_um, it.pixelSizeUm * it.binning), fontSize = 12.sp) }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun GuideCameraSettings(vm: CameraViewModel) {
-    val exposure by vm.guideExposureUs.collectAsStateWithPageLifecycle()
-    val gain by vm.guideGain.collectAsStateWithPageLifecycle()
-    val capability by vm.guideGainCapability.collectAsStateWithPageLifecycle()
-    val writing by vm.guideGainWriteInProgress.collectAsStateWithPageLifecycle()
-    val format by vm.guidePixelFormat.collectAsStateWithPageLifecycle()
-    val formats by vm.guideSupportedPixelFormats.collectAsStateWithPageLifecycle()
-    val mode by vm.guideReadoutMode.collectAsStateWithPageLifecycle()
-    val modes by vm.guideReadoutModes.collectAsStateWithPageLifecycle()
-    val native by vm.guideNativeReadoutModes.collectAsStateWithPageLifecycle()
-    val nativeId by vm.guideNativeReadoutId.collectAsStateWithPageLifecycle()
-    val connection by vm.guideConnectionState.collectAsStateWithPageLifecycle()
-    val enabled = connection is ConnectionState.Connected && !writing
-    var seconds by remember(exposure) { mutableStateOf(number(exposure / 1000000, 2)) }
-    OutlinedTextField(seconds, { seconds = it }, label = { Text(stringResource(R.string.guide_exposure)) }, suffix = { Text("s") }, singleLine = true, enabled = enabled)
-    TextButton(onClick = { seconds.replace(',', '.').toFloatOrNull()?.takeIf { it.isFinite() && it in .05f..5f }?.let { vm.setGuideExposure(it * 1000000) } }, enabled = enabled) { Text(stringResource(R.string.gw_apply_exposure)) }
-    capability?.let { GainControl(capability = it, gain = gain, onGainChange = vm::setGuideGain, enabled = enabled, writeInProgress = writing) }
-    Text(stringResource(R.string.gw_bit_depth), style = MaterialTheme.typography.labelMedium)
-    GuideChoice(formats, format, { "${it.nativeBits} bit · ${it.name}" }, vm::setGuidePixelFormat, enabled)
-    Text(stringResource(R.string.gw_readout), style = MaterialTheme.typography.labelMedium)
-    if (native.isNotEmpty()) GuideChoice(native.map { it.id }, nativeId, { id -> native.firstOrNull { it.id == id }?.displayName ?: id }, vm::setGuideNativeReadoutMode, enabled)
-    else GuideChoice(modes, mode, { it.displayName }, vm::setGuideReadoutMode, enabled)
-    Text(stringResource(R.string.gw_raw_help), fontSize = 12.sp)
-}
-
-@Composable
-private fun GuideCalibrationSettings(vm: CameraViewModel) {
-    val steps by vm.guideCalibrationSteps.collectAsStateWithPageLifecycle()
-    val distance by vm.guideCalibrationDistance.collectAsStateWithPageLifecycle()
-    val pulse by vm.guideCalibrationPulseMs.collectAsStateWithPageLifecycle()
-    val calibration by vm.guideCalibration.collectAsStateWithPageLifecycle()
-    val calibrating by vm.guideCalibrating.collectAsStateWithPageLifecycle()
-    val running by vm.guideRunning.collectAsStateWithPageLifecycle()
-    val backlash by vm.guideBacklashEnabled.collectAsStateWithPageLifecycle()
-    Text(stringResource(R.string.gw_calibration_help), fontSize = 12.sp)
-    GuideSettingSlider(stringResource(R.string.gw_steps), steps.toFloat(), 5f..20f, { vm.setGuideCalibrationSteps(it.roundToInt()) }, !calibrating)
-    GuideSettingSlider(stringResource(R.string.gw_distance), distance, 10f..50f, vm::setGuideCalibrationDistance, !calibrating)
-    GuideSettingSlider(stringResource(R.string.calibration_pulse), pulse.toFloat(), 300f..5000f, { vm.setGuideCalibrationPulseMs(it.roundToInt()) }, !calibrating)
-    GuideToggle(stringResource(R.string.gw_backlash), backlash, vm::setGuideBacklashEnabled)
-    calibration?.let {
-        Text(stringResource(R.string.guide_rates, it.eastRatePxPerSec, it.northRatePxPerSec), fontSize = 12.sp)
-        Text(stringResource(R.string.gw_calibration_result, it.eastSteps, it.northSteps, it.raBacklashMs, it.decBacklashMs, it.fitResidualPx), fontSize = 12.sp)
-    }
-    Row {
-        TextButton(onClick = { if (calibrating) vm.setGuideRunning(false) else vm.startGuideCalibration() }, enabled = !running) { Text(stringResource(if (calibrating) R.string.gw_stop_guiding else R.string.calibration)) }
-        TextButton(onClick = vm::clearGuideCalibration, enabled = !calibrating && !running) { Text(stringResource(R.string.clear)) }
-    }
-}
-
-@Composable
-private fun GuideAlgorithmSettings(vm: CameraViewModel) {
-    val algorithm by vm.guideAlgorithm.collectAsStateWithPageLifecycle()
-    val multi by vm.guideMultiStarEnabled.collectAsStateWithPageLifecycle()
-    val ra by vm.guideRaAggressiveness.collectAsStateWithPageLifecycle()
-    val dec by vm.guideDecAggressiveness.collectAsStateWithPageLifecycle()
-    val minMove by vm.guideMinMovePx.collectAsStateWithPageLifecycle()
-    val reverseRa by vm.guideReverseRa.collectAsStateWithPageLifecycle()
-    val reverseDec by vm.guideReverseDec.collectAsStateWithPageLifecycle()
-    val names = GuideAlgorithm.entries.associateWith { stringResource(when (it) {
-        GuideAlgorithm.HYSTERESIS -> R.string.guide_algorithm_hysteresis
-        GuideAlgorithm.LOW_PASS -> R.string.guide_algorithm_low_pass
-        GuideAlgorithm.RESIST_SWITCH -> R.string.guide_algorithm_resist_switch
-        GuideAlgorithm.PREDICTIVE_RA -> R.string.guide_algorithm_predictive_ra
-    }) }
-    GuideChoice(GuideAlgorithm.entries, algorithm, { names.getValue(it) }, vm::setGuideAlgorithm)
-    GuideToggle(stringResource(R.string.gw_multistar), multi, vm::setGuideMultiStarEnabled)
-    GuideSettingSlider(stringResource(R.string.gw_ra_aggression), ra, .1f..1f, vm::setGuideRaAggressiveness)
-    GuideSettingSlider(stringResource(R.string.gw_dec_aggression), dec, .1f..1f, vm::setGuideDecAggressiveness)
-    GuideSettingSlider(stringResource(R.string.gw_min_move), minMove, .05f..1f, vm::setGuideMinMovePx)
-    GuideToggle(stringResource(R.string.gw_reverse_ra), reverseRa, vm::setGuideReverseRa)
-    GuideToggle(stringResource(R.string.gw_reverse_dec), reverseDec, vm::setGuideReverseDec)
-}
-
-@Composable
-private fun GuideToggle(label: String, checked: Boolean, change: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, Modifier.weight(1f), fontSize = 12.sp); Switch(checked, change)
-    }
-}
-
-@Composable
-private fun GuideSettingSlider(label: String, value: Float, range: ClosedFloatingPointRange<Float>, change: (Float) -> Unit, enabled: Boolean = true) {
-    Text("$label · ${number(value)}", fontSize = 12.sp)
-    var draft by remember(value) { mutableFloatStateOf(value) }
-    Slider(draft.coerceIn(range), { draft = it }, valueRange = range, enabled = enabled, onValueChangeFinished = { change(draft) })
 }
 
 @Composable
