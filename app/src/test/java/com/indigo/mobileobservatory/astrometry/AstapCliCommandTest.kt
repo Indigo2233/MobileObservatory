@@ -57,6 +57,7 @@ class AstapCliCommandTest {
         assertEquals(input.absolutePath, valueAfter(command, "-f"))
         assertEquals(outputBase.absolutePath, valueAfter(command, "-o"))
         assertFalse(command.contains("-update"))
+        assertFalse(command.contains("-z"))
         assertEquals("1.200000", valueAfter(command, "-fov"))
         assertEquals("180.000000", valueAfter(command, "-r"))
         assertFalse(command.contains("-ra"))

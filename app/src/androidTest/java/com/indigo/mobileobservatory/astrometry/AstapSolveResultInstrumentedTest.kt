@@ -13,6 +13,8 @@ import org.junit.Before
 import org.junit.Test
 import java.io.File
 import java.nio.file.Files
+import java.util.zip.GZIPInputStream
+import com.indigo.mobileobservatory.mount.MountCoordinates
 
 /** Executes the packaged native CLI against a starless FITS and seeds stale successful results. */
 class AstapSolveResultInstrumentedTest {
@@ -76,6 +78,23 @@ class AstapSolveResultInstrumentedTest {
         assertEquals(input, session.samples.value[0].file)
         assertEquals(2, context.cacheDir.listFiles()!!.count { it.isDirectory && it.name.startsWith("astap_solve_") })
         assertTrue(File(firstFolder, "solution.wcs").isFile)
+    }
+
+    @Test fun weakCfaFrameUsesTheSameUInt16RetryAndFindsSevenStars(): Unit = runBlocking {
+        val assets = InstrumentationRegistry.getInstrumentation().context.assets
+        GZIPInputStream(assets.open("weak-cfa.fits.gz")).use { source -> input.outputStream().use { source.copyTo(it) } }
+        val original = input.readBytes()
+        val result = withTimeout(30_000) {
+            AstapRunner(context).solve(input, .804943, MountCoordinates(26.33455630945 / 15, -13.69720215663), .2)
+        }
+        assertTrue(result.log, result.log.contains("Only 4 stars found in image"))
+        assertTrue(result.log, result.log.contains("attempt=uint16_sum2"))
+        assertTrue(result.log, result.log.contains("7 stars, 35 quads"))
+        // This isolated test has no catalog tiles for the field; finding stars cannot imply a solve.
+        assertFalse(result.log, result.success)
+        assertNull(result.wcsHeaderPath)
+        assertArrayEquals(original, input.readBytes())
+        assertFalse(context.cacheDir.walkTopDown().any { it.isFile && it.name == "input-sum2.fits" })
     }
 
     private fun solvedHeader() = "PLTSOLVD=T\nCRVAL1=230\nCRVAL2=50\nCRPIX1=192.5\nCRPIX2=128.5\nCD1_1=-0.0004\nCD1_2=0\nCD2_1=0\nCD2_2=0.0004"
