@@ -14,6 +14,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -30,6 +33,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.indigo.mobileobservatory.ui.theme.ObservatoryTheme
 
 /**
@@ -134,16 +138,17 @@ fun ObservatoryNavRail(
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
     showLabels: Boolean = true,
+    contentInsets: WindowInsets = WindowInsets(0, 0, 0, 0),
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surface,
-        modifier = modifier.fillMaxHeight()
+        modifier = modifier.fillMaxHeight().testTag("observatory-nav-rail")
     ) {
-        Row {
+        Row(Modifier.windowInsetsPadding(contentInsets)) {
             Column(
                 modifier = Modifier
                     .fillMaxHeight()
-                    .width(if (showLabels) 92.dp else 64.dp)
+                    .width(if (showLabels) ObservatoryTheme.dimens.railWidth else ObservatoryTheme.dimens.railWidthCompact)
                     .verticalScroll(rememberScrollState())
                     .padding(vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -173,17 +178,18 @@ private fun RailItem(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .height(if (showLabel) 64.dp else 52.dp)
-            .padding(horizontal = 8.dp)
+            .heightIn(min = if (showLabel) 64.dp else 52.dp)
+            .padding(horizontal = 4.dp)
             .clickable(role = Role.Tab) { onClick() }
             .testTag("workspace-${entry.key}")
-            .semantics { contentDescription = entry.contentDescription; this.selected = selected },
+            .semantics { contentDescription = entry.contentDescription; this.selected = selected }
+            .padding(vertical = 6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
         Box(
             modifier = Modifier
-                .size(width = if (showLabel) 60.dp else 44.dp, height = 30.dp)
+                .size(width = if (showLabel) 48.dp else 44.dp, height = 30.dp)
                 .background(
                     color = if (selected) MaterialTheme.colorScheme.primaryContainer
                     else MaterialTheme.colorScheme.surface,
@@ -203,10 +209,12 @@ private fun RailItem(
             Text(
                 text = entry.label,
                 style = MaterialTheme.typography.labelSmall,
+                fontSize = 13.sp,
+                lineHeight = 18.sp,
                 color = if (selected) MaterialTheme.colorScheme.onSurface
                 else MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
-                maxLines = 1
+                maxLines = 2
             )
         }
     }
