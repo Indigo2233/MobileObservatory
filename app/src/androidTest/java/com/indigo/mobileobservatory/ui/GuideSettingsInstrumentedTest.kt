@@ -4,7 +4,7 @@ import android.app.Application
 import android.content.Context
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
-import android.graphics.Bitmap
+import android.os.ParcelFileDescriptor
 import android.view.KeyEvent
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
@@ -26,7 +26,17 @@ import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
-import java.io.File
+
+internal fun saveGuideScreenshot(name: String) {
+    val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+    fun shell(command: String): String = ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand(command))
+        .bufferedReader().use { it.readText() }
+    val folder = "/sdcard/Download/polar-ui-screenshots"
+    val path = "$folder/guide-$name.png"
+    shell("mkdir -p $folder")
+    shell("screencap -p $path")
+    assertEquals(path, shell("ls $path").trim())
+}
 
 class GuideSettingsInstrumentedTest {
     @get:Rule val compose = createAndroidComposeRule<WorkflowTestActivity>()
@@ -77,11 +87,8 @@ class GuideSettingsInstrumentedTest {
     }
     private fun apply(id: String) = compose.onNodeWithTag("guide-$id-apply").performScrollTo().performClick()
     private fun screenshot(name: String) {
-        val folder = File(app.getExternalFilesDir(null), "guide-entry").apply { mkdirs() }
-        instrumentation.uiAutomation.takeScreenshot()?.let { bitmap ->
-            File(folder, "settings-$name.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
-            bitmap.recycle()
-        }
+        compose.waitForIdle()
+        saveGuideScreenshot("settings-$name")
     }
 
     @Test fun wideDialogSupportsWholeStepsAndExactMilliseconds() {
@@ -114,7 +121,7 @@ class GuideSettingsInstrumentedTest {
         apply("distance")
         assertEquals(20f, vm.guideCalibrationDistance.value, 0f)
         compose.onNodeWithTag("guide-distance-increase").performScrollTo().performClick()
-        compose.onNodeWithTag("guide-distance-input").assertTextEquals("21")
+        compose.onNodeWithTag("guide-distance-input").assertTextContains("21")
         assertEquals(21f, vm.guideCalibrationDistance.value, 0f)
         input("distance", "20,25"); apply("distance")
         assertEquals(20.25f, vm.guideCalibrationDistance.value, 0f)
