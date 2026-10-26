@@ -397,10 +397,14 @@ fun PolarAlignmentScreen(
 
     imagePickerSlot?.let { slot ->
         AppImagePicker(
+            recordingsDir = context.getExternalFilesDir("recordings"),
+            capturesDir = context.getExternalFilesDir("captures"),
+            excludeFile = null,
             selectionLabel = if (slot == 3) stringResource(R.string.polar_correction_sample)
                 else stringResource(R.string.point_number, slot + 1),
             onDismiss = { imagePickerSlot = null },
-            onSelect = { uri, modified -> imagePickerSlot = null; importSample(slot, uri, modified) }
+            onSelect = { file -> imagePickerSlot = null; importSample(slot, Uri.fromFile(file), file.lastModified()) },
+            onDocumentSelect = { uri -> imagePickerSlot = null; importSample(slot, uri, null) }
         )
     }
 

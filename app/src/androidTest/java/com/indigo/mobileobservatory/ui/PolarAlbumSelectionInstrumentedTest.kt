@@ -134,8 +134,9 @@ class PolarAlbumSelectionInstrumentedTest {
 
     private fun selectAlbumImage(file: File) {
         compose.onNodeWithTag("app-image-search").performTextInput(file.name)
-        compose.waitUntil(10_000) { compose.onAllNodesWithText(file.name).fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithText(file.name).performClick()
+        val row = hasText(file.name, substring = true) and hasAnyAncestor(hasTestTag("plate-image-list"))
+        compose.waitUntil(10_000) { compose.onAllNodes(row).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNode(row).performClick()
     }
 
     private fun seedCalibration(): PolarAdjustmentSnapshot {

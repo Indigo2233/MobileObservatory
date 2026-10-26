@@ -6,6 +6,24 @@ import java.io.File
 import java.nio.file.Files
 
 class MediaLibraryTest {
+    @Test fun imagePickerIncludesIndividualFitsFramesAndExcludesRunningAndUnfinishedFiles() = withLibrary { recordings, captures ->
+        val photo = file(captures, "JPG/moon.png", 1000)
+        val raw = file(captures, "FITS/raw.fits", 2000)
+        val frame = file(recordings, "FITS/session/frame-001.fit", 3000)
+        val active = file(recordings, "FITS/session/frame-002.fits", 4000)
+        file(recordings, "FITS/session/frame-003.partial.fits", 5000)
+        file(recordings, "FITS/session/.frame-004.fits", 6000)
+        file(recordings, "FITS/session/notes.json", 7000)
+        file(recordings, "SER/movie.ser", 8000)
+        file(captures, "JPG/.hidden.jpg", 9000)
+        file(captures, "JPG/stack-M42.png", 10000)
+        val images = MediaLibrary.listImages(recordings, captures, active)
+        assertEquals(listOf("stack-M42.png", "session / frame-001.fit", raw.name, photo.name), images.map { it.name })
+        assertTrue(images.all { it.file.isFile })
+        assertEquals(frame, images[1].file)
+        assertFalse(MediaLibrary.listImages(recordings, captures, active.parentFile).any { it.file.parentFile == active.parentFile })
+    }
+
     private fun withLibrary(test: (File, File) -> Unit) {
         val root = Files.createTempDirectory("media-library").toFile()
         try { test(File(root, "recordings").apply { mkdirs() }, File(root, "captures").apply { mkdirs() }) }
@@ -75,20 +93,20 @@ class MediaLibraryTest {
         file(recordings, "FITS/night/unfinished.partial.fit", 13000)
         file(recordings, "FITS/night/not-a-frame.png", 14000)
         file(recordings, "MP4/movie.mp4", 15000)
-        val images = MediaLibrary.list(recordings, captures, MediaCategory.PHOTOS, active, expandFitsFolders = true)
+        val images = MediaLibrary.listImages(recordings, captures, active)
         assertEquals(listOf(photo, second, single, first), images.map { it.file })
         assertTrue(images.all { it.file.isFile })
         assertTrue(MediaLibrary.list(recordings, captures, MediaCategory.PHOTOS, active).any { it.file.name == "night" && it.file.isDirectory })
         assertTrue(active.exists())
     }
 
-    @Test fun expandedFitsSelectionKeepsFormatsExclusionsAndDuplicateRootsConsistent() = withLibrary { _, captures ->
+    @Test fun imageSelectionKeepsExclusionsAndDuplicateRootsConsistent() = withLibrary { _, captures ->
         val fits = file(captures, "FITS/session/one.FITS", 1000)
         val excluded = file(captures, "FITS/session/two.fit", 2000)
-        file(captures, "JPG/photo.jpg", 3000)
-        val images = MediaLibrary.list(captures, captures, MediaCategory.FITS, excluded, expandFitsFolders = true)
-        assertEquals(listOf(fits), images.map { it.file })
-        assertTrue(MediaLibrary.list(null, null, MediaCategory.PHOTOS, expandFitsFolders = true).isEmpty())
+        val photo = file(captures, "JPG/photo.jpg", 3000)
+        val images = MediaLibrary.listImages(captures, captures, excluded)
+        assertEquals(listOf(photo, fits), images.map { it.file })
+        assertTrue(MediaLibrary.listImages(null, null).isEmpty())
     }
 
     @Test fun recentMergesPhotosRawFramesResultsAndVideosWithoutActiveOrPartialFiles() = withLibrary { recordings, captures ->

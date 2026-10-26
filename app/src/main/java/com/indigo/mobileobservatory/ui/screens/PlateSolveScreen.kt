@@ -8,6 +8,7 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -20,6 +21,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -44,6 +46,7 @@ import com.indigo.mobileobservatory.astro.OpticsEquipment
 import com.indigo.mobileobservatory.astro.SensorSpec
 import com.indigo.mobileobservatory.mount.MountCoordinates
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -57,6 +60,9 @@ fun PlateSolveScreen(
     mountCoordinates: MountCoordinates? = null,
     cameraPixelSizeUm: Float? = null,
     onSolved: (PlateSolveResult) -> Unit = {},
+    recordingsDir: File? = null,
+    capturesDir: File? = null,
+    excludeFile: File? = null,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -67,17 +73,20 @@ fun PlateSolveScreen(
 
     var d50Status by remember { mutableStateOf(d50Manager.status()) }
     var selectedDatabase by remember { mutableStateOf(d50Status.database ?: AstapDatabase.D20) }
-    var selectedFile by remember(initialFile) { mutableStateOf(initialFile) }
+    var selectedPath by rememberSaveable(initialFile?.absolutePath) { mutableStateOf(initialFile?.absolutePath) }
+    val selectedFile = remember(selectedPath) { selectedPath?.let(::File) }
+    var showImageLibrary by rememberSaveable { mutableStateOf(false) }
+    var loadingFile by remember { mutableStateOf(false) }
     var computedFovDeg by remember { mutableStateOf<Double?>(null) }
-    var focalLengthText by remember { mutableStateOf(prefs.getFloat("plate_focal_length_mm", 0f).takeIf { it > 0f }?.toString() ?: "") }
-    var pixelSizeText by remember {
+    var focalLengthText by rememberSaveable { mutableStateOf(prefs.getFloat("plate_focal_length_mm", 0f).takeIf { it > 0f }?.toString() ?: "") }
+    var pixelSizeText by rememberSaveable {
         mutableStateOf(
             prefs.getFloat("plate_pixel_size_um", 0f).takeIf { it > 0f }?.let { formatPixelSizeUm(it.toDouble()) }
                 ?: cameraPixelSizeUm?.takeIf { it > 0f }?.let { formatPixelSizeUm(it.toDouble()) }
                 ?: ""
         )
     }
-    var selectedSensorId by remember {
+    var selectedSensorId by rememberSaveable {
         mutableStateOf(prefs.getString("plate_sensor_id", "") ?: "")
     }
     var hintText by remember { mutableStateOf("") }
@@ -91,21 +100,41 @@ fun PlateSolveScreen(
     var error by remember { mutableStateOf<String?>(null) }
     var showLog by remember { mutableStateOf(false) }
     var useMountHint by remember(mountCoordinates) { mutableStateOf(mountCoordinates != null) }
-    var autoSolveAttempted by remember(initialFile, autoSolve) { mutableStateOf(false) }
+    var autoSolveAttempted by rememberSaveable(initialFile?.absolutePath, autoSolve) { mutableStateOf(false) }
 
     LaunchedEffect(result) {
         result?.takeIf { it.success }?.let(onSolved)
     }
 
+    fun selectImage(file: File) {
+        if (selectedPath != file.absolutePath) {
+            computedFovDeg = null
+            hintText = ""
+        }
+        selectedPath = file.absolutePath
+        result = null
+        error = null
+        autoSolveAttempted = true
+    }
+
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
         if (uri != null) {
             scope.launch {
+                loadingFile = true
                 error = null
-                result = null
-                selectedFile = withContext(Dispatchers.IO) { runner.copyUriToCache(uri) }
+                try {
+                    selectImage(runner.copyUriToCache(uri))
+                } catch (cancelled: CancellationException) { throw cancelled
+                } catch (_: Exception) {
+                    error = context.getString(R.string.plate_image_load_failed)
+                } finally { loadingFile = false }
             }
         }
     }
+
+    if (showImageLibrary) AppImagePicker(recordingsDir, capturesDir, excludeFile,
+        onDismiss = { showImageLibrary = false },
+        onSelect = { file -> selectImage(file); showImageLibrary = false })
 
     val connectedSensorName = stringResource(R.string.connected_camera_sensor)
     val sensors = remember(cameraPixelSizeUm, connectedSensorName) {
@@ -239,7 +268,7 @@ fun PlateSolveScreen(
         }
     }
 
-    val canSolve = selectedFile != null && d50Status.installed && !progress.active && !solving && computedFovDeg != null
+    val canSolve = selectedFile != null && d50Status.installed && !progress.active && !solving && !loadingFile && computedFovDeg != null
     LaunchedEffect(autoSolve, canSolve) {
         if (autoSolve && canSolve && !autoSolveAttempted) {
             autoSolveAttempted = true
@@ -266,15 +295,23 @@ fun PlateSolveScreen(
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.weight(1f)
             )
-            Button(
-                onClick = { picker.launch(arrayOf("image/*", "application/fits", "application/octet-stream", "*/*")) },
-                enabled = !progress.active && !solving
-            ) {
-                Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(18.dp))
+        }
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { showImageLibrary = true },
+                enabled = !progress.active && !solving && !loadingFile,
+                modifier = Modifier.testTag("plate-choose-library")) {
+                Text(stringResource(R.string.plate_image_library))
+            }
+            TextButton(onClick = { picker.launch(arrayOf("image/*", "application/fits", "application/octet-stream", "*/*")) },
+                enabled = !progress.active && !solving && !loadingFile,
+                modifier = Modifier.testTag("plate-choose-device")) {
+                Icon(Icons.Default.FolderOpen, null, Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
-                Text(stringResource(R.string.select))
+                Text(stringResource(R.string.plate_image_device))
             }
         }
+        if (loadingFile) LinearProgressIndicator(Modifier.fillMaxWidth())
 
         Column(
             modifier = Modifier
@@ -317,7 +354,8 @@ fun PlateSolveScreen(
             Surface(shape = MaterialTheme.shapes.medium, tonalElevation = 1.dp) {
                 Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(stringResource(R.string.image_desc), style = MaterialTheme.typography.titleSmall)
-                    Text(selectedFile?.name ?: stringResource(R.string.no_image_selected), fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                    Text(selectedFile?.name ?: stringResource(R.string.no_image_selected), fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp, modifier = Modifier.testTag("plate-selected-image"))
                     if (hintText.isNotBlank()) {
                         Text(hintText, color = MaterialTheme.colorScheme.outline, fontSize = 12.sp)
                     }

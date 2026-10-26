@@ -19,16 +19,27 @@ enum class MediaCategory(val extensions: List<String>) {
  * File-system work is synchronous: UI callers must use Dispatchers.IO.
  */
 object MediaLibrary {
-    /** Single-image tasks expand FITS sessions; the media browser keeps its grouped entries by default. */
+    /** Individual still images, including completed frames within FITS recordings. */
+    fun listImages(recordingsDir: File?, capturesDir: File?, excludeFile: File? = null): List<VideoFileInfo> =
+        list(recordingsDir, capturesDir, MediaCategory.PHOTOS, excludeFile).flatMap { info ->
+            if (info.file.isDirectory) {
+                info.file.listFiles().orEmpty().filter {
+                    it.absoluteFile.normalize() != excludeFile?.absoluteFile?.normalize() &&
+                        (it.extension.equals("fit", true) || it.extension.equals("fits", true))
+                }.mapNotNull { describe(it)?.copy(name = "${info.name} / ${it.name}") }
+            } else listOf(info)
+        }.distinctBy { it.file.absoluteFile.normalize().path }
+            .sortedWith(compareByDescending<VideoFileInfo> { it.file.lastModified() }.thenBy { it.name })
+
     fun list(recordingsDir: File?, capturesDir: File?, category: MediaCategory,
-             excludeFile: File? = null, expandFitsFolders: Boolean = false): List<VideoFileInfo> {
+             excludeFile: File? = null): List<VideoFileInfo> {
         val groups = when (category) {
             MediaCategory.RECENT -> listOf(MediaCategory.JPG, MediaCategory.FITS, MediaCategory.SER_PSER, MediaCategory.MP4)
             MediaCategory.PHOTOS -> listOf(MediaCategory.JPG, MediaCategory.FITS)
             MediaCategory.VIDEOS -> listOf(MediaCategory.SER_PSER, MediaCategory.MP4)
             else -> emptyList()
         }
-        if (groups.isNotEmpty()) return groups.flatMap { list(recordingsDir, capturesDir, it, excludeFile, expandFitsFolders) }
+        if (groups.isNotEmpty()) return groups.flatMap { list(recordingsDir, capturesDir, it, excludeFile) }
             .distinctBy { it.file.absoluteFile.normalize().path }
             .sortedWith(compareByDescending<VideoFileInfo> { it.file.lastModified() }.thenBy { it.name })
         val excluded = excludeFile?.absoluteFile?.normalize()?.path
@@ -45,17 +56,15 @@ object MediaLibrary {
             MediaCategory.STACK_RESULTS -> listOfNotNull(capturesDir?.resolve("JPG"), capturesDir?.resolve("FITS"))
             else -> emptyList()
         }
-        return directories.flatMap { it.listFiles().orEmpty().toList() }.filter(::visible).flatMap { file ->
+        return directories.flatMap { it.listFiles().orEmpty().toList() }.filter(::visible).mapNotNull { file ->
             when {
-                category == MediaCategory.STACK_RESULTS && !file.name.startsWith("stack-", ignoreCase = true) -> emptyList()
-                matches(file) -> listOfNotNull(describe(file))
+                category == MediaCategory.STACK_RESULTS && !file.name.startsWith("stack-", ignoreCase = true) -> null
+                matches(file) -> describe(file)
                 category == MediaCategory.FITS && file.isDirectory -> {
                     val frames = file.listFiles().orEmpty().filter(::matches)
-                    if (expandFitsFolders) frames.mapNotNull(::describe)
-                    else if (frames.isEmpty()) emptyList()
-                    else listOf(VideoFileInfo(file, file.name, frames.sumOf(File::length), "FITS"))
+                    if (frames.isEmpty()) null else VideoFileInfo(file, file.name, frames.sumOf(File::length), "FITS")
                 }
-                else -> emptyList()
+                else -> null
             }
         }.distinctBy { it.file.absoluteFile.normalize().path }
             .sortedWith(compareByDescending<VideoFileInfo> { it.file.lastModified() }.thenBy { it.name })

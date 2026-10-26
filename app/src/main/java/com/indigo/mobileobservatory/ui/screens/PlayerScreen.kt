@@ -59,6 +59,7 @@ import com.indigo.mobileobservatory.media.MediaEditRecipe
 import com.indigo.mobileobservatory.media.MediaEditRecipeStore
 import com.indigo.mobileobservatory.media.MediaLineage
 import com.indigo.mobileobservatory.media.MediaTrash
+import com.indigo.mobileobservatory.media.shareMediaFiles
 import com.indigo.mobileobservatory.media.MediaGroup
 import com.indigo.mobileobservatory.media.MediaRole
 import com.indigo.mobileobservatory.ui.components.Lp750Credit
@@ -196,7 +197,8 @@ fun PlayerScreen(
         save = { info -> info?.let { listOf(it.file.absolutePath, it.name, it.size.toString(), it.format) } ?: emptyList() },
         restore = { if (it.isEmpty()) null else VideoFileInfo(File(it[0]), it[1], it[2].toLong(), it[3]) })
     var selectedFile by rememberSaveable(stateSaver = fileSaver) { mutableStateOf<VideoFileInfo?>(null) }
-    var plateSolveFile by remember { mutableStateOf<File?>(null) }
+    var plateSolvePath by rememberSaveable { mutableStateOf<String?>(null) }
+    val plateSolveFile = remember(plateSolvePath) { plateSolvePath?.let(::File) }
     var selectedCategory by rememberSaveable(initialCategory) { mutableStateOf(initialCategory) }
     var showFilePicker by rememberSaveable { mutableStateOf(true) }
     com.indigo.mobileobservatory.ui.components.ReportObservatoryImmersion(selectedFile != null && !showFilePicker)
@@ -234,7 +236,7 @@ fun PlayerScreen(
     }
     val navigateBack: () -> Unit = {
         when {
-            plateSolveFile != null -> plateSolveFile = null
+            plateSolveFile != null -> plateSolvePath = null
             selectedFile != null -> leaveFile()
             else -> onBack()
         }
@@ -244,7 +246,10 @@ fun PlayerScreen(
         PlateSolveScreen(
             initialFile = file,
             mountCoordinates = mountCoordinates,
-            onBack = { plateSolveFile = null }
+            recordingsDir = recordingsDir,
+            capturesDir = capturesDir,
+            excludeFile = excludeFile,
+            onBack = { plateSolvePath = null }
         )
         return
     }
@@ -291,7 +296,7 @@ fun PlayerScreen(
                 onViewExported = { file ->
                     MediaLibrary.describe(file)?.let { selectedFile = it; showFilePicker = false }
                 },
-                onSolve = { plateSolveFile = firstFitsIn(info.file) ?: info.file },
+                onSolve = { plateSolvePath = (firstFitsIn(info.file) ?: info.file).absolutePath },
                 onStackFile = onStackFile?.let { launch -> { file: File ->
                     launch(file)
                 } },
@@ -677,6 +682,12 @@ private fun FilePickerView(
                                     onCheckedChange = { checked -> selectedPaths = if (checked) (selectedPaths + info.file.absolutePath).distinct()
                                         else selectedPaths - info.file.absolutePath })
                                 else {
+                                    if (info.file.isFile) IconButton(onClick = {
+                                        if (!shareMediaFiles(context, listOf(info.file)))
+                                            Toast.makeText(context, R.string.media_share_failed, Toast.LENGTH_LONG).show()
+                                    }, modifier = Modifier.testTag("media-share-${info.name}")) {
+                                        Icon(Icons.Default.Share, stringResource(R.string.media_batch_share), modifier = Modifier.size(20.dp))
+                                    }
                                     if (onStackFile != null && (info.format.equals("SER", true) || info.format.equals("PSER", true))) {
                                         val description = stringResource(R.string.stack_process_file)
                                         TextButton(onClick = { onStackFile(info.file) },
@@ -1451,9 +1462,6 @@ private fun ImageViewScreen(
                     )
                 }
             }
-            if (!editing) IconButton(onClick = { leaveImage(onSolve) }, enabled = !exporting) {
-                Icon(Icons.Default.Search, stringResource(R.string.plate_solve), tint = ObservatoryTheme.colors.onImage)
-            }
             if (fileInfo.file.isFile) {
                     TextButton(onClick = { editPreviewActive = true; editing = !editing }, enabled = preparedImage != null && sourceBitmap != null && !exporting) {
                     Text(stringResource(if (editing) R.string.media_edit_done else R.string.media_edit_action), color = ObservatoryTheme.colors.onImage,
@@ -1465,6 +1473,17 @@ private fun ImageViewScreen(
                     Icon(Icons.Default.Delete, stringResource(R.string.delete), tint = Color(0xFFFF6B6B))
                 }
             }
+        }
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (!editing) TextButton(onClick = { leaveImage(onSolve) }, enabled = !exporting) {
+                Icon(Icons.Default.Search, null, tint = ObservatoryTheme.colors.onImage)
+                Spacer(Modifier.width(6.dp))
+                Text(stringResource(R.string.plate_solve), color = ObservatoryTheme.colors.onImage,
+                    modifier = Modifier.semantics { contentDescription = context.getString(R.string.plate_solve) })
+            }
+            val shareSource = remember(fileInfo) { firstFitsIn(fileInfo.file) ?: fileInfo.file }
+            if (shareSource.isFile) MediaImageShareButton(shareSource, bitmap, enabled = !exporting)
         }
         if (fitsInfo.isNotEmpty()) {
             Text(fitsInfo, color = ObservatoryTheme.colors.onImage.copy(alpha = 0.7f), fontSize = 11.sp,

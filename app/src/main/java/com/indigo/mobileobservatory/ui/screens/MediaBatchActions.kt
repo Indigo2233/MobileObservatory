@@ -1,9 +1,5 @@
 package com.indigo.mobileobservatory.ui.screens
 
-import android.content.ClipData
-import android.content.Context
-import android.content.Intent
-import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.horizontalScroll
@@ -15,12 +11,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import androidx.core.content.FileProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.media.MediaBatchViewModel
+import com.indigo.mobileobservatory.media.shareMediaFiles
 import com.indigo.mobileobservatory.recording.VideoFileInfo
-import java.io.File
 
 @Composable
 internal fun MediaBatchActions(selected: List<VideoFileInfo>, onClear: () -> Unit) {
@@ -59,26 +54,3 @@ internal fun MediaBatchActions(selected: List<VideoFileInfo>, onClear: () -> Uni
         if (state.saved) Text(stringResource(R.string.media_batch_saved), style = MaterialTheme.typography.bodySmall)
     }
 }
-
-internal fun mediaShareIntent(context: Context, files: List<File>): Intent {
-    require(files.isNotEmpty() && files.all { it.isFile })
-    val uris = files.map { FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", it) }
-    fun mime(file: File) = when (file.extension.lowercase()) {
-        "jpg", "jpeg" -> "image/jpeg"; "png" -> "image/png"; "mp4" -> "video/mp4"; "zip" -> "application/zip"; else -> "application/octet-stream"
-    }
-    val types = files.map(::mime).distinct()
-    val asFiles = files.any { it.extension.lowercase() in listOf("fit", "fits") }
-    return Intent(if (uris.size == 1) Intent.ACTION_SEND else Intent.ACTION_SEND_MULTIPLE).apply {
-        type = if (asFiles) "application/octet-stream" else types.singleOrNull() ?: if (types.all { it.startsWith("image/") }) "image/*" else "*/*"
-        if (uris.size == 1) putExtra(Intent.EXTRA_STREAM, uris[0])
-        else putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList<Uri>(uris))
-        clipData = ClipData("captures", if (asFiles) arrayOf("application/octet-stream") else types.toTypedArray(), ClipData.Item(uris[0]))
-            .apply { uris.drop(1).forEach { addItem(ClipData.Item(it)) } }
-        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    }
-}
-
-private fun shareMediaFiles(context: Context, files: List<File>): Boolean = runCatching {
-    context.startActivity(Intent.createChooser(mediaShareIntent(context, files), context.getString(R.string.media_batch_share)))
-    true
-}.getOrDefault(false)
