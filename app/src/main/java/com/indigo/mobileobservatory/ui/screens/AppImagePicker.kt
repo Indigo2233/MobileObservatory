@@ -1,5 +1,7 @@
 package com.indigo.mobileobservatory.ui.screens
 
+import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -40,7 +42,13 @@ internal fun AppImagePicker(
 ) {
     val selected by rememberUpdatedState(onSelect)
     val documentSelected by rememberUpdatedState(onDocumentSelect)
-    val document = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+    val documentContract = remember {
+        object : ActivityResultContracts.OpenDocument() {
+            override fun createIntent(context: Context, input: Array<String>): Intent =
+                super.createIntent(context, input).addCategory(Intent.CATEGORY_OPENABLE)
+        }
+    }
+    val document = rememberLauncherForActivityResult(documentContract) { uri ->
         if (uri != null) documentSelected?.invoke(uri)
     }
     var refresh by remember { mutableIntStateOf(0) }

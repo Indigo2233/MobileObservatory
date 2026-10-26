@@ -990,7 +990,8 @@ fun PolarAlignmentScreen(
 
                         }
 
-                        (0..3).filter { it < 3 || samples[3].phase != PolarSamplePhase.EMPTY }.forEach { index ->
+                        (0..3).filter { it < 3 || adjustment != null || samples[3].file != null ||
+                            samples[3].phase != PolarSamplePhase.EMPTY }.forEach { index ->
                             MeasurementCard(
                                 index = index,
                                 file = samples[index].file,
