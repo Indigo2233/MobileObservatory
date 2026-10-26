@@ -78,7 +78,7 @@ internal object MountReadOnlyWirePolicy {
         if (payload.isEmpty()) return false
         val text = payload.toString(Charsets.US_ASCII)
         if (text.startsWith(":") && text.endsWith("#")) {
-            return text in setOf(":GR#", ":GD#", ":Gt#", ":Gg#", ":GC#", ":GL#", ":GUT#", ":GLS#", ":GEP#",
+            return text in setOf(":GR#", ":GD#", ":Gt#", ":Gg#", ":GC#", ":GL#", ":GG#", ":GUT#", ":GLS#", ":GEP#",
                 ":GVP#", ":GVN#", ":GVR#", ":MountInfo#", ":Q#", ":Qn#", ":Qs#", ":Qe#", ":Qw#",
                 ":qD#", ":qR#", ":Td#", ":ST0#")
         }
