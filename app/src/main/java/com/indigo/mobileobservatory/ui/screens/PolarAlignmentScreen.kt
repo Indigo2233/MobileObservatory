@@ -131,7 +131,7 @@ fun PolarAlignmentScreen(
     var inspectFile by remember { mutableStateOf<File?>(null) }
     val pageForeground = rememberPageForeground()
     DisposableEffect(workflowTask) { onDispose { stopTask() } }
-    LaunchedEffect(mountStopSignal) { stopTask() }
+    LaunchedEffect(mountStopSignal) { workflowTask.stop() }
     // Document results can arrive before onResume; the bounded file import is independent of device acquisition.
     LaunchedEffect(pageForeground) { if (!pageForeground) workflowTask.stop() }
     BackHandler(enabled = taskBusy && pageForeground && inspectFile == null) { stopTask(); onBack() }
