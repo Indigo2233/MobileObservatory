@@ -117,6 +117,17 @@ class GuideEntryInstrumentedTest {
         assertTrue("The graph should remain compact", image.height > graph.height * 3f)
     }
 
+    @Test fun guideStatusFloatsInsideThePreview() {
+        compose.setContent { MobileObservatoryTheme {
+            Box(Modifier.requiredSize(780.dp, 300.dp)) { GuideScreen(vm, onBack = {}) }
+        } }
+        val image = compose.onNodeWithTag("guide-image").getUnclippedBoundsInRoot()
+        val status = compose.onNodeWithTag("guide-status").getUnclippedBoundsInRoot()
+        assertTrue("Status must overlay the image", status.top > image.top && status.bottom < image.bottom)
+        assertTrue("Status must stay inside the preview width", status.left >= image.left && status.right <= image.right)
+        assertTrue("Only the toolbar should reserve space above the image", image.top < 64.dp)
+    }
+
     @Test fun largeFontLandscapeKeepsTheCameraAndAllDiagnostics() {
         compose.setContent { MobileObservatoryTheme {
             val density = LocalDensity.current

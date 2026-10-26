@@ -16,7 +16,7 @@
     <string name="gw_samples">历史采样点数</string>
     <string name="gw_plot_range">曲线与散点范围</string>
     <string name="gw_sample_count">%1$d / %2$d</string>
-    <string name="gw_rms_compact">RMS RA %1$.2f · DEC %2$.2f · 总计 %3$.2f %4$s</string>
+    <string name="gw_rms_compact">RMS RA %1$.2f · DEC %2$.2f · 总计\u00a0%3$.2f\u00a0%4$s</string>
     <string name="gw_star_details">查看星点详情与能量分布</string>
     <string name="gw_image">导星原始灰度图像，可平移缩放与点选星点</string>
     <string name="gw_algorithms">算法</string>

@@ -15,6 +15,7 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -202,7 +203,7 @@ fun CameraScreen(viewModel: CameraViewModel, redNightMode: Boolean = false,
         updateViewModel::openInstallPermissionSettings)
 
     CompositionLocalProvider(LocalSettingsExitRegistry provides settingsExits, LocalObservatoryImmersion provides immersion) {
-    BoxWithConstraints(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+    BoxWithConstraints(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).testTag("observatory-shell")) {
         val rail = !immersion.active && (maxWidth >= 600.dp || (maxWidth >= 520.dp && maxWidth > maxHeight))
         val railLabels = maxWidth >= 600.dp
         val entries = listOf(
@@ -212,9 +213,11 @@ fun CameraScreen(viewModel: CameraViewModel, redNightMode: Boolean = false,
             ObservatoryNavEntry("EQUIPMENT", stringResource(R.string.wf_equipment), Icons.Default.Build),
             ObservatoryNavEntry("TOOLS", stringResource(R.string.cockpit_tab_tools), Icons.Default.Widgets))
         val selectKey: (String) -> Unit = { select(ObservatoryWorkspace.valueOf(it)) }
-        Row(Modifier.fillMaxSize()) {
-            if (rail) ObservatoryNavRail(entries, navigation.workspace.name, selectKey, showLabels = railLabels)
-            Column(Modifier.weight(1f).fillMaxSize()) {
+        Row(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Vertical))) {
+            if (rail) ObservatoryNavRail(entries, navigation.workspace.name, selectKey, showLabels = railLabels,
+                contentInsets = WindowInsets.displayCutout.only(WindowInsetsSides.Start))
+            Column(Modifier.weight(1f).fillMaxSize().windowInsetsPadding(WindowInsets.displayCutout.only(
+                if (rail) WindowInsetsSides.End else WindowInsetsSides.Horizontal))) {
                 ObservatoryDeviceBar(viewModel, redNightMode, onRedNightModeChange,
                     onSettings = { open(ObservatoryDestination.SETTINGS) },
                     onDevice = { key -> if (key == "guide") open(ObservatoryDestination.GUIDE) else quickDevice = key })

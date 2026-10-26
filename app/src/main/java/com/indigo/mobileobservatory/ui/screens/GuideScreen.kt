@@ -7,6 +7,7 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -137,15 +138,13 @@ fun GuideScreen(viewModel: CameraViewModel, onBack: () -> Unit) {
             GuideAction(R.string.settings, Icons.Default.Settings, true, Modifier.weight(1f), stacked) { panel = "settings" }
             }
         }
-        Text(status, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp))
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
             val landscape = maxWidth >= 480.dp && maxWidth > maxHeight
             val diagnosticsWidth = (maxWidth * .36f).coerceIn(228.dp, 320.dp)
             val plotHeight = (maxHeight * if (landscape) .3f else .14f).coerceIn(64.dp, 96.dp)
             if (landscape) {
                 Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    GuideImage(display, references, viewModel::selectGuideStar,
+                    GuidePreview(display, references, viewModel::selectGuideStar, status,
                         Modifier.weight(1f).fillMaxHeight(), foreground && panel.isEmpty())
                     Column(Modifier.width(diagnosticsWidth).fillMaxHeight()
                         .verticalScroll(rememberScrollState())) {
@@ -156,7 +155,7 @@ fun GuideScreen(viewModel: CameraViewModel, onBack: () -> Unit) {
                 }
             } else {
                 Column(Modifier.fillMaxSize()) {
-                    GuideImage(display, references, viewModel::selectGuideStar,
+                    GuidePreview(display, references, viewModel::selectGuideStar, status,
                         Modifier.weight(1f).fillMaxWidth(), foreground && panel.isEmpty())
                     GuideStarSummary(display, factor, unit) { panel = "star" }
                     GuidePlots(window, factor, unit, plotRange, showPulses, plotHeight,
@@ -164,6 +163,20 @@ fun GuideScreen(viewModel: CameraViewModel, onBack: () -> Unit) {
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun GuidePreview(frame: GuideDisplayFrame?, references: List<GuideStar>, onSelect: (Float, Float) -> Unit,
+    status: String, modifier: Modifier, active: Boolean) {
+    Box(modifier) {
+        GuideImage(frame, references, onSelect, Modifier.fillMaxSize(), active)
+        if (status.isNotBlank()) Text(status,
+            modifier = Modifier.align(Alignment.TopStart).padding(8.dp).widthIn(max = 320.dp)
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .84f), RoundedCornerShape(6.dp))
+                .padding(horizontal = 8.dp, vertical = 4.dp).testTag("guide-status"),
+            color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp, lineHeight = 18.sp,
+            maxLines = 2, overflow = TextOverflow.Ellipsis)
     }
 }
 
