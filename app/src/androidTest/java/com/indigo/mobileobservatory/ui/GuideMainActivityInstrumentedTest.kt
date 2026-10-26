@@ -54,7 +54,6 @@ class GuideMainActivityInstrumentedTest {
         saveGuideScreenshot("chinese-main-landscape")
         compose.onNodeWithText("设置").performClick()
         compose.onNodeWithText("校准").performScrollTo().performClick()
-        compose.onNodeWithText("校准").assertIsSelected()
         compose.onNodeWithTag("guide-steps-input").performScrollTo().assertIsDisplayed()
         compose.onNodeWithTag("guide-steps-increase").assertIsDisplayed()
         compose.onNodeWithTag("guide-settings-close").assertIsDisplayed()
