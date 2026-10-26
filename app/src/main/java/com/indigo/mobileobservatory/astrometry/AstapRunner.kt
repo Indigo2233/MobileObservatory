@@ -7,6 +7,7 @@ import android.os.Build
 import android.provider.OpenableColumns
 import com.indigo.mobileobservatory.mount.MountCoordinates
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -24,14 +25,20 @@ class AstapRunner(private val context: Context) : ImagePlateSolver {
     private val d50Manager = D50Manager(context)
     override val ready: Boolean get() = d50Manager.status().installed
 
-    suspend fun copyUriToCache(uri: Uri): File = withContext(Dispatchers.IO) {
+    suspend fun copyUriToCache(uri: Uri, sourceLastModifiedMs: Long? = null): File = withContext(Dispatchers.IO) {
         val name = displayName(uri).sanitizeFileName()
         val ext = name.substringAfterLast('.', "fits")
-        val target = File(context.cacheDir, "platesolve_${System.currentTimeMillis()}.$ext")
-        context.contentResolver.openInputStream(uri)?.use { input ->
-            target.outputStream().use { output -> input.copyTo(output) }
-        } ?: error("Unable to open selected file.")
-        target
+        val target = File.createTempFile("platesolve_", ".$ext", context.cacheDir)
+        try {
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            } ?: error("Unable to open selected file.")
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
+            sourceLastModifiedMs?.takeIf { it > 0 }?.let { time ->
+                check(target.setLastModified(time)) { "Unable to preserve the selected image timestamp." }
+            }
+            target
+        } catch (failure: Throwable) { target.delete(); throw failure }
     }
 
     override suspend fun solve(
@@ -200,6 +207,7 @@ class AstapRunner(private val context: Context) : ImagePlateSolver {
     }
 
     private fun displayName(uri: Uri): String {
+        if (uri.scheme == "file") return uri.lastPathSegment ?: "selected.fits"
         context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
             val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
             if (idx >= 0 && cursor.moveToFirst()) return cursor.getString(idx)

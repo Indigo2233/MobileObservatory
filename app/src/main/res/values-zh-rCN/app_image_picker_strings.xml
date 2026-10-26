@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_image_search">搜索文件名或拍摄会话</string>
+    <string name="app_image_album_empty">应用相册暂无图像，也可从系统文件选择。</string>
+    <string name="app_image_no_matches">没有匹配的图像。</string>
+    <string name="app_image_load_failed">无法读取应用相册：%1$s</string>
+    <string name="app_image_system_files">从系统文件选择</string>
+    <string name="polar_sample_imported">图像已载入 · 可解析此采样点</string>
+</resources>

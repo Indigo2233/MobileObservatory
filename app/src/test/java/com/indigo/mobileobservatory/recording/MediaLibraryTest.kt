@@ -82,6 +82,33 @@ class MediaLibraryTest {
         assertEquals(VideoFileInfo(png, png.name, 23, "PNG"), MediaLibrary.describe(png))
     }
 
+    @Test fun imageSelectionIncludesIndividualFitsSequenceFramesAndPhotos() = withLibrary { recordings, captures ->
+        val first = file(recordings, "FITS/night/01.fits", 3000)
+        val second = file(recordings, "FITS/night/02.FIT", 6000)
+        val active = file(recordings, "FITS/night/03.fit", 10000)
+        val photo = file(captures, "JPG/moon.png", 7000)
+        val single = file(captures, "FITS/single.fits", 5000)
+        file(captures, "JPG/moon.json", 11000)
+        file(recordings, "FITS/night/.hidden.fits", 12000)
+        file(recordings, "FITS/night/unfinished.partial.fit", 13000)
+        file(recordings, "FITS/night/not-a-frame.png", 14000)
+        file(recordings, "MP4/movie.mp4", 15000)
+        val images = MediaLibrary.listImages(recordings, captures, active)
+        assertEquals(listOf(photo, second, single, first), images.map { it.file })
+        assertTrue(images.all { it.file.isFile })
+        assertTrue(MediaLibrary.list(recordings, captures, MediaCategory.PHOTOS, active).any { it.file.name == "night" && it.file.isDirectory })
+        assertTrue(active.exists())
+    }
+
+    @Test fun imageSelectionKeepsExclusionsAndDuplicateRootsConsistent() = withLibrary { _, captures ->
+        val fits = file(captures, "FITS/session/one.FITS", 1000)
+        val excluded = file(captures, "FITS/session/two.fit", 2000)
+        val photo = file(captures, "JPG/photo.jpg", 3000)
+        val images = MediaLibrary.listImages(captures, captures, excluded)
+        assertEquals(listOf(photo, fits), images.map { it.file })
+        assertTrue(MediaLibrary.listImages(null, null).isEmpty())
+    }
+
     @Test fun recentMergesPhotosRawFramesResultsAndVideosWithoutActiveOrPartialFiles() = withLibrary { recordings, captures ->
         file(captures, "JPG/moon.jpg", 1000)
         file(captures, "FITS/raw.fits", 3000)

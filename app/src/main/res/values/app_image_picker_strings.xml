@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_image_search">Search file or session name</string>
+    <string name="app_image_album_empty">No images in the app album. You can also choose a system file.</string>
+    <string name="app_image_no_matches">No matching images.</string>
+    <string name="app_image_load_failed">Could not read the app album: %1$s</string>
+    <string name="app_image_system_files">Choose system file</string>
+    <string name="polar_sample_imported">Image loaded · solve this point when ready</string>
+</resources>
