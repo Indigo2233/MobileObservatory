@@ -22,6 +22,24 @@ import org.junit.Test
 class GuideWorkbenchInstrumentedTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
+    @Test fun hdrRgbFramesRemainMonochromeInTheGuidePreview() {
+        for (format in listOf(PixelFormat.RGB24, PixelFormat.RGB48)) {
+            val bytes = ByteArray(32 * 32 * format.bytesPerPixel)
+            for (i in 0 until 32 * 32) {
+                val channels = intArrayOf(20, 150, 50)
+                for (channel in 0..2) {
+                    val offset = i * format.bytesPerPixel + channel * if (format == PixelFormat.RGB48) 2 else 1
+                    if (format == PixelFormat.RGB48) bytes[offset + 1] = channels[channel].toByte()
+                    else bytes[offset] = channels[channel].toByte()
+                }
+            }
+            val processor = FrameProcessor().apply { rawMonochrome = true; autoStretchEnabled = false }
+            val pixel = processor.frameToBitmap(FrameData(bytes, 32, 32, format, 1, 0)).getPixel(16, 16)
+            assertEquals("Guide RGB channels differ in $format", android.graphics.Color.red(pixel), android.graphics.Color.green(pixel))
+            assertEquals(android.graphics.Color.green(pixel), android.graphics.Color.blue(pixel))
+        }
+    }
+
     @Test fun rawBayerPreviewKeepsTheOriginalMonochromeSamples() {
         val pixels = ByteArray(32 * 32) { if (it % 2 == 0) 40 else 180.toByte() }
         val processor = FrameProcessor().apply { rawMonochrome = true; autoStretchEnabled = false }
