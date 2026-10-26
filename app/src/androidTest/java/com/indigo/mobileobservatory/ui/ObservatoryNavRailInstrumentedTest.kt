@@ -36,7 +36,8 @@ class ObservatoryNavRailInstrumentedTest {
             }
         } }
         val rail = compose.onNodeWithTag("observatory-nav-rail").getUnclippedBoundsInRoot()
-        assertTrue("The labeled rail should be narrower than the old 92 dp rail", rail.width <= 73.dp)
+        // The 72 dp column and 1 dp divider each round to physical pixels independently.
+        assertTrue("Labeled rail width ${rail.width} should stay below 74 dp", rail.width < 74.dp)
         entries.forEach { entry ->
             val target = compose.onNodeWithTag("workspace-${entry.key}")
             assertTrue("Navigation touch width must stay at least 48 dp", target.getUnclippedBoundsInRoot().width >= 48.dp)
