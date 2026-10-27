@@ -2011,8 +2011,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         guideDecBacklash.accepted(MountDirection.SOUTH)
                         _guideReferenceStars.value = result.stars
                         _guideReferenceStar.value = result.stars.firstOrNull()
-                        _guideStatus.value = app.getString(R.string.calibration_complete_rates, calibration.eastRatePxPerSec, calibration.northRatePxPerSec) +
-                            if (calibration.advisories.isEmpty()) "" else app.getString(R.string.gw_calibration_advisory_status)
+                        _guideStatus.value = app.getString(R.string.calibration_complete_rates, calibration.eastRatePxPerSec, calibration.northRatePxPerSec)
                     }
                 } catch (cancelled: CancellationException) {
                     throw cancelled
