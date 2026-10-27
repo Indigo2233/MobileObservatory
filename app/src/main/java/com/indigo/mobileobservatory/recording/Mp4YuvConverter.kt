@@ -5,17 +5,27 @@ import com.indigo.mobileobservatory.stacking.ChannelOrder
 import com.indigo.mobileobservatory.stacking.PixelTraits
 import com.indigo.mobileobservatory.stacking.SampleAlignment
 import java.nio.ByteOrder
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.Executors
 
 /**
  * Converts science frames into tightly packed NV12 (Y plane + interleaved UV).
  * Used by [Mp4Writer] before copying into a MediaCodec input Image or ByteBuffer.
  */
 class Mp4YuvConverter {
+    companion object {
+        // One additional worker bounds CPU contention with preview and acquisition.
+        private val bayerWorker = Executors.newSingleThreadExecutor { task ->
+            Thread(task, "mp4-bayer").apply { isDaemon = true }
+        }
+        private const val PARALLEL_BAYER_PIXELS = 1_000_000
+    }
     private var grey8: ByteArray = ByteArray(0)
     private var srcY: ByteArray = ByteArray(0)
     private var srcUv: ByteArray = ByteArray(0)
     private var dstY: ByteArray = ByteArray(0)
     private var dstUv: ByteArray = ByteArray(0)
+    internal var parallelBayerEnabled = true
 
     var wbRedGain = 1.0f
     var wbGreenGain = 1.0f
@@ -140,59 +150,69 @@ class Mp4YuvConverter {
         val wB = wbBlueGain
         uvOut.fill(128.toByte())
 
-        for (y in 0 until h) {
-            val yEven = y % 2 == 0
-            val ym = if (y > 0) y - 1 else 0
-            val yp = if (y < h - 1) y + 1 else h - 1
-            for (x in 0 until w) {
-                val bx = x % 2
-                val by = y % 2
-                val cur = grey8[y * w + x].toInt() and 0xFF
-                val xm = if (x > 0) x - 1 else 0
-                val xp = if (x < w - 1) x + 1 else w - 1
-                val r: Int
-                val g: Int
-                val b: Int
-                when {
-                    bx == rX && by == rY -> {
-                        r = cur
-                        g = ((grey8[y * w + xm].toInt() and 0xFF) + (grey8[y * w + xp].toInt() and 0xFF) +
-                            (grey8[ym * w + x].toInt() and 0xFF) + (grey8[yp * w + x].toInt() and 0xFF)) shr 2
-                        b = ((grey8[ym * w + xm].toInt() and 0xFF) + (grey8[ym * w + xp].toInt() and 0xFF) +
-                            (grey8[yp * w + xm].toInt() and 0xFF) + (grey8[yp * w + xp].toInt() and 0xFF)) shr 2
+        fun convertRows(startY: Int, endY: Int) {
+            for (y in startY until endY) {
+                val yEven = y % 2 == 0
+                val ym = if (y > 0) y - 1 else 0
+                val yp = if (y < h - 1) y + 1 else h - 1
+                for (x in 0 until w) {
+                    val bx = x % 2
+                    val by = y % 2
+                    val cur = grey8[y * w + x].toInt() and 0xFF
+                    val xm = if (x > 0) x - 1 else 0
+                    val xp = if (x < w - 1) x + 1 else w - 1
+                    val r: Int
+                    val g: Int
+                    val b: Int
+                    when {
+                        bx == rX && by == rY -> {
+                            r = cur
+                            g = ((grey8[y * w + xm].toInt() and 0xFF) + (grey8[y * w + xp].toInt() and 0xFF) +
+                                (grey8[ym * w + x].toInt() and 0xFF) + (grey8[yp * w + x].toInt() and 0xFF)) shr 2
+                            b = ((grey8[ym * w + xm].toInt() and 0xFF) + (grey8[ym * w + xp].toInt() and 0xFF) +
+                                (grey8[yp * w + xm].toInt() and 0xFF) + (grey8[yp * w + xp].toInt() and 0xFF)) shr 2
+                        }
+                        bx != rX && by != rY -> {
+                            b = cur
+                            g = ((grey8[y * w + xm].toInt() and 0xFF) + (grey8[y * w + xp].toInt() and 0xFF) +
+                                (grey8[ym * w + x].toInt() and 0xFF) + (grey8[yp * w + x].toInt() and 0xFF)) shr 2
+                            r = ((grey8[ym * w + xm].toInt() and 0xFF) + (grey8[ym * w + xp].toInt() and 0xFF) +
+                                (grey8[yp * w + xm].toInt() and 0xFF) + (grey8[yp * w + xp].toInt() and 0xFF)) shr 2
+                        }
+                        else -> {
+                            g = cur
+                            if (by == rY) {
+                                r = ((grey8[y * w + xm].toInt() and 0xFF) + (grey8[y * w + xp].toInt() and 0xFF)) shr 1
+                                b = ((grey8[ym * w + x].toInt() and 0xFF) + (grey8[yp * w + x].toInt() and 0xFF)) shr 1
+                            } else {
+                                b = ((grey8[y * w + xm].toInt() and 0xFF) + (grey8[y * w + xp].toInt() and 0xFF)) shr 1
+                                r = ((grey8[ym * w + x].toInt() and 0xFF) + (grey8[yp * w + x].toInt() and 0xFF)) shr 1
+                            }
+                        }
                     }
-                    bx != rX && by != rY -> {
-                        b = cur
-                        g = ((grey8[y * w + xm].toInt() and 0xFF) + (grey8[y * w + xp].toInt() and 0xFF) +
-                            (grey8[ym * w + x].toInt() and 0xFF) + (grey8[yp * w + x].toInt() and 0xFF)) shr 2
-                        r = ((grey8[ym * w + xm].toInt() and 0xFF) + (grey8[ym * w + xp].toInt() and 0xFF) +
-                            (grey8[yp * w + xm].toInt() and 0xFF) + (grey8[yp * w + xp].toInt() and 0xFF)) shr 2
-                    }
-                    else -> {
-                        g = cur
-                        if (by == rY) {
-                            r = ((grey8[y * w + xm].toInt() and 0xFF) + (grey8[y * w + xp].toInt() and 0xFF)) shr 1
-                            b = ((grey8[ym * w + x].toInt() and 0xFF) + (grey8[yp * w + x].toInt() and 0xFF)) shr 1
-                        } else {
-                            b = ((grey8[y * w + xm].toInt() and 0xFF) + (grey8[y * w + xp].toInt() and 0xFF)) shr 1
-                            r = ((grey8[ym * w + x].toInt() and 0xFF) + (grey8[yp * w + x].toInt() and 0xFF)) shr 1
+                    val r8 = (r * wR).toInt().coerceIn(0, 255)
+                    val g8 = (g * wG).toInt().coerceIn(0, 255)
+                    val b8 = (b * wB).toInt().coerceIn(0, 255)
+                    yOut[y * w + x] = (((66 * r8 + 129 * g8 + 25 * b8 + 128) shr 8) + 16).coerceIn(16, 235).toByte()
+                    if (yEven && x % 2 == 0) {
+                        val u = (((-38 * r8 - 74 * g8 + 112 * b8 + 128) shr 8) + 128).coerceIn(16, 240)
+                        val v = (((112 * r8 - 94 * g8 - 18 * b8 + 128) shr 8) + 128).coerceIn(16, 240)
+                        val uvOff = (y / 2) * w + x
+                        if (uvOff + 1 < uvOut.size) {
+                            uvOut[uvOff] = u.toByte()
+                            uvOut[uvOff + 1] = v.toByte()
                         }
                     }
                 }
-                val r8 = (r * wR).toInt().coerceIn(0, 255)
-                val g8 = (g * wG).toInt().coerceIn(0, 255)
-                val b8 = (b * wB).toInt().coerceIn(0, 255)
-                yOut[y * w + x] = (((66 * r8 + 129 * g8 + 25 * b8 + 128) shr 8) + 16).coerceIn(16, 235).toByte()
-                if (yEven && x % 2 == 0) {
-                    val u = (((-38 * r8 - 74 * g8 + 112 * b8 + 128) shr 8) + 128).coerceIn(16, 240)
-                    val v = (((112 * r8 - 94 * g8 - 18 * b8 + 128) shr 8) + 128).coerceIn(16, 240)
-                    val uvOff = (y / 2) * w + x
-                    if (uvOff + 1 < uvOut.size) {
-                        uvOut[uvOff] = u.toByte()
-                        uvOut[uvOff + 1] = v.toByte()
-                    }
-                }
             }
+        }
+        if (parallelBayerEnabled && w % 2 == 0 && w.toLong() * h >= PARALLEL_BAYER_PIXELS &&
+            Runtime.getRuntime().availableProcessors() > 1) {
+            val split = h / 2
+            val first = CompletableFuture.runAsync({ convertRows(0, split) }, bayerWorker)
+            try { convertRows(split, h) } finally { first.join() }
+        } else {
+            convertRows(0, h)
         }
     }
 
@@ -206,6 +226,21 @@ class Mp4YuvConverter {
         dstW: Int,
         dstH: Int
     ) {
+        // Encoder alignment frequently changes only the height. Preserve the same
+        // nearest-neighbour row selection without resampling every pixel.
+        if (srcW == dstW && srcW % 2 == 0) {
+            for (y in 0 until dstH) {
+                val sy = (y * srcH) / dstH
+                System.arraycopy(srcY, sy * srcW, dstY, y * dstW, dstW)
+            }
+            val srcUvH = (srcH + 1) / 2
+            val dstUvH = (dstH + 1) / 2
+            for (y in 0 until dstUvH) {
+                val sy = ((y * srcUvH) / dstUvH).coerceAtMost(srcUvH - 1)
+                System.arraycopy(srcUv, sy * srcW, dstUv, y * dstW, dstW)
+            }
+            return
+        }
         for (y in 0 until dstH) {
             val sy = (y * srcH) / dstH
             val srcRow = sy * srcW
