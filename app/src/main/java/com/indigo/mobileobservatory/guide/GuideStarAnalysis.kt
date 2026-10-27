@@ -17,54 +17,83 @@ object GuideStarAnalysis {
     fun measure(frame: FrameData, star: GuideStar, saturationLevel: Int? = null): GuideStarProfile? {
         if (!star.x.isFinite() || !star.y.isFinite() || star.x < 0 || star.y < 0 || star.x >= frame.width || star.y >= frame.height ||
             frame.data.size.toLong() < frame.width.toLong() * frame.height * frame.pixelFormat.bytesPerPixel) return null
-        val reader = GuideModule()
         val radius = 12
         val x0 = (star.x.roundToInt() - radius).coerceAtLeast(0); val y0 = (star.y.roundToInt() - radius).coerceAtLeast(0)
         val x1 = (star.x.roundToInt() + radius).coerceAtMost(frame.width - 1); val y1 = (star.y.roundToInt() + radius).coerceAtMost(frame.height - 1)
         val bayer = frame.pixelFormat.isBayer
         fun phase(x: Int, y: Int) = if (bayer) (y and 1) * 2 + (x and 1) else 0
-        val border = Array(if (bayer) 4 else 1) { mutableListOf<Float>() }; val pixels = mutableListOf<Float>()
+        val width = x1 - x0 + 1; val height = y1 - y0 + 1
+        val capacity = width * height
+        val phaseCount = if (bayer) 4 else 1
+        val borderCapacity = if (bayer) ((width + 1) / 2) * ((height + 1) / 2) else capacity
+        val border = Array(phaseCount) { FloatArray(borderCapacity) }
+        val borderCounts = IntArray(phaseCount)
+        val pixels = FloatArray(capacity)
+        var peak = 0f
         for (y in y0..y1) for (x in x0..x1) {
-            val v = reader.rawValue(frame, x, y).toFloat(); pixels += v
-            if (hypot(x - star.x, y - star.y) >= 10f) border[phase(x, y)] += v
+            val value = GuidePixelAccess.raw(frame, x, y).toFloat()
+            pixels[(y - y0) * width + x - x0] = value
+            peak = max(peak, value)
+            if (hypot(x - star.x, y - star.y) >= 10f) {
+                val index = phase(x, y)
+                border[index][borderCounts[index]++] = value
+            }
         }
-        if (border.any { it.isEmpty() }) return null
-        val backgrounds = border.map { values ->
-            val median = values.sorted()[values.size / 2]
-            val noise = values.map { abs(it - median) }.sorted()[values.size / 2] * 1.4826f
-            values.filter { abs(it - median) <= max(1f, noise * 3f) }.average().toFloat()
+        if (borderCounts.any { it == 0 }) return null
+        val deviations = FloatArray(borderCapacity)
+        val backgrounds = FloatArray(phaseCount) { index ->
+            val values = border[index]; val count = borderCounts[index]
+            java.util.Arrays.sort(values, 0, count)
+            val median = values[count / 2]
+            for (i in 0 until count) deviations[i] = abs(values[i] - median)
+            java.util.Arrays.sort(deviations, 0, count)
+            val tolerance = max(1f, deviations[count / 2] * 1.4826f * 3f)
+            var sum = 0.0; var kept = 0
+            for (i in 0 until count) if (abs(values[i] - median) <= tolerance) { sum += values[i]; kept++ }
+            (sum / kept).toFloat()
         }
         val background = backgrounds.average().toFloat()
         val radial = FloatArray(radius + 1); val counts = IntArray(radius + 1)
-        val fluxes = mutableListOf<Pair<Float, Float>>()
+        val radii = FloatArray(capacity); val fluxes = FloatArray(capacity)
+        val order = LongArray(capacity)
+        val energyBins = DoubleArray(radius + 1)
+        var samples = 0; var totalFlux = 0.0
         for (y in y0..y1) for (x in x0..x1) {
             val r = hypot(x - star.x, y - star.y)
             if (r > radius) continue
             // Keep signed background residuals: clipping negative noise inflates faint-star wings.
-            val flux = reader.rawValue(frame, x, y) - backgrounds[phase(x, y)]
-            fluxes += r to flux
+            val flux = pixels[(y - y0) * width + x - x0] - backgrounds[phase(x, y)]
+            radii[samples] = r; fluxes[samples] = flux
+            // Non-negative Float bits preserve radius order; the index preserves stable ties.
+            order[samples] = (r.toRawBits().toLong() shl 32) or samples.toLong()
+            samples++
+            totalFlux += flux.toDouble()
+            energyBins[ceil(r.toDouble()).toInt()] += flux.toDouble()
             val bin = r.toInt(); radial[bin] += flux; counts[bin]++
         }
-        val total = fluxes.sumOf { it.second.toDouble() }.toFloat()
+        val total = totalFlux.toFloat()
         if (total <= 0f) return null
+        java.util.Arrays.sort(order, 0, samples)
         var sum = 0f; var hfr = 0f; var previousRadius = 0f
-        for ((r, value) in fluxes.sortedBy { it.first }) {
+        for (i in 0 until samples) {
+            val index = order[i].toInt()
+            val r = radii[index]; val value = fluxes[index]
             if (value > 0f && sum + value >= total / 2) { hfr = previousRadius + (r - previousRadius) * (total / 2 - sum) / value; break }
             sum += value; previousRadius = r
         }
-        var energy = 0f
-        val energies = radial.indices.map { bin ->
-            energy = max(energy, (fluxes.filter { it.first <= bin }.sumOf { it.second.toDouble() }.toFloat() / total).coerceIn(0f, 1f))
+        var energy = 0f; var enclosed = 0.0
+        val energies = FloatArray(radius + 1) { bin ->
+            enclosed += energyBins[bin]
+            energy = max(energy, (enclosed.toFloat() / total).coerceIn(0f, 1f))
             energy
-        }.toMutableList().apply { this[lastIndex] = 1f }
-        val peak = pixels.max()
+        }.apply { this[lastIndex] = 1f }
         val nominal = (1 shl frame.pixelFormat.nativeBits) - 1
         val maximum = saturationLevel ?: if (peak > nominal) 65535 else nominal
         val row = star.y.roundToInt().coerceIn(y0, y1); val column = star.x.roundToInt().coerceIn(x0, x1)
-        return GuideStarProfile(x1 - x0 + 1, y1 - y0 + 1, pixels, hfr, total, pixels.max(), background,
+        return GuideStarProfile(width, height, pixels.asList(), hfr, total, peak, background,
             radial.indices.map { radial[it] / counts[it].coerceAtLeast(1) },
-            energies, (x0..x1).map { it - star.x }, (x0..x1).map { reader.rawValue(frame, it, row).toFloat() },
-            (y0..y1).map { it - star.y }, (y0..y1).map { reader.rawValue(frame, column, it).toFloat() },
+            energies.asList(), (x0..x1).map { it - star.x }, (x0..x1).map { pixels[(row - y0) * width + it - x0] },
+            (y0..y1).map { it - star.y }, (y0..y1).map { pixels[(it - y0) * width + column - x0] },
             maximum.toFloat(), star.saturated || peak >= maximum - max(1, maximum / 1000), bayer)
     }
 }

@@ -48,14 +48,73 @@ public class GuideReconstructionBenchmark {
         return mass;
     }
 
+    private static GuideStar target(float x, float y) {
+        return new GuideStar(x, y, 20, 100, 2, false, Float.NaN, Float.NaN);
+    }
+
+    private static long payload(long hash, GuideStarProfile profile) {
+        if (profile == null) return hash * 31 + 1;
+        hash = (hash * 31 + profile.getWidth()) * 31 + profile.getHeight();
+        for (float value : new float[]{profile.getHfrPx(), profile.getFlux(), profile.getPeak(), profile.getBackground(),
+                profile.getSaturationLevel(), profile.getSaturated() ? 1 : 0, profile.isBayer() ? 1 : 0})
+            hash = hash * 31 + Float.floatToIntBits(value);
+        for (List<Float> values : Arrays.asList(profile.getPixels(), profile.getRadialIntensity(), profile.getEncircledEnergy(),
+                profile.getHorizontalOffsets(), profile.getHorizontalIntensity(), profile.getVerticalOffsets(), profile.getVerticalIntensity()))
+            for (float value : values) hash = hash * 31 + Float.floatToIntBits(value);
+        return hash;
+    }
+
+    private static long profiles(FrameData frame) {
+        long hash = 1;
+        for (int star = 0; star < 20; star++)
+            hash = payload(hash, GuideStarAnalysis.INSTANCE.measure(frame,
+                target((float) center(star % 5, frame.getWidth(), 5), (float) center(star / 5, frame.getHeight(), 4)), 16383));
+        return hash;
+    }
+
+    private static void checkProfiles() {
+        long hash = 1; int cases = 0;
+        for (PixelFormat format : new PixelFormat[]{PixelFormat.MONO8, PixelFormat.BAYER_RG8,
+                PixelFormat.BAYER_BG14, PixelFormat.MONO16, PixelFormat.RGB24, PixelFormat.RGB48})
+            for (double sigma : new double[]{.8,1.8,3.2}) for (double amplitude : new double[]{0,.02,.2,1.2})
+                for (double cx : new double[]{.2,12.3,32.3,63.2}) {
+                    double cy = cx == 63.2 ? 62.7 : 31.7;
+                    int maximum = (1 << format.getNativeBits()) - 1;
+                    int stride = format.getBytesPerPixel(), channels = format.isRgb() ? 3 : 1;
+                    int sampleBytes = stride / channels;
+                    byte[] data = new byte[64 * 64 * stride];
+                    Random random = new Random(585 + cases);
+                    for (int y = 0; y < 64; y++) for (int x = 0; x < 64; x++) {
+                        int phase = (y & 1) * 2 + (x & 1);
+                        double signal = maximum * amplitude * Math.exp(-((x-cx)*(x-cx)+(y-cy)*(y-cy))/(2*sigma*sigma));
+                        double noise = maximum * .001 * random.nextGaussian();
+                        for (int c = 0; c < channels; c++) {
+                            double response = format.isBayer() ? new double[]{4,.4,.4,.08}[phase] : channels == 3 ? new double[]{.6,1.1,.3}[c] : 1;
+                            double background = maximum * (format.isBayer() ? new double[]{.01,.014,.014,.005}[phase] : .01);
+                            int value = (int) Math.round(Math.max(0,Math.min(maximum,background + signal * response + noise)));
+                            int offset = (y * 64 + x) * stride + c * sampleBytes;
+                            data[offset] = (byte) value;
+                            if (sampleBytes == 2) data[offset+1] = (byte) (value >> 8);
+                        }
+                    }
+                    hash = payload(hash, GuideStarAnalysis.INSTANCE.measure(new FrameData(data,64,64,format,1,0,null),
+                        target((float) cx,(float) cy), maximum));
+                    cases++;
+                }
+        System.out.println("cases,checksum");
+        System.out.println(cases + "," + hash);
+    }
+
     public static void main(String[] args) {
         String operation = args[0];
+        if (operation.equals("profilecheck")) { checkProfiles(); return; }
         int width = Integer.parseInt(args[1]), height = Integer.parseInt(args[2]);
         FrameData frame = frame(width, height);
         GuideModule module = new GuideModule();
         LongSupplier action;
         if (operation.equals("detect")) action = () -> module.detectStars(frame, 16, 16383, null, true).size();
         else if (operation.equals("local")) action = () -> localMeasurements(frame);
+        else if (operation.equals("profile")) action = () -> profiles(frame);
         else throw new IllegalArgumentException(operation);
         for (int i = 0; i < 30; i++) sink = action.getAsLong();
         double[] times = new double[21];

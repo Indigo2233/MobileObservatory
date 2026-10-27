@@ -82,10 +82,41 @@ data class GuideVector(val x: Float, val y: Float) {
 data class GuideRms(val raPx: Float, val decPx: Float, val totalPx: Float)
 data class GuideSolution(val raErrorPx: Float, val decErrorPx: Float, val correction: GuideCorrection)
 
+enum class GuideFrameIssue { PRIMARY_LOST, MASS_CHANGE, MATCH_LOST }
+
 /** Pure guide-domain implementation: star detection, matching, calibration projection and filtering. */
 class GuideModule {
     private val raFilter = Phd2GuideFilter(true)
     private val decFilter = Phd2GuideFilter(false)
+    private val massChecker = Phd2MassChecker()
+    private val massLimits = DoubleArray(4)
+    @Volatile var lastFrameIssue: GuideFrameIssue? = null
+        private set
+    @Volatile var acceptedPrimary: GuideStar? = null
+        private set
+
+    @Synchronized fun resetTrackingQuality() { massChecker.reset(); lastFrameIssue = null; acceptedPrimary = null }
+
+    /** Dropped frames preserve filter/GP history. A usable primary is required before any correction. */
+    @Synchronized fun measureTrackedShift(reference: List<GuideStar>, current: List<GuideStar>, primary: GuideStar?,
+        exposureMs: Int, nowMs: Long): GuideVector? {
+        lastFrameIssue = null
+        if (primary == null || primary !in current || !isUsableStar(primary)) {
+            lastFrameIssue = GuideFrameIssue.PRIMARY_LOST
+            return null
+        }
+        massChecker.setExposure(exposureMs)
+        val rejected = massChecker.checkMass(primary.flux.toDouble(), .5, massLimits)
+        // PHD2 includes mass-rejected observations so sustained sky changes can enter the history.
+        massChecker.append(primary.flux.toDouble(), nowMs)
+        if (rejected) {
+            lastFrameIssue = GuideFrameIssue.MASS_CHANGE
+            return null
+        }
+        return matchShift(reference, current).also {
+            if (it == null) lastFrameIssue = GuideFrameIssue.MATCH_LOST else acceptedPrimary = primary
+        }
+    }
 
     fun detectStars(frame: FrameData, maxStars: Int = 16, saturationLevel: Int? = null,
         preferred: GuideStar? = null, includeRejected: Boolean = false): List<GuideStar> {

@@ -1,0 +1,6 @@
+{
+  "commit": "70e9fd178b3122b6553646c60f462cb09335dcc5",
+  "samples": 1786,
+  "sourceSha256": "b1f0600239245488bd7bd4dd5b3ae79910a3cc2122423ddb6c91f8eb8550c395",
+  "method": "Unmodified MassChecker class; UTC millisecond clock injected; no application code"
+}

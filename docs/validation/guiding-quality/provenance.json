@@ -1,0 +1,29 @@
+{
+  "protocol": "Desktop; 30 warmups, 21 measured runs; separate JVM per case; serial execution; synthetic RAW14, 20 stars; detector maxStars=16",
+  "currentSources": [
+    {
+      "currentSha256": "75BA898EDC62658FF48E6D34569B0299C3143335F63676DFF5A3A32619D58490",
+      "path": "app/src/main/java/com/indigo/mobileobservatory/guide/GuideImage.kt"
+    },
+    {
+      "currentSha256": "45F97856B86DA978EE220EADDAB17D7A16686170B5274CF5116B18EFC596EF4A",
+      "path": "app/src/main/java/com/indigo/mobileobservatory/guide/GuideModule.kt"
+    },
+    {
+      "currentSha256": "CCF8BC3A1B399B2F824EAC82D19B13C3F84881B6DA502D0739013D9133F98D4D",
+      "path": "app/src/main/java/com/indigo/mobileobservatory/guide/Phd2StarMeasurement.kt"
+    },
+    {
+      "currentSha256": "718E63985478BEF5ECA07584DC7F224AB60E71E90A00EB1E4A1F5C8923133461",
+      "path": "app/src/main/java/com/indigo/mobileobservatory/guide/GuideStarAnalysis.kt"
+    }
+  ],
+  "exclusions": "Frame construction, capture and preview rendering; PSF profiles included only in profile operation; checksum consumption included; these measurements do not establish Android device latency",
+  "currentRevision": "working tree based on f073e0cac96e0420cd0b8f6fb72990de42617a5d",
+  "baselineRevision": "f073e0cac96e0420cd0b8f6fb72990de42617a5d",
+  "compiler": "Both variants compile the production source with Kotlin 1.9.22 CLI, JVM target 17, without Compose instrumentation",
+  "profileCases": 288,
+  "profilePayloadChecksum": "-687559671138813624",
+  "measurement": "20 raw PSF profiles plus complete output consumption; frame generation and rendering excluded",
+  "massReference": "app/src/test/resources/guide/phd2-mass-reference.json"
+}

@@ -1648,6 +1648,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun applyGuideStarSelection(star: GuideStar, stars: List<GuideStar>) {
+        guideModule.resetTrackingQuality()
         _guideStar.value = star
         _guideReferenceStar.value = star
         _guideReferenceStars.value = guideModule.referenceStars(star, stars, _guideMultiStarEnabled.value)
@@ -1725,6 +1726,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
         val refs = guideModule.referenceStars(star, _guideStars.value, _guideMultiStarEnabled.value)
+        guideModule.resetTrackingQuality()
         _guideReferenceStar.value = star
         _guideReferenceStars.value = refs
         _guideCorrection.value = null
@@ -1749,6 +1751,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun stopGuideOperations(invalidateCalibration: Boolean = false) = synchronized(guideOperationLock) {
+        guideModule.resetTrackingQuality()
         guideAutoStartJob?.cancel(); guideAutoStartJob = null
         _guideAutoStarting.value = false
         _guideRunning.value = false
@@ -1810,6 +1813,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     return
                 }
                 if (!_guideRunning.value) {
+                    guideModule.resetTrackingQuality()
                     clearGuideHistory()
                 }
                 _guideStatus.value = app.getString(R.string.guiding)
@@ -2062,8 +2066,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 _guideFrameSize.value = frame.width to frame.height
                 _guidePreviewBitmap.value = guidePreviewPipeline.frame.value?.bitmap
                 val locked = _guideReferenceStar.value
-                val trackingAnchor = _guideDisplayFrame.value?.primary?.takeIf { locked != null } ?: locked
-                val stars = detectGuideStars(frame, preferred = trackingAnchor)
+                val trackingAnchor = (if (_guideRunning.value) guideModule.acceptedPrimary else _guideDisplayFrame.value?.primary)
+                    ?.takeIf { locked != null } ?: locked
+                val analysisFrame = guideAnalysisFrame(frame)
+                val saturationLevel = guideSaturationLevel(frame)
+                val stars = guideModule.detectStars(analysisFrame, saturationLevel = saturationLevel, preferred = trackingAnchor, includeRejected = true)
                 val usable = guideModule.usableStars(stars)
                 observeAuxiliaryMotionFrame(cam, frame, usable.ifEmpty { stars })
                 if (guideMeasurements.processed(frame.captureGeneration, frame.frameId, usable, measurementRun) == null) return@processed
@@ -2078,7 +2085,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 val displayStars = (usable + listOfNotNull(displayedPrimary)).distinct()
                 val profiles = displayStars.mapNotNull { star ->
-                    com.indigo.mobileobservatory.guide.GuideStarAnalysis.measure(guideAnalysisFrame(frame), star, guideSaturationLevel(frame))?.let { star to it }
+                    com.indigo.mobileobservatory.guide.GuideStarAnalysis.measure(analysisFrame, star, saturationLevel)?.let { star to it }
                 }.toMap()
                 _guideProfile.value = profiles[displayedPrimary]
                 guidePreviewPipeline.frame.value?.bitmap?.let { bitmap ->
@@ -2152,10 +2159,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         return maximum
     }
 
-    private fun detectGuideStars(frame: FrameData, maxStars: Int = 16, preferred: GuideStar? = null): List<GuideStar> {
-        return guideModule.detectStars(guideAnalysisFrame(frame), maxStars, guideSaturationLevel(frame), preferred, includeRejected = true)
-    }
-
     private fun guideAnalysisFrame(frame: FrameData): FrameData {
         val camera = guideCameraManager.activeCamera ?: return frame
         val traits = camera.sciencePixelTraits?.copy(roiX = camera.currentRoi.x, roiY = camera.currentRoi.y,
@@ -2197,13 +2200,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private fun measureStarShift(referenceStars: List<GuideStar>, currentStars: List<GuideStar>) =
         guideModule.matchShift(referenceStars, currentStars)
 
-    private fun measureGuideError(currentStars: List<GuideStar>): GuideVector? {
+    private fun measureGuideError(currentStars: List<GuideStar>, nowMs: Long): GuideVector? {
         val references = if (_guideMultiStarEnabled.value) {
             _guideReferenceStars.value.ifEmpty { _guideReferenceStar.value?.let { listOf(it) } ?: emptyList() }
         } else {
             _guideReferenceStar.value?.let { listOf(it) } ?: emptyList()
         }
-        return measureStarShift(references, currentStars)
+        return guideModule.measureTrackedShift(references, currentStars, _guideStar.value,
+            (_guideExposureUs.value / 1000f).roundToInt().coerceAtLeast(1), nowMs)
     }
 
     private fun resetGuideAlgorithmState(raAxis: Boolean? = null) = synchronized(guideOperationLock) { guideModule.resetFilter(raAxis) }
@@ -2232,18 +2236,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 guideStarLost = true
                 _guideStatus.value = app.getString(if (badQuality) R.string.guide_bad_frame else R.string.guide_star_lost)
                 guideTasks.cancel()
-                resetGuideAlgorithmState()
                 return
             }
             if (!mountModule.isConnected || guideTasks.busy || !guideMeasurementIsFresh()) return
 
             val now = android.os.SystemClock.elapsedRealtime()
 
-            val error = measureGuideError(stars) ?: run {
+            val error = measureGuideError(stars, now) ?: run {
                 guideStarLost = true
                 guideTasks.cancel()
-                resetGuideAlgorithmState()
-                _guideStatus.value = app.getString(R.string.guide_stars_lost)
+                _guideStatus.value = app.getString(if (guideModule.lastFrameIssue == com.indigo.mobileobservatory.guide.GuideFrameIssue.MASS_CHANGE)
+                    R.string.guide_bad_frame else R.string.guide_stars_lost)
                 return
             }
             guideStarLost = false
