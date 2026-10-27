@@ -10,6 +10,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
 import androidx.test.platform.app.InstrumentationRegistry
+import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.camera.*
 import com.indigo.mobileobservatory.guide.GuideCalibrationState
 import com.indigo.mobileobservatory.mount.*
@@ -31,13 +32,13 @@ class GuideFlowInstrumentedTest {
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
 
     @Test fun selectionCalibrationGuidingAndExposureStopCompleteThroughTheRealVm() = withFlow { vm, endpoint ->
-        compose.onNodeWithTag("guide-auto-select").performClick()
+        clickGuideAction("guide-auto-select")
         compose.onNodeWithTag("guide-hfr", useUnmergedTree = true).assertTextContains("px", substring = true)
         compose.onNodeWithTag("guide-star-summary").performClick()
         compose.onNodeWithTag("guide-hfr-detail").assertTextContains("px", substring = true)
         compose.onNodeWithTag("guide-profile-axis").assertExists()
         instrumentation.sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
-        compose.onNodeWithTag("guide-start-stop").performClick()
+        clickGuideAction("guide-start-stop", R.string.gw_start_guiding)
         compose.waitUntil(15_000) { vm.guideDisplayFrame.value?.profile?.saturated == true ||
             vm.guideCalibrationState.value == GuideCalibrationState.FAILED }
         assertNotNull("A temporarily saturated selected star remains visible", vm.guideDisplayFrame.value?.primary)
@@ -51,21 +52,29 @@ class GuideFlowInstrumentedTest {
         endpoint.drift(2.5f, -1.5f)
         compose.waitUntil(15_000) { vm.guideHistory.value.any { it.raPulseMs != 0 || it.decPulseMs != 0 } }
         assertEquals("Guiding pulses must not overlap guide exposure", 0, endpoint.exposureOverlaps)
-        compose.onNodeWithTag("guide-start-stop").performClick()
+        clickGuideAction("guide-start-stop", R.string.gw_stop_guiding)
         compose.waitUntil(5000) { !vm.guideRunning.value && !vm.guideAutoStarting.value }
-        compose.onNodeWithTag("guide-exposure").performClick()
+        clickGuideAction("guide-exposure", R.string.gw_stop_exposure)
         compose.waitUntil(5000) { !vm.guideExposing.value && !vm.guideExposureRequested.value }
         assertNotNull(vm.guideDisplayFrame.value)
     }
 
     @Test fun stoppingDuringCalibrationCancelsThePendingGuideStart() = withFlow { vm, _ ->
-        compose.onNodeWithTag("guide-auto-select").performClick()
-        compose.onNodeWithTag("guide-start-stop").performClick()
+        clickGuideAction("guide-auto-select")
+        clickGuideAction("guide-start-stop", R.string.gw_start_guiding)
         compose.waitUntil(10_000) { vm.guideCalibrating.value }
-        compose.onNodeWithTag("guide-start-stop").performClick()
+        clickGuideAction("guide-start-stop", R.string.gw_stop_calibration)
         compose.waitUntil(5000) { !vm.guideCalibrating.value && !vm.guideAutoStarting.value && vm.guideExposing.value }
         assertFalse(vm.guideRunning.value)
         assertTrue(vm.guideExposing.value)
+    }
+
+    /** StateFlow readiness can precede the enabled button and its new action reaching semantics. */
+    private fun clickGuideAction(tag: String, label: Int? = null) {
+        var matcher = hasTestTag(tag) and isEnabled()
+        if (label != null) matcher = matcher and hasText(compose.activity.getString(label))
+        compose.waitUntil(5_000) { compose.onAllNodes(matcher).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNode(matcher).assertIsDisplayed().performClick()
     }
 
     private fun withFlow(check: (CameraViewModel, Endpoint) -> Unit) {
