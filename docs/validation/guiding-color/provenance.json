@@ -1,0 +1,16 @@
+{
+  "baselineCommit": "be1c32130a5afe493c6e5842fd0a943799b07b58",
+  "referenceCommit": "70e9fd178b3122b6553646c60f462cb09335dcc5",
+  "syntheticColorSamples": 64,
+  "originalCppReferenceSamples": 82,
+  "recordedImageReplay": {
+    "HYSTERESIS": 0.11849486625301514,
+    "IDENTITY": 0.05729277904401223,
+    "LOW_PASS": 0.12514903884518624,
+    "LOW_PASS_2": 0.24919733605306796,
+    "PREDICTIVE_RA": 0.10366112567547678,
+    "RESIST_SWITCH": 0.12156236526203891,
+    "Z_FILTER": 0.1784165530820562
+  },
+  "referenceResourceSha256": "4af66836098769c7ab56824c12ca7bf6d92db961a766bf585c479eb3f0c5cf2a"
+}

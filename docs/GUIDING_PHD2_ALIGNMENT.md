@@ -73,6 +73,18 @@ Lowpass、Z-filter、Identity 不使用修正强度，界面相应控件禁用�
 脉冲基础上限对齐 2500 ms，DEC 回差附加量保留 Android 当前 2000 ms 上限，
 总时长不超过 SDK 5000 ms。方向反转和实际命令接受后的方向记录继续保留。
 
+## 彩色输入与星体测量（2026-10-27 追加）
+
+已对齐 `image_math.cpp::QuickLRecon` 和 `star.cpp::Star::Find(FIND_CENTROID)`：
+同尺寸滑动 2×2 亮度重建、7–12 px 环形背景、迭代 2σ 剔除、半径 7 px 孔径质心、
+总通量 SNR 与 HFD。跟踪 SNR 默认 3，自动选星默认 6，优先低于 90% 饱和值的有效星。
+已选星单独执行局部测量；完整全图候选策略继续使用 Android 入口。
+
+公开坐标补回重建窗口中心的半像素偏移；保留原始通道饱和检查与原始 PSF/HFR 诊断。
+32 行缓存限制临时内存，SDK 已确认的合并单色帧直接进入测量。
+原版 C++ 生成的 82 组参考、位相扫描前后对比和 IMX585 七算法回放见
+[彩色导星验证](validation/guiding-color/README.md)。
+
 ## 验证方法
 
 1. 新增自然漂移和 RA 固定脉冲回归；修改前两个用例均失败。
@@ -91,8 +103,9 @@ Lowpass、Z-filter、Identity 不使用修正强度，界面相应控件禁用�
 
 ```powershell
 .\gradlew.bat :app:testDebugUnitTest :app:compileDebugAndroidTestKotlin :app:lintDebug -PstellariumNonCommercial=true -PsequenceEnabled=false -PemulatorTest=false
-.\Build.ps1 -NonCommercial
 ```
+
+APK 按安装、实机测试或发布需求另行生成，常规算法修改执行编译和测试。
 
 主机 JVM 原生测试要求 PATH 中有支持 C++11 的 `g++` 和 JDK JNI 头文件；Android 构建使用 NDK。
 固定 Eigen 3.4.0，归档 SHA-256 为
@@ -102,7 +115,7 @@ Lowpass、Z-filter、Identity 不使用修正强度，界面相应控件禁用�
 
 - PHD2 的持久化校准、过中天/赤纬变换、DEC 单向模式、Guiding Assistant 专门回差测量、
   自适应回差、AO、盲导和暂停后保留 GP 模型尚未整体接入。
-- 本轮保留 Android 既有星点检测与多星匹配；没有宣称与 PHD2 的多星测量、丢星重获策略逐行一致。
+- 局部星体测量已移植；全图候选生成、多星匹配、质量历史、丢星重获和导星暗场/坏点图校正继续单列。
 - 已有用户显式设置保留，Android 数值范围、SDK 停采和单次脉冲上限沿用设备约束。
 - 自动回放验证数值和调度；实际极轴误差、风扰、机械回差及长曝光星形需要真实器材确认。
 

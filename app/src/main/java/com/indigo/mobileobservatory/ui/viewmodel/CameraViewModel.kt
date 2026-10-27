@@ -1573,7 +1573,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 _guideAutoStarting.value || pendingGuideSettings > 0 || guideTasks.busy) {
                 _guideStatus.value = app.getString(R.string.guide_operation_busy); return
             }
-            val star = _guideStars.value.firstOrNull() ?: run {
+            val star = guideModule.autoSelectStar(_guideStars.value) ?: run {
                 _guideStatus.value = app.getString(R.string.no_guide_stars_detected); return
             }
             applyGuideStarSelection(star, _guideStars.value)
@@ -2078,7 +2078,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 val displayStars = (usable + listOfNotNull(displayedPrimary)).distinct()
                 val profiles = displayStars.mapNotNull { star ->
-                    com.indigo.mobileobservatory.guide.GuideStarAnalysis.measure(frame, star, guideSaturationLevel(frame))?.let { star to it }
+                    com.indigo.mobileobservatory.guide.GuideStarAnalysis.measure(guideAnalysisFrame(frame), star, guideSaturationLevel(frame))?.let { star to it }
                 }.toMap()
                 _guideProfile.value = profiles[displayedPrimary]
                 guidePreviewPipeline.frame.value?.bitmap?.let { bitmap ->
@@ -2153,7 +2153,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun detectGuideStars(frame: FrameData, maxStars: Int = 16, preferred: GuideStar? = null): List<GuideStar> {
-        return guideModule.detectStars(frame, maxStars, guideSaturationLevel(frame), preferred, includeRejected = true)
+        return guideModule.detectStars(guideAnalysisFrame(frame), maxStars, guideSaturationLevel(frame), preferred, includeRejected = true)
+    }
+
+    private fun guideAnalysisFrame(frame: FrameData): FrameData {
+        val camera = guideCameraManager.activeCamera ?: return frame
+        val traits = camera.sciencePixelTraits?.copy(roiX = camera.currentRoi.x, roiY = camera.currentRoi.y,
+            binning = (camera as? CameraBinningCapable)?.currentHardwareBin ?: 1)
+        return CameraCfaLayout.displayFrame(frame, traits)
     }
 
     private suspend fun awaitGuideStars(
