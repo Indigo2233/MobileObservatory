@@ -448,9 +448,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val guideProfile = _guideProfile.asStateFlow()
     private val _guideDisplayFrame = MutableStateFlow<com.indigo.mobileobservatory.guide.GuideDisplayFrame?>(null)
     val guideDisplayFrame = _guideDisplayFrame.asStateFlow()
-    private val _guideCalibrationSteps = MutableStateFlow(7)
+    private val _guideCalibrationSteps = MutableStateFlow(12)
     val guideCalibrationSteps = _guideCalibrationSteps.asStateFlow()
-    private val _guideCalibrationDistance = MutableStateFlow(15f)
+    private val _guideCalibrationDistance = MutableStateFlow(25f)
     val guideCalibrationDistance = _guideCalibrationDistance.asStateFlow()
     private val _guideFocalLength = MutableStateFlow(0f)
     val guideFocalLength = _guideFocalLength.asStateFlow()
@@ -516,7 +516,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _guideRaAggressiveness = MutableStateFlow(0.7f)
     val guideRaAggressiveness: StateFlow<Float> = _guideRaAggressiveness.asStateFlow()
 
-    private val _guideDecAggressiveness = MutableStateFlow(0.7f)
+    private val _guideDecAggressiveness = MutableStateFlow(1.0f)
     val guideDecAggressiveness: StateFlow<Float> = _guideDecAggressiveness.asStateFlow()
 
     private val _guideHistory = MutableStateFlow<List<GuideHistoryPoint>>(emptyList())
@@ -534,11 +534,19 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _guidePulseMsPerPx = MutableStateFlow(120f)
     val guidePulseMsPerPx: StateFlow<Float> = _guidePulseMsPerPx.asStateFlow()
 
-    private val _guideMinMovePx = MutableStateFlow(0.15f)
+    private val _guideMinMovePx = MutableStateFlow(0.2f)
     val guideMinMovePx: StateFlow<Float> = _guideMinMovePx.asStateFlow()
+    private val _guideDecMinMovePx = MutableStateFlow(0.2f)
+    val guideDecMinMovePx = _guideDecMinMovePx.asStateFlow()
 
     private val _guideAlgorithm = MutableStateFlow(GuideAlgorithm.HYSTERESIS)
     val guideAlgorithm: StateFlow<GuideAlgorithm> = _guideAlgorithm.asStateFlow()
+    private val _guideDecAlgorithm = MutableStateFlow(GuideAlgorithm.RESIST_SWITCH)
+    val guideDecAlgorithm = _guideDecAlgorithm.asStateFlow()
+    private val _guideFilterParameters = MutableStateFlow(com.indigo.mobileobservatory.guide.GuideFilterParameters())
+    val guideFilterParameters = _guideFilterParameters.asStateFlow()
+    private val _guideDecFilterParameters = MutableStateFlow(com.indigo.mobileobservatory.guide.GuideFilterParameters())
+    val guideDecFilterParameters = _guideDecFilterParameters.asStateFlow()
 
     private val _guideMultiStarEnabled = MutableStateFlow(true)
     val guideMultiStarEnabled: StateFlow<Boolean> = _guideMultiStarEnabled.asStateFlow()
@@ -599,7 +607,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             catch (failure: Exception) { runCatching { mountModule.stopAllMotion() }; throw failure }
         }) }
     @Volatile private var pendingGuideConnect = false
-    private var lastGuideCorrectionMs = 0L
     private var lastRaGuideOutputPx = 0f
     private var lastDecGuideOutputPx = 0f
     private var lastRaGuideErrorPx = 0f
@@ -896,22 +903,42 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         prefs.registerOnSharedPreferenceChangeListener(pointingOpticsPreferenceListener)
         _guideExposureUs.value = prefs.getFloat("guide_exposure_us", 1_000_000f)
             .coerceIn(50_000f, 5_000_000f)
-        _guideCalibrationSteps.value = prefs.getInt("guide_calibration_steps", 7).coerceIn(5, 20)
-        _guideCalibrationDistance.value = prefs.getFloat("guide_calibration_distance", 15f).coerceIn(10f, 50f)
+        _guideCalibrationSteps.value = prefs.getInt("guide_calibration_steps", 12).coerceIn(5, 20)
+        _guideCalibrationDistance.value = prefs.getFloat("guide_calibration_distance", 25f).coerceIn(10f, 50f)
         _guideCalibrationPulseMs.value = prefs.getInt("guide_calibration_pulse_ms", 1200).coerceIn(300, 5000)
         _guideRateSidereal.value = prefs.getFloat("guide_rate_sidereal", .5f).takeIf { it.isFinite() }?.coerceIn(.1f, 1f) ?: .5f
         _guideFocalLength.value = prefs.getFloat("guide_focal_length_mm", 0f)
         _guideBacklashEnabled.value = prefs.getBoolean("guide_backlash_enabled", true)
         _guideAlgorithm.value = runCatching { GuideAlgorithm.valueOf(prefs.getString("guide_algorithm", "HYSTERESIS")!!) }.getOrDefault(GuideAlgorithm.HYSTERESIS)
+        _guideDecAlgorithm.value = runCatching { GuideAlgorithm.valueOf(prefs.getString("guide_dec_algorithm", "RESIST_SWITCH")!!) }
+            .getOrDefault(GuideAlgorithm.RESIST_SWITCH).takeUnless { it == GuideAlgorithm.PREDICTIVE_RA } ?: GuideAlgorithm.RESIST_SWITCH
+        _guideFilterParameters.value = com.indigo.mobileobservatory.guide.GuideFilterParameters(
+            hysteresis = prefs.getFloat("guide_hysteresis", .1f).toDouble().coerceIn(0.0, .99),
+            slopeWeight = prefs.getFloat("guide_slope_weight", 5f).toDouble().coerceIn(0.0, 20.0),
+            fastSwitch = prefs.getBoolean("guide_fast_switch", true),
+            predictionGain = prefs.getFloat("guide_prediction_gain", .5f).toDouble().coerceIn(0.0, 1.0),
+            periodSeconds = prefs.getFloat("guide_period_seconds", 200f).toDouble().coerceIn(10.0, 2000.0),
+            estimatePeriod = prefs.getBoolean("guide_estimate_period", true),
+            exposureFactor = prefs.getFloat("guide_exposure_factor", 2f).toDouble().coerceIn(1.0, 20.0))
+        _guideDecFilterParameters.value = com.indigo.mobileobservatory.guide.GuideFilterParameters(
+            hysteresis = prefs.getFloat("guide_dec_hysteresis", .1f).toDouble().coerceIn(0.0, .99),
+            slopeWeight = prefs.getFloat("guide_dec_slope_weight", 5f).toDouble().coerceIn(0.0, 20.0),
+            fastSwitch = prefs.getBoolean("guide_dec_fast_switch", true),
+            exposureFactor = prefs.getFloat("guide_dec_exposure_factor", 2f).toDouble().coerceIn(1.0, 20.0))
         _guideMultiStarEnabled.value = prefs.getBoolean("guide_multi_star", true)
         _guideReverseRa.value = prefs.getBoolean("guide_reverse_ra", false)
         _guideReverseDec.value = prefs.getBoolean("guide_reverse_dec", false)
-        _guideRaAggressiveness.value = prefs.getFloat("guide_ra_aggressiveness", 0.7f)
+        _guideRaAggressiveness.value = prefs.getFloat("guide_ra_aggressiveness_${_guideAlgorithm.value.name}",
+            prefs.getFloat("guide_ra_aggressiveness", guideDefaultAggression(_guideAlgorithm.value)))
             .coerceIn(0.1f, 1.0f)
-        _guideDecAggressiveness.value = prefs.getFloat("guide_dec_aggressiveness", 0.7f)
+        _guideDecAggressiveness.value = prefs.getFloat("guide_dec_aggressiveness_${_guideDecAlgorithm.value.name}",
+            prefs.getFloat("guide_dec_aggressiveness", guideDefaultAggression(_guideDecAlgorithm.value)))
             .coerceIn(0.1f, 1.0f)
-        _guideMinMovePx.value = prefs.getFloat("guide_min_move_px", 0.15f)
+        _guideMinMovePx.value = prefs.getFloat("guide_ra_min_move_${_guideAlgorithm.value.name}",
+            prefs.getFloat("guide_min_move_px", if (_guideAlgorithm.value == GuideAlgorithm.Z_FILTER) .1f else .2f))
             .coerceIn(0.05f, 1.0f)
+        _guideDecMinMovePx.value = prefs.getFloat("guide_dec_min_move_${_guideDecAlgorithm.value.name}",
+            prefs.getFloat("guide_dec_min_move_px", _guideMinMovePx.value)).coerceIn(.05f, 1f)
         cameraManager.register()
         guideCameraManager.register()
         accessoryManager.register()
@@ -1728,7 +1755,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         guideTasks.cancel()
         pendingGuideDither.set(null)
         resetGuideAlgorithmState()
-        lastGuideCorrectionMs = 0L
         guideDecBacklash.reset()
         if (_guideCalibrationState.value == GuideCalibrationState.RUNNING) {
             _guideCalibration.value = null
@@ -1795,12 +1821,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setGuideRaAggressiveness(value: Float) {
         _guideRaAggressiveness.value = value.coerceIn(0.1f, 1.0f)
-        prefs.edit().putFloat("guide_ra_aggressiveness", _guideRaAggressiveness.value).apply()
+        prefs.edit().putFloat("guide_ra_aggressiveness", _guideRaAggressiveness.value)
+            .putFloat("guide_ra_aggressiveness_${_guideAlgorithm.value.name}", _guideRaAggressiveness.value).apply()
     }
 
     fun setGuideDecAggressiveness(value: Float) {
         _guideDecAggressiveness.value = value.coerceIn(0.1f, 1.0f)
-        prefs.edit().putFloat("guide_dec_aggressiveness", _guideDecAggressiveness.value).apply()
+        prefs.edit().putFloat("guide_dec_aggressiveness", _guideDecAggressiveness.value)
+            .putFloat("guide_dec_aggressiveness_${_guideDecAlgorithm.value.name}", _guideDecAggressiveness.value).apply()
     }
 
     fun clearGuideHistory() {
@@ -1817,13 +1845,66 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setGuideMinMovePx(value: Float) {
         // PHD2-style deadband: useful values are almost always under 1 px.
         _guideMinMovePx.value = value.coerceIn(0.05f, 1.0f)
-        prefs.edit().putFloat("guide_min_move_px", _guideMinMovePx.value).apply()
+        prefs.edit().putFloat("guide_min_move_px", _guideMinMovePx.value)
+            .putFloat("guide_ra_min_move_${_guideAlgorithm.value.name}", _guideMinMovePx.value).apply()
+        resetGuideAlgorithmState(true)
     }
 
     fun setGuideAlgorithm(algorithm: GuideAlgorithm) {
+        if (_guideAlgorithm.value == algorithm) return
+        prefs.edit().putFloat("guide_ra_aggressiveness_${_guideAlgorithm.value.name}", _guideRaAggressiveness.value).apply()
+        prefs.edit().putFloat("guide_ra_min_move_${_guideAlgorithm.value.name}", _guideMinMovePx.value).apply()
         _guideAlgorithm.value = algorithm
-        prefs.edit().putString("guide_algorithm", algorithm.name).apply()
-        resetGuideAlgorithmState()
+        _guideRaAggressiveness.value = prefs.getFloat("guide_ra_aggressiveness_${algorithm.name}", guideDefaultAggression(algorithm))
+        _guideMinMovePx.value = prefs.getFloat("guide_ra_min_move_${algorithm.name}", if (algorithm == GuideAlgorithm.Z_FILTER) .1f else .2f)
+        prefs.edit().putString("guide_algorithm", algorithm.name)
+            .putFloat("guide_ra_aggressiveness_${algorithm.name}", _guideRaAggressiveness.value)
+            .putFloat("guide_ra_min_move_${algorithm.name}", _guideMinMovePx.value).apply()
+        resetGuideAlgorithmState(true)
+    }
+
+    fun setGuideDecAlgorithm(algorithm: GuideAlgorithm) {
+        if (algorithm == GuideAlgorithm.PREDICTIVE_RA) return
+        if (_guideDecAlgorithm.value == algorithm) return
+        prefs.edit().putFloat("guide_dec_aggressiveness_${_guideDecAlgorithm.value.name}", _guideDecAggressiveness.value).apply()
+        prefs.edit().putFloat("guide_dec_min_move_${_guideDecAlgorithm.value.name}", _guideDecMinMovePx.value).apply()
+        _guideDecAlgorithm.value = algorithm
+        _guideDecAggressiveness.value = prefs.getFloat("guide_dec_aggressiveness_${algorithm.name}", guideDefaultAggression(algorithm))
+        _guideDecMinMovePx.value = prefs.getFloat("guide_dec_min_move_${algorithm.name}", if (algorithm == GuideAlgorithm.Z_FILTER) .1f else .2f)
+        prefs.edit().putString("guide_dec_algorithm", algorithm.name)
+            .putFloat("guide_dec_aggressiveness_${algorithm.name}", _guideDecAggressiveness.value)
+            .putFloat("guide_dec_min_move_${algorithm.name}", _guideDecMinMovePx.value).apply()
+        resetGuideAlgorithmState(false)
+    }
+    fun setGuideDecMinMove(value: Float) {
+        _guideDecMinMovePx.value = value.coerceIn(.05f, 1f)
+        prefs.edit().putFloat("guide_dec_min_move_px", _guideDecMinMovePx.value)
+            .putFloat("guide_dec_min_move_${_guideDecAlgorithm.value.name}", _guideDecMinMovePx.value).apply()
+        resetGuideAlgorithmState(false)
+    }
+    private fun guideDefaultAggression(algorithm: GuideAlgorithm) = when (algorithm) {
+        GuideAlgorithm.IDENTITY, GuideAlgorithm.Z_FILTER -> 1f
+        GuideAlgorithm.HYSTERESIS -> .7f
+        GuideAlgorithm.LOW_PASS -> 1f
+        GuideAlgorithm.LOW_PASS_2 -> .8f
+        GuideAlgorithm.RESIST_SWITCH -> 1f
+        GuideAlgorithm.PREDICTIVE_RA -> .6f
+    }
+
+    fun setGuideFilterParameters(value: com.indigo.mobileobservatory.guide.GuideFilterParameters) = setGuideAxisFilterParameters(value, false)
+    fun setGuideDecFilterParameters(value: com.indigo.mobileobservatory.guide.GuideFilterParameters) = setGuideAxisFilterParameters(value, true)
+    private fun setGuideAxisFilterParameters(value: com.indigo.mobileobservatory.guide.GuideFilterParameters, dec: Boolean) {
+        if (!value.hysteresis.isFinite() || value.hysteresis !in 0.0..0.99 || !value.slopeWeight.isFinite() ||
+            value.slopeWeight !in 0.0..20.0 || !value.predictionGain.isFinite() || value.predictionGain !in 0.0..1.0 ||
+            !value.periodSeconds.isFinite() || value.periodSeconds !in 10.0..2000.0 ||
+            !value.exposureFactor.isFinite() || value.exposureFactor !in 1.0..20.0) return
+        if (dec) _guideDecFilterParameters.value = value else _guideFilterParameters.value = value
+        val prefix = if (dec) "guide_dec_" else "guide_"
+        prefs.edit().putFloat(prefix + "hysteresis", value.hysteresis.toFloat()).putFloat(prefix + "slope_weight", value.slopeWeight.toFloat())
+            .putBoolean(prefix + "fast_switch", value.fastSwitch).putFloat(prefix + "prediction_gain", value.predictionGain.toFloat())
+            .putFloat(prefix + "period_seconds", value.periodSeconds.toFloat()).putBoolean(prefix + "estimate_period", value.estimatePeriod)
+            .putFloat(prefix + "exposure_factor", value.exposureFactor.toFloat()).apply()
+        resetGuideAlgorithmState(!dec)
     }
 
     fun setGuideMultiStarEnabled(enabled: Boolean) {
@@ -1907,12 +1988,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         },
                         progress = { value ->
                             val phase = when (value.phase) {
-                                com.indigo.mobileobservatory.guide.GuideCalibrationPhase.CLEAR_EAST -> R.string.gw_clear_east
-                                com.indigo.mobileobservatory.guide.GuideCalibrationPhase.EAST -> R.string.calibration_ra_east
-                                com.indigo.mobileobservatory.guide.GuideCalibrationPhase.WEST -> R.string.calibration_ra_return
+                                com.indigo.mobileobservatory.guide.GuideCalibrationPhase.WEST -> R.string.gw_calibration_west
+                                com.indigo.mobileobservatory.guide.GuideCalibrationPhase.EAST -> R.string.calibration_ra_return
                                 com.indigo.mobileobservatory.guide.GuideCalibrationPhase.CLEAR_NORTH -> R.string.gw_clear_north
                                 com.indigo.mobileobservatory.guide.GuideCalibrationPhase.NORTH -> R.string.calibration_dec_north
                                 com.indigo.mobileobservatory.guide.GuideCalibrationPhase.SOUTH -> R.string.calibration_dec_return
+                                com.indigo.mobileobservatory.guide.GuideCalibrationPhase.NUDGE_SOUTH -> R.string.gw_calibration_nudge
                             }
                             _guideStatus.value = app.getString(R.string.gw_calibration_progress, app.getString(phase), value.step, value.distancePx)
                             FileLogger.i("GuideCalibration", "phase=${value.phase} step=${value.step} originDx=${value.xPx} " +
@@ -1920,6 +2001,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                                 "starX=${primary.x} starY=${primary.y} flux=${primary.flux}")
                         }).run()
                     val calibration = result.calibration
+                    FileLogger.i("GuideCalibration", "Complete RA return=${calibration.raReturnResidualPx}px " +
+                        "DEC return=${calibration.decReturnResidualPx}px advisories=${calibration.advisories}")
                     val calibrationContext = currentCoroutineContext()
                     synchronized(guideOperationLock) {
                         calibrationContext.ensureActive()
@@ -1928,7 +2011,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         guideDecBacklash.accepted(MountDirection.SOUTH)
                         _guideReferenceStars.value = result.stars
                         _guideReferenceStar.value = result.stars.firstOrNull()
-                        _guideStatus.value = app.getString(R.string.calibration_complete_rates, calibration.eastRatePxPerSec, calibration.northRatePxPerSec)
+                        _guideStatus.value = app.getString(R.string.calibration_complete_rates, calibration.eastRatePxPerSec, calibration.northRatePxPerSec) +
+                            if (calibration.advisories.isEmpty()) "" else app.getString(R.string.gw_calibration_advisory_status)
                     }
                 } catch (cancelled: CancellationException) {
                     throw cancelled
@@ -2099,7 +2183,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private suspend fun awaitGuideStarsAfterMotion(reference: GuideStar? = null): List<GuideStar> = awaitGuideStars(
         afterSequence = guideMeasurements.boundary(),
-        notBeforeMs = android.os.SystemClock.elapsedRealtime() + (_guideExposureUs.value / 1000).toLong() + 150,
+        notBeforeMs = android.os.SystemClock.elapsedRealtime(),
         reference = reference)
 
     private fun measureStarShift(referenceStars: List<GuideStar>, currentStars: List<GuideStar>) =
@@ -2114,7 +2198,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         return measureStarShift(references, currentStars)
     }
 
-    private fun resetGuideAlgorithmState() = synchronized(guideOperationLock) { guideModule.resetFilter() }
+    private fun resetGuideAlgorithmState(raAxis: Boolean? = null) = synchronized(guideOperationLock) { guideModule.resetFilter(raAxis) }
 
     private fun appendGuideHistory(timestampMs: Long, raErrorPx: Float, decErrorPx: Float) {
         val points = (_guideHistory.value + GuideHistoryPoint(timestampMs, raErrorPx, decErrorPx))
@@ -2146,8 +2230,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             if (!mountModule.isConnected || guideTasks.busy || !guideMeasurementIsFresh()) return
 
             val now = android.os.SystemClock.elapsedRealtime()
-            val minIntervalMs = (_guideExposureUs.value / 1000f).coerceIn(500f, 2500f).toLong()
-            if (now - lastGuideCorrectionMs < minIntervalMs) return
 
             val error = measureGuideError(stars) ?: run {
                 guideStarLost = true
@@ -2163,9 +2245,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 dx += offsetX
                 dy += offsetY
             }
-            val solution = guideModule.solveCorrection(calibration, dx, dy, _guideAlgorithm.value,
+            val solution = try { guideModule.solveCorrection(calibration, dx, dy, _guideAlgorithm.value,
                 _guideRaAggressiveness.value, _guideDecAggressiveness.value, _guideMinMovePx.value,
-                guideDecBacklash, _guideBacklashEnabled.value, _guideReverseRa.value, _guideReverseDec.value) ?: run {
+                guideDecBacklash, _guideBacklashEnabled.value, _guideReverseRa.value, _guideReverseDec.value,
+                decAlgorithm = _guideDecAlgorithm.value, decMinMovePx = _guideDecMinMovePx.value,
+                raParameters = _guideFilterParameters.value, decParameters = _guideDecFilterParameters.value,
+                snr = _guideStar.value?.snr ?: 5f, exposureSeconds = _guideExposureUs.value / 1_000_000.0,
+                timestampSeconds = now / 1000.0)
+            } catch (failure: Throwable) {
+                if (failure is CancellationException) throw failure
+                _guideRunning.value = false
+                guideTasks.cancel(); resetGuideAlgorithmState()
+                _guideStatus.value = app.getString(R.string.guide_pulse_error_detail, failure.message.orEmpty())
+                return
+            } ?: run {
                 _guideStatus.value = app.getString(R.string.guide_calibration_invalid)
                 return
             }
@@ -2179,19 +2272,22 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     if (_guideMultiStarEnabled.value) _guideReferenceStars.value.size else 1)
                 return
             }
-            lastGuideCorrectionMs = now
             guideTasks.launch {
                 try {
                     if (!_guideRunning.value || !guideMeasurementIsFresh()) return@launch
-                    if (raDirection != null) guideTasks.pulse(raDirection, raPulse) {
-                        recordGuidePulse(now, true, if (raDirection == MountDirection.EAST) raPulse else -raPulse, calibration.eastRatePxPerSec / 1000)
-                    }
-                    kotlinx.coroutines.currentCoroutineContext().ensureActive()
-                    if (_guideRunning.value && guideMeasurementIsFresh() && decDirection != null) guideTasks.pulse(decDirection, decPulse) {
-                        synchronized(guideOperationLock) {
-                            if (_guideRunning.value) guideDecBacklash.accepted(decDirection)
+                    val camera = guideCameraManager.activeCamera ?: return@launch
+                    guideAcquisition.withMotion(camera) {
+                        if (!_guideRunning.value) return@withMotion
+                        if (raDirection != null) guideTasks.pulse(raDirection, raPulse) {
+                            recordGuidePulse(now, true, if (raDirection == MountDirection.EAST) raPulse else -raPulse, calibration.eastRatePxPerSec / 1000)
                         }
-                        recordGuidePulse(now, false, if (decDirection == MountDirection.NORTH) decPulse else -decPulse, calibration.northRatePxPerSec / 1000)
+                        kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                        if (_guideRunning.value && decDirection != null) guideTasks.pulse(decDirection, decPulse) {
+                            synchronized(guideOperationLock) {
+                                if (_guideRunning.value) guideDecBacklash.accepted(decDirection)
+                            }
+                            recordGuidePulse(now, false, if (decDirection == MountDirection.NORTH) decPulse else -decPulse, calibration.northRatePxPerSec / 1000)
+                        }
                     }
                     if (_guideRunning.value) _guideStatus.value = app.getString(R.string.guide_pulse_status, raPulse, decPulse)
                 } catch (cancelled: CancellationException) { throw cancelled
@@ -2205,7 +2301,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    private suspend fun pulseMount(direction: MountDirection, durationMs: Int) = guideTasks.pulse(direction, durationMs)
+    private suspend fun pulseMount(direction: MountDirection, durationMs: Int) {
+        val camera = guideCameraManager.activeCamera ?: error(app.getString(R.string.connect_guide_camera_first))
+        guideAcquisition.withMotion(camera) { guideTasks.pulse(direction, durationMs) }
+    }
 
     private fun startPreview() {
         val cam = cameraManager.activeCamera ?: return

@@ -34,8 +34,8 @@
     <string name="gw_readout">Camera readout mode</string>
     <string name="gw_apply_exposure">Apply exposure (0.05–5 s)</string>
     <string name="gw_raw_help">Bayer previews and thumbnails use 2×2 CFA cell luminance. Star measurements and calibration use original pixels. Delivered RGB uses luminance. Recalibrate after changing format or readout mode.</string>
-    <string name="gw_calibration_help">Match the guide rate to your mount. With focal length and pixel size, initial pulses are calculated from the requested travel and steps; otherwise use the fallback pulse. RA starts sampling directly. DEC clears backlash before sampling. Return distance is measured from the original axis marker and pulses adapt to measured motion.</string>
-    <string name="gw_steps">Minimum steps per axis</string>
+    <string name="gw_calibration_help">Match the guide rate to your mount. A fixed calibration pulse is calculated from image scale, desired steps and declination. RA samples west and returns east for the same command time. DEC clears backlash, samples north, returns south and makes limited south adjustments. Return offsets are reported for review.</string>
+    <string name="gw_steps">Desired calibration steps</string>
     <string name="gw_distance">Minimum travel per axis (px)</string>
     <string name="gw_backlash">DEC reversal backlash compensation</string>
     <string name="gw_calibration_result">RA / DEC: %1$d / %2$d steps\nBacklash RA %3$d ms · DEC %4$d ms\nFit residual %5$.2f px</string>

@@ -85,6 +85,9 @@ class GuideFitsReplayTest {
     @Test fun lowPassClosesTheLoopOnRecordedImages() = runTest(timeout = 180.seconds) { replayClosedLoop(GuideAlgorithm.LOW_PASS) }
     @Test fun resistSwitchClosesTheLoopOnRecordedImages() = runTest(timeout = 180.seconds) { replayClosedLoop(GuideAlgorithm.RESIST_SWITCH) }
     @Test fun predictiveRaClosesTheLoopOnRecordedImages() = runTest(timeout = 180.seconds) { replayClosedLoop(GuideAlgorithm.PREDICTIVE_RA) }
+    @Test fun lowPass2ClosesTheLoopOnRecordedImages() = runTest(timeout = 180.seconds) { replayClosedLoop(GuideAlgorithm.LOW_PASS_2) }
+    @Test fun zFilterClosesTheLoopOnRecordedImages() = runTest(timeout = 180.seconds) { replayClosedLoop(GuideAlgorithm.Z_FILTER) }
+    @Test fun identityClosesTheLoopOnRecordedImages() = runTest(timeout = 180.seconds) { replayClosedLoop(GuideAlgorithm.IDENTITY) }
 
     private suspend fun TestScope.replayClosedLoop(algorithm: GuideAlgorithm) {
         val plant = ImageMount()
@@ -103,7 +106,7 @@ class GuideFitsReplayTest {
             val actualX = plant.x - lockedX; val actualY = plant.y - lockedY
             val measured = requireNotNull(controller.matchShift(calibrated.stars, stars(field.frame(plant.x, plant.y))))
             val solution = requireNotNull(controller.solveCorrection(calibrated.calibration, measured.x, measured.y,
-                algorithm, .7f, .7f, .15f, backlash))
+                algorithm, .7f, .7f, .15f, backlash, timestampSeconds = index * 2.0, exposureSeconds = 2.0))
             val correction = solution.correction
             var sentRa = 0; var sentDec = 0
             assertTrue(runner.launch {
@@ -157,13 +160,14 @@ class GuideFitsReplayTest {
         report("calibration", "eastX,eastY,northX,northY,raBacklash,decBacklash,eastSteps,northSteps,residual", listOf(
             result.calibration.let { "${it.eastXPerMs},${it.eastYPerMs},${it.northXPerMs},${it.northYPerMs},${it.raBacklashMs},${it.decBacklashMs},${it.eastSteps},${it.northSteps},${it.fitResidualPx}" }))
         val c = result.calibration
-        assertEquals(ex, c.eastXPerMs, .0002f)
-        assertEquals(ey, c.eastYPerMs, .0002f)
+        val raEffectiveFraction = 1f - 600f / (c.eastSteps * c.pulseMs)
+        assertEquals(ex * raEffectiveFraction, c.eastXPerMs, .0002f)
+        assertEquals(ey * raEffectiveFraction, c.eastYPerMs, .0002f)
         assertEquals(nx, c.northXPerMs, .0003f)
         assertEquals(ny, c.northYPerMs, .0003f)
         assertEquals(1800f, c.decBacklashMs.toFloat(), 250f)
-        assertTrue(c.eastSteps >= 7 && c.northSteps >= 7)
-        assertTrue(c.eastTravelPx >= 15 && c.northTravelPx >= 15)
+        assertTrue(c.eastSteps >= 4 && c.northSteps >= 4)
+        assertTrue(c.eastTravelPx >= 25 && c.northTravelPx >= 25)
     }
 
     private fun stars(frame: FrameData) = module.usableStars(module.detectStars(frame))

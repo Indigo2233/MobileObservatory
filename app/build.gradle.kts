@@ -1,6 +1,35 @@
+import java.io.File
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+}
+
+// Exercise the same upstream PPEC core in host JVM tests as in the Android JNI library.
+val phd2HostDirectory = layout.buildDirectory.dir("phd2-host")
+val phd2WindowsHost = System.getProperty("os.name").startsWith("Windows")
+val phd2HostLibrary = phd2HostDirectory.map { it.file(if (phd2WindowsHost) "phd2_guiding.dll" else "libphd2_guiding.so") }
+val buildPhd2Host by tasks.registering(Exec::class) {
+    inputs.files(fileTree("src/main/cpp/phd2"), file("src/main/cpp/phd2_guiding_jni.cpp"))
+    outputs.file(phd2HostLibrary)
+    doFirst {
+        phd2HostDirectory.get().asFile.mkdirs()
+        val jni = File(System.getProperty("java.home"), "include")
+        val nativeRoot = file("src/main/cpp")
+        val flags = mutableListOf("g++", "-std=c++11", "-O1", "-DNDEBUG", "-DEIGEN_MPL2_ONLY", "-DEIGEN_DONT_PARALLELIZE", "-shared")
+        if (phd2WindowsHost) flags += listOf("-static-libgcc", "-static-libstdc++", "-static") else flags += "-fPIC"
+        flags += listOf("-I${jni.absolutePath}", "-I${File(jni, if (phd2WindowsHost) "win32" else "linux").absolutePath}",
+            "-I${File(nativeRoot, "phd2/eigen").absolutePath}", "-I${File(nativeRoot, "phd2/src").absolutePath}",
+            "-I${File(nativeRoot, "phd2/tools").absolutePath}")
+        flags += listOf("phd2_guiding_jni.cpp", "phd2/src/gaussian_process_guider.cpp", "phd2/src/gaussian_process.cpp",
+            "phd2/src/covariance_functions.cpp", "phd2/src/zfilterfactory.cpp", "phd2/tools/math_tools.cpp").map { File(nativeRoot, it).absolutePath }
+        flags += listOf("-o", phd2HostLibrary.get().asFile.absolutePath)
+        commandLine(flags)
+    }
+}
+tasks.withType<Test>().configureEach {
+    dependsOn(buildPhd2Host)
+    systemProperty("java.library.path", phd2HostDirectory.get().asFile.absolutePath)
 }
 
 val stellariumNonCommercial =

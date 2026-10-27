@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="gw_calibration_west">校准：赤经向西</string>
+    <string name="gw_calibration_nudge">校准：赤纬向南微调</string>
+    <string name="gw_calibration_return">返回偏移：RA %1$.2f px · DEC %2$.2f px</string>
+    <string name="gw_calibration_advisory_status"> · 请在设置中查看校准提示</string>
+    <string name="gw_advisory_steps">校准采样步数较少，建议减小校准脉冲后重测。</string>
+    <string name="gw_advisory_fit">校准运动存在波动，请检查星点质量和架台响应。</string>
+    <string name="gw_advisory_ra_return">RA 返回后存在位置偏移，请检查自然漂移和跟踪。</string>
+    <string name="gw_advisory_dec_return">DEC 返回后存在位置偏移，请检查自然漂移和回差。</string>
+    <string name="gw_advisory_reverse">反向运动不足或方向异常，请检查架台响应。</string>
+    <string name="gw_advisory_axes">RA 与 DEC 方向偏离垂直较多，请检查校准条件。</string>
+    <string name="gw_advisory_backlash">DEC 回差估计不确定，已停用该估计值的自动补偿。</string>
+    <string name="gw_algorithm_lowpass2">低通二型（Lowpass2）</string>
+    <string name="gw_algorithm_identity">直通（Identity）</string>
+    <string name="gw_algorithm_zfilter">Z 滤波（Z-filter）</string>
+    <string name="gw_exposure_factor">Z 滤波曝光系数</string>
+    <string name="gw_ra_algorithm">RA 导星算法</string>
+    <string name="gw_dec_algorithm">DEC 导星算法</string>
+    <string name="gw_ra_min_move">RA 最小修正量</string>
+    <string name="gw_dec_min_move">DEC 最小修正量</string>
+    <string name="gw_hysteresis">滞后系数</string>
+    <string name="gw_slope_weight">低通斜率权重</string>
+    <string name="gw_fast_switch">抵抗切换算法快速换向</string>
+    <string name="gw_prediction_weight">PPEC 预测权重</string>
+    <string name="gw_worm_period">PPEC 蜗杆周期</string>
+    <string name="gw_estimate_period">自动估计周期</string>
+</resources>

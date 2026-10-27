@@ -34,8 +34,8 @@
     <string name="gw_readout">相机读出模式</string>
     <string name="gw_apply_exposure">应用曝光（0.05–5 s）</string>
     <string name="gw_raw_help">Bayer 预览和缩略图采用 2×2 CFA 亮度合成，星点测量和校准使用原始像素。相机提供 RGB 时使用亮度通道。更改格式或读出模式后需要重新校准。</string>
-    <string name="gw_calibration_help">导星速率须与架台设置一致。已知焦距与像元时，根据目标位移、步数及赤纬计算初始脉冲；否则使用备用脉冲。RA 直接采样，DEC 先消除空程。返回距离相对该轴最初标记点计算，并按实测响应合并返回脉冲。</string>
-    <string name="gw_steps">每轴最少步数</string>
+    <string name="gw_calibration_help">请核对导星速率与架台一致。按像素尺、期望步数和赤纬计算固定校准脉冲。RA 向西采样，按相同累计指令时间向东返回；DEC 消隙后向北采样、向南返回并有限微调。返回偏移保留在结果中供检查。</string>
+    <string name="gw_steps">期望校准步数</string>
     <string name="gw_distance">每轴最小位移（px）</string>
     <string name="gw_backlash">DEC 换向回差补偿</string>
     <string name="gw_calibration_result">RA / DEC：%1$d / %2$d 步\n回差 RA %3$d ms · DEC %4$d ms\n拟合残差 %5$.2f px</string>

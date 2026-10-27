@@ -1,0 +1,14 @@
+{
+  "commit": "70e9fd178b3122b6553646c60f462cb09335dcc5",
+  "source_newlines": "LF",
+  "sources": {
+    "guide_algorithm_hysteresis.cpp": "cbbe2321e8d9aa5b7426a62df35eb96c21c2517946c3921d2a7e7cd125248c63",
+    "guide_algorithm_lowpass.cpp": "23538e1e687db2506feff84b6b8de5bfcb707eedc69fef4d3a318765f3b6dad8",
+    "guide_algorithm_lowpass2.cpp": "7438734f6f1d1d80ec3c6a13b97fa9424a93e50810c2a60abc234975b5d4672a",
+    "guide_algorithm_resistswitch.cpp": "2fc187e7c66f84003ddbe3a912921727545e16b7532fa6aff64241c2c4575015",
+    "guide_algorithm_zfilter.cpp": "43e5b799257c29a412401f87df811ac6935a38797ceab9377fb7f1eb0e1e4087",
+    "guide_algorithm_identity.cpp": "8677e5dddc4bfb6d7687484d0043f74153a67e8a0bea887aceb0e8adfa853cff",
+    "zfilterfactory.cpp": "b88f372d7bd37c070924e2e07229f52e8691e6e696041e1bd5f07d93a7928e65",
+    "zfilterfactory.h": "e13584d7d7fed453cee5e4b17fb3569980fb9079ee9d89c25b0c05601ae7c428"
+  }
+}

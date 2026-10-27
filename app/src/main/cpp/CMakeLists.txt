@@ -1,6 +1,14 @@
 cmake_minimum_required(VERSION 3.18)
 project(camera_jni)
 
+# PHD2's original GaussianProcessGuider, isolated from all camera SDK libraries.
+add_library(phd2_guiding SHARED phd2_guiding_jni.cpp
+    phd2/src/gaussian_process_guider.cpp phd2/src/gaussian_process.cpp
+    phd2/src/covariance_functions.cpp phd2/src/zfilterfactory.cpp phd2/tools/math_tools.cpp)
+target_include_directories(phd2_guiding PRIVATE phd2/eigen phd2/src phd2/tools)
+target_compile_features(phd2_guiding PRIVATE cxx_std_17)
+target_compile_definitions(phd2_guiding PRIVATE EIGEN_MPL2_ONLY EIGEN_DONT_PARALLELIZE)
+
 # --- ToupTek ---
 add_library(toupcam SHARED IMPORTED)
 set_target_properties(toupcam PROPERTIES

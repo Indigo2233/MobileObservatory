@@ -396,7 +396,7 @@
     <string name="guide_algorithm_hysteresis">Hysteresis</string>
     <string name="guide_algorithm_low_pass">Low pass</string>
     <string name="guide_algorithm_resist_switch">Resist switch</string>
-    <string name="guide_algorithm_predictive_ra">Predictive RA</string>
+    <string name="guide_algorithm_predictive_ra">Predictive PEC (PHD2)</string>
     <string name="cover_status">%1$s  Cover: %2$s  Light: %3$s</string>
     <string name="brightness_value">Brightness %1$d / %2$d</string>
     <string name="rotator_status">%1$s  Angle: %2$.2f°  Steps: %3$d%4$s</string>

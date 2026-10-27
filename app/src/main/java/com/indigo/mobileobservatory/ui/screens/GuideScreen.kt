@@ -55,6 +55,9 @@ fun GuideScreen(viewModel: CameraViewModel, onBack: () -> Unit) {
     val calibrating by viewModel.guideCalibrating.collectAsStateWithPageLifecycle()
     val autoStarting by viewModel.guideAutoStarting.collectAsStateWithPageLifecycle()
     val status by viewModel.guideStatus.collectAsStateWithPageLifecycle()
+    val calibration by viewModel.guideCalibration.collectAsStateWithPageLifecycle()
+    val displayedStatus = if (!calibrating && calibration?.advisories?.isNotEmpty() == true)
+        stringResource(R.string.gw_calibration_advisory_status).trimStart(' ', '·') + "\n" + status else status
     val display by viewModel.guideDisplayFrame.collectAsStateWithPageLifecycle()
     val references by viewModel.guideReferenceStars.collectAsStateWithPageLifecycle()
     val selectedStar by viewModel.guideReferenceStar.collectAsStateWithPageLifecycle()
@@ -145,7 +148,7 @@ fun GuideScreen(viewModel: CameraViewModel, onBack: () -> Unit) {
             val plotHeight = (maxHeight * if (landscape) .3f else .14f).coerceIn(64.dp, 96.dp)
             if (landscape) {
                 Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    GuidePreview(display, references, viewModel::selectGuideStar, status,
+                    GuidePreview(display, references, viewModel::selectGuideStar, displayedStatus,
                         Modifier.weight(1f).fillMaxHeight(), foreground && panel.isEmpty())
                     Column(Modifier.width(diagnosticsWidth).fillMaxHeight()
                         .verticalScroll(rememberScrollState())) {
@@ -156,7 +159,7 @@ fun GuideScreen(viewModel: CameraViewModel, onBack: () -> Unit) {
                 }
             } else {
                 Column(Modifier.fillMaxSize()) {
-                    GuidePreview(display, references, viewModel::selectGuideStar, status,
+                    GuidePreview(display, references, viewModel::selectGuideStar, displayedStatus,
                         Modifier.weight(1f).fillMaxWidth(), foreground && panel.isEmpty())
                     GuideStarSummary(display) { panel = "star" }
                     GuidePlots(window, factor, unit, plotRange, showPulses, plotHeight,

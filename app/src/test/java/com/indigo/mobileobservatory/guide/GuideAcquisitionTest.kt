@@ -22,7 +22,8 @@ class GuideAcquisitionTest {
         override val cropInfo = CropInfo(0, 0, 64, 64)
         override val hwExposureMaxUs = 5000000f
         override var longExposureEnabled = false
-        var starts = 0; var stops = 0; var refusesStop = false
+        var starts = 0; var stops = 0; var refusesStop = false; var readerStillRunning = false
+        override val isCaptureStopped get() = !isCapturing.value && !readerStillRunning
         var onStart: () -> Unit = {}
         override fun startCapture(callback: FrameCallback) { starts++; isCapturing.value = true; onStart() }
         override fun stopCapture() { stops++; if (!refusesStop) isCapturing.value = false }
@@ -86,5 +87,61 @@ class GuideAcquisitionTest {
         val acquisition = GuideAcquisition(Mutex(), { camera }, {}, {}, { active = it })
         try { acquisition.update(camera) { writes++ }; fail("Stop failure was ignored") } catch (_: IllegalStateException) { }
         assertTrue(active); assertEquals(0, writes)
+    }
+
+    @Test fun allPulsesFinishBeforeExposureIsRestarted() = runTest {
+        val camera = CameraFixture(); val events = mutableListOf<String>()
+        val acquisition = GuideAcquisition(Mutex(), { camera }, {
+            events += "exposure"; it.startCapture(callback)
+        }, { events += "retire" }, {})
+        acquisition.requested = true
+        acquisition.withMotion(camera) {
+            assertTrue(camera.isCaptureStopped)
+            events += "RA"; events += "RA-stop"; events += "DEC"; events += "DEC-stop"
+            assertFalse(camera.isCapturing.value)
+        }
+        assertEquals(listOf("retire", "RA", "RA-stop", "DEC", "DEC-stop", "exposure"), events)
+        assertTrue(camera.isCapturing.value)
+    }
+
+    @Test fun anAliveReaderPreventsAnyMountPulseEvenWhenCapturingFlagIsFalse() = runTest {
+        val camera = CameraFixture().apply { readerStillRunning = true }
+        var pulses = 0
+        val acquisition = GuideAcquisition(Mutex(), { camera }, { it.startCapture(callback) }, {}, {})
+        acquisition.requested = true
+        try { acquisition.withMotion(camera) { pulses++ }; fail("Reader shutdown was ignored") }
+        catch (_: IllegalStateException) { }
+        assertEquals(0, pulses); assertEquals(0, camera.starts)
+    }
+
+    @Test fun aStopDuringMotionCannotRestartExposure() = runTest {
+        val camera = CameraFixture()
+        val acquisition = GuideAcquisition(Mutex(), { camera }, { it.startCapture(callback) }, {}, {})
+        acquisition.requested = true
+        acquisition.withMotion(camera) { acquisition.requested = false }
+        assertEquals(0, camera.starts); assertTrue(camera.isCaptureStopped)
+    }
+
+    @Test fun failedMotionOrPhysicalStopCannotResumeExposure() = runTest {
+        val camera = CameraFixture()
+        val acquisition = GuideAcquisition(Mutex(), { camera }, { it.startCapture(callback) }, {}, {})
+        acquisition.requested = true
+        try { acquisition.withMotion(camera) { error("Physical mount stop could not be confirmed") }; fail("Stop failure ignored") }
+        catch (_: IllegalStateException) { }
+        assertFalse(acquisition.requested); assertTrue(camera.isCaptureStopped); assertEquals(0, camera.starts)
+    }
+
+    @Test fun cancelledMotionResumesPreviewOnlyAfterItsStopCleanup() = runTest {
+        val camera = CameraFixture(); val events = mutableListOf<String>()
+        val acquisition = GuideAcquisition(Mutex(), { camera }, { events += "exposure"; it.startCapture(callback) }, {}, {})
+        acquisition.requested = true
+        try {
+            acquisition.withMotion(camera) {
+                try { throw kotlinx.coroutines.CancellationException("User stopped guiding") }
+                finally { events += "mount-stopped" }
+            }
+        } catch (_: kotlinx.coroutines.CancellationException) { }
+        assertEquals(listOf("mount-stopped", "exposure"), events)
+        assertTrue(camera.isCapturing.value)
     }
 }

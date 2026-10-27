@@ -47,8 +47,10 @@ class GuideFlowInstrumentedTest {
         assertEquals(vm.guideStatus.value, GuideCalibrationState.COMPLETE, vm.guideCalibrationState.value)
         assertTrue(vm.guideStatus.value, vm.guideRunning.value)
         assertTrue(endpoint.pulses > 12)
+        assertEquals("Calibration pulses must not overlap guide exposure", 0, endpoint.exposureOverlaps)
         endpoint.drift(2.5f, -1.5f)
         compose.waitUntil(15_000) { vm.guideHistory.value.any { it.raPulseMs != 0 || it.decPulseMs != 0 } }
+        assertEquals("Guiding pulses must not overlap guide exposure", 0, endpoint.exposureOverlaps)
         compose.onNodeWithTag("guide-start-stop").performClick()
         compose.waitUntil(5000) { !vm.guideRunning.value && !vm.guideAutoStarting.value }
         compose.onNodeWithTag("guide-exposure").performClick()
@@ -61,7 +63,7 @@ class GuideFlowInstrumentedTest {
         compose.onNodeWithTag("guide-start-stop").performClick()
         compose.waitUntil(10_000) { vm.guideCalibrating.value }
         compose.onNodeWithTag("guide-start-stop").performClick()
-        compose.waitUntil(5000) { !vm.guideCalibrating.value && !vm.guideAutoStarting.value }
+        compose.waitUntil(5000) { !vm.guideCalibrating.value && !vm.guideAutoStarting.value && vm.guideExposing.value }
         assertFalse(vm.guideRunning.value)
         assertTrue(vm.guideExposing.value)
     }
@@ -108,7 +110,9 @@ class GuideFlowInstrumentedTest {
         private val source: SimulatedCamera = SimulatedCamera("Guide flow fixture").apply { setPixelFormat(PixelFormat.MONO8) }
     ) : Camera by source {
         override val cameraInfo = source.cameraInfo.copy(pixelSizeUm = 2.9f)
-        override fun startCapture(callback: FrameCallback) = source.startCapture(object : FrameCallback {
+        override fun startCapture(callback: FrameCallback) {
+            endpoint.exposing = true
+            source.startCapture(object : FrameCallback {
             override fun onFrame(frame: FrameData) {
                 source.recycleBuffer(frame.data)
                 val pixels = ByteArray(frame.width * frame.height) { 10 }
@@ -124,7 +128,9 @@ class GuideFlowInstrumentedTest {
                 }
                 callback.onFrame(frame.copy(data = pixels, pixelFormat = PixelFormat.MONO8))
             }
-        })
+            })
+        }
+        override fun stopCapture() { source.stopCapture(); endpoint.exposing = false }
         override fun recycleBuffer(buf: ByteArray) { }
     }
 
@@ -132,6 +138,8 @@ class GuideFlowInstrumentedTest {
         private val server = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
         val port get() = server.localPort
         @Volatile var pulses = 0
+        @Volatile var exposing = false
+        @Volatile var exposureOverlaps = 0
         @Volatile private var client: Socket? = null
         private var x = 0f; private var y = 0f
         @Volatile private var saturatedUntil = 0L
@@ -140,6 +148,7 @@ class GuideFlowInstrumentedTest {
         fun temporarilySaturated() = android.os.SystemClock.elapsedRealtime() < saturatedUntil
         @Synchronized fun drift(dx: Float, dy: Float) { x += dx; y += dy }
         @Synchronized private fun pulse(command: String): String {
+            if (exposing) exposureOverlaps++
             val duration = command.substring(4).dropLast(1).toInt()
             when (command[3]) {
                 'e' -> x += duration * .01f
