@@ -116,7 +116,7 @@ class FrameProcessor(private val bitmapBufferCount: Int = 2, private val downsam
     private var lastFocusComputeMs = 0L
 
     var autoStretchEnabled: Boolean = true
-    /** Guide raw samples bypass CFA interpolation; delivered RGB uses unbalanced luminance. */
+    /** Guide Bayer previews use 2×2 cell means; delivered RGB uses unbalanced luminance. */
     var rawMonochrome: Boolean = false
     /** Infrared LP750 is an explicit display conversion, never the normal visible-light path. */
     var lp750Enabled: Boolean = false
@@ -168,10 +168,11 @@ class FrameProcessor(private val bitmapBufferCount: Int = 2, private val downsam
     private var cachedH = 0
     private var nextBitmapIndex = 0
     private var previewSampleBuf: ByteArray? = null
+    private var cfaLuminanceBuf: ByteArray? = null
     private var lastPreviewScaleLogKey: String? = null
 
     fun frameToBitmap(frame: FrameData, traits: PixelTraits? = null): Bitmap {
-        val preview = if (downsample) downsampleForPreview(frame) else frame
+        var preview = if (downsample) downsampleForPreview(frame) else frame
         val w = preview.width
         val h = preview.height
         if (w <= 0 || h <= 0 || w > 20000 || h > 20000) {
@@ -185,6 +186,12 @@ class FrameProcessor(private val bitmapBufferCount: Int = 2, private val downsam
             val bpp = preview.pixelFormat.bytesPerPixel
             val safeW = (preview.data.size / bpp / h).coerceAtLeast(1)
             return frameToBitmap(preview.copy(width = safeW.coerceAtMost(w)), traits)
+        }
+
+        if (rawMonochrome && preview.pixelFormat.isBayer) {
+            val buffer = cfaLuminanceBuf?.takeIf { it.size >= expectedBytes }
+                ?: ByteArray(expectedBytes.toInt()).also { cfaLuminanceBuf = it }
+            preview = CfaLuminancePreview.compose(preview, buffer, traits?.byteOrder ?: ByteOrder.LITTLE_ENDIAN)
         }
 
         val bitmap: Bitmap
@@ -265,6 +272,7 @@ class FrameProcessor(private val bitmapBufferCount: Int = 2, private val downsam
         cachedBitmaps = null
         cachedPixels = null
         cachedBayerRaw8 = null
+        cfaLuminanceBuf = null
         cachedW = 0
         cachedH = 0
         nextBitmapIndex = 0

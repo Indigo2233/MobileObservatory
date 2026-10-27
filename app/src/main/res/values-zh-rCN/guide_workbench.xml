@@ -33,7 +33,7 @@
     <string name="gw_bit_depth">图像格式 / 位深</string>
     <string name="gw_readout">相机读出模式</string>
     <string name="gw_apply_exposure">应用曝光（0.05–5 s）</string>
-    <string name="gw_raw_help">导星使用灰度显示与测量。Bayer 输入不执行去马赛克，相机提供 RGB 时使用亮度通道。更改格式或读出模式后需要重新校准。</string>
+    <string name="gw_raw_help">Bayer 预览和缩略图采用 2×2 CFA 亮度合成，星点测量和校准使用原始像素。相机提供 RGB 时使用亮度通道。更改格式或读出模式后需要重新校准。</string>
     <string name="gw_calibration_help">导星速率须与架台设置一致。已知焦距与像元时，根据目标位移、步数及赤纬计算初始脉冲；否则使用备用脉冲。RA 直接采样，DEC 先消除空程。返回距离相对该轴最初标记点计算，并按实测响应合并返回脉冲。</string>
     <string name="gw_steps">每轴最少步数</string>
     <string name="gw_distance">每轴最小位移（px）</string>
