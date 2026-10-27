@@ -191,7 +191,7 @@ class GuideSettingsInstrumentedTest {
         start(fontScale = 1.5f, night = true); category(R.string.calibration)
         compose.onNodeWithTag("guide-steps-input").performScrollTo().assertIsDisplayed()
         compose.onNodeWithTag("guide-steps-increase").assertIsDisplayed().performClick()
-        assertEquals(8, vm.guideCalibrationSteps.value)
+        assertEquals(13, vm.guideCalibrationSteps.value)
         compose.onNodeWithTag("guide-settings-close").assertIsDisplayed()
         screenshot("landscape-large-night")
         instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
