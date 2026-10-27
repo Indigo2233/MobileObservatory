@@ -102,7 +102,7 @@ fun GuideScreen(viewModel: CameraViewModel, onBack: () -> Unit) {
             text = { Box(Modifier.fillMaxWidth().heightIn(max = 440.dp)) {
                 when (panel) {
                     "devices" -> GuideDevices(viewModel) { panel = "" }
-                    "star" -> GuideStarPanel(display, factor, unit, Modifier.fillMaxWidth())
+                    "star" -> GuideStarPanel(display, Modifier.fillMaxWidth())
                     "plots" -> GuidePlotSettings(samples, { samples = it }, showPulses, { showPulses = it },
                         plotRange, { plotRange = it }, unit)
                 }
@@ -149,7 +149,7 @@ fun GuideScreen(viewModel: CameraViewModel, onBack: () -> Unit) {
                         Modifier.weight(1f).fillMaxHeight(), foreground && panel.isEmpty())
                     Column(Modifier.width(diagnosticsWidth).fillMaxHeight()
                         .verticalScroll(rememberScrollState())) {
-                        GuideStarSummary(display, factor, unit) { panel = "star" }
+                        GuideStarSummary(display) { panel = "star" }
                         GuidePlots(window, factor, unit, plotRange, showPulses, plotHeight,
                             onSettings = { panel = "plots" }, onClear = viewModel::clearGuideHistory)
                     }
@@ -158,7 +158,7 @@ fun GuideScreen(viewModel: CameraViewModel, onBack: () -> Unit) {
                 Column(Modifier.fillMaxSize()) {
                     GuidePreview(display, references, viewModel::selectGuideStar, status,
                         Modifier.weight(1f).fillMaxWidth(), foreground && panel.isEmpty())
-                    GuideStarSummary(display, factor, unit) { panel = "star" }
+                    GuideStarSummary(display) { panel = "star" }
                     GuidePlots(window, factor, unit, plotRange, showPulses, plotHeight,
                         onSettings = { panel = "plots" }, onClear = viewModel::clearGuideHistory)
                 }
@@ -182,7 +182,7 @@ private fun GuidePreview(frame: GuideDisplayFrame?, references: List<GuideStar>,
 }
 
 @Composable
-private fun GuideStarSummary(frame: GuideDisplayFrame?, factor: Float, unit: String, onDetails: () -> Unit) {
+private fun GuideStarSummary(frame: GuideDisplayFrame?, onDetails: () -> Unit) {
     val description = stringResource(R.string.gw_star_details)
     Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant)
         .clickable(onClickLabel = description, onClick = onDetails).testTag("guide-star-summary")
@@ -196,9 +196,9 @@ private fun GuideStarSummary(frame: GuideDisplayFrame?, factor: Float, unit: Str
         Column(Modifier.weight(1f)) {
             Text(stringResource(R.string.guide_star), fontSize = 13.sp, lineHeight = 18.sp)
             Text(if (profile == null) stringResource(R.string.no_star_detected) else
-                "HFR ${number(profile.hfrPx * factor)} $unit · SNR ${number(frame.primary?.snr ?: 0f)}",
+                "HFR ${number(profile.hfrPx)} px · SNR ${number(frame.primary?.snr ?: 0f)}",
                 fontSize = 13.sp, lineHeight = 18.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("guide-hfr"))
         }
         Icon(Icons.Default.ChevronRight, description, Modifier.size(20.dp))
     }
@@ -320,7 +320,7 @@ internal fun GuideImage(frame: GuideDisplayFrame?, references: List<GuideStar>, 
 }
 
 @Composable
-private fun GuideStarPanel(frame: GuideDisplayFrame?, factor: Float, unit: String, modifier: Modifier) {
+private fun GuideStarPanel(frame: GuideDisplayFrame?, modifier: Modifier) {
     Column(modifier.background(MaterialTheme.colorScheme.surfaceVariant).verticalScroll(rememberScrollState())
         .testTag("guide-star-details").padding(8.dp)) {
         Text(stringResource(R.string.guide_star), style = MaterialTheme.typography.labelMedium)
@@ -328,38 +328,51 @@ private fun GuideStarPanel(frame: GuideDisplayFrame?, factor: Float, unit: Strin
         if (profile == null) {
             Text(stringResource(R.string.no_star_detected), fontSize = 11.sp)
         } else {
-            GuideStarDetails(profile, frame.primary, factor, unit)
+            GuideStarDetails(profile, frame.primary)
         }
     }
 }
 
 @Composable
-private fun GuideStarDetails(profile: GuideStarProfile, primary: GuideStar?, factor: Float, unit: String) {
+private fun GuideStarDetails(profile: GuideStarProfile, primary: GuideStar?) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             GuideStarThumbnail(profile, Modifier.size(64.dp))
             Column(Modifier.padding(start = 6.dp)) {
-                Text("HFR ${number(profile.hfrPx * factor)} $unit", fontSize = 11.sp)
+                Text("HFR ${number(profile.hfrPx)} px", fontSize = 11.sp, modifier = Modifier.testTag("guide-hfr-detail"))
                 Text("SNR ${number(primary?.snr ?: 0f)}", fontSize = 11.sp)
                 Text(stringResource(R.string.gw_peak, profile.peak), fontSize = 11.sp)
             }
         }
         Text(stringResource(R.string.gw_flux, profile.flux), fontSize = 11.sp)
+        Text(stringResource(if (profile.saturated) R.string.gw_star_saturated else R.string.gw_star_not_saturated),
+            color = if (profile.saturated) decColor else MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp,
+            modifier = Modifier.testTag("guide-star-saturation"))
         Text(stringResource(R.string.gw_profile), fontSize = 11.sp)
-        Canvas(Modifier.fillMaxWidth().height(65.dp).background(Color(0xFF101318))) {
-            val maxIntensity = profile.radialIntensity.maxOrNull()?.coerceAtLeast(1f) ?: 1f
-            fun series(values: List<Float>, divisor: Float, color: Color) {
+        val radius = max(profile.horizontalOffsets.maxOfOrNull { abs(it) } ?: 12f,
+            profile.verticalOffsets.maxOfOrNull { abs(it) } ?: 12f).coerceAtLeast(1f)
+        Canvas(Modifier.fillMaxWidth().height(110.dp).background(Color(0xFF101318)).clipToBounds().testTag("guide-star-profile")) {
+            val maxIntensity = (profile.peak * 1.08f).coerceAtLeast(1f)
+            fun x(offset: Float) = (offset + radius) / (2 * radius) * size.width
+            fun y(value: Float) = size.height * (1 - value / maxIntensity)
+            fun series(offsets: List<Float>, values: List<Float>, color: Color) {
                 for (i in 1 until values.size) drawLine(color,
-                    Offset((i - 1) * size.width / (values.size - 1), size.height * (1 - values[i - 1] / divisor)),
-                    Offset(i * size.width / (values.size - 1), size.height * (1 - values[i] / divisor)), 2f)
+                    Offset(x(offsets[i - 1]), y(values[i - 1])), Offset(x(offsets[i]), y(values[i])), 2f)
             }
-            series(profile.radialIntensity, maxIntensity, raColor)
-            series(profile.encircledEnergy, 1f, Color(0xFFFFD54F))
-            val hfrX = profile.hfrPx / (profile.radialIntensity.size - 1) * size.width
-            drawLine(Color.White.copy(alpha = .5f), Offset(hfrX, 0f), Offset(hfrX, size.height), 1f)
-            drawLine(Color.White.copy(alpha = .25f), Offset(0f, size.height / 2), Offset(size.width, size.height / 2), 1f)
+            drawLine(Color.White.copy(alpha = .25f), Offset(x(0f), 0f), Offset(x(0f), size.height), 1f)
+            drawLine(Color.White.copy(alpha = .2f), Offset(0f, y(profile.background)), Offset(size.width, y(profile.background)), 1f)
+            series(profile.horizontalOffsets, profile.horizontalIntensity, raColor)
+            series(profile.verticalOffsets, profile.verticalIntensity, Color(0xFFFFD54F))
+            for (offset in listOf(-profile.hfrPx, profile.hfrPx))
+                drawLine(Color.White.copy(alpha = .5f), Offset(x(offset), 0f), Offset(x(offset), size.height), 1f)
+            if (profile.saturationLevel <= maxIntensity) drawLine(decColor,
+                Offset(0f, y(profile.saturationLevel)), Offset(size.width, y(profile.saturationLevel)), 2f)
+        }
+        Row(Modifier.fillMaxWidth().testTag("guide-profile-axis"), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("−${number(radius, 1)} px", fontSize = 10.sp)
+            Text("0", fontSize = 10.sp)
+            Text("+${number(radius, 1)} px", fontSize = 10.sp)
         }
         Text(stringResource(R.string.gw_profile_legend), fontSize = 10.sp)
-        Text(stringResource(R.string.gw_profile_radius, (profile.radialIntensity.size - 1) * factor, unit), fontSize = 10.sp)
 }
 
 @Composable

@@ -18,23 +18,23 @@
     <string name="gw_sample_count">%1$d / %2$d</string>
     <string name="gw_rms_compact">RMS RA %1$.2f · DEC %2$.2f · total\u00a0%3$.2f\u00a0%4$s</string>
     <string name="gw_star_details">Star details and energy profile</string>
-    <string name="gw_image">Raw monochrome guide image; pan, zoom and tap a star</string>
+    <string name="gw_image">Monochrome guide image; pan, zoom and tap a star</string>
     <string name="gw_algorithms">Algorithms</string>
     <string name="gw_optics">Optics</string>
     <string name="gw_focal_mm">Guide focal length (mm; blank uses px)</string>
-    <string name="gw_scale_help">With a guide focal length and known pixel size, graphs and HFR use arcseconds. Otherwise they use px.</string>
+    <string name="gw_scale_help">With a guide focal length and known pixel size, guiding graphs use arcseconds. HFR and star profiles use sensor pixels.</string>
     <string name="gw_pixel_um">Effective pixel size: %1$.2f μm</string>
     <string name="gw_peak">Peak %1$.0f ADU</string>
     <string name="gw_flux">Background-subtracted flux %1$.0f ADU</string>
     <string name="gw_profile">Star energy profile</string>
-    <string name="gw_profile_legend" formatted="false">Blue: mean radial intensity · yellow: encircled energy 0–100%</string>
+    <string name="gw_profile_legend" formatted="false">Blue: horizontal · yellow: vertical · center: 0 px · white: ±HFR · red: saturation</string>
     <string name="gw_profile_radius">Radius 0–%1$.1f %2$s · vertical line: HFR</string>
     <string name="gw_rms">RMS  RA %1$.2f · DEC %2$.2f · total %3$.2f %4$s  |  %5$d / %6$d samples</string>
-    <string name="gw_bit_depth">Raw format / bit depth</string>
+    <string name="gw_bit_depth">Image format / bit depth</string>
     <string name="gw_readout">Camera readout mode</string>
     <string name="gw_apply_exposure">Apply exposure (0.05–5 s)</string>
-    <string name="gw_raw_help">Guiding displays and measures raw single-channel pixels. Recalibrate after changing format or readout mode.</string>
-    <string name="gw_calibration_help">Clear backlash, measure at least the specified steps and travel, fit both axes, and measure reversal backlash on return. Step duration adapts to the measured response.</string>
+    <string name="gw_raw_help">Guiding uses monochrome pixels. Bayer input bypasses demosaicing; delivered RGB uses luminance. Recalibrate after changing format or readout mode.</string>
+    <string name="gw_calibration_help">Match the guide rate to your mount. With focal length and pixel size, initial pulses are calculated from the requested travel and steps; otherwise use the fallback pulse. RA starts sampling directly. DEC clears backlash before sampling. Return distance is measured from the original axis marker and pulses adapt to measured motion.</string>
     <string name="gw_steps">Minimum steps per axis</string>
     <string name="gw_distance">Minimum travel per axis (px)</string>
     <string name="gw_backlash">DEC reversal backlash compensation</string>
