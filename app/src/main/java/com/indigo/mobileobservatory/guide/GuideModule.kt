@@ -96,16 +96,26 @@ class GuideModule {
 
         val image = GuideImage(frame)
         var sum = 0.0; var square = 0.0; var count = 0
+        val phaseSums = DoubleArray(4)
+        var phaseCount = 0
         for (y in 0 until height step 8) for (x in 0 until width step 8) {
             val value = image.value(x, y).toDouble()
             sum += value; square += value * value; count++
+            if (image.bayer && x + 1 < width && y + 1 < height) {
+                for (dy in 0..1) for (dx in 0..1)
+                    phaseSums[dy * 2 + dx] += rawValue(frame, x + dx, y + dy).toDouble()
+                phaseCount++
+            }
         }
         if (count == 0) return emptyList()
         val mean = sum / count
         val threshold = mean + 4 * sqrt((square / count - mean * mean).coerceAtLeast(0.0))
+        val signal = if (image.bayer) GuideCandidateMask(frame, DoubleArray(4) { phaseSums[it] / phaseCount }, threshold) else null
         val candidates = ArrayList<Candidate>()
         for (y in 2 until height - 2) {
+            signal?.prepareRow(y)
             for (x in 2 until width - 2) {
+                if (signal != null && !signal.mayContainSignal(x)) continue
                 val value = image.value(x, y).toDouble()
                 if (value <= threshold) continue
                 if (value >= image.value(x - 1, y) && value >= image.value(x + 1, y) &&

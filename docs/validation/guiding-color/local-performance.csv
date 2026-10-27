@@ -1,0 +1,13 @@
+variant,operation,width,height,minMs,medianMs,p95Ms,checksumOrStars
+baseline,detect,640,480,3.448,6.193,7.258,16
+current,detect,640,480,3.881,5.298,6.515,16
+baseline,local,640,480,0.871,1.156,1.592,1382471
+current,local,640,480,0.768,0.988,1.473,1382471
+baseline,detect,1920,1080,22.303,27.662,32.173,16
+current,detect,1920,1080,12.717,16.626,22.278,16
+baseline,local,1920,1080,1.533,2.021,2.519,1383679
+current,local,1920,1080,1.143,1.391,1.590,1383679
+baseline,detect,3840,2160,106.993,119.929,151.321,16
+current,detect,3840,2160,34.678,43.392,74.598,16
+baseline,local,3840,2160,1.769,2.772,3.020,1381951
+current,local,3840,2160,0.766,0.870,1.425,1381951

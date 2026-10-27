@@ -15,6 +15,7 @@ internal object Phd2StarMeasurement {
 
     fun find(image: GuideImage, baseX: Int, baseY: Int, search: Int = 3, maxADU: Int = 0,
         minHfd: Double = 1.5, maxHfd: Double = 20.0): Measurement {
+        image.beginMeasurement(baseX, baseY, search)
         val sx = maxOf(baseX - search, 0); val ex = minOf(baseX + search, image.width - 1)
         val sy = maxOf(baseY - search, 0); val ey = minOf(baseY + search, image.height - 1)
         if (ex <= sx || ey <= sy) return Measurement(baseX.toDouble(), baseY.toDouble(), 0.0, 0.0, 0.0, 0, 0.0, Result.ERROR)

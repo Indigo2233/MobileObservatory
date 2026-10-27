@@ -62,15 +62,18 @@ class Phd2StarReferenceTest {
         }
     }
 
-    @Test fun rowCacheStaysBoundedAndLeavesTheRawSensorBytesUnchanged() {
+    @Test fun sparseReadsAvoidRowAllocationAndLocalPhotometryKeepsTheRawBytesUnchanged() {
         val pixels = ByteArray(256 * 512) { ((it * 17) % 251).toByte() }
         val original = pixels.clone()
         val image = GuideImage(FrameData(pixels, 256, 512, PixelFormat.BAYER_RG8, 1, 0))
         for (y in 0 until image.height) for (x in 0 until image.width) image.value(x, y)
-        assertTrue(image.cachedPixels <= 256 * 32)
+        assertEquals(0, image.cachedPixels)
         assertArrayEquals(original, pixels)
         assertEquals((pixels[0].toInt().and(255) + pixels[1].toInt().and(255) +
             pixels[256].toInt().and(255) + pixels[257].toInt().and(255)) / 4, image.value(0, 0))
+        Phd2StarMeasurement.find(image, 128, 256)
+        assertTrue(image.cachedPixels <= 31 * 31)
+        assertArrayEquals(original, pixels)
     }
 
     @Test fun rawClippingInOneColorChannelSurvivesLuminanceAveraging() {
