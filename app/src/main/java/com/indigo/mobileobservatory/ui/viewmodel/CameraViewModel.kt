@@ -370,6 +370,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val binning: StateFlow<Int> = _binning.asStateFlow()
     private val _binningUsesHardware = MutableStateFlow(false)
     val binningUsesHardware: StateFlow<Boolean> = _binningUsesHardware.asStateFlow()
+    private val _binningUsesSdk = MutableStateFlow(false)
+    val binningUsesSdk: StateFlow<Boolean> = _binningUsesSdk.asStateFlow()
     private val _binningUsesSoftware = MutableStateFlow(false)
     val binningUsesSoftware: StateFlow<Boolean> = _binningUsesSoftware.asStateFlow()
     private val _imagingWidth = MutableStateFlow(1920)
@@ -2411,6 +2413,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 previewPipeline.submit(display, traits?.copy(bayerPatternAtOutput = true), previewRun, runRecycler)
             }
         })
+        publishBinImplementation(cam)
         runTraits.set(cameraCfaTraits(cam, selection))
         activePreviewTraits = runTraits.get()
         val generation = cam.scienceCaptureGeneration
@@ -3281,24 +3284,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun applyBinning(cam: Camera, requested: Int) {
-        val capable = cam as? CameraBinningCapable
-        val app = requested.coerceAtLeast(1)
-        val candidates = AppBinning.hardwareCandidates(app, capable?.supportedHardwareBins.orEmpty())
-        var appliedHw = 1
-        if (capable != null) {
-            for (hw in candidates) {
-                if (capable.currentHardwareBin == hw || capable.setHardwareBin(hw)) {
-                    appliedHw = hw
-                    break
-                }
-            }
-            if (capable.currentHardwareBin != appliedHw) {
-                if (capable.currentHardwareBin != 1) capable.setHardwareBin(1)
-                appliedHw = 1
-            }
-        }
-        val plan = AppBinPlan(appBin = app, hardwareBin = appliedHw, softwareBin = (app / appliedHw).coerceAtLeast(1))
-        publishBinPlan(cam, plan)
+        publishBinPlan(cam, AppBinning.apply(requested, cam as? CameraBinningCapable))
     }
 
     private fun syncBinningState(cam: Camera, appBin: Int) {
@@ -3314,10 +3300,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             "software=${plan.softwareBin} output=${cam.currentRoi.width}x${cam.currentRoi.height}")
         softwareBinning.factor = plan.softwareBin
         _binning.value = plan.appBin
-        _binningUsesHardware.value = plan.usesHardware
+        publishBinImplementation(cam)
         _binningUsesSoftware.value = plan.usesSoftware
         _roi.value = cam.currentRoi
         updateImagingSize(cam)
+    }
+
+    private fun publishBinImplementation(cam: Camera) {
+        val native = cam as? CameraBinningCapable
+        val hasNativeBin = (native?.currentHardwareBin ?: 1) > 1
+        val sensorHardware = native?.sensorHardwareBinningActive == true
+        _binningUsesHardware.value = hasNativeBin && sensorHardware
+        _binningUsesSdk.value = hasNativeBin && !sensorHardware
     }
 
     private fun updateImagingSize(cam: Camera) {
@@ -3333,6 +3327,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         softwareBinning.factor = 1
         _binning.value = 1
         _binningUsesHardware.value = false
+        _binningUsesSdk.value = false
         _binningUsesSoftware.value = false
         _imagingWidth.value = 1920
         _imagingHeight.value = 1200

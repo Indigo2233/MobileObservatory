@@ -144,7 +144,11 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
     var lastOpenError: String? = null
         private set
     private var currentBin = 1
+    private var binningStateValid = true
+    private var sensorHardwareBin = false
     override val currentHardwareBin: Int get() = currentBin
+    override val binningStateVerified: Boolean get() = binningStateValid
+    override val sensorHardwareBinningActive: Boolean get() = binningStateValid && currentBin > 1 && sensorHardwareBin
     override val roiSensorScale: Int get() = currentBin
     override var supportedHardwareBins: List<Int> = listOf(1); private set
     private var hardwareBinControlAvailable = false
@@ -298,11 +302,20 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
     }
 
     @Synchronized override fun startCapture(callback: FrameCallback) {
+        check(binningStateValid) { "Camera binning state is unknown; reconnect camera" }
         val cam = zwoCamera ?: return
         if (!_isOpen.value) return
         if (running.get() || captureThread?.isAlive == true || captureStopFailed) {
             FileLogger.w(TAG, "Cannot start while the previous capture has not stopped")
             return
+        }
+        if (currentBin > 1 && hardwareBinControlAvailable) {
+            val bin = currentBin
+            val roi = currentRoi
+            enableHardwareBinControl(cam, true)
+            syncRoiFromCamera(cam)
+            binningStateValid = scienceRoiVerified && currentBin == bin && currentRoi == roi
+            check(binningStateValid) { "Hardware bin mode changed camera geometry; reconnect camera" }
         }
         val verified = runCatching {
             val exposureControl = cam.getControlValue(ASI_EXPOSURE)
@@ -675,34 +688,43 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
         captureGeneration.invalidateScience()
         val cam = zwoCamera ?: return false
         val b = if (bin in supportedHardwareBins) bin else return false
-        if (b == currentBin) return true
+        if (b == currentBin && binningStateValid) return true
         val wasCapturing = _isCapturing.value
         val cb = frameCallback
         if (wasCapturing) stopCapture()
         if (captureThread?.isAlive == true || captureStopFailed) return false
         val previous = currentBin
+        val previousRoi = currentRoi
+        val previousHardware = if (hardwareBinControlAvailable) asiLong(cam.getControlValue(ASI_HARDWARE_BIN)) else null
+        if (hardwareBinControlAvailable && previousHardware !in listOf(0L, 1L)) return false
         val applied = try {
-            enableHardwareBinControl(cam, b > 1)
-            currentBin = b
             val maxW = (sensorW / b / 8) * 8
             val maxH = (sensorH / b / 2) * 2
             val ret = cam.setRoiFormat(maxW.coerceAtLeast(roiMinWidth), maxH.coerceAtLeast(roiMinHeight), b, currentImgType)
-            if (ret?.intVal != ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
-                FileLogger.w(TAG, "setHardwareBin($b) setRoiFormat failed: ${ret?.intVal}")
-                currentBin = previous
-                enableHardwareBinControl(cam, previous > 1)
-                false
-            } else {
-                cam.setStartPos(0, 0)
-                currentRoi = Roi(0, 0, maxW.coerceAtLeast(roiMinWidth), maxH.coerceAtLeast(roiMinHeight))
-                syncRoiFromCamera(cam)
-                cropInfo = CropInfo(0, 0, currentRoi.width, currentRoi.height)
-                FileLogger.i(TAG, "Bin -> $b, imageSize=${currentRoi.width}x${currentRoi.height}")
-                true
-            }
+            check(ret?.intVal == ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) { "Camera bin format rejected" }
+            cam.setStartPos(0, 0)
+            check(enableHardwareBinControl(cam, b > 1)) { "Hardware bin control rejected" }
+            syncRoiFromCamera(cam)
+            check(scienceRoiVerified && currentBin == b && currentRoi == Roi(0, 0, maxW, maxH)) { "Camera bin geometry readback differs" }
+            binningStateValid = true
+            bufferPool.clear()
+            cropInfo = CropInfo(0, 0, currentRoi.width, currentRoi.height)
+            FileLogger.i(TAG, "Bin -> $b, imageSize=${currentRoi.width}x${currentRoi.height}")
+            true
         } catch (e: Throwable) {
             FileLogger.w(TAG, "setHardwareBin($b) failed: ${e.message}")
-            currentBin = previous
+            val restored = runCatching {
+                check(cam.setRoiFormat(previousRoi.width, previousRoi.height, previous, currentImgType)?.intVal == ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS)
+                cam.setStartPos(previousRoi.x, previousRoi.y)
+                check(enableHardwareBinControl(cam, previousHardware == 1L))
+                syncRoiFromCamera(cam)
+                check(scienceRoiVerified && currentBin == previous && currentRoi == previousRoi)
+            }.isSuccess
+            if (!restored) {
+                binningStateValid = false
+                scienceRoiVerified = false
+                throw IllegalStateException("Cannot restore camera binning; reconnect camera", e)
+            }
             false
         }
         if (wasCapturing && cb != null) startCapture(cb)
@@ -1032,20 +1054,22 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
         } catch (_: Throwable) {
             emptyList()
         }.distinct().sorted()
-        supportedHardwareBins = parsed.ifEmpty { listOf(1, 2) }
-        hardwareBinControlAvailable = findControlCap(cam, ASI_HARDWARE_BIN)?.isWritable != 0
+        supportedHardwareBins = (parsed + 1).distinct().sorted()
+        hardwareBinControlAvailable = findControlCap(cam, ASI_HARDWARE_BIN)?.let { it.isWritable != 0 } ?: false
         FileLogger.i(
             TAG,
             "Supported bins: ${supportedHardwareBins.joinToString()} hardwareControl=$hardwareBinControlAvailable"
         )
     }
 
-    private fun enableHardwareBinControl(cam: ZwoCamera, enable: Boolean) {
-        if (!hardwareBinControlAvailable) return
+    private fun enableHardwareBinControl(cam: ZwoCamera, enable: Boolean): Boolean {
+        if (!hardwareBinControlAvailable) { sensorHardwareBin = false; return true } // Legacy SDK ROI binning.
         val result = cam.setControlValue(ASI_HARDWARE_BIN, if (enable) 1L else 0L, 0)
-        if (result != ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS) {
-            FileLogger.w(TAG, "ASI_HARDWARE_BIN=${if (enable) 1 else 0} failed: $result")
-        }
+        val actual = asiLong(cam.getControlValue(ASI_HARDWARE_BIN))
+        sensorHardwareBin = actual == 1L
+        val confirmed = result == ASIConstants.ASI_ERROR_CODE.ASI_SUCCESS && actual == (if (enable) 1L else 0L)
+        FileLogger.i(TAG, "ASI_HARDWARE_BIN requested=$enable actual=$actual result=$result confirmed=$confirmed")
+        return confirmed
     }
 
     private fun ignoreJni(step: String, block: () -> Unit) {
@@ -1138,6 +1162,10 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
         }
         if (!asiOk(roiFmt)) return
         val roi = roiFmt?.obj as? com.zwo.ASIROIFormat ?: return
+        if (roi.imgType != currentImgType) {
+            FileLogger.w(TAG, "SDK changed image type: requested=$currentImgType actual=${roi.imgType}")
+            return
+        }
         val width = roi.imgWidth
         val height = roi.imgHeight
         val bin = roi.getiBin().coerceAtLeast(1)
@@ -1156,6 +1184,7 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
     }
 
     private fun configureInitialFormat(cam: ZwoCamera) {
+        binningStateValid = true
         currentImgType = if (!isColor) ASI_IMG_RAW8 else ASI_IMG_RAW8
         currentPixelFormat = if (!isColor) PixelFormat.MONO8 else defaultBayer8()
 

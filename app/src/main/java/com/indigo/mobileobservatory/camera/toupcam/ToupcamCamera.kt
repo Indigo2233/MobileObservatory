@@ -15,7 +15,7 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
     CameraUsbBandwidthCapable, CameraBinningCapable {
 
     override val sciencePixelTraits get() = if (!rawLayoutConfirmed || currentPixelFormat.isRgb) null else
-        CameraScienceLayouts.toupcam(rawFourCC, currentPixelFormat.nativeBits, zeroPadding = rawZeroPadding)
+        CameraScienceLayouts.toupcam(rawFourCC, currentPixelFormat.nativeBits, zeroPadding = rawZeroPadding, sensorBin = currentBin)
     private val captureGeneration = CaptureGeneration()
     override val scienceCaptureGeneration get() = captureGeneration.scienceGeneration
     private var captureStopFailed = false
@@ -100,7 +100,12 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
     private var outputW = 0
     private var outputH = 0
     private var currentBin = 1
+    private var binningStateValid = true
+    private var hardwareBinning: ToupcamHardwareBinning? = null
     override val currentHardwareBin: Int get() = currentBin
+    override val binningStateVerified: Boolean get() = binningStateValid
+    override val sensorHardwareBinningActive: Boolean get() = binningStateValid && currentBin > 1
+    override val roiSensorScale: Int get() = currentBin
     override var supportedHardwareBins: List<Int> = listOf(1); private set
     private var rawBits = 8
     private var rawFourCC = 0
@@ -173,7 +178,7 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
             currentBin = 1
             // Do not write OPTION_BINNING here. Probing 2/3/4 during open stalls
             // some cameras and the connect spinner never leaves Connecting.
-            supportedHardwareBins = listOf(1, 2, 3, 4)
+            supportedHardwareBins = listOf(1)
 
             FileLogger.i(TAG, "open sensor ${sensorW}x${sensorH} flag=0x${modelFlag.toString(16)}")
             rawBits = ToupcamJni.getMaxBitDepth()
@@ -240,10 +245,16 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
                 Log.w(TAG, "initCooling failed: ${e.message}")
             }
 
-            currentRoi = Roi(0, 0, sensorW, sensorH)
-            cropInfo = CropInfo(0, 0, sensorW, sensorH)
-            outputW = sensorW
-            outputH = sensorH
+            hardwareBinning = createHardwareBinning()
+            supportedHardwareBins = hardwareBinning!!.supportedBins
+            val geometry = hardwareBinning!!.initialize()
+            outputW = geometry?.width ?: sensorW
+            outputH = geometry?.height ?: sensorH
+            currentBin = geometry?.bin ?: 1
+            binningStateValid = true
+            currentRoi = Roi(0, 0, outputW, outputH)
+            cropInfo = CropInfo(0, 0, outputW, outputH)
+            FileLogger.i(TAG, "Sensor hardware bins=${supportedHardwareBins.joinToString()} current=$currentBin")
             captureStopFailed = false
             _isOpen.value = true
             initUsbBandwidth()
@@ -342,6 +353,7 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
 
     @Synchronized override fun startCapture(callback: FrameCallback) {
         if (!_isOpen.value) return
+        check(binningStateValid) { "Sensor binning state is unknown; reconnect camera" }
         if (running.get() || captureThread?.isAlive == true || captureStopFailed) {
             Log.w(TAG, "Cannot start while the previous capture has not stopped")
             return
@@ -639,6 +651,10 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
             val actualRoi = ToupcamJni.getRoi()
             val roiW = actualRoi[2]
             val roiH = actualRoi[3]
+            if (actualRoi[0] < 0 || actualRoi[1] < 0 || roiW <= 0 || roiH <= 0) {
+                rawLayoutConfirmed = false
+                error("Cannot verify camera ROI")
+            }
             Log.i(TAG, "ROI applied: ${roiW}x${roiH}@(${actualRoi[0]},${actualRoi[1]})")
             currentRoi = Roi(actualRoi[0], actualRoi[1], roiW, roiH)
             cropInfo = CropInfo(0, 0, roiW, roiH)
@@ -655,37 +671,52 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
     @Synchronized override fun setHardwareBin(bin: Int): Boolean {
         captureGeneration.invalidateScience()
         val b = if (bin in supportedHardwareBins) bin else return false
-        if (b == currentBin) return true
+        if (b == currentBin && binningStateValid) return true
         val wasCapturing = _isCapturing.value
         val cb = frameCallback
         if (wasCapturing) stopCapture()
         if (captureThread?.isAlive == true || captureStopFailed) return false
-        val previous = currentBin
         val applied = try {
-            val option = if (b == 1) 1 else b
-            if (!ToupcamJni.putOption(ToupcamJni.OPTION_BINNING, option)) {
-                Log.w(TAG, "OPTION_BINNING=$option failed")
+            val geometry = hardwareBinning?.apply(b)
+            if (geometry == null) {
+                FileLogger.w(TAG, "Sensor bin $b rejected; original settings restored")
                 false
             } else {
                 currentBin = b
-                val size = ToupcamJni.getSize()
-                outputW = size[0].coerceAtLeast(1)
-                outputH = size[1].coerceAtLeast(1)
-                ToupcamJni.putRoi(0, 0, outputW, outputH)
+                binningStateValid = true
+                outputW = geometry.width
+                outputH = geometry.height
                 currentRoi = Roi(0, 0, outputW, outputH)
                 cropInfo = CropInfo(0, 0, outputW, outputH)
+                bufferPool.clear()
                 refreshRawDescription()
-                Log.i(TAG, "Bin -> $b, imageSize=${outputW}x${outputH}")
+                FileLogger.i(TAG, "Sensor bin -> $b, imageSize=${outputW}x${outputH}")
                 true
             }
         } catch (e: Exception) {
-            Log.e(TAG, "setHardwareBin($b) failed: ${e.message}")
-            currentBin = previous
-            false
+            binningStateValid = false
+            rawLayoutConfirmed = false
+            FileLogger.e(TAG, "setHardwareBin($b) failed; acquisition blocked", e)
+            throw e
         }
         if (wasCapturing && cb != null) startCapture(cb)
         return applied
     }
+
+    private fun createHardwareBinning() = ToupcamHardwareBinning(object : ToupcamHardwareBinning.Port {
+        override fun values() = ToupcamJni.hardwareBinningValues().toList()
+        override fun methods() = ToupcamJni.hardwareBinningMethods().toList()
+        override fun mode() = ToupcamJni.getHardwareBinning()?.takeIf { it.size == 2 }?.let {
+            ToupcamHardwareBinning.Mode(it[0], it[1])
+        }
+        override fun setMode(mode: ToupcamHardwareBinning.Mode) = ToupcamJni.putHardwareBinning(mode.value, mode.method)
+        override fun digitalBin() = ToupcamJni.getOption(ToupcamJni.OPTION_BINNING).takeIf { it > 0 }
+        override fun setDigitalBin(value: Int) = ToupcamJni.putOption(ToupcamJni.OPTION_BINNING, value)
+        override fun roi() = ToupcamJni.getRoi().takeIf { it.size == 4 && it.all { v -> v >= 0 } }
+            ?.let { Roi(it[0], it[1], it[2], it[3]) }
+        override fun setRoi(roi: Roi) = ToupcamJni.putRoi(roi.x, roi.y, roi.width, roi.height)
+        override fun finalSize() = ToupcamJni.getFinalSize().let { it[0] to it[1] }
+    }, sensorW, sensorH)
 
     override fun recycleBuffer(buf: ByteArray) {
         if (bufferPool.size < 8) bufferPool.offer(buf)

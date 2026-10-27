@@ -107,6 +107,7 @@ fun ControlPanel(
     showHostRoi: Boolean = true,
     binning: Int = 1,
     binningUsesHardware: Boolean = false,
+    binningUsesSdk: Boolean = false,
     binningUsesSoftware: Boolean = false,
     onBinningChange: (Int) -> Unit = {},
     // Cooling params
@@ -984,6 +985,8 @@ fun ControlPanel(
                             val mode = when {
                                 binningUsesHardware && binningUsesSoftware -> R.string.bin_mixed
                                 binningUsesHardware -> R.string.bin_hardware
+                                binningUsesSdk && binningUsesSoftware -> R.string.bin_sdk_mixed
+                                binningUsesSdk -> R.string.bin_sdk
                                 else -> R.string.bin_software
                             }
                             Text(

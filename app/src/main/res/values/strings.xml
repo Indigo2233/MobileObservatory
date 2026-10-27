@@ -128,6 +128,8 @@
     <string name="bin_hardware">HW</string>
     <string name="bin_software">SW</string>
     <string name="bin_mixed">HW+SW</string>
+    <string name="bin_sdk">SDK</string>
+    <string name="bin_sdk_mixed">SDK+SW</string>
 
     <!-- ROI -->
     <string name="roi_full">Full</string>

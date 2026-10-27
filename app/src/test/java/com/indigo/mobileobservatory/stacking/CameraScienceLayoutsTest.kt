@@ -74,4 +74,18 @@ class CameraScienceLayoutsTest {
             fail("An even sensor bin needs a verified output CFA")
         } catch (expected: IllegalArgumentException) { assertTrue(expected.message!!.contains("Even Bayer")) }
     }
+
+    @Test fun toupcamSensorBinUsesTheVerifiedOutputFourCcForColorAndMono() {
+        val colors = intArrayOf(12345, 6789, 2345)
+        val samples = IntArray(8 * 6) { i -> colors[when ("RGGB"[(i / 8 % 2) * 2 + i % 2]) {
+            'R' -> 0; 'G' -> 1; else -> 2
+        }] }
+        val traits = CameraScienceLayouts.toupcam(fourCC("RGGB"), 14, sensorBin = 2)!!
+        val decoded = LinearPixelDecoder.decode(frame(samples, PixelFormat.BAYER_RG14, 8), traits)
+        assertEquals(2, traits.binning)
+        decoded.pixels.forEachIndexed { i, value -> assertEquals(colors[i % 3] / 16383f, value, 1e-7f) }
+        val mono = LinearPixelDecoder.decode(frame(intArrayOf(3, 7, 9, 11), PixelFormat.MONO14),
+            CameraScienceLayouts.toupcam(fourCC("YYYY"), 14, sensorBin = 2)!!)
+        assertEquals(3f / 16383f, mono.pixels[0], 0f)
+    }
 }

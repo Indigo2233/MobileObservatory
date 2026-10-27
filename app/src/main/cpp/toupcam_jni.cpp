@@ -3,6 +3,8 @@
 #include <cstring>
 #include <cstdlib>
 #include <cstdint>
+#include <string>
+#include <vector>
 #include "toupcam.h"
 
 #define TAG "ToupcamJNI"
@@ -146,6 +148,58 @@ JNIEXPORT jintArray JNICALL JNI_FN(nGetFinalSize)(JNIEnv* env, jobject) {
     return result;
 }
 
+static jobjectArray strings(JNIEnv* env, const std::vector<std::string>& values) {
+    jclass type = env->FindClass("java/lang/String");
+    if (!type) return nullptr;
+    jobjectArray result = env->NewObjectArray(values.size(), type, nullptr);
+    for (size_t i = 0; result && i < values.size(); ++i) {
+        jstring value = env->NewStringUTF(values[i].c_str());
+        env->SetObjectArrayElement(result, i, value);
+        env->DeleteLocalRef(value);
+    }
+    env->DeleteLocalRef(type);
+    return result;
+}
+
+JNIEXPORT jobjectArray JNICALL JNI_FN(nHardwareBinningValues)(JNIEnv* env, jobject) {
+    std::vector<std::string> values;
+    const HRESULT count = g_hcam ? Toupcam_get_BinningNumber(g_hcam) : 0;
+    for (unsigned i = 0; count > 0 && i < static_cast<unsigned>(count) && i < 64; ++i) {
+        const char* value = nullptr;
+        if (SUCCEEDED(Toupcam_get_BinningValue(g_hcam, i, &value)) && value) values.emplace_back(value);
+    }
+    return strings(env, values);
+}
+
+JNIEXPORT jobjectArray JNICALL JNI_FN(nHardwareBinningMethods)(JNIEnv* env, jobject) {
+    std::vector<std::string> methods;
+    for (unsigned i = 0; g_hcam && i < 32; ++i) {
+        const char* method = nullptr;
+        if (FAILED(Toupcam_get_BinningMethod(g_hcam, i, &method))) break;
+        if (method) methods.emplace_back(method);
+    }
+    return strings(env, methods);
+}
+
+JNIEXPORT jobjectArray JNICALL JNI_FN(nGetHardwareBinning)(JNIEnv* env, jobject) {
+    const char *value = nullptr, *method = nullptr;
+    if (!g_hcam || FAILED(Toupcam_get_Binning(g_hcam, &value, &method)) || !value || !method) return nullptr;
+    return strings(env, {value, method});
+}
+
+JNIEXPORT jboolean JNICALL JNI_FN(nPutHardwareBinning)(JNIEnv* env, jobject, jstring value, jstring method) {
+    if (!g_hcam || !value || !method) return JNI_FALSE;
+    const char* v = env->GetStringUTFChars(value, nullptr);
+    if (!v) return JNI_FALSE;
+    const char* m = env->GetStringUTFChars(method, nullptr);
+    if (!m) { env->ReleaseStringUTFChars(value, v); return JNI_FALSE; }
+    const HRESULT result = Toupcam_put_Binning(g_hcam, v, m);
+    LOGI("hardware binning %s %s -> 0x%08x", v, m, result);
+    env->ReleaseStringUTFChars(value, v);
+    env->ReleaseStringUTFChars(method, m);
+    return SUCCEEDED(result) ? JNI_TRUE : JNI_FALSE;
+}
+
 JNIEXPORT jint JNICALL JNI_FN(nPullImageRawWithSize)(JNIEnv* env, jobject, jbyteArray buffer, jint bits, jintArray dimensions) {
     if (!g_hcam || !buffer || !dimensions || env->GetArrayLength(dimensions) < 4) return -1;
     const jint empty[4] = {};
@@ -254,8 +308,8 @@ JNIEXPORT jboolean JNICALL JNI_FN(nPutRoi)(JNIEnv*, jobject, jint x, jint y, jin
 
 JNIEXPORT jintArray JNICALL JNI_FN(nGetRoi)(JNIEnv* env, jobject) {
     unsigned x = 0, y = 0, w = 0, h = 0;
-    if (g_hcam) Toupcam_get_Roi(g_hcam, &x, &y, &w, &h);
-    jint vals[4] = { (jint)x, (jint)y, (jint)w, (jint)h };
+    const bool valid = g_hcam && SUCCEEDED(Toupcam_get_Roi(g_hcam, &x, &y, &w, &h));
+    jint vals[4] = { valid ? (jint)x : -1, valid ? (jint)y : -1, valid ? (jint)w : -1, valid ? (jint)h : -1 };
     jintArray arr = env->NewIntArray(4);
     env->SetIntArrayRegion(arr, 0, 4, vals);
     return arr;

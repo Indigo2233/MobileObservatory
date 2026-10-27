@@ -126,6 +126,8 @@
     <string name="bin_hardware">硬件</string>
     <string name="bin_software">软件</string>
     <string name="bin_mixed">硬件+软件</string>
+    <string name="bin_sdk">SDK</string>
+    <string name="bin_sdk_mixed">SDK+软件</string>
 
     <!-- ROI -->
     <string name="roi_full">全幅</string>
