@@ -391,9 +391,12 @@ internal fun GuideStarThumbnail(profile: GuideStarProfile, modifier: Modifier) {
     Canvas(modifier.background(Color.Black)) {
         pixels.forEachIndexed { index, value ->
             val level = ((value - profile.background) / peak).coerceIn(0f, 1f)
-            drawRect(Color(level, level, level), Offset(index % profile.width * size.width / profile.width,
-                index / profile.width * size.height / profile.height),
-                Size(size.width / profile.width + .1f, size.height / profile.height + .1f))
+            val x = index % profile.width; val y = index / profile.width
+            val left = (x * size.width / profile.width).roundToInt().toFloat()
+            val top = (y * size.height / profile.height).roundToInt().toFloat()
+            val right = ((x + 1) * size.width / profile.width).roundToInt().toFloat()
+            val bottom = ((y + 1) * size.height / profile.height).roundToInt().toFloat()
+            drawRect(Color(level, level, level), Offset(left, top), Size(right - left, bottom - top))
         }
     }
 }

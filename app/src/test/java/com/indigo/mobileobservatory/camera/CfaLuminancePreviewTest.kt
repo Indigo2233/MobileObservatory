@@ -5,6 +5,15 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class CfaLuminancePreviewTest {
+    @Test fun downsamplingComposesSourceCellsWithoutRepeatingOrSkippingAdjacentCellSamples() {
+        val pixels = ByteArray(8 * 4) { index -> ((index / 8 / 2) * 100 + (index % 8 / 2) * 20 + 10).toByte() }
+        val frame = FrameData(pixels, 8, 4, PixelFormat.BAYER_RG8, 1, 0)
+        val preview = CfaLuminancePreview.compose(frame, ByteArray(8), ByteOrder.LITTLE_ENDIAN, sampleStep = 2)
+        assertEquals(4, preview.width); assertEquals(2, preview.height)
+        assertArrayEquals(byteArrayOf(10, 30, 50, 70, 110, 130.toByte(), 150.toByte(), 170.toByte()), preview.data)
+        assertEquals(8, frame.width); assertEquals(4, frame.height)
+    }
+
     @Test fun uniformColorResponseBecomesUniformLuminanceForEveryBayerPattern() {
         for (format in listOf(PixelFormat.BAYER_RG8, PixelFormat.BAYER_GR8, PixelFormat.BAYER_GB8, PixelFormat.BAYER_BG8)) {
             val pixels = ByteArray(8 * 6) { index -> intArrayOf(40, 180, 180, 40)[(index / 8 % 2) * 2 + index % 2].toByte() }
