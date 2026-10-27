@@ -376,14 +376,27 @@ private fun GuideStarDetails(profile: GuideStarProfile, primary: GuideStar?) {
 }
 
 @Composable
-private fun GuideStarThumbnail(profile: GuideStarProfile, modifier: Modifier) {
+internal fun GuideStarThumbnail(profile: GuideStarProfile, modifier: Modifier) {
+    val pixels = remember(profile) {
+        if (!profile.isBayer) profile.pixels else List(profile.pixels.size) { index ->
+            val columns = min(2, profile.width); val rows = min(2, profile.height)
+            val x = min(index % profile.width / 2 * 2, profile.width - columns)
+            val y = min(index / profile.width / 2 * 2, profile.height - rows)
+            var sum = 0f
+            for (dy in 0 until rows) for (dx in 0 until columns) sum += profile.pixels[(y + dy) * profile.width + x + dx]
+            sum / (columns * rows)
+        }
+    }
+    val peak = ((pixels.maxOrNull() ?: profile.background) - profile.background).coerceAtLeast(1f)
     Canvas(modifier.background(Color.Black)) {
-        val peak = (profile.peak - profile.background).coerceAtLeast(1f)
-        profile.pixels.forEachIndexed { index, value ->
+        pixels.forEachIndexed { index, value ->
             val level = ((value - profile.background) / peak).coerceIn(0f, 1f)
-            drawRect(Color(level, level, level), Offset(index % profile.width * size.width / profile.width,
-                index / profile.width * size.height / profile.height),
-                Size(size.width / profile.width + .1f, size.height / profile.height + .1f))
+            val x = index % profile.width; val y = index / profile.width
+            val left = (x * size.width / profile.width).roundToInt().toFloat()
+            val top = (y * size.height / profile.height).roundToInt().toFloat()
+            val right = ((x + 1) * size.width / profile.width).roundToInt().toFloat()
+            val bottom = ((y + 1) * size.height / profile.height).roundToInt().toFloat()
+            drawRect(Color(level, level, level), Offset(left, top), Size(right - left, bottom - top))
         }
     }
 }

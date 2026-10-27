@@ -116,7 +116,7 @@ class FrameProcessor(private val bitmapBufferCount: Int = 2, private val downsam
     private var lastFocusComputeMs = 0L
 
     var autoStretchEnabled: Boolean = true
-    /** Guide raw samples bypass CFA interpolation; delivered RGB uses unbalanced luminance. */
+    /** Guide Bayer previews use 2×2 cell means; delivered RGB uses unbalanced luminance. */
     var rawMonochrome: Boolean = false
     /** Infrared LP750 is an explicit display conversion, never the normal visible-light path. */
     var lp750Enabled: Boolean = false
@@ -168,10 +168,20 @@ class FrameProcessor(private val bitmapBufferCount: Int = 2, private val downsam
     private var cachedH = 0
     private var nextBitmapIndex = 0
     private var previewSampleBuf: ByteArray? = null
+    private var cfaLuminanceBuf: ByteArray? = null
     private var lastPreviewScaleLogKey: String? = null
 
     fun frameToBitmap(frame: FrameData, traits: PixelTraits? = null): Bitmap {
-        val preview = if (downsample) downsampleForPreview(frame) else frame
+        val sourceBytes = frame.width.toLong() * frame.height * frame.pixelFormat.bytesPerPixel
+        val preview = if (rawMonochrome && frame.pixelFormat.isBayer && frame.width > 0 && frame.height > 0 &&
+            sourceBytes <= frame.data.size) {
+            val step = if (downsample) PreviewScale.sampleStep(frame.width, frame.height, keepBayerPhase = true) else 1
+            val needed = (frame.width / step).coerceAtLeast(1) * (frame.height / step).coerceAtLeast(1) * frame.pixelFormat.bytesPerPixel
+            val buffer = cfaLuminanceBuf?.takeIf { it.size >= needed }
+                ?: ByteArray(needed).also { cfaLuminanceBuf = it }
+            // Compose source CFA cells before sampling the display grid; retain the original frame for analysis.
+            CfaLuminancePreview.compose(frame, buffer, traits?.byteOrder ?: ByteOrder.LITTLE_ENDIAN, step)
+        } else if (downsample) downsampleForPreview(frame) else frame
         val w = preview.width
         val h = preview.height
         if (w <= 0 || h <= 0 || w > 20000 || h > 20000) {
@@ -265,6 +275,7 @@ class FrameProcessor(private val bitmapBufferCount: Int = 2, private val downsam
         cachedBitmaps = null
         cachedPixels = null
         cachedBayerRaw8 = null
+        cfaLuminanceBuf = null
         cachedW = 0
         cachedH = 0
         nextBitmapIndex = 0

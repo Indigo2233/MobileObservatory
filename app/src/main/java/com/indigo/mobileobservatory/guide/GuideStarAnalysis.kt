@@ -7,7 +7,7 @@ data class GuideStarProfile(val width: Int, val height: Int, val pixels: List<Fl
     val flux: Float, val peak: Float, val background: Float, val radialIntensity: List<Float>, val encircledEnergy: List<Float>,
     val horizontalOffsets: List<Float> = emptyList(), val horizontalIntensity: List<Float> = emptyList(),
     val verticalOffsets: List<Float> = emptyList(), val verticalIntensity: List<Float> = emptyList(),
-    val saturationLevel: Float = 255f, val saturated: Boolean = false)
+    val saturationLevel: Float = 255f, val saturated: Boolean = false, val isBayer: Boolean = false)
 
 object GuideStarAnalysis {
     fun arcsecPerPixel(pixelSizeUm: Float?, focalLengthMm: Float): Float? =
@@ -65,7 +65,7 @@ object GuideStarAnalysis {
             radial.indices.map { radial[it] / counts[it].coerceAtLeast(1) },
             energies, (x0..x1).map { it - star.x }, (x0..x1).map { reader.rawValue(frame, it, row).toFloat() },
             (y0..y1).map { it - star.y }, (y0..y1).map { reader.rawValue(frame, column, it).toFloat() },
-            maximum.toFloat(), star.saturated || peak >= maximum - max(1, maximum / 1000))
+            maximum.toFloat(), star.saturated || peak >= maximum - max(1, maximum / 1000), bayer)
     }
 }
 
