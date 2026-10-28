@@ -278,6 +278,7 @@ internal fun GuideImage(frame: GuideDisplayFrame?, references: List<GuideStar>, 
     val viewport = GuideViewport(canvasSize.width.toFloat(), canvasSize.height.toFloat(), frame?.width ?: 0, frame?.height ?: 0, zoom, panX, panY)
     val currentViewport by rememberUpdatedState(viewport)
     val currentSelect by rememberUpdatedState(onSelect)
+    val currentFrame by rememberUpdatedState(frame)
     val description = stringResource(R.string.gw_image)
     Canvas(modifier.background(Color.Black).clipToBounds().testTag("guide-image")
         .semantics { contentDescription = description }
@@ -291,7 +292,9 @@ internal fun GuideImage(frame: GuideDisplayFrame?, references: List<GuideStar>, 
                 zoom = next
             }
         }.pointerInput(Unit) { detectTapGestures(onTap = { point ->
-            currentViewport.toImage(point.x, point.y)?.let { currentSelect(it.x, it.y) }
+            val star = currentViewport.starAt(currentFrame?.stars.orEmpty(), point.x, point.y, 24.dp.toPx())
+            if (star != null) currentSelect(star.x, star.y)
+            else currentViewport.toImage(point.x, point.y)?.let { currentSelect(it.x, it.y) }
         }, onDoubleTap = { zoom = 1f; panX = 0f; panY = 0f }) }) {
         val source = frame ?: return@Canvas
         if (viewport.scale <= 0f) return@Canvas

@@ -1676,10 +1676,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun selectGuideStar(x: Float, y: Float) {
-        if (_guideRunning.value || _guideCalibrating.value || _guideAutoStarting.value || auxiliaryCaptureOwned.get()) return
-        val nearest = _guideStars.value.minByOrNull { hypot(it.x - x, it.y - y) } ?: return
-        if (hypot(nearest.x - x, nearest.y - y) > 30f) return
-        applyGuideStarSelection(nearest, _guideStars.value)
+        synchronized(guideOperationLock) {
+            if (_guideRunning.value || _guideCalibrating.value || _guideAutoStarting.value || auxiliaryCaptureOwned.get() ||
+                pendingGuideSettings > 0 || guideTasks.busy) {
+                _guideStatus.value = app.getString(R.string.guide_operation_busy); return
+            }
+            val nearest = _guideStars.value.minByOrNull { hypot(it.x - x, it.y - y) }
+                ?.takeIf { hypot(it.x - x, it.y - y) <= 30f }
+            if (nearest == null) { _guideStatus.value = app.getString(R.string.no_guide_stars_detected); return }
+            applyGuideStarSelection(nearest, _guideStars.value)
+        }
     }
 
     private fun applyGuideStarSelection(star: GuideStar, stars: List<GuideStar>) {
@@ -2017,8 +2023,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         val measurementRun = guideMeasurements.startRun()
+        var previousMeasurement: com.indigo.mobileobservatory.guide.GuideMeasurement? = null
+        var lastTimingLogMs = 0L
         val previewRun = guidePreviewPipeline.start(
             onProcessed = processed@ { frame ->
+                val analysisStarted = android.os.SystemClock.elapsedRealtime()
                 if (guideCameraManager.activeCamera !== cam) return@processed
                 val previousSize = _guideFrameSize.value
                 if (previousSize.first > 0 && previousSize != (frame.width to frame.height) &&
@@ -2026,9 +2035,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 _guideFrameSize.value = frame.width to frame.height
                 _guidePreviewBitmap.value = guidePreviewPipeline.frame.value?.bitmap
                 val stars = detectGuideStars(frame)
+                val detectionFinished = android.os.SystemClock.elapsedRealtime()
                 observeAuxiliaryMotionFrame(cam, frame, stars)
                 val usable = guideModule.usableStars(stars)
-                if (guideMeasurements.processed(frame.captureGeneration, frame.frameId, usable, measurementRun) == null) return@processed
+                val measurement = guideMeasurements.processed(frame.captureGeneration, frame.frameId, usable, measurementRun) ?: return@processed
                 _guideStars.value = usable
                 val primary = _guideReferenceStar.value
                 _guideStar.value = if (primary == null) usable.firstOrNull() else guideModule.matchStar(primary, usable)
@@ -2041,6 +2051,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         usable, _guideStar.value, _guideProfile.value, guidePreviewPipeline.frame.value?.sequence ?: 0, profiles)
                 }
                 processGuideCorrection(usable, badQuality = stars.isNotEmpty() && usable.isEmpty())
+                val analysisFinished = android.os.SystemClock.elapsedRealtime()
+                if (analysisFinished - lastTimingLogMs >= 10_000) {
+                    val preview = guidePreviewPipeline.performance.value
+                    FileLogger.i("GuideTiming", "frame=${frame.frameId} size=${frame.width}x${frame.height} " +
+                        "exposureMs=${cam.currentExposureUs / 1000} " +
+                        "measurementGapMs=${previousMeasurement?.let { measurement.deliveredMs - it.deliveredMs }} " +
+                        "deliverySteps=${previousMeasurement?.let { measurement.sequence - it.sequence }} " +
+                        "ageBeforeAnalysisMs=${analysisStarted - measurement.deliveredMs} " +
+                        "detectMs=${detectionFinished - analysisStarted} analysisMs=${analysisFinished - analysisStarted} " +
+                        "renderAverageMs=${preview.averageProcessingMs} dropped=${preview.droppedFrames} " +
+                        "pulseBusy=${guideTasks.busy} usableStars=${usable.size}")
+                    lastTimingLogMs = analysisFinished
+                }
+                previousMeasurement = measurement
             },
             recycleBuffer = cam::recycleBuffer
         )

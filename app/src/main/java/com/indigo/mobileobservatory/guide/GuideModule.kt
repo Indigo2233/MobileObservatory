@@ -293,7 +293,13 @@ class GuideModule {
         lastDecError = 0f
     }
 
+    // Centroid precision improves with SNR and decreases with the spread of the star.
+    // The detector's total-flux order can favour broad, low-contrast peaks.
     fun usableStars(stars: List<GuideStar>): List<GuideStar> = stars.filter(::isUsableStar)
+        .sortedByDescending { star ->
+            val radius = star.radiusPx.takeIf { it.isFinite() }?.coerceAtLeast(1f) ?: 1f
+            star.snr / radius
+        }
 
     private fun isUsableStar(star: GuideStar): Boolean =
         star.x.isFinite() && star.y.isFinite() && star.snr.isFinite() && star.snr >= 5f &&

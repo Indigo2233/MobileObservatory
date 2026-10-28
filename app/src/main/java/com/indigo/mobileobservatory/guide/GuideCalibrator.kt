@@ -96,8 +96,9 @@ class GuideCalibrator(
                 if (moving <= 3) backlash = (commanded - returned / rate).roundToInt().coerceAtLeast(0)
             }
             progress(GuideCalibrationProgress(backPhase, i, returned))
-            if (abs(travel - returned) <= max(.5f, rate * 60)) { reached = true; break }
-            check(returned <= travel + 2f) { "Calibration return overshoot" }
+            // Crossing the origin ends reverse motion. Further reverse pulses increase
+            // the error; the endpoint and rate checks below still reject a bad return.
+            if (returned >= travel || abs(travel - returned) <= max(.5f, rate * 60)) { reached = true; break }
         }
         check(reached) { "Calibration return failed" }
         check(hypot(x + returnX, y + returnY) <= max(1.5f, travel * .1f)) { "Calibration return drifted across the axis" }

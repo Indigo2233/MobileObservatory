@@ -69,4 +69,11 @@ data class GuideViewport(val width: Float, val height: Float, val imageWidth: In
         if (scale <= 0 || !scale.isFinite()) return null
         return GuideVector((x - left) / scale, (y - top) / scale).takeIf { contains(it.x, it.y) }
     }
+
+    /** Touch tolerance is in screen pixels and stays usable on reduced full-frame previews. */
+    fun starAt(stars: List<GuideStar>, x: Float, y: Float, touchRadius: Float): GuideStar? {
+        val point = toImage(x, y) ?: return null
+        return stars.filter { contains(it.x, it.y) }.minByOrNull { hypot(it.x - point.x, it.y - point.y) }
+            ?.takeIf { hypot(it.x - point.x, it.y - point.y) * scale <= touchRadius }
+    }
 }

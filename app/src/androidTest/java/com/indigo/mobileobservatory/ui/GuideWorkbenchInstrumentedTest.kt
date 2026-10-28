@@ -71,6 +71,18 @@ class GuideWorkbenchInstrumentedTest {
         assertEquals(0f, before[1, before.height / 4].red, .01f)
     }
 
+    @Test fun fingerOffsetOnFullResolutionPreviewSelectsTheNearbyStar() {
+        val star = GuideStar(1920f, 1080f, 20f)
+        val frame = frame().copy(width = 3840, height = 2160, stars = listOf(star), primary = star)
+        val selections = mutableListOf<Pair<Float, Float>>()
+        compose.setContent { MaterialTheme {
+            GuideImage(frame, emptyList(), { x, y -> selections += x to y }, Modifier.size(320.dp, 180.dp))
+        } }
+        compose.onNodeWithTag("guide-image").performTouchInput { click(center + Offset(width * .02f, 0f)) }
+        compose.mainClock.advanceTimeBy(500)
+        compose.runOnIdle { assertEquals(listOf(1920f to 1080f), selections) }
+    }
+
     private fun frame(): GuideDisplayFrame {
         val bitmap = Bitmap.createBitmap(160, 120, Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.BLACK) }
         val star = GuideStar(240f, 240f, 20f)
