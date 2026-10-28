@@ -29,10 +29,10 @@ data class PolarAdjustmentSnapshot(
 }
 
 /**
- * Project a fixed reference direction as it will appear AFTER the physical knob corrections.
+ * Project the current image centre as it will appear AFTER the physical knob corrections.
  * A star moves opposite to the boresight. For an already partially corrected camera, its virtual
- * direction is R(current) * inverse(R(destination)) * star. This also keeps the final target fixed
- * as new WCS frames follow the moving reference point towards it.
+ * direction is R(current) * inverse(R(destination)) * star. Each new WCS reanchors the guide
+ * on that image, including when the original third-point field has moved outside the sensor.
  *
  * The two solid legs are the exact azimuth-then-altitude rotation. Their translated opposite sides
  * form a parallelogram; the fourth vertex is a component endpoint, not another measured star.
@@ -42,8 +42,8 @@ fun correctionGeometry(determination: PolarErrorDetermination, current: PolarAli
     val wcs = sample.result?.takeIf { it.success }?.imageWcs ?: return null
     val at = sample.capturedAt ?: return null
     val initial = determination.initial
-    val referenceSky = EquatorialCoordinates(determination.initialReferenceFrame.raDeg, determination.initialReferenceFrame.decDeg)
-    val reference = wcs.pixel(referenceSky) ?: return null
+    val reference = ImagePoint((wcs.width - 1) / 2.0, (wcs.height - 1) / 2.0)
+    val referenceSky = wcs.direction(reference)
     val star = PolarVector3.fromTopocentric(CoordinateTransform.j2000ToTopocentric(
         referenceSky, at, determination.site, determination.refraction))
     val currentAzimuth = initial.azimuthErrorDeg - current.azimuthErrorDeg

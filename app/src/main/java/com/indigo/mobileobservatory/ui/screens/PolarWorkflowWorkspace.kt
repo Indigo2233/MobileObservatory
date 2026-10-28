@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.indigo.mobileobservatory.R
+import com.indigo.mobileobservatory.astrometry.solveInputFormat
 import com.indigo.mobileobservatory.camera.CameraPreviewSettings
 import com.indigo.mobileobservatory.media.*
 import com.indigo.mobileobservatory.polar.*
@@ -140,6 +141,7 @@ internal fun PolarWorkflowPreview(
     var bitmap by remember(key, previewSettings) { mutableStateOf<Bitmap?>(null) }
     var loading by remember(key, previewSettings) { mutableStateOf(source != null) }
     var previewError by remember(key, previewSettings) { mutableStateOf<String?>(null) }
+    var inputFormat by remember(key) { mutableStateOf<String?>(null) }
     LaunchedEffect(key, previewSettings) {
         if (source == null) return@LaunchedEffect
         val task = currentCoroutineContext()
@@ -147,6 +149,10 @@ internal fun PolarWorkflowPreview(
         var published = false
         try {
             val image = withContext(Dispatchers.IO) {
+                inputFormat = if (source.extension.lowercase() in setOf("fit", "fits")) {
+                    val header = com.indigo.mobileobservatory.util.FitsHeaderParser.read(source)
+                    header.solveInputFormat()
+                } else source.extension.uppercase()
                 val decoded = CameraImagePreview.prepare(source, previewSettings, cancelled = { !task.isActive })
                 owned = decoded.bitmap
                 decoded
@@ -161,7 +167,12 @@ internal fun PolarWorkflowPreview(
     // Published bitmaps can still be referenced by a Compose draw node/render thread
     // after disposal. Let the runtime release them once those references disappear.
     var showLog by remember { mutableStateOf(false) }
+    var lastFailure by remember { mutableStateOf<PolarSample?>(null) }
+    var diagnosticSample by remember { mutableStateOf<PolarSample?>(null) }
+    var diagnosticError by remember { mutableStateOf<String?>(null) }
+    var diagnosticFormat by remember { mutableStateOf<String?>(null) }
     val failed = sample?.takeIf { it.phase == PolarSamplePhase.FAILED }
+    LaunchedEffect(failed) { if (failed != null) lastFailure = failed }
     val details = failed?.failureDetails()
     val clipboard = LocalClipboardManager.current
     BoxWithConstraints(modifier.padding(horizontal = 12.dp)) {
@@ -174,7 +185,12 @@ internal fun PolarWorkflowPreview(
                 if (busy) OutlinedButton(onClick = onStop) { Text(stringResource(R.string.stop)) }
                 TextButton(onClick = { source?.let { onInspect(it) } }, enabled = source?.isFile == true,
                     modifier = Modifier.testTag("polar-preview-expand")) { Text(stringResource(R.string.polar_view_sample)) }
-                if (details != null || error != null) IconButton(onClick = { showLog = true },
+                if (source != null || details != null || error != null) IconButton(onClick = {
+                    diagnosticSample = sample?.takeIf { it.result != null } ?: lastFailure ?: sample
+                    diagnosticError = error
+                    diagnosticFormat = inputFormat
+                    showLog = true
+                },
                     modifier = Modifier.testTag("polar-diagnostics-expand")) {
                     Icon(Icons.Default.Info, stringResource(R.string.show_log))
                 }
@@ -194,6 +210,11 @@ internal fun PolarWorkflowPreview(
             }
             Column(Modifier.heightIn(max = footerMaxHeight).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (details == null && error == null) adjustment?.let { PolarCorrectionSummary(it) }
+                inputFormat?.let { Text(stringResource(R.string.solve_input_format, it), style = MaterialTheme.typography.bodySmall) }
+                if (sample?.result?.log?.contains("attempt=uint16_sum2") == true) {
+                    Text(stringResource(R.string.solve_sum_retry), style = MaterialTheme.typography.bodySmall)
+                }
                 if (details == null && error == null && (adjustment == null || busy)) {
                     Text(status.ifBlank { stringResource(R.string.polar_preview_ready) },
                         style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -211,17 +232,19 @@ internal fun PolarWorkflowPreview(
                         }
                     }
                 }
-                adjustment?.let { PolarCorrectionSummary(it) }
+                if (details != null || error != null) adjustment?.let { PolarCorrectionSummary(it) }
             }
         }
     }
     if (showLog) {
         val diagnostics = buildString {
-            appendLine(error.orEmpty())
-            appendLine("phase=${sample?.phase} failedPhase=${sample?.failedPhase}")
-            appendLine("image=${sample?.file?.absolutePath} capturedAt=${sample?.capturedAt}")
-            appendLine(sample?.failure.orEmpty())
-            append(sample?.result?.log.orEmpty())
+            appendLine(diagnosticFormat.orEmpty())
+            appendLine("displayOnly=true monochromePreview=${previewSettings.monochrome}")
+            appendLine(diagnosticError.orEmpty())
+            appendLine("phase=${diagnosticSample?.phase} failedPhase=${diagnosticSample?.failedPhase}")
+            appendLine("image=${diagnosticSample?.file?.absolutePath} capturedAt=${diagnosticSample?.capturedAt}")
+            appendLine(diagnosticSample?.failure.orEmpty())
+            append(diagnosticSample?.result?.log.orEmpty())
         }
         AlertDialog(onDismissRequest = { showLog = false }, title = { Text(stringResource(R.string.show_log)) },
             text = { SelectionContainer { Text(diagnostics.take(64_000),
@@ -241,6 +264,7 @@ internal fun PolarWorkflowPreview(
                         if (busy) TextButton(onClick = onStop) { Text(stringResource(R.string.stop)) }
                         TextButton(onClick = { onInspect(null) }, modifier = Modifier.testTag("polar-preview-close")) { Text(stringResource(R.string.close)) }
                     }
+                    Text(stringResource(R.string.solve_input_raw_hint), Modifier.padding(horizontal = 12.dp), style = MaterialTheme.typography.bodySmall)
                     pinnedAdjustment?.let {
                         Column(Modifier.heightIn(max = 144.dp).verticalScroll(rememberScrollState())) { PolarCorrectionSummary(it) }
                     }

@@ -31,6 +31,29 @@ import kotlin.math.min
 class PolarPreviewRenderingInstrumentedTest {
     @get:Rule val compose = createAndroidComposeRule<WorkflowTestActivity>()
 
+    @Test fun monochromeAlignmentDisplayPreservesRawBayerFitsAndNativeCrop() {
+        val file = sampleFile()
+        val data = ByteArray(192 * 128) { i ->
+            val x = i % 192; val y = i / 192
+            (if (x % 2 == 0 && y % 2 == 0) 40 else if (x % 2 == 1 && y % 2 == 1) 20 else 170).toByte()
+        }
+        try {
+            FITSWriter().write(file, FrameData(data, 192, 128, PixelFormat.BAYER_RG8, 1, 0), 3f, 100f)
+            val original = file.readBytes()
+            val colour = CameraImagePreview.prepare(file, CameraPreviewSettings(autoStretch = false))
+            val mono = CameraImagePreview.prepare(file, CameraPreviewSettings(autoStretch = false, monochrome = true))
+            val crop = CameraImagePreview.renderRegion(mono, MediaImageRegion(13, 17, 24, 16))
+            try {
+                assertTrue(pixels(colour.bitmap).any { Color.green(it) > Color.red(it) })
+                for (pixel in pixels(mono.bitmap) + pixels(crop)) {
+                    assertEquals(Color.red(pixel), Color.green(pixel)); assertEquals(Color.green(pixel), Color.blue(pixel))
+                }
+                assertArrayEquals(original, file.readBytes())
+                assertEquals("RGGB", com.indigo.mobileobservatory.util.FitsHeaderParser.read(file)["BAYERPAT"])
+            } finally { colour.bitmap.recycle(); mono.bitmap.recycle(); crop.recycle() }
+        } finally { file.delete() }
+    }
+
     @Test fun importedPngKeepsTheCameraRgbDisplayAndNativeCrop() {
         val file = File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir, "camera-${UUID.randomUUID()}.png")
         val original = Bitmap.createBitmap(96, 64, Bitmap.Config.ARGB_8888)

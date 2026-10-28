@@ -227,6 +227,7 @@ class PolarWorkflowScreenInstrumentedTest {
         val all = points + PolarSolvePoint(current.raDeg, current.decDeg, later)
         val fixtures = all.mapIndexed { index, point -> fitsFixture(index, point.solvedAt) }
         val captures = AtomicInteger()
+        val allowAdjustment = CompletableDeferred<Unit>()
         val pending = CompletableDeferred<File?>()
         val engine = object : ImagePlateSolver {
             override val ready = true
@@ -240,6 +241,7 @@ class PolarWorkflowScreenInstrumentedTest {
         }
         screen(engine) {
             val index = captures.getAndIncrement()
+            if (index == 3) allowAdjustment.await()
             fixtures.getOrNull(index) ?: pending.await()
         }
         compose.onNodeWithTag("polar-run").performScrollTo().performClick()
@@ -256,7 +258,8 @@ class PolarWorkflowScreenInstrumentedTest {
         compose.onNodeWithTag("polar-correction-inspection").assertIsDisplayed()
         screenshot("-result-fullscreen")
         compose.onNodeWithTag("polar-preview-close").performClick()
-        compose.onNodeWithTag("polar-run").performScrollTo().performClick()
+        // Three points enter adjustment automatically, without a second start action.
+        compose.runOnIdle { allowAdjustment.complete(Unit) }
         compose.waitUntil(20_000) { captures.get() >= 5 }
         compose.waitUntil(10_000) { compose.onAllNodes(hasTestTag("polar-error-summary") and hasText("6.71", substring = true)).fetchSemanticsNodes().isNotEmpty() }
         compose.waitUntil(15_000) { compose.onAllNodesWithTag("polar-correction-overlay").fetchSemanticsNodes().isNotEmpty() }

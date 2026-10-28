@@ -25,6 +25,9 @@ import com.indigo.mobileobservatory.astrometry.AstapRunner
 import com.indigo.mobileobservatory.astrometry.D50Manager
 import com.indigo.mobileobservatory.astrometry.FitsSolveHintReader
 import com.indigo.mobileobservatory.astrometry.PlateSolveResult
+import com.indigo.mobileobservatory.astrometry.SolveCaptureSettings
+import com.indigo.mobileobservatory.astrometry.retrySolveCapture
+import com.indigo.mobileobservatory.astrometry.solveWithFallback
 import com.indigo.mobileobservatory.mount.MountModule
 import com.indigo.mobileobservatory.mount.MountAccessMode
 import com.indigo.mobileobservatory.mount.MountCoordinates
@@ -1240,6 +1243,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         mountModule.syncMountToTarget(name, jnowRa, jnowDec)
     }
 
+    val precisionSamples = com.indigo.mobileobservatory.polar.PolarSampleSession()
+    private val precisionSolveMutex = Mutex()
+
+    private fun precisionSolveSettings() = SolveCaptureSettings(
+        exposureUs = prefs.getFloat("precision_exposure_us", 5_000_000f),
+        searchRadiusDeg = prefs.getFloat("precision_search_radius_deg", 30f).toDouble(),
+        blindFallback = prefs.getBoolean("precision_blind_fallback", true),
+        gain = if (prefs.contains("precision_gain")) prefs.getFloat("precision_gain", 0f) else cameraManager.activeCamera?.currentGain,
+        focalLengthMm = prefs.getFloat("plate_focal_length_mm", 0f).toDouble().takeIf { it > 0 },
+        pixelSizeUm = cameraManager.activeCamera?.cameraInfo?.pixelSizeUm?.toDouble()?.takeIf { it > 0 }
+            ?: prefs.getFloat("plate_pixel_size_um", 0f).toDouble().takeIf { it > 0 })
+
     fun startPrecisionGoto(
         name: String,
         raHours: Double,
@@ -1250,23 +1265,76 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (connectionState.value !is ConnectionState.Connected) {
             return mountModule.rejectPrecisionGoto(name, app.getString(R.string.precision_goto_need_camera))
         }
-        val preflightFailure = runCatching { synchronized(recordingLifecycleLock) { requirePointingReferenceReady() } }.exceptionOrNull()
+        val preflight = runCatching {
+            val options = precisionSolveSettings()
+            val camera = synchronized(recordingLifecycleLock) { requirePointingReferenceReady(singleExposure = options) }
+            check(options.focalLengthMm != null && options.pixelSizeUm != null) { app.getString(R.string.plate_solve_need_optics) }
+            options to camera
+        }
+        val preflightFailure = preflight.exceptionOrNull()
         if (preflightFailure != null) return mountModule.rejectPrecisionGoto(name,
             preflightFailure.message ?: app.getString(R.string.wfp_reference_busy))
+        val (options, camera) = preflight.getOrThrow()
         val (jnowRa, jnowDec) = EquatorialEpoch.toJnowHours(raHours, decDeg, frame)
+        if (!precisionGotoProgress.value.isActive) precisionSamples.clear()
         return mountModule.startPrecisionGoto(
             name = name,
             raHours = jnowRa,
             decDeg = jnowDec,
             toleranceArcmin = PrecisionGotoMath.clampToleranceArcmin(toleranceArcmin),
-            captureAndSolve = { hint -> captureAndSolveForPrecisionGoto(hint) }
+            captureAndSolve = { hint ->
+                check(cameraManager.activeCamera === camera) { app.getString(R.string.wfp_configuration_changed) }
+                captureAndSolveForPrecisionGoto(hint, options)
+            }
         )
     }
 
-    private suspend fun captureAndSolveForPrecisionGoto(hint: MountCoordinates?): MountCoordinates {
-        val observation = capturePointingReference(hint)
-        val (jnowRa, jnowDec) = EquatorialEpoch.j2000DegToJnowHours(observation.direction.raDeg, observation.direction.decDeg)
-        return MountCoordinates(raHours = jnowRa, decDeg = jnowDec)
+    private suspend fun captureAndSolveForPrecisionGoto(hint: MountCoordinates?, options: SolveCaptureSettings = precisionSolveSettings()): MountCoordinates = precisionSolveMutex.withLock {
+        val camera = synchronized(recordingLifecycleLock) { requirePointingReferenceReady(singleExposure = options) }
+        val info = requireNotNull(camera.cameraInfo)
+        val roi = camera.currentRoi
+        val roiScale = camera.roiSensorScale
+        val identity = CameraReferenceIdentity.of(camera)
+        pointingRepository.observeConnectedCamera("primary", identity)
+        val revision = pointingRepository.captureRevision("primary")
+        var captureStamp: com.indigo.mobileobservatory.pointing.ObservationStamp? = null
+        var captureFile: File? = null
+        val solved = retrySolveCapture(maxAttempts = 3) {
+            precisionSamples.execute(0,
+                capture = {
+                    check(cameraManager.activeCamera === camera) { app.getString(R.string.polar_capture_no_camera) }
+                    check(camera.currentRoi == roi && camera.roiSensorScale == roiScale) { app.getString(R.string.wfp_configuration_changed) }
+                    val startedUtc = System.currentTimeMillis()
+                    val started = android.os.SystemClock.elapsedRealtime()
+                    val file = captureTempFitsForPlateSolve(options.exposureUs, options.gain, options.focalLengthMm?.toFloat())
+                    val ended = android.os.SystemClock.elapsedRealtime()
+                    check(kotlin.math.abs((System.currentTimeMillis() - startedUtc) - (ended - started)) <= 250) {
+                        "Clock changed during reference capture"
+                    }
+                    // Includes stop/readout/file-writing time as a conservative timing bound.
+                    captureStamp = com.indigo.mobileobservatory.pointing.ObservationStamp(startedUtc + (ended - started) / 2,
+                        (started + ended) / 2, (camera.currentExposureUs / 1000).toLong(), (ended - started + 1) / 2)
+                    captureFile = file
+                    file
+                },
+                fieldOfView = { file ->
+                    val hints = FitsSolveHintReader.read(requireNotNull(file))
+                    com.indigo.mobileobservatory.astrometry.PlateSolveOptics.astapFovDeg(hints,
+                        options.focalLengthMm, options.pixelSizeUm)
+                },
+                solve = { file, fov -> astapRunner.solveWithFallback(file, fov, hint, options.searchRadiusDeg, options.blindFallback) },
+                noFrame = app.getString(R.string.precision_goto_no_frame), missingOptics = app.getString(R.string.plate_solve_need_optics))
+        }
+        check(solved.success) { solved.message }
+        val wcs = requireNotNull(solved.imageWcs) { "ASTAP returned no image geometry" }
+        val observation = withContext(Dispatchers.IO) {
+            recordSolvedReference(requireNotNull(captureFile), requireNotNull(captureStamp), roi, info,
+                wcs.width, wcs.height, "primary", roiScale, identity, revision, solved)
+        }
+        val direction = observation.direction
+        recordPlateSolveResult(solved)
+        val (jnowRa, jnowDec) = EquatorialEpoch.j2000DegToJnowHours(direction.raDeg, direction.decDeg)
+        MountCoordinates(raHours = jnowRa, decDeg = jnowDec)
     }
 
     suspend fun runPointingCalibrationMoves(targets: List<com.indigo.mobileobservatory.pointing.PhoneCatalogStar>,
@@ -3793,7 +3861,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    suspend fun captureTempFitsForPlateSolve(requestedExposureUs: Float? = null): File? = withContext(Dispatchers.IO) {
+    suspend fun captureTempFitsForPlateSolve(requestedExposureUs: Float? = null, requestedGain: Float? = null,
+        focalLengthMm: Float? = null): File? = withContext(Dispatchers.IO) {
         captureSettingsMutex.withLock {
             val cam = cameraManager.activeCamera ?: error(app.getString(R.string.polar_capture_no_camera))
             check(cam.isOpen.value) { app.getString(R.string.polar_capture_no_camera) }
@@ -3825,6 +3894,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 withContext(NonCancellable) { cam.stopCapture() }
                 check(cam.isCaptureStopped) { app.getString(R.string.polar_capture_stop_failed) }
                 currentCoroutineContext().ensureActive()
+                if (requestedGain != null && requestedGain != cam.currentGain) {
+                    val normalized = GainValueNormalizer.normalize(cam.gainCapability, requestedGain)
+                    check(requestedGain.isFinite() && kotlin.math.abs(normalized - requestedGain) <= maxOf(1f, cam.gainCapability.step)) {
+                        app.getString(R.string.solve_gain_invalid)
+                    }
+                    gainWriteMutex.withLock {
+                        invalidateStackSettings()
+                        cam.setGain(normalized)
+                        syncGainState(cam)
+                        check(kotlin.math.abs(cam.currentGain - normalized) <= maxOf(.01f, cam.gainCapability.step)) {
+                            app.getString(R.string.solve_gain_invalid)
+                        }
+                    }
+                }
                 if (requestedExposureUs != null) {
                     if (requestedExposureUs != cam.currentExposureUs) {
                         invalidateStackSettings()
@@ -3895,7 +3978,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         gainUnit = cam.gainCapability.unit, gainDbEquivalent = cam.gainDbEquivalent(gain),
                         cameraName = info?.name, filterName = currentFilterName(), configuredFormat = frame.pixelFormat,
                         pixelSizeUm = info?.pixelSizeUm,
-                        focalLengthMm = prefs.getFloat("plate_focal_length_mm", 0f).takeIf { it > 0f }, binning = bin,
+                        focalLengthMm = focalLengthMm ?: prefs.getFloat("plate_focal_length_mm", 0f).takeIf { it > 0f }, binning = bin,
                         exposureStartedAt = java.time.Instant.ofEpochMilli(frame.timestamp)
                             .minusNanos((exposure.toDouble() * 1000).toLong()))
                     currentCoroutineContext().ensureActive()
@@ -4134,10 +4217,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             com.indigo.mobileobservatory.pointing.ReferencePairing.pair(camera, reference, site, trackingSky, bound, stability)
         } }
 
-    private fun requirePointingReferenceReady(ownedByThisCapture: Boolean = false, expectedCamera: Camera? = null): Camera {
+    private fun requirePointingReferenceReady(ownedByThisCapture: Boolean = false, expectedCamera: Camera? = null,
+        singleExposure: SolveCaptureSettings? = null): Camera {
         val camera = cameraManager.activeCamera
         check(expectedCamera == null || camera === expectedCamera) { app.getString(R.string.wfp_configuration_changed) }
-        val state = PointingReferenceState(camera?.let { PointingReferenceCameraState.of(it) }, d50Manager.status().installed,
+        val state = PointingReferenceState(camera?.let { PointingReferenceCameraState.of(it).let { state ->
+            if (singleExposure != null) state.copy(exposureUs = singleExposure.exposureUs) else state
+        } }, d50Manager.status().installed,
             recordingBusy = _isRecording.value || recordingWriteSession != null || currentRecordingFile != null,
             liveStackBusy = stacking.live.state.value.phase == LiveStackPhase.RUNNING,
             calibrationBusy = stacking.calibration.state.value.busy,
@@ -4147,7 +4233,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             autoExposureOff = autoExposureController.mode == AutoExposureMode.OFF,
             previewPaused = _previewPaused.value, filterMoving = filterWheelMoving.value,
             rotatorMoving = rotatorConnected.value && rotatorMoving.value)
-        val issue = PointingReferencePreflight.issue(state)
+        if (singleExposure != null && camera != null) {
+            check(singleExposure.exposureUs in camera.exposureRange.min..camera.hwExposureMaxUs) {
+                app.getString(R.string.polar_exposure_out_of_range, camera.exposureRange.min / 1_000_000f, camera.hwExposureMaxUs / 1_000_000f)
+            }
+            singleExposure.gain?.let { gain ->
+                check(gain in camera.gainCapability.min..camera.gainCapability.max) { app.getString(R.string.solve_gain_invalid) }
+            }
+        }
+        val issue = PointingReferencePreflight.issue(state, singleExposure = singleExposure != null)
         check(issue == null) { app.getString(when (issue) {
             PointingReferenceIssue.CAMERA -> R.string.precision_goto_need_camera
             PointingReferenceIssue.DATABASE -> R.string.precision_goto_need_d50
@@ -4223,7 +4317,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         acquisitionIdentity: String = info.serialNumber.ifBlank { info.name },
         opticalRevision: com.indigo.mobileobservatory.pointing.PointingRepository.CaptureRevision): com.indigo.mobileobservatory.pointing.OpticalObservation {
         check(pointingRepository.isCurrent(opticalRevision)) { app.getString(R.string.wfp_configuration_changed) }
-        val (axisX, axisY) = com.indigo.mobileobservatory.pointing.ReferencePixelMapper.sensorCenter(
+        com.indigo.mobileobservatory.pointing.ReferencePixelMapper.sensorCenter(
             info.sensorWidth, info.sensorHeight, roi, roiSensorScale, frame.width, frame.height)
         val directory = File(app.filesDir, "pointing/references").also { it.mkdirs() }
         val file = File(directory, "${opticalPath}_${stamp.utcMidpointMs}_${frame.frameId}.fits")
@@ -4233,6 +4327,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val hint = FitsSolveHintReader.read(file)
         val solved = astapRunner.solve(file, hint.fovHeightDeg?.takeIf { it > 0 } ?: 0.0,
             mountCoordinates = hintCoordinates, searchRadiusDeg = if (hintCoordinates != null) 5.0 else null)
+        return recordSolvedReference(file, stamp, roi, info, frame.width, frame.height,
+            opticalPath, roiSensorScale, acquisitionIdentity, opticalRevision, solved)
+    }
+
+    private suspend fun recordSolvedReference(file: File, stamp: com.indigo.mobileobservatory.pointing.ObservationStamp,
+        roi: Roi, info: CameraInfo, width: Int, height: Int, opticalPath: String, roiSensorScale: Int,
+        acquisitionIdentity: String, opticalRevision: com.indigo.mobileobservatory.pointing.PointingRepository.CaptureRevision,
+        solved: PlateSolveResult): com.indigo.mobileobservatory.pointing.OpticalObservation {
+        check(pointingRepository.isCurrent(opticalRevision)) { app.getString(R.string.wfp_configuration_changed) }
+        val (axisX, axisY) = com.indigo.mobileobservatory.pointing.ReferencePixelMapper.sensorCenter(
+            info.sensorWidth, info.sensorHeight, roi, roiSensorScale, width, height)
         check(solved.success) { solved.message }
         val header = com.indigo.mobileobservatory.astrometry.FitsHeaderReader.read(File(requireNotNull(solved.wcsHeaderPath)))
         val wcs = com.indigo.mobileobservatory.astrometry.OpticalWcs.parse(header)
@@ -4241,7 +4346,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             if (opticalPath == "primary") com.indigo.mobileobservatory.pointing.OpticalIdentity("telescope", "axis", opticalPath)
             else com.indigo.mobileobservatory.pointing.OpticalIdentity(acquisitionIdentity, "sensor", opticalPath),
             stamp, pose.forward.direction(), pose,
-            com.indigo.mobileobservatory.pointing.CameraGeometry(frame.width, frame.height, roi.x, roi.y, roi.width, roi.height,
+            com.indigo.mobileobservatory.pointing.CameraGeometry(width, height, roi.x, roi.y, roi.width, roi.height,
                 wcs.parity, axisX - 1, axisY - 1, "$acquisitionIdentity/sensor-center-frame-v1", roiSensorScale),
             // A conservative operational bound, not a measured plate-fit RMS. Independent
             // validation still measures the installation error before this can be used.
@@ -4249,7 +4354,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             if (opticalPath == "primary") com.indigo.mobileobservatory.pointing.OpticalObservationKind.MAIN_PLATE
             else com.indigo.mobileobservatory.pointing.OpticalObservationKind.AUXILIARY_PLATE,
             acquisitionDeviceId = acquisitionIdentity, plateScaleDegPerPixel = wcs.scaleDegPerPixel)
-        File(directory, "${file.nameWithoutExtension}.json").writeText(org.json.JSONObject().apply {
+        File(file.parentFile, "${file.nameWithoutExtension}.json").writeText(org.json.JSONObject().apply {
             put("camera", observation.acquisitionDeviceId); put("utcMidpointMs", stamp.utcMidpointMs)
             put("elapsedMidpointMs", stamp.elapsedMidpointMs); put("timeUncertaintyMs", stamp.clockUncertaintyMs)
             put("axisFitsX", axisX); put("axisFitsY", axisY); put("raDeg", observation.direction.raDeg)

@@ -56,22 +56,22 @@ enum class PointingReferenceIssue {
 object PointingReferencePreflight {
     const val FRAME_TIMEOUT_MS = 30_000L
 
-    fun issue(state: PointingReferenceState): PointingReferenceIssue? {
+    fun issue(state: PointingReferenceState, singleExposure: Boolean = false): PointingReferenceIssue? {
         val camera = state.camera ?: return PointingReferenceIssue.CAMERA
         if (!camera.open) return PointingReferenceIssue.CAMERA
         if (!state.databaseInstalled) return PointingReferenceIssue.DATABASE
         if (state.recordingBusy || state.liveStackBusy || state.calibrationBusy ||
             state.referenceBusy || state.snapshotBusy) return PointingReferenceIssue.BUSY
         if (state.settingsBusy) return PointingReferenceIssue.SETTINGS
-        if (!camera.recordsScience || !camera.rawLayoutKnown || camera.acquisitionGeneration == null ||
+        if (!camera.recordsScience || !camera.rawLayoutKnown || (!singleExposure && camera.acquisitionGeneration == null) ||
             camera.requiresHighBitStill || camera.format.isRgb) return PointingReferenceIssue.SCIENCE_MODE
         if (!state.autoExposureOff) return PointingReferenceIssue.AUTO_EXPOSURE
         if (state.filterMoving) return PointingReferenceIssue.FILTER
         if (state.rotatorMoving) return PointingReferenceIssue.ROTATOR
-        if (state.previewPaused || !camera.capturing) return PointingReferenceIssue.PREVIEW
+        if (!singleExposure && (state.previewPaused || !camera.capturing)) return PointingReferenceIssue.PREVIEW
         if (!camera.exposureUs.isFinite() || camera.exposureUs <= 0 ||
-            camera.exposureUs > FRAME_TIMEOUT_MS * 1000f ||
-            camera.softwareStacking && (!camera.hardwareExposureMaxUs.isFinite() ||
+            (!singleExposure && camera.exposureUs > FRAME_TIMEOUT_MS * 1000f) ||
+            (singleExposure || camera.softwareStacking) && (!camera.hardwareExposureMaxUs.isFinite() ||
                 camera.exposureUs > camera.hardwareExposureMaxUs)) return PointingReferenceIssue.EXPOSURE
         val axisAvailable = runCatching {
             ReferencePixelMapper.sensorCenter(camera.sensorWidth, camera.sensorHeight, camera.roi,

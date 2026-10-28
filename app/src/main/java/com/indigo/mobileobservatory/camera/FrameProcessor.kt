@@ -88,7 +88,8 @@ internal class HighBitLayoutDetector(
 data class CameraPreviewSettings(
     val autoStretch: Boolean = true, val blackPoint: Int = 0, val whitePoint: Int = 255,
     val redGain: Float = 1f, val greenGain: Float = 1f, val blueGain: Float = 1f,
-    val lp700: Boolean = false, val focusAssist: Boolean = false
+    val lp700: Boolean = false, val focusAssist: Boolean = false,
+    val monochrome: Boolean = false
 )
 
 /** Fraction of the delivered sample range; native regions retain the overview's stretch. */
@@ -118,6 +119,7 @@ class FrameProcessor(private val bitmapBufferCount: Int = 2, private val downsam
     var autoStretchEnabled: Boolean = true
     /** Guide cameras render the original single-channel samples without CFA interpolation. */
     var rawMonochrome: Boolean = false
+    private var monochromeDisplay: Boolean = false
     /** Infrared LP750 is an explicit display conversion, never the normal visible-light path. */
     var lp750Enabled: Boolean = false
     var manualBlackPoint: Int = 0
@@ -135,9 +137,10 @@ class FrameProcessor(private val bitmapBufferCount: Int = 2, private val downsam
         private set
 
     fun previewSettings() = CameraPreviewSettings(autoStretchEnabled, manualBlackPoint, manualWhitePoint,
-        wbRedGain, wbGreenGain, wbBlueGain, lp750Enabled, focusAssistEnabled)
+        wbRedGain, wbGreenGain, wbBlueGain, lp750Enabled, focusAssistEnabled, monochromeDisplay)
 
     fun applyPreviewSettings(settings: CameraPreviewSettings) {
+        monochromeDisplay = settings.monochrome
         autoStretchEnabled = settings.autoStretch; manualBlackPoint = settings.blackPoint; manualWhitePoint = settings.whitePoint
         wbRedGain = settings.redGain; wbGreenGain = settings.greenGain; wbBlueGain = settings.blueGain
         lp750Enabled = settings.lp700; focusAssistEnabled = settings.focusAssist
@@ -226,6 +229,12 @@ class FrameProcessor(private val bitmapBufferCount: Int = 2, private val downsam
 
         if (lp750Enabled && !rawMonochrome && (preview.pixelFormat.isBayer || preview.pixelFormat == PixelFormat.RGB48)) {
             renderedLpRecipe = Lp700PreviewMapping.applyToArgb(pixels, recipe = fixedLpRecipe)
+        }
+
+        if (monochromeDisplay) for (index in pixels.indices) {
+            val color = pixels[index]
+            val luminance = (77 * ((color ushr 16) and 255) + 150 * ((color ushr 8) and 255) + 29 * (color and 255) + 128) ushr 8
+            pixels[index] = (color and 0xff000000.toInt()) or (luminance shl 16) or (luminance shl 8) or luminance
         }
 
         bitmap.setPixels(pixels, 0, w, 0, 0, w, h)

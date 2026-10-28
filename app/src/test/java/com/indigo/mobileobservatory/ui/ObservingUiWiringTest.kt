@@ -501,7 +501,7 @@ class ObservingUiWiringTest {
         assertTrue(camera.contains("frame = target.frame"))
         assertTrue(camera.contains("toleranceArcmin = toleranceArcmin"))
         assertTrue(viewModel.contains("EquatorialEpoch.toJnowHours(raHours, decDeg, frame)"))
-        assertTrue(viewModel.contains("EquatorialEpoch.j2000DegToJnowHours(observation.direction.raDeg, observation.direction.decDeg)"))
+        assertTrue(viewModel.contains("EquatorialEpoch.j2000DegToJnowHours(direction.raDeg, direction.decDeg)"))
         assertTrue(starMap.contains("PrecisionGotoMath.PREFS_TOLERANCE_ARCMIN"))
         assertTrue(starMap.contains("centerOnRaDec(ra, dec, frame = \"JNOW\")"))
         assertTrue(starMap.contains("onPrecisionGoto(target, currentPrecisionToleranceArcmin())"))

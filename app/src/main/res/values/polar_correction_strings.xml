@@ -3,10 +3,10 @@
     <string name="polar_latest_error">Latest solved polar error</string>
     <string name="polar_summary_total">Total: %1$.2f′</string>
     <string name="polar_summary_components">Azimuth: %1$+.2f′ · Altitude: %2$+.2f′</string>
-    <string name="polar_correction_legend">Yellow: azimuth · Cyan: altitude · Move the white cross into the green ring</string>
+    <string name="polar_correction_legend">Yellow: azimuth · Cyan: altitude · Adjust in the indicated directions until the green ring reaches the centre cross</string>
     <string name="polar_correction_no_projection">The correction cannot be projected on this image. Check the alignment geometry and solve again.</string>
     <string name="polar_correction_overlay_description">Polar correction parallelogram with azimuth and altitude arrows, reference cross and target ring</string>
     <string name="polar_correction_no_wcs">Complete image WCS is unavailable. Solve again to draw the correction guide.</string>
-    <string name="polar_correction_outside">The target is outside the original image. The overview includes its actual projected position.</string>
+    <string name="polar_correction_outside">The target is outside this image. Follow the direction guidance; image scale is preserved.</string>
     <string name="polar_start_adjustment">Start continuous adjustment</string>
 </resources>

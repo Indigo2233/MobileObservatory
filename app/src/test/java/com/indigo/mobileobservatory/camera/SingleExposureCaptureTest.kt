@@ -8,6 +8,28 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class SingleExposureCaptureTest {
+    @Test fun automaticSolveRetriesStopTheCameraBeforeEverySolve(): Unit = runTest {
+        val camera = SingleCamera()
+        var solves = 0
+        val firstSolved = CompletableDeferred<Unit>()
+        val task = async {
+            com.indigo.mobileobservatory.astrometry.retrySolveCapture(maxAttempts = 3) {
+                val frame = captureSingleExposureFrame(camera, 1000, { currentTime })
+                assertNotNull(frame)
+                assertTrue(camera.isCaptureStopped)
+                solves++
+                if (solves == 1) firstSolved.complete(Unit)
+                com.indigo.mobileobservatory.astrometry.PlateSolveResult(solves == 2, "No solution")
+            }
+        }
+        runCurrent(); camera.emit(byteArrayOf(1, 2, 3, 4)); firstSolved.await(); runCurrent()
+        assertEquals(1, solves); assertTrue(camera.isCaptureStopped)
+        advanceTimeBy(1500); runCurrent()
+        assertEquals(2, camera.singleStarts)
+        camera.emit(byteArrayOf(5, 6, 7, 8))
+        assertTrue(task.await().success)
+        assertEquals(2, solves); assertEquals(2, camera.stops); assertEquals(0, camera.streamStarts)
+    }
     @Test fun nativeSingleFrameStopsAndOwnsItsBytesBeforeReturning(): Unit = runTest {
         val camera = SingleCamera()
         val task = async { captureSingleExposureFrame(camera, 1000, { currentTime }) }

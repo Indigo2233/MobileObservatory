@@ -3,10 +3,10 @@
     <string name="polar_latest_error">最近有效解算的极轴误差</string>
     <string name="polar_summary_total">总误差：%1$.2f′</string>
     <string name="polar_summary_components">方位：%1$+.2f′ · 高度：%2$+.2f′</string>
-    <string name="polar_correction_legend">黄：方位 · 蓝：高度 · 调整旋钮，使白十字靠近绿圈</string>
+    <string name="polar_correction_legend">黄：方位 · 蓝：高度 · 按方向提示调整旋钮，使绿圈靠近中心白十字</string>
     <string name="polar_correction_no_projection">本次校正无法投影到图像上，请检查采样几何并重新解算。</string>
     <string name="polar_correction_overlay_description">极轴调整平行四边形，包含方位与高度箭头、参考十字和目标圆环</string>
     <string name="polar_correction_no_wcs">本次解算缺少完整图像 WCS，请重新解算以显示调整辅助线。</string>
-    <string name="polar_correction_outside">校正目标位于原画面之外，已缩小视图以显示其实际投影位置。</string>
+    <string name="polar_correction_outside">校正目标位于当前画面外；按方向提示调整，图像比例保持不变。</string>
     <string name="polar_start_adjustment">开始连续调整</string>
 </resources>

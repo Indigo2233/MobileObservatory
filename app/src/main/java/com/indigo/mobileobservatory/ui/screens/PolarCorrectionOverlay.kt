@@ -13,6 +13,7 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -32,30 +33,22 @@ internal data class PolarOverlayColors(val azimuth: Color, val altitude: Color, 
     PolarOverlayColors(Color(0xffff8888), Color(0xffce5555), Color(0xffff4444), Color(0xffffbbbb))
 else PolarOverlayColors(Color(0xffffd54f), Color(0xff43d9ef), Color(0xff62e39e), Color.White)
 
-/** Fits the image AND real projected endpoints. Off-frame targets keep their correct scale. */
+/** Fit the photograph only. Large corrections are clipped at the photograph's boundary. */
 @Composable
 internal fun PolarCorrectionImage(image: Bitmap, width: Int, height: Int, geometry: PolarCorrectionGeometry?, modifier: Modifier) {
     val colors = polarOverlayColors()
     val description = stringResource(if (geometry == null) R.string.polar_sample_preview else R.string.polar_correction_overlay_description)
     Canvas(modifier.semantics { contentDescription = description }
         .then(if (geometry != null) Modifier.testTag("polar-correction-overlay") else Modifier)) {
-        val margin = if (geometry == null) 0.0 else maxOf(width, height) * .04
-        val points = geometry?.vertices.orEmpty()
-        val left = minOf(0.0, points.minOfOrNull { it.x + .5 } ?: 0.0) - margin
-        val top = minOf(0.0, points.minOfOrNull { it.y + .5 } ?: 0.0) - margin
-        val right = maxOf(width.toDouble(), points.maxOfOrNull { it.x + .5 } ?: 0.0) + margin
-        val bottom = maxOf(height.toDouble(), points.maxOfOrNull { it.y + .5 } ?: 0.0) + margin
-        val padding = if (geometry == null) 0f else 12.dp.toPx()
-        val usableWidth = (size.width - padding * 2).coerceAtLeast(1f)
-        val usableHeight = (size.height - padding * 2).coerceAtLeast(1f)
-        val scale = minOf(usableWidth / (right - left), usableHeight / (bottom - top)).toFloat()
-        val offset = Offset(padding + (usableWidth - (right - left).toFloat() * scale) / 2f - left.toFloat() * scale,
-            padding + (usableHeight - (bottom - top).toFloat() * scale) / 2f - top.toFloat() * scale)
+        val scale = minOf(size.width / width, size.height / height)
+        val offset = Offset((size.width - width * scale) / 2f, (size.height - height * scale) / 2f)
         val imageSize = IntSize(maxOf(1, (width * scale).roundToInt()), maxOf(1, (height * scale).roundToInt()))
         drawImage(image.asImageBitmap(), dstOffset = IntOffset(offset.x.roundToInt(), offset.y.roundToInt()), dstSize = imageSize)
         if (geometry != null) {
             drawRect(colors.reference.copy(alpha = .35f), offset, Size(imageSize.width.toFloat(), imageSize.height.toFloat()), style = Stroke(1.dp.toPx()))
-            drawPolarCorrection(geometry, offset, imageSize, colors)
+            clipRect(offset.x, offset.y, offset.x + imageSize.width, offset.y + imageSize.height) {
+                drawPolarCorrection(geometry, offset, imageSize, colors)
+            }
         }
     }
 }
@@ -96,11 +89,13 @@ internal fun PolarCorrectionSummary(snapshot: PolarAdjustmentSnapshot, modifier:
     Surface(modifier.testTag("polar-error-summary").semantics(mergeDescendants = true) {},
         color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.small) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 5.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(stringResource(R.string.polar_latest_error), style = MaterialTheme.typography.labelMedium)
             Text(stringResource(R.string.polar_summary_total, result.totalErrorArcMin), style = MaterialTheme.typography.titleSmall,
                 modifier = Modifier.testTag("polar-total-error"))
-            Text(stringResource(R.string.polar_summary_components, result.azimuthErrorArcMin, result.altitudeErrorArcMin),
-                style = MaterialTheme.typography.bodySmall)
+            Text(stringResource(R.string.polar_adjust_directions,
+                stringResource(if (polarAdjustWest(result.azimuthErrorDeg, snapshot.determination.site.latitudeDeg)) R.string.polar_turn_west else R.string.polar_turn_east),
+                abs(result.azimuthErrorArcMin),
+                stringResource(if (polarAdjustDown(result.altitudeErrorDeg, snapshot.determination.site.latitudeDeg)) R.string.move_down else R.string.move_up),
+                abs(result.altitudeErrorArcMin)), style = MaterialTheme.typography.titleSmall)
             Text(stringResource(R.string.polar_correction_legend), style = MaterialTheme.typography.bodySmall)
             if (snapshot.geometry == null) Text(stringResource(if (snapshot.projectionUnavailable)
                 R.string.polar_correction_no_projection else R.string.polar_correction_no_wcs),

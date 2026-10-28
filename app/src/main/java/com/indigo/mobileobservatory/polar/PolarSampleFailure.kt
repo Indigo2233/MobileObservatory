@@ -23,7 +23,8 @@ fun PolarSample.failureDetails(): PolarFailureDetails {
     val count = countPatterns.asSequence().flatMap { it.findAll(native) }
         .maxByOrNull { it.range.first }?.groupValues?.get(1)?.toIntOrNull()
     val reason = when {
-        "could not start" in text || "cli is missing" in text || "permission denied" in text -> PolarFailureReason.EXECUTION
+        "could not start" in text || "cli is missing" in text || "permission denied" in text ||
+            "cannot link executable" in text || "exec format error" in text || "cannot locate symbol" in text -> PolarFailureReason.EXECUTION
         "not enough memory" in text || "out of memory" in text -> PolarFailureReason.MEMORY
         "no star database" in text || "database is not installed" in text || "database not found" in text -> PolarFailureReason.DATABASE
         "timed out" in message.lowercase() || "timeout" in message.lowercase() || "超时" in message -> PolarFailureReason.TIMEOUT

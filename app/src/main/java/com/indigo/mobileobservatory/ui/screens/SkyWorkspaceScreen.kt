@@ -24,6 +24,9 @@ import com.indigo.mobileobservatory.astro.ConnectedOpticsGeometry
 import com.indigo.mobileobservatory.astro.ObserverSite
 import com.indigo.mobileobservatory.pointing.PhoneSiteProvider
 import kotlinx.coroutines.CancellationException
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import java.io.File
 
 @Composable
 @OptIn(ExperimentalLayoutApi::class)
@@ -43,6 +46,11 @@ internal fun SkyWorkspaceScreen(viewModel: CameraViewModel, selectedTarget: Star
     val globalMountMotionState by viewModel.mountMotionState.collectAsStateWithPageLifecycle()
     val mountSlewRate by viewModel.mountSlewRate.collectAsStateWithPageLifecycle()
     val precisionGotoProgress by viewModel.precisionGotoProgress.collectAsStateWithPageLifecycle()
+    val precisionSamples by viewModel.precisionSamples.samples.collectAsStateWithPageLifecycle()
+    val cameraPreviewSettings = viewModel.cameraPreviewSettings()
+    var showPrecision by rememberSaveable { mutableStateOf(false) }
+    var inspectPrecision by remember { mutableStateOf<File?>(null) }
+    LaunchedEffect(precisionGotoProgress.isActive) { if (precisionGotoProgress.isActive) showPrecision = true }
     val connectionState by viewModel.connectionState.collectAsStateWithPageLifecycle()
     val roi by viewModel.roi.collectAsStateWithPageLifecycle()
     val appBinning by viewModel.binning.collectAsStateWithPageLifecycle()
@@ -98,6 +106,7 @@ internal fun SkyWorkspaceScreen(viewModel: CameraViewModel, selectedTarget: Star
                         mountMotionState = globalMountMotionState,
                         mountSlewRate = mountSlewRate,
                         precisionGotoProgress = precisionGotoProgress,
+                        onPrecisionDetails = { showPrecision = true },
                         cameraPixelSizeUm = (connectionState as? ConnectionState.Connected)
                             ?.info?.pixelSizeUm,
                         cameraFrameWidthPx = roi.width,
@@ -129,6 +138,7 @@ internal fun SkyWorkspaceScreen(viewModel: CameraViewModel, selectedTarget: Star
                             )
                         },
                         onPrecisionGoto = { target, toleranceArcmin ->
+                            showPrecision = true
                             viewModel.startPrecisionGoto(
                                 name = target.name,
                                 raHours = target.raHours,
@@ -196,6 +206,34 @@ internal fun SkyWorkspaceScreen(viewModel: CameraViewModel, selectedTarget: Star
         androidx.activity.compose.BackHandler(enabled = pageForeground && pendingGoto != null) { pendingGoto = null }
     }
     // Register after the workspace's own Back handler: this visible dialog is the top layer.
+    if (showPrecision && pageForeground) {
+        val sample = precisionSamples.first()
+        val stage = if (precisionGotoProgress.isActive) when (sample.phase) {
+            com.indigo.mobileobservatory.polar.PolarSamplePhase.CAPTURING -> stringResource(R.string.solve_capturing_task)
+            com.indigo.mobileobservatory.polar.PolarSamplePhase.SOLVING -> stringResource(R.string.solve_solving_task)
+            else -> precisionGotoProgress.message
+        } else precisionGotoProgress.message
+        var previousFile by remember { mutableStateOf<File?>(null) }
+        LaunchedEffect(sample) { if (sample.file != null) previousFile = sample.file }
+        Dialog(onDismissRequest = { showPrecision = false; inspectPrecision = null },
+            properties = DialogProperties(usePlatformDefaultWidth = false)) {
+            Surface(Modifier.fillMaxSize()) {
+                Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(stringResource(R.string.precision_goto_label), Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                        TextButton(onClick = { showPrecision = false; inspectPrecision = null }) { Text(stringResource(R.string.close)) }
+                    }
+                    Text(stage)
+                    PolarWorkflowPreview(file = sample.file ?: previousFile, label = stringResource(R.string.solve_view_capture),
+                        livePreview = null, sample = sample, status = stage,
+                        error = precisionGotoProgress.message.takeIf { precisionGotoProgress.phase == com.indigo.mobileobservatory.mount.PrecisionGotoPhase.FAILED },
+                        busy = precisionGotoProgress.isActive, onStop = viewModel::stopMountMotion,
+                        inspectFile = inspectPrecision, onInspect = { inspectPrecision = it }, modifier = Modifier.weight(1f),
+                        previewSettings = cameraPreviewSettings.copy(monochrome = true))
+                }
+            }
+        }
+    }
     if (siteDialog && pageForeground) ObserverSiteDialog(observerSite, onDismiss = { siteDialog = false })
     androidx.activity.compose.BackHandler(enabled = pageForeground && siteDialog) { siteDialog = false }
 }

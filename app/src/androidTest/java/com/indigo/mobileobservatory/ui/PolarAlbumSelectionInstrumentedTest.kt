@@ -127,6 +127,7 @@ class PolarAlbumSelectionInstrumentedTest {
                 onCaptureFits = { captures.incrementAndGet(); null }, onBack = { back.incrementAndGet() }) }
         } }
         compose.onNodeWithText(context.getString(R.string.polar_parameters)).performScrollTo().performClick()
+        compose.onNodeWithTag("polar-sample-details").performScrollTo().performClick()
     }
 
     private fun choosePoint(index: Int) {

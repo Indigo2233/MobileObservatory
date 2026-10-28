@@ -1,0 +1,20 @@
+<resources>
+    <string name="solve_capturing_task">正在单张曝光…</string>
+    <string name="solve_solving_task">正在解析定位图…</string>
+    <string name="solve_exposure_seconds">单张曝光（秒）</string>
+    <string name="solve_gain_optional">增益（留空使用当前值）</string>
+    <string name="solve_gain_invalid">所填增益不在可用范围内，或相机未成功应用。请检查相机增益范围。</string>
+    <string name="solve_focal_mm">焦距（毫米）</string>
+    <string name="solve_blind_fallback">解析失败后尝试全天盲解</string>
+    <string name="solve_single_capture_hint">每次测量独立拍摄一张，停止采集后解析。解析失败时重新拍摄，最多尝试三张。</string>
+    <string name="solve_retry_capture">解析失败，将在当前位置重拍（第 %1$d 次）：%2$s</string>
+    <string name="solve_view_capture">定位图与解析详情</string>
+    <string name="solve_monochrome_preview">黑白预览</string>
+    <string name="solve_input_format">ASTAP 输入：%1$s</string>
+    <string name="solve_input_raw_hint">保留原始 FITS 像素；预览拉伸与颜色设置仅作用于显示。</string>
+    <string name="solve_sum_retry">追加解析输入：2×2 像素求和的 16 位黑白 FITS；原图保留。</string>
+    <string name="polar_turn_west">向西调整</string>
+    <string name="polar_turn_east">向东调整</string>
+    <string name="polar_adjust_directions">%1$s %2$.1f′ · %3$s %4$.1f′</string>
+    <string name="polar_sample_details">采样记录与手动恢复</string>
+</resources>

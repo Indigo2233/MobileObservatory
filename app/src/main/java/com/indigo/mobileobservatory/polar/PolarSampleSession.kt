@@ -15,7 +15,7 @@ import java.time.Instant
 enum class PolarSamplePhase { EMPTY, CAPTURING, SOLVING, COMPLETE, FAILED, CANCELLED }
 
 data class PolarSolveConfiguration(val focalLengthMm: Double?, val pixelSizeUm: Double?, val catalogHeightPx: Int,
-                                   val useMountHint: Boolean, val searchRadiusDeg: Double) {
+                                   val useMountHint: Boolean, val searchRadiusDeg: Double, val blindFallback: Boolean = true) {
     fun fieldOfView(hints: FitsSolveHints): Double? =
         PlateSolveOptics.astapFovDeg(hints, focalLengthMm, pixelSizeUm, catalogHeightPx)
 }

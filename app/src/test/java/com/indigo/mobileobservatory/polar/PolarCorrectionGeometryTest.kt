@@ -11,10 +11,10 @@ import kotlin.math.*
 class PolarCorrectionGeometryTest {
     private val at = Instant.parse("2026-10-25T10:00:00Z")
     private val refraction = RefractionParameters(0.0, 15.0, 0.0)
-    private fun determination(latitude: Double): PolarErrorDetermination {
+    private fun determination(latitude: Double, azimuthError: Double = .4, altitudeError: Double = .3): PolarErrorDetermination {
         val site = ObserverSite(latitude, 110.0, 0.0)
-        val axis = PolarVector3.fromTopocentric(TopocentricCoordinates(abs(latitude) + if (latitude > 0) .3 else -.3,
-            if (latitude > 0) .4 else 180.4))
+        val axis = PolarVector3.fromTopocentric(TopocentricCoordinates(abs(latitude) + if (latitude > 0) altitudeError else -altitudeError,
+            if (latitude > 0) azimuthError else 180.0 + azimuthError))
         val field = PolarVector3.fromTopocentric(TopocentricCoordinates(55.0, 35.0))
         val points = listOf(0.0, 15.0, 30.0).map {
             val ray = PolarVector3.rotateByRodrigues(field, axis, it)
@@ -23,10 +23,10 @@ class PolarCorrectionGeometryTest {
         }
         return PolarAlignmentCalculator.determine(points, site, refraction)
     }
-    private fun initialWcs(d: PolarErrorDetermination, parity: Int = -1): SolvedImageWcs = requireNotNull(SolvedImageWcs.parse(
+    private fun initialWcs(d: PolarErrorDetermination, parity: Int = -1, pixelScale: Double = .004): SolvedImageWcs = requireNotNull(SolvedImageWcs.parse(
         mapOf("PLTSOLVD" to "T", "CRVAL1" to "${d.initialReferenceFrame.raDeg}", "CRVAL2" to "${d.initialReferenceFrame.decDeg}",
-            "CRPIX1" to "200.5", "CRPIX2" to "150.5", "CD1_1" to "${parity * .004}", "CD1_2" to "0",
-            "CD2_1" to "0", "CD2_2" to ".004"), 400, 300))
+            "CRPIX1" to "200.5", "CRPIX2" to "150.5", "CD1_1" to "${parity * pixelScale}", "CD1_2" to "0",
+            "CD2_1" to "0", "CD2_2" to "$pixelScale"), 400, 300))
     private fun sample(wcs: SolvedImageWcs?) = PolarSample(phase = PolarSamplePhase.COMPLETE, file = File("third.fits"),
         result = PlateSolveResult(true, "Solved", imageWcs = wcs), capturedAt = at)
 
@@ -46,7 +46,7 @@ class PolarCorrectionGeometryTest {
         }
     }
 
-    @Test fun liveReferenceApproachesAStationaryTargetAndZeroErrorCollapsesTheGuide() {
+    @Test fun guideStaysAtTheCurrentImageCentreAndZeroErrorCollapsesIt() {
         val d = determination(30.0); val original = initialWcs(d)
         val initial = requireNotNull(correctionGeometry(d, d.initial, sample(original)))
         var previousDistance = hypot(initial.target.x - initial.reference.x, initial.target.y - initial.reference.y)
@@ -54,7 +54,7 @@ class PolarCorrectionGeometryTest {
             val residual = d.resultForResidual(d.initial.azimuthErrorDeg * factor, d.initial.altitudeErrorDeg * factor)
             val currentWcs = movedWcs(original, d, residual)
             val shape = requireNotNull(correctionGeometry(d, residual, sample(currentWcs)))
-            assertEquals(initial.target.x, shape.target.x, .1); assertEquals(initial.target.y, shape.target.y, .1)
+            assertEquals(199.5, shape.reference.x, .001); assertEquals(149.5, shape.reference.y, .001)
             val distance = hypot(shape.target.x - shape.reference.x, shape.target.y - shape.reference.y)
             assertTrue(distance < previousDistance); previousDistance = distance
             if (factor == 0.0) assertTrue(distance < .001)
@@ -65,6 +65,24 @@ class PolarCorrectionGeometryTest {
         val d = determination(30.0)
         val snapshot = PolarAdjustmentSnapshot.create(d, d.initial, sample(null))
         assertNull(snapshot.geometry); assertEquals(d.initial.totalErrorArcMin, snapshot.current.totalErrorArcMin, 0.0)
+    }
+
+    @Test fun degreeScaleErrorsKeepTheGuideOnTheLatestImageAfterTheOriginalFieldLeavesIt() {
+        for (latitude in listOf(30.0, -33.0)) for (parity in listOf(-1, 1)) {
+            val d = determination(latitude, 1.2, .6)
+            val original = initialWcs(d, parity, .0004)
+            val residual = d.resultForResidual(d.initial.azimuthErrorDeg * .2, d.initial.altitudeErrorDeg * .2)
+            val currentWcs = movedWcs(original, d, residual)
+            val oldReference = requireNotNull(currentWcs.pixel(EquatorialCoordinates(
+                d.initialReferenceFrame.raDeg, d.initialReferenceFrame.decDeg)))
+            assertTrue(oldReference.x !in 0.0..400.0 || oldReference.y !in 0.0..300.0)
+            val currentSample = sample(currentWcs).copy(file = File("latest.fits"))
+            val snapshot = PolarAdjustmentSnapshot.create(d, residual, currentSample)
+            val guide = requireNotNull(snapshot.geometry)
+            assertEquals(File("latest.fits"), snapshot.file)
+            assertEquals(199.5, guide.reference.x, 1e-8); assertEquals(149.5, guide.reference.y, 1e-8)
+            assertTrue(guide.targetOutsideImage)
+        }
     }
 
     /** Build an independent camera WCS by physically rotating its centre and two neighbouring rays. */

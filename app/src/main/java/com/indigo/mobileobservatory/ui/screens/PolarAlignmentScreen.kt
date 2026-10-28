@@ -51,6 +51,8 @@ import com.indigo.mobileobservatory.astrometry.FitsSolveHints
 import com.indigo.mobileobservatory.astrometry.PlateSolveOptics
 import com.indigo.mobileobservatory.astrometry.PlateSolveResult
 import com.indigo.mobileobservatory.astrometry.ImagePlateSolver
+import com.indigo.mobileobservatory.astrometry.retrySolveCapture
+import com.indigo.mobileobservatory.astrometry.solveWithFallback
 import com.indigo.mobileobservatory.astro.ObserverSite
 import com.indigo.mobileobservatory.astro.OpticsEquipment
 import com.indigo.mobileobservatory.astro.RefractionParameters
@@ -72,6 +74,8 @@ import com.indigo.mobileobservatory.polar.PolarSampleAdvice
 import com.indigo.mobileobservatory.polar.PolarExposure
 import com.indigo.mobileobservatory.polar.PolarSampleSession
 import com.indigo.mobileobservatory.polar.PolarAdjustmentSnapshot
+import com.indigo.mobileobservatory.polar.runPolarAlignmentWorkflow
+import com.indigo.mobileobservatory.polar.runPolarCorrectionPhase
 import com.indigo.mobileobservatory.polar.advice
 import com.indigo.mobileobservatory.ui.viewmodel.PolarSamplesViewModel
 import com.indigo.mobileobservatory.util.FileLogger
@@ -174,7 +178,10 @@ fun PolarAlignmentScreen(
     var searchRadiusText by rememberSaveable { mutableStateOf(prefs.getFloat("polar_search_radius_deg", 30f).toString()) }
     var alignmentToleranceText by rememberSaveable { mutableStateOf(prefs.getFloat("polar_alignment_tolerance_arcmin", 0f).toString()) }
     var refractionAdjustment by rememberSaveable { mutableStateOf(prefs.getBoolean("polar_refraction_adjustment", true)) }
-    var continuousEstimator by rememberSaveable { mutableStateOf(prefs.getBoolean("polar_continuous_estimator", false)) }
+    var blindFallback by rememberSaveable { mutableStateOf(prefs.getBoolean("polar_blind_fallback", true)) }
+    var monochromePreview by rememberSaveable { mutableStateOf(prefs.getBoolean("polar_monochrome_preview", true)) }
+    var showSamples by rememberSaveable { mutableStateOf(false) }
+    val alignmentPreviewSettings = cameraPreviewSettings.copy(monochrome = monochromePreview)
     var useMountHint by rememberSaveable { mutableStateOf(prefs.getBoolean("polar_use_mount_hint", true)) }
     var selectedSlot by rememberSaveable { mutableIntStateOf(0) }
     var imagePickerSlot by rememberSaveable { mutableStateOf<Int?>(null) }
@@ -233,7 +240,7 @@ fun PolarAlignmentScreen(
         } ?: 0
         val focal = focalLengthText.toDoubleOrNull()?.takeIf { it > 0.0 }
         return PolarSolveConfiguration(focal, pixel, catalogHeight, useMountHint,
-            searchRadiusText.toDoubleOrNull()?.coerceIn(30.0, 180.0) ?: 30.0)
+            searchRadiusText.toDoubleOrNull()?.coerceIn(.1, 180.0) ?: 30.0, blindFallback)
     }
 
     fun currentAstapFov(hints: FitsSolveHints = FitsSolveHints()): Double? = solveConfiguration().fieldOfView(hints)
@@ -246,10 +253,15 @@ fun PolarAlignmentScreen(
             },
             solve = { file, fov ->
                 val hint = latestMountCoordinates.value.takeIf { configuration.useMountHint }
-                solveEngine.solve(file, fov, hint, if (hint == null) 180.0 else configuration.searchRadiusDeg)
+                solveEngine.solveWithFallback(file, fov, hint, configuration.searchRadiusDeg, configuration.blindFallback)
             },
             noFrame = noCameraFrame, missingOptics = context.getString(R.string.plate_solve_need_optics),
             exposureTime = ::exposureTimeOf)
+
+    suspend fun captureSample(index: Int, configuration: PolarSolveConfiguration, exposure: Float): PlateSolveResult =
+        retrySolveCapture(onRetry = { attempt, result ->
+            workflowStatus = context.getString(R.string.solve_retry_capture, attempt, result.message)
+        }) { executeSample(index, configuration) { onCaptureFits(exposure) } }
 
     fun publishAdjustment(solved: PolarErrorDetermination, result: PolarAlignmentResult, sample: PolarSample) {
         determination = solved
@@ -261,10 +273,10 @@ fun PolarAlignmentScreen(
     }
 
     suspend fun correctAlignment(solved: PolarErrorDetermination, configuration: PolarSolveConfiguration, exposure: Float) {
-        runCorrectionPhase(solved, alignmentToleranceText.toDoubleOrNull() ?: 0.0,
+        runPolarCorrectionPhase(solved, alignmentToleranceText.toDoubleOrNull() ?: 0.0,
             capture = {
                 workflowStatus = context.getString(R.string.polar_correction_capturing)
-                val result = executeSample(3, configuration) { onCaptureFits(exposure) }
+                val result = captureSample(3, configuration, exposure)
                 val at = requireNotNull(sampleSession.samples.value[3].capturedAt)
                 if (result.success && result.raDeg != null && result.decDeg != null) PolarSolvePoint(result.raDeg, result.decDeg, at)
                 else error(result.message)
@@ -322,7 +334,8 @@ fun PolarAlignmentScreen(
             .takeIf { it >= 0 }?.let { index ->
                 workflowStatus = when {
                     index == PolarSampleSession.PREVIEW_INDEX -> context.getString(R.string.polar_test_capturing)
-                    index == 3 -> context.getString(R.string.polar_correction_capturing)
+                    index == 3 -> context.getString(if (samples[index].phase == PolarSamplePhase.CAPTURING)
+                        R.string.solve_capturing_task else R.string.solve_solving_task)
                     samples[index].phase == PolarSamplePhase.CAPTURING -> context.getString(R.string.capturing_point, index + 1)
                     else -> context.getString(R.string.solving_point, index + 1)
                 }
@@ -500,7 +513,7 @@ fun PolarAlignmentScreen(
                     val label = if (previewFile != null && latestSample?.file == null)
                         stringResource(R.string.polar_previous_image, previewLabel) else previewLabel
                     PolarWorkflowPreview(file = previewFile, label = label, livePreview = cameraPreviewBitmap,
-                        previewSettings = cameraPreviewSettings,
+                        previewSettings = alignmentPreviewSettings,
                         sample = latestSample, status = workflowStatus, error = error, busy = taskBusy || mountBusy,
                         onStop = {
                             if (taskBusy) stopTask() else onStopMountRaMove()
@@ -512,6 +525,13 @@ fun PolarAlignmentScreen(
                         modifier = modifier.verticalScroll(rememberScrollState()).padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(stringResource(R.string.solve_monochrome_preview), Modifier.weight(1f))
+                            Switch(checked = monochromePreview, onCheckedChange = {
+                                monochromePreview = it
+                                prefs.edit().putBoolean("polar_monochrome_preview", it).apply()
+                            })
+                        }
                         PolarExposureControls(seconds = exposureSeconds, onSecondsChange = {
                             exposureSeconds = it
                             prefs.edit().putString("polar_exposure_seconds", it).apply()
@@ -586,7 +606,6 @@ fun PolarAlignmentScreen(
                                             val distance = targetDistanceText.toDoubleOrNull()?.coerceIn(1.0, 90.0) ?: 10.0
                                             val rate = moveRateText.toDoubleOrNull()?.coerceIn(0.1, 20.0) ?: 3.0
                                             val refraction = currentRefraction()
-                                            val useContinuous = continuousEstimator
                                             val useManual = manualMode
                                             val useRefractionAdjustment = refractionAdjustment
                                             showParameters = false
@@ -619,7 +638,7 @@ fun PolarAlignmentScreen(
                                                     val mountDeclinations = mutableListOf<Double>()
                                                     var previousMountRaDeg = latestMountCoordinates.value?.raDeg
 
-                                                    for (index in startIndex..2) {
+                                                    runPolarAlignmentWorkflow(initialPoints = points, moveToPoint = { index ->
                                                         if (index > sampleModel.positionedPoint) {
                                                             sampleModel.canResume = false
                                                             workflowStatus = context.getString(R.string.moving_ra_point, index + 1)
@@ -661,36 +680,37 @@ fun PolarAlignmentScreen(
                                                             sampleModel.canResume = true
                                                         }
 
+                                                    }, capturePoint = { index ->
                                                         previousMountRaDeg = latestMountCoordinates.value?.raDeg
                                                         workflowStatus = context.getString(R.string.capturing_point, index + 1)
                                                         solvingSlot = index
-                                                        val solved = executeSample(index, configuration) { onCaptureFits(exposure) }
+                                                        val solved = captureSample(index, configuration, exposure)
                                                         val capturedAt = requireNotNull(sampleSession.samples.value[index].capturedAt)
                                                         solvingSlot = null
                                                         if (!solved.success) error(solved.message)
-                                                        points += PolarSolvePoint(
+                                                        val point = PolarSolvePoint(
                                                             raDeg = solved.raDeg ?: error(solved.message),
                                                             decDeg = solved.decDeg ?: error(solved.message),
                                                             solvedAt = capturedAt
                                                         )
                                                         latestMountCoordinates.value?.let { mountDeclinations += it.decDeg }
-                                                    }
-
-                                                    workflowStatus = context.getString(R.string.polar_calculating)
-                                                    val solved = PolarAlignmentCalculator.determine(
-                                                        points = points,
-                                                        site = site,
-                                                        refraction = refraction,
-                                                        correctForRefraction = useRefractionAdjustment,
-                                                        declinationSpreadArcsec =
-                                                            PolarAlignmentCalculator.declinationSpreadArcsec(mountDeclinations)
-                                                    )
-                                                    publishAdjustment(solved, solved.initial, sampleSession.samples.value[2])
-                                                    workflowStatus = context.getString(R.string.tppa_complete)
-
-                                                    if (useContinuous) {
+                                                        point
+                                                    }, determine = { allPoints ->
+                                                        workflowStatus = context.getString(R.string.polar_calculating)
+                                                        PolarAlignmentCalculator.determine(
+                                                            points = allPoints,
+                                                            site = site,
+                                                            refraction = refraction,
+                                                            correctForRefraction = useRefractionAdjustment,
+                                                            declinationSpreadArcsec =
+                                                                PolarAlignmentCalculator.declinationSpreadArcsec(mountDeclinations)
+                                                        )
+                                                    }, onDetermined = { solved ->
+                                                        publishAdjustment(solved, solved.initial, sampleSession.samples.value[2])
+                                                        workflowStatus = context.getString(R.string.tppa_complete)
+                                                    }, adjust = { solved ->
                                                         correctAlignment(solved, configuration, exposure)
-                                                    }
+                                                    })
                                                 } catch (cancel: CancellationException) {
                                                     FileLogger.i("PolarAlign", "Workflow cancelled stage=$workflowStatus")
                                                     workflowStatus = context.getString(R.string.stopped)
@@ -757,7 +777,7 @@ fun PolarAlignmentScreen(
                             }
                         }
 
-                        determination?.let { solved ->
+                        if (showParameters) determination?.let { solved ->
                             PolarAlignmentResultCard(
                                 determination = solved,
                                 current = currentResult ?: solved.initial,
@@ -925,7 +945,7 @@ fun PolarAlignmentScreen(
                                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                         OptionField(stringResource(R.string.search_radius), searchRadiusText, Modifier.weight(1f)) {
                                             searchRadiusText = it.filterCoordinateText()
-                                            it.toFloatOrNull()?.let { value -> prefs.edit().putFloat("polar_search_radius_deg", value.coerceIn(30f, 180f)).apply() }
+                                            it.toFloatOrNull()?.let { value -> prefs.edit().putFloat("polar_search_radius_deg", value.coerceIn(.1f, 180f)).apply() }
                                         }
                                         OptionField(stringResource(R.string.tolerance_arcmin), alignmentToleranceText, Modifier.weight(1f)) {
                                             alignmentToleranceText = it.filterCoordinateText()
@@ -947,9 +967,9 @@ fun PolarAlignmentScreen(
                                             refractionAdjustment = it
                                             prefs.edit().putBoolean("polar_refraction_adjustment", it).apply()
                                         }
-                                        LabeledSwitch(stringResource(R.string.continuous), continuousEstimator) {
-                                            continuousEstimator = it
-                                            prefs.edit().putBoolean("polar_continuous_estimator", it).apply()
+                                        LabeledSwitch(stringResource(R.string.solve_blind_fallback), blindFallback) {
+                                            blindFallback = it
+                                            prefs.edit().putBoolean("polar_blind_fallback", it).apply()
                                         }
                                     }
                                     LabeledSwitch(stringResource(R.string.mount_hint), useMountHint) {
@@ -990,74 +1010,80 @@ fun PolarAlignmentScreen(
 
                         }
 
-                        (0..3).filter { it < 3 || adjustment != null || samples[3].file != null ||
-                            samples[3].phase != PolarSamplePhase.EMPTY }.forEach { index ->
-                            MeasurementCard(
-                                index = index,
-                                file = samples[index].file,
-                                solve = samples[index].result,
-                                solving = solvingSlot == index,
-                                sample = samples[index],
-                                actionsEnabled = !taskBusy && !mountBusy,
-                                canRecapture = index == 3 || index == sampleModel.positionedPoint,
-                                onSelect = {
-                                    selectedSlot = index
-                                    imagePickerSlot = index
-                                },
-                                onSolve = { runSingleSample(index, false) },
-                                onRecapture = { runSingleSample(index, true) },
-                                onBlindRetry = { runSingleSample(index, false, blind = true) },
-                                onViewImage = { inspectFile = samples[index].file },
-                                previewSettings = cameraPreviewSettings
-                            )
+                        TextButton(onClick = { showSamples = !showSamples }, modifier = Modifier.testTag("polar-sample-details")) {
+                            Text(stringResource(R.string.polar_sample_details))
+                            Icon(if (showSamples) Icons.Default.ExpandLess else Icons.Default.ExpandMore, null)
                         }
+                        if (showSamples) {
+                            (0..3).filter { it < 3 || adjustment != null || samples[3].file != null ||
+                                samples[3].phase != PolarSamplePhase.EMPTY }.forEach { index ->
+                                MeasurementCard(
+                                    index = index,
+                                    file = samples[index].file,
+                                    solve = samples[index].result,
+                                    solving = solvingSlot == index,
+                                    sample = samples[index],
+                                    actionsEnabled = !taskBusy && !mountBusy,
+                                    canRecapture = index == 3 || index == sampleModel.positionedPoint,
+                                    onSelect = {
+                                        selectedSlot = index
+                                        imagePickerSlot = index
+                                    },
+                                    onSolve = { runSingleSample(index, false) },
+                                    onRecapture = { runSingleSample(index, true) },
+                                    onBlindRetry = { runSingleSample(index, false, blind = true) },
+                                    onViewImage = { inspectFile = samples[index].file },
+                                    previewSettings = alignmentPreviewSettings
+                                )
+                            }
 
-                        Button(
-                            onClick = {
-                                val site = currentSite()
-                                if (site == null) {
-                                    error = context.getString(R.string.invalid_coordinates)
-                                    return@Button
-                                }
-                                val points = (0..2).mapNotNull { index ->
-                                    val solve = solves[index]
-                                    val time = solvedAt[index]
-                                    val ra = solve?.raDeg
-                                    val dec = solve?.decDeg
-                                    if (solve?.success == true && time != null && ra != null && dec != null) {
-                                        PolarSolvePoint(ra, dec, time)
-                                    } else {
-                                        null
+                            Button(
+                                onClick = {
+                                    val site = currentSite()
+                                    if (site == null) {
+                                        error = context.getString(R.string.invalid_coordinates)
+                                        return@Button
                                     }
-                                }
-                                if (points.size != 3) {
-                                    error = threeSolvesRequired
-                                    return@Button
-                                }
-                                prefs.edit()
-                                    .putFloat("polar_latitude_deg", site.latitudeDeg.toFloat())
-                                    .putFloat("polar_longitude_deg", site.longitudeDeg.toFloat())
-                                    .apply()
-                                try {
-                                    val solved = PolarAlignmentCalculator.determine(
-                                        points = points,
-                                        site = site,
-                                        refraction = currentRefraction(),
-                                        correctForRefraction = refractionAdjustment
-                                    )
-                                    publishAdjustment(solved, solved.initial, sampleSession.samples.value[2])
-                                    correctionField = null
-                                    error = null
-                                } catch (failure: Exception) {
-                                    error = failure.message ?: tppaFailed
-                                    FileLogger.e("PolarAlign", "Three-point geometry failed", failure)
-                                }
-                            },
-                            enabled = !runningAuto && solvingSlot == null && solves.count { it?.success == true } == 3
-                        ) {
-                            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text(stringResource(R.string.calculate))
+                                    val points = (0..2).mapNotNull { index ->
+                                        val solve = solves[index]
+                                        val time = solvedAt[index]
+                                        val ra = solve?.raDeg
+                                        val dec = solve?.decDeg
+                                        if (solve?.success == true && time != null && ra != null && dec != null) {
+                                            PolarSolvePoint(ra, dec, time)
+                                        } else {
+                                            null
+                                        }
+                                    }
+                                    if (points.size != 3) {
+                                        error = threeSolvesRequired
+                                        return@Button
+                                    }
+                                    prefs.edit()
+                                        .putFloat("polar_latitude_deg", site.latitudeDeg.toFloat())
+                                        .putFloat("polar_longitude_deg", site.longitudeDeg.toFloat())
+                                        .apply()
+                                    try {
+                                        val solved = PolarAlignmentCalculator.determine(
+                                            points = points,
+                                            site = site,
+                                            refraction = currentRefraction(),
+                                            correctForRefraction = refractionAdjustment
+                                        )
+                                        publishAdjustment(solved, solved.initial, sampleSession.samples.value[2])
+                                        correctionField = null
+                                        error = null
+                                    } catch (failure: Exception) {
+                                        error = failure.message ?: tppaFailed
+                                        FileLogger.e("PolarAlign", "Three-point geometry failed", failure)
+                                    }
+                                },
+                                enabled = !runningAuto && solvingSlot == null && solves.count { it?.success == true } == 3
+                            ) {
+                                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text(stringResource(R.string.calculate))
+                            }
                         }
 
 
@@ -1109,55 +1135,6 @@ private suspend fun awaitManualMove(
         delay(500L)
     }
 }
-
-/**
- * Keeps solving while the observer adjusts the knobs and reports the error that is still left.
- * A single below-tolerance solve is not enough to finish; the reading has to repeat.
- */
-private suspend fun runCorrectionPhase(
-    determination: PolarErrorDetermination,
-    toleranceArcMin: Double,
-    capture: suspend () -> PolarSolvePoint?,
-    onEstimate: (PolarAlignmentResult, CorrectionFieldInfo) -> Unit,
-    onUnstable: () -> Unit,
-    onWithinTolerance: (Double) -> Unit,
-    seed: PolarAlignmentResult = determination.initial
-) {
-    var seedAzimuth = seed.azimuthErrorDeg
-    var seedAltitude = seed.altitudeErrorDeg
-    var consecutiveWithinTolerance = 0
-
-    while (true) {
-        val frame = capture() ?: continue
-        val estimate = ContinuousPolarErrorEstimator.estimate(
-            determination,
-            frame,
-            seedAzimuth,
-            seedAltitude
-        )
-        if (!estimate.success) {
-            onUnstable()
-            continue
-        }
-
-        seedAzimuth = estimate.azimuthErrorDeg
-        seedAltitude = estimate.altitudeErrorDeg
-        val result = determination.resultForResidual(seedAzimuth, seedAltitude)
-        onEstimate(result, determination.correctionFieldInfo(frame))
-
-        if (toleranceArcMin > 0.0 && abs(result.totalErrorArcMin) <= toleranceArcMin) {
-            consecutiveWithinTolerance++
-            if (consecutiveWithinTolerance >= REQUIRED_TOLERANCE_CONFIRMATIONS) {
-                onWithinTolerance(abs(result.totalErrorArcMin))
-                return
-            }
-        } else {
-            consecutiveWithinTolerance = 0
-        }
-    }
-}
-
-private const val REQUIRED_TOLERANCE_CONFIRMATIONS = 2
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable

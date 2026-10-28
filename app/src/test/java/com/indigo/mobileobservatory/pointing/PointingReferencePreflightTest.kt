@@ -11,6 +11,16 @@ class PointingReferencePreflightTest {
         PixelFormat.MONO16, 1024, 768, Roi(0, 0, 1024, 768), 1, 1_000_000f, 60_000_000f, false)
     private val ready = PointingReferenceState(camera, true)
 
+    @Test fun centeringTakesItsOwnExposureEvenWhenLivePreviewIsPaused() {
+        val stopped = ready.copy(previewPaused = true, camera = camera.copy(capturing = false,
+            acquisitionGeneration = null, exposureUs = 45_000_000f))
+        assertNull(PointingReferencePreflight.issue(stopped, singleExposure = true))
+        assertEquals(PointingReferenceIssue.BUSY,
+            PointingReferencePreflight.issue(stopped.copy(recordingBusy = true), singleExposure = true))
+        assertEquals(PointingReferenceIssue.EXPOSURE, PointingReferencePreflight.issue(stopped.copy(
+            camera = stopped.camera!!.copy(exposureUs = 70_000_000f)), singleExposure = true))
+    }
+
     @Test fun predictableUnavailableConditionsAreRejectedBeforeAReferenceCanBeUsed() {
         val cases = listOf(
             ready.copy(camera = null) to PointingReferenceIssue.CAMERA,

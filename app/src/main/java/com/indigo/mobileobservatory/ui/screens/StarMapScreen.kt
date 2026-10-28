@@ -343,6 +343,7 @@ fun StarMapScreen(
     mountMotionState: MountMotionState = MountMotionState.Idle,
     mountSlewRate: MountSlewRate = MountSlewRate.DEFAULT,
     precisionGotoProgress: PrecisionGotoProgress = PrecisionGotoProgress(),
+    onPrecisionDetails: () -> Unit = {},
     cameraPixelSizeUm: Float? = null,
     cameraFrameWidthPx: Int = 0,
     cameraFrameHeightPx: Int = 0,
@@ -2212,6 +2213,7 @@ fun StarMapScreen(
                                 color = MaterialTheme.colorScheme.primary,
                                 maxLines = 2
                             )
+                            TextButton(onClick = onPrecisionDetails) { Text(stringResource(R.string.solve_view_capture)) }
                         }
                         if (mountConnected && mountPointingCapabilities.goto && !mountPointingCapabilities.sync) {
                             Text(
