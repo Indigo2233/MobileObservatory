@@ -15,7 +15,7 @@ class ScienceFrameProvenance {
     }
 
     @Synchronized fun frame(frame: FrameData, activeRun: Long?): StackSessionKey? {
-        if (activeRun == null || generation != activeRun || frame.captureGeneration != activeRun) return null
+        if (frame.previewOnly || activeRun == null || generation != activeRun || frame.captureGeneration != activeRun) return null
         return settings?.copy(width = frame.width, height = frame.height, format = frame.pixelFormat)
             ?.also { latest = it }
     }

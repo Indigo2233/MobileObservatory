@@ -3,8 +3,9 @@ package com.indigo.mobileobservatory.camera
 /** A fresh SDK run must consume queued images before exposing scientific provenance.
  * The SDK callback must use a non-blocking read/readiness query. Only an explicit EMPTY
  * result establishes a boundary; errors and exhausted limits are not evidence of freshness.
- * After draining, discard one further complete image to avoid delivering a boundary image
- * that was already in transport. This is a host-side guard, not per-frame sensor metadata.
+ * After draining, classify one further complete image as a boundary image that may have
+ * been in transport. Adapters must exclude it from science and other measurements.
+ * This is a host-side guard, not per-frame sensor metadata.
  */
 class CaptureStartupBarrier {
     enum class Read { BUFFERED_FRAME, EMPTY, FAILED }

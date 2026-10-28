@@ -916,7 +916,7 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
                     continue
                 }
 
-                if (!startup.acceptCompleteFrame()) continue
+                val previewOnly = !startup.acceptCompleteFrame()
                 bb.position(0)
                 val outData = getBuffer(imageBytes)
                 bb.get(outData, 0, imageBytes.coerceAtMost(outData.size).coerceAtMost(bb.remaining()))
@@ -924,7 +924,7 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
                 val pixFmt = asiImgTypeToPixelFormat(currentImgType)
 
                 if (frameSeq == 0L) {
-                    FileLogger.i(TAG, "First frame: ${w}x${h} imgType=$currentImgType fmt=${pixFmt.name} bpp=$frameBpp")
+                    FileLogger.i(TAG, "First frame: ${w}x${h} imgType=$currentImgType fmt=${pixFmt.name} bpp=$frameBpp previewOnly=$previewOnly")
                 }
 
                 frameSeq++
@@ -935,7 +935,8 @@ class ZwoAsiCamera : Camera, CameraOffsetCapable, CameraUsbBandwidthCapable,
                     pixelFormat = pixFmt,
                     frameId = frameSeq,
                     timestamp = System.currentTimeMillis(),
-                    captureGeneration = generation
+                    captureGeneration = generation,
+                    previewOnly = previewOnly
                 )
                 if (captureGeneration.isActive(generation)) callback.onFrame(frame) else recycleBuffer(outData)
 

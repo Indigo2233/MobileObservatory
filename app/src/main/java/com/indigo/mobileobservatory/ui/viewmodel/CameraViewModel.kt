@@ -2105,6 +2105,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         cam.startCapture(object : FrameCallback {
             override fun onFrame(frame: FrameData) {
+                if (frame.previewOnly) { cam.recycleBuffer(frame.data); return }
                 guideMeasurements.delivered(frame.captureGeneration, frame.frameId, android.os.SystemClock.elapsedRealtime(), measurementRun)
                 if (auxiliaryMotionMonitor.get() != null) synchronized(guideDeliveryLock) {
                     val end = android.os.SystemClock.elapsedRealtime()
@@ -2373,6 +2374,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 val actualSelection = if (input.pixelFormat.isRgb) SerCfaInterpretation.AUTO else selection
                 val interpretedFrame = CameraCfaLayout.interpret(input, actualSelection)
                 val traits = runTraits.get()
+                if (input.previewOnly) {
+                    onFrameArrived()
+                    val processed = softwareBinning.apply(interpretedFrame, traits)
+                    if (processed.data !== interpretedFrame.data) cam.recycleBuffer(interpretedFrame.data)
+                    if (!previewEpoch.isCurrent(runEpoch)) { runRecycler(processed.data); return }
+                    val display = CameraCfaLayout.displayFrame(processed, traits)
+                    previewPipeline.submit(display, traits?.copy(bayerPatternAtOutput = true), previewRun, runRecycler)
+                    return
+                }
                 onFrameArrived()
                 updateFps()
 

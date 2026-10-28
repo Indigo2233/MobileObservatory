@@ -495,7 +495,6 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
                 if (!captureGeneration.isActive(generation)) break
 
                 if (ret == QhyccdJni.QHYCCD_SUCCESS) {
-                    if (!startup.acceptCompleteFrame()) continue
                     val w = outInfo[0]
                     val h = outInfo[1]
                     val bits = outInfo[2]
@@ -518,8 +517,13 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
                         continue
                     }
 
-                    val displayBuf = if (useA) displayBufA else displayBufB
-                    useA = !useA
+                    val previewOnly = !startup.acceptCompleteFrame()
+
+                    // The preview worker may still hold the boundary frame when live
+                    // capture advances; do not reuse its bytes for a later SDK image.
+                    val displayBuf = if (previewOnly) ByteArray(actualDataLen.toInt()) else {
+                        (if (useA) displayBufA else displayBufB).also { useA = !useA }
+                    }
                     System.arraycopy(sdkBuf, 0, displayBuf, 0, actualDataLen.toInt())
 
                     val frame = FrameData(
@@ -529,7 +533,8 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
                         pixelFormat = fmt,
                         frameId = frameCounter.incrementAndGet(),
                         timestamp = System.nanoTime(),
-                        captureGeneration = generation
+                        captureGeneration = generation,
+                        previewOnly = previewOnly
                     )
                     try {
                         if (captureGeneration.isActive(generation)) callback.onFrame(frame)

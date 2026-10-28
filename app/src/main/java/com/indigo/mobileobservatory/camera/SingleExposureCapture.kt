@@ -26,7 +26,7 @@ suspend fun captureSingleExposureFrame(
         val callback = object : FrameCallback {
             override fun onFrame(frame: FrameData) {
                 try {
-                    if (closed.get() || !acceptFrame(frame) || !claimed.compareAndSet(false, true)) return
+                    if (closed.get() || frame.previewOnly || !acceptFrame(frame) || !claimed.compareAndSet(false, true)) return
                     checkCamera()
                     val owned = snapshot(frame)
                     if (!closed.get()) received.complete(owned)

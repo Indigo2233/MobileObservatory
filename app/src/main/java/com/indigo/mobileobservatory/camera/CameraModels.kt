@@ -82,7 +82,9 @@ data class FrameData(
     val frameId: Long,
     val timestamp: Long,
     /** Fixed when the adapter's acquisition run starts, including delayed delivery slots. */
-    val captureGeneration: Long? = null
+    val captureGeneration: Long? = null,
+    /** Startup boundary image may be shown, but must not drive capture or measurements. */
+    val previewOnly: Boolean = false
 ) {
     val bytesPerPixel: Int get() = pixelFormat.bytesPerPixel
     override fun equals(other: Any?): Boolean {
