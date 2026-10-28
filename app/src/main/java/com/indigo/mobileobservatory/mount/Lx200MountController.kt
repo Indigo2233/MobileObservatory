@@ -189,11 +189,12 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
     private var socket: Socket? = null
     private var input: BufferedInputStream? = null
     private var output: BufferedOutputStream? = null
-    private var serialPort: UsbSerialPort? = null
-    private var serialConnection: UsbDeviceConnection? = null
+    @Volatile private var serialPort: UsbSerialPort? = null
+    @Volatile private var serialConnection: UsbDeviceConnection? = null
     private var bluetoothSocket: BluetoothSocket? = null
     private var synScanSocket: DatagramSocket? = null
     private var skyWatcherAdapter: SkyWatcherMountSession? = null
+    private val closeLock = Any()
     @Volatile private var permanentlyClosed = false
 
     var activeProtocol: MountProtocolType = MountProtocolType.AUTO
@@ -280,13 +281,14 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
         val failures = mutableListOf<String>()
         for (candidateBaud in baudCandidates) {
             check(!permanentlyClosed) { "Mount controller is closed." }
-            val connection = usbManager.openDevice(driver.device)
-                ?: error("Unable to open USB serial device.")
             val port = driver.ports.firstOrNull()
                 ?: error("USB serial device has no port.")
+            val connection = usbManager.openDevice(driver.device)
+                ?: error("Unable to open USB serial device.")
             serialConnection = connection
             serialPort = port
             try {
+                check(!permanentlyClosed) { "Mount controller is closed." }
                 FileLogger.i(
                     TAG,
                     "Opening USB serial mount ${driver.device.deviceName} " +
@@ -355,7 +357,9 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
                 failures += "$candidateBaud: ${e.message}"
                 FileLogger.w(TAG, "USB serial baud $candidateBaud failed: ${e.message}")
                 runCatching { port.close() }
+                    .onFailure { FileLogger.e(TAG, "USB serial port close after failed connect failed", it) }
                 runCatching { connection.close() }
+                    .onFailure { FileLogger.e(TAG, "USB connection close after failed connect failed", it) }
                 serialPort = null
                 serialConnection = null
             }
@@ -486,15 +490,19 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
 
     /** Permanently releases every mount transport. Safe to call repeatedly during teardown. */
     fun close() {
-        if (permanentlyClosed) return
+        // Reject queued movement before sending the final emergency stop.
+        synchronized(closeLock) {
+            if (permanentlyClosed) return
+            permanentlyClosed = true
+        }
         runCatching {
             if (isConnected) emergencyStop()
-        }
-        permanentlyClosed = true
+        }.onFailure { FileLogger.e(TAG, "Emergency stop during mount close failed", it) }
         closeTransports()
     }
 
     private fun closeTransports() {
+        val wasConnected = isConnected
         pointingAccess.disconnected()
         injectedTestSession = false
         val oldInput = input
@@ -519,10 +527,20 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
         runCatching { oldInput?.close() }
         runCatching { oldOutput?.close() }
         runCatching { oldSocket?.close() }
-        runCatching { oldSerialPort?.close() }
-        runCatching { oldSerialConnection?.close() }
+        val serialPortClose = runCatching { oldSerialPort?.close() }
+            .onFailure { FileLogger.e(TAG, "USB serial port close failed", it) }
+        val serialConnectionClose = runCatching { oldSerialConnection?.close() }
+            .onFailure { FileLogger.e(TAG, "USB connection close failed", it) }
         runCatching { oldBluetoothSocket?.close() }
         runCatching { oldSynScanSocket?.close() }
+        if (wasConnected || oldSerialPort != null || oldSerialConnection != null) {
+            FileLogger.i(
+                TAG,
+                "Mount transport cleanup connected=$wasConnected usbPort=${oldSerialPort != null} " +
+                    "usbPortClose=${serialPortClose.isSuccess} usbConnection=${oldSerialConnection != null} " +
+                    "usbConnectionClose=${serialConnectionClose.isSuccess}"
+            )
+        }
     }
 
     suspend fun readCoordinates(): MountCoordinates = withContext(Dispatchers.IO) {
@@ -1016,6 +1034,7 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
         if (udp != null) {
             val outgoing = DatagramPacket(payload, payload.size)
             synchronized(udp) {
+                check(!permanentlyClosed) { "Mount controller is closed." }
                 udp.send(outgoing)
             }
             val buffer = ByteArray(256)
@@ -1027,6 +1046,7 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
         val port = serialPort ?: error("Sky-Watcher transport is closed.")
         drainSerialInput(port)
         synchronized(port) {
+            check(!permanentlyClosed) { "Mount controller is closed." }
             port.write(payload, SERIAL_TIMEOUT_MS)
         }
         val response = ArrayList<Byte>(32)
@@ -1101,6 +1121,7 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
 
     private fun sendSerialCommand(port: UsbSerialPort, command: String, timeoutMs: Int): String {
         synchronized(port) {
+            check(!permanentlyClosed) { "Mount controller is closed." }
             pointingAccess.requireWireAllowed(command.toByteArray(Charsets.US_ASCII))
             port.write(command.toByteArray(Charsets.US_ASCII), SERIAL_TIMEOUT_MS)
         }
@@ -1209,6 +1230,7 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
         val port = serialPort
         if (port != null) {
             synchronized(port) {
+                check(!permanentlyClosed) { "Mount controller is closed." }
                 pointingAccess.requireWireAllowed(bytes)
                 port.write(bytes, SERIAL_TIMEOUT_MS)
             }
@@ -1216,6 +1238,7 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
         }
         val out = output ?: error("Mount is not connected.")
         synchronized(out) {
+            check(!permanentlyClosed) { "Mount controller is closed." }
             pointingAccess.requireWireAllowed(bytes)
             out.write(bytes)
             out.flush()
@@ -1454,7 +1477,7 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
 
         fun listUsbDevices(context: Context): List<MountUsbDevice> {
             val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
-            return UsbSerialProber.getDefaultProber()
+            val serialDevices = UsbSerialProber.getDefaultProber()
                 .findAllDrivers(usbManager)
                 .map { driver ->
                     val device = driver.device
@@ -1471,6 +1494,18 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
                         productId = device.productId
                     )
                 }
+            val attachedDevices = runCatching {
+                usbManager.deviceList.values.joinToString { device ->
+                    "${device.deviceName} %04x:%04x id=%d".format(
+                        Locale.US, device.vendorId, device.productId, device.deviceId
+                    )
+                }.ifBlank { "none" }
+            }.getOrElse { "unavailable (${it.javaClass.simpleName})" }
+            FileLogger.i(
+                TAG,
+                "USB scan serialDrivers=${serialDevices.size} attached=[$attachedDevices]"
+            )
+            return serialDevices
         }
 
         @SuppressLint("MissingPermission")

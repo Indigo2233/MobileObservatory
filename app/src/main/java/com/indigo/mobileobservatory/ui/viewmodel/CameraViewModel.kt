@@ -1183,6 +1183,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private val resourceCleaner by lazy {
         DeterministicResourceCleaner(
+            ::closeMountTransport,
             ::cancelOwnedJobs,
             ::unregisterOwnedReceiver,
             { closeRecordingResources(saveToGallery = false) },
@@ -1197,7 +1198,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         previewPipeline.close()
         guidePreviewPipeline.close()
         stopExposureTimer()
-        mountModule.cancelJobs()
         coolingJobs.forEach { it.cancel() }
         coolingJobs.clear()
         _guideRunning.value = false
@@ -1221,6 +1221,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             .onFailure { Log.e(TAG, "Guide camera manager cleanup failed", it) }
         runCatching { accessoryManager.unregister() }
             .onFailure { Log.e(TAG, "Accessory manager cleanup failed", it) }
+    }
+
+    private fun closeMountTransport() {
+        // Release the mount USB handle before camera and accessory teardown can take longer.
+        runCatching { mountModule.cancelJobs() }
+            .onFailure { Log.e(TAG, "Mount job cancellation failed", it) }
         runCatching { mountModule.closeController() }
             .onFailure { Log.e(TAG, "Mount transport cleanup failed", it) }
     }

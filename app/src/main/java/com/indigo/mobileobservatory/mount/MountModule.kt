@@ -279,7 +279,9 @@ class MountModule(
 
     fun scanMountUsbDevices() {
         val context = application
-        val devices = runCatching { Lx200MountController.listUsbDevices(context) }.getOrDefault(emptyList())
+        val devices = runCatching { Lx200MountController.listUsbDevices(context) }
+            .onFailure { FileLogger.e(TAG, "USB serial scan failed", it) }
+            .getOrDefault(emptyList())
         _mountUsbDevices.value = devices
         if (devices.isNotEmpty() && devices.none { it.deviceId == _mountUsbDeviceId.value }) {
             setMountUsbDevice(devices.first().deviceId)
@@ -1435,7 +1437,6 @@ class MountModule(
         mountConnectionGeneration++
         mountConnectJob?.cancel()
         mountConnectJob = null
-        controller.cancelPendingBluetoothConnection()
         pendingMountUsbConnect = false
     }
 
@@ -1446,7 +1447,9 @@ class MountModule(
     }
 
     fun closeController() {
+        FileLogger.i(TAG, "closeController connected=${controller.isConnected}")
         controller.close()
+        FileLogger.i(TAG, "closeController complete connected=${controller.isConnected}")
     }
 
     private var receiverRegistered = false
