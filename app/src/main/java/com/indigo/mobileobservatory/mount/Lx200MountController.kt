@@ -193,7 +193,7 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
     private var serialConnection: UsbDeviceConnection? = null
     private var bluetoothSocket: BluetoothSocket? = null
     private var synScanSocket: DatagramSocket? = null
-    private var skyWatcherAdapter: SkyWatcherMountSession? = null
+    private var skyWatcherAdapter: MountSession? = null
     @Volatile private var permanentlyClosed = false
 
     var activeProtocol: MountProtocolType = MountProtocolType.AUTO
@@ -215,7 +215,7 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
             (synScanSocket?.isClosed == false) || injectedTestSession
 
     private fun publishPointingConnection() {
-        if (!isConnected || activeProtocol == MountProtocolType.AUTO) return
+        if (!isConnected || activeProtocol == MountProtocolType.AUTO && skyWatcherAdapter == null) return
         val adapter = skyWatcherAdapter
         val capabilities = adapter?.pointingCapabilities ?: PointingMountCapabilities(readCoordinates = true,
             goto = true, sync = true, tracking = true, manualMove = true, home = true, setHome = true,
@@ -226,6 +226,16 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
         skyWatcherAdapter = session; injectedTestSession = true; activeProtocol = MountProtocolType.SKYWATCHER
         mountModel = session.modelName; publishPointingConnection()
     }
+
+    fun connectVirtual(session: com.indigo.mobileobservatory.simulation.VirtualMountSession): MountCoordinates {
+        check(!permanentlyClosed && !isConnected) { "Disconnect the mount before starting simulation" }
+        skyWatcherAdapter = session; injectedTestSession = true
+        mountModel = session.modelName
+        publishPointingConnection()
+        return session.open()
+    }
+
+    val virtualSession get() = skyWatcherAdapter as? com.indigo.mobileobservatory.simulation.VirtualMountSession
 
     suspend fun connect(
         host: String,
@@ -504,6 +514,7 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
         val oldSerialConnection = serialConnection
         val oldBluetoothSocket = bluetoothSocket
         val oldSynScanSocket = synScanSocket
+        val oldSession = skyWatcherAdapter
 
         input = null
         output = null
@@ -515,6 +526,7 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
         skyWatcherAdapter = null
         activeProtocol = MountProtocolType.AUTO
         mountModel = null
+        runCatching { oldSession?.close() }
 
         runCatching { oldInput?.close() }
         runCatching { oldOutput?.close() }
@@ -792,6 +804,7 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
     suspend fun startGuidePulse(direction: MountDirection, durationMs: Int) = withContext(Dispatchers.IO) {
         require(durationMs in 1..5000)
         pointingAccess.requireWritable()
+        skyWatcherAdapter?.let { it.startGuidePulse(direction, durationMs); return@withContext }
         if (isOnStepFirmware) {
             val axis = when (direction) {
                 MountDirection.NORTH -> 'n'

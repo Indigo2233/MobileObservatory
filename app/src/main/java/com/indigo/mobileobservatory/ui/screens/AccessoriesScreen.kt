@@ -239,6 +239,7 @@ private fun EquipmentList(viewModel: CameraViewModel, onOpen: (DeviceControlDest
                 Icon(Icons.Default.Refresh, stringResource(R.string.scan))
             }
         }
+        VirtualObservationEntry(viewModel)
         DeviceControlDestination.equipment.forEach { destination ->
             val summary = deviceSummary(viewModel, destination)
             Card(Modifier.fillMaxWidth().testTag("equipment-${destination.key}").clickable { onOpen(destination) }) {

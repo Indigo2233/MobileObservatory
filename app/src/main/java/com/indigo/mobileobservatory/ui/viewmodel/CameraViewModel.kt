@@ -198,6 +198,50 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val mountMotionState: StateFlow<MountMotionState> = mountModule.motionState
     val precisionGotoProgress: StateFlow<PrecisionGotoProgress> = mountModule.precisionGotoProgress
     private val astapRunner = AstapRunner(application)
+    private val _virtualObservation = MutableStateFlow<com.indigo.mobileobservatory.simulation.VirtualObservatorySession?>(null)
+    val virtualObservation = _virtualObservation.asStateFlow()
+    private val _virtualObservationMessage = MutableStateFlow("")
+    val virtualObservationMessage = _virtualObservationMessage.asStateFlow()
+    private val _virtualObservationBusy = MutableStateFlow(false)
+    val virtualObservationBusy = _virtualObservationBusy.asStateFlow()
+
+    fun startVirtualObservation() {
+        if (_virtualObservationBusy.value || _virtualObservation.value != null) return
+        _virtualObservationBusy.value = true
+        viewModelScope.launch {
+            var session: com.indigo.mobileobservatory.simulation.VirtualObservatorySession? = null
+            try {
+                check(cameraManager.activeCamera == null && guideCameraManager.activeCamera == null &&
+                    !mountModule.isConnected && !mountBusy.value) { app.getString(R.string.virtual_disconnect_first) }
+                session = withContext(Dispatchers.IO) { com.indigo.mobileobservatory.simulation.VirtualObservatorySession(app) }
+                check(cameraManager.openVirtualCamera(session.primary)) { app.getString(R.string.virtual_disconnect_first) }
+                check(guideCameraManager.openVirtualCamera(session.guide)) { app.getString(R.string.virtual_disconnect_first) }
+                mountModule.connectVirtual(session.mount)
+                _virtualObservation.value = session
+                _virtualObservationMessage.value = ""
+            } catch (failure: Exception) {
+                session?.let {
+                    if (cameraManager.activeCamera === it.primary) disconnectCamera()
+                    if (guideCameraManager.activeCamera === it.guide) disconnectGuideCamera()
+                    it.close()
+                }
+                FileLogger.e("VirtualObservation", "Failed to connect virtual devices", failure)
+                _virtualObservationMessage.value = if (failure.message == app.getString(R.string.virtual_disconnect_first))
+                    app.getString(R.string.virtual_disconnect_first) else app.getString(R.string.virtual_start_failed)
+                if (failure is CancellationException) throw failure
+            } finally { _virtualObservationBusy.value = false }
+        }
+    }
+
+    fun stopVirtualObservation() {
+        val session = _virtualObservation.value ?: return
+        stopMountMotion()
+        _virtualObservation.value = null
+        if (cameraManager.activeCamera === session.primary) disconnectCamera()
+        if (guideCameraManager.activeCamera === session.guide) disconnectGuideCamera()
+        mountModule.disconnectMount()
+        session.close()
+    }
     private val virtualSequenceHardware = if (BuildConfig.EMULATOR_TEST) {
         VirtualSequenceHardware()
     } else {
@@ -593,7 +637,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private var guideDeliveryGeneration: Long? = null
     private val guideMeasurements = com.indigo.mobileobservatory.guide.GuideMeasurements()
     private val guideTasks by lazy { com.indigo.mobileobservatory.guide.GuideTaskRunner(viewModelScope,
-        { direction, durationMs -> mountModule.setGuideRate(); mountModule.startGuidePulse(direction, durationMs) },
+        { direction, durationMs ->
+            val virtual = guideCameraManager.activeCamera as? com.indigo.mobileobservatory.simulation.VirtualCamera
+            check((virtual == null && mountModule.virtualObservatory == null) ||
+                virtual != null && virtual.observatory === mountModule.virtualObservatory) { "Guide camera and mount simulation sessions do not match" }
+            mountModule.setGuideRate(); mountModule.startGuidePulse(direction, durationMs)
+        },
         { direction ->
             try { mountModule.stopGuidePulse(direction) }
             catch (failure: Exception) { runCatching { mountModule.stopAllMotion() }; throw failure }
@@ -1196,6 +1245,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     override fun onCleared() {
+        _virtualObservation.value?.close()
         resourceCleaner.close()
         super.onCleared()
     }
@@ -1216,7 +1266,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun scanMountBluetoothDevices() = mountModule.scanMountBluetoothDevices()
     fun connectMount() = mountModule.connectMount()
     fun cancelMountConnection() = mountModule.cancelMountConnection()
-    fun disconnectMount() = mountModule.disconnectMount()
+    fun disconnectMount() { if (_virtualObservation.value != null) stopVirtualObservation() else mountModule.disconnectMount() }
     fun readMountSite() = mountModule.readMountSite()
     fun syncPhoneSiteToMount(latitudeDeg: Double, longitudeDeg: Double) =
         mountModule.syncPhoneSiteToMount(latitudeDeg, longitudeDeg)
@@ -1247,11 +1297,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val precisionSolveMutex = Mutex()
 
     private fun precisionSolveSettings() = SolveCaptureSettings(
-        exposureUs = prefs.getFloat("precision_exposure_us", 5_000_000f),
+        exposureUs = prefs.getFloat("precision_exposure_us", if (_virtualObservation.value != null) 500_000f else 5_000_000f),
         searchRadiusDeg = prefs.getFloat("precision_search_radius_deg", 30f).toDouble(),
         blindFallback = prefs.getBoolean("precision_blind_fallback", true),
         gain = if (prefs.contains("precision_gain")) prefs.getFloat("precision_gain", 0f) else cameraManager.activeCamera?.currentGain,
-        focalLengthMm = prefs.getFloat("plate_focal_length_mm", 0f).toDouble().takeIf { it > 0 },
+        focalLengthMm = if (_virtualObservation.value != null) com.indigo.mobileobservatory.simulation.VirtualObservatory.FOCAL_MM.toDouble()
+            else prefs.getFloat("plate_focal_length_mm", 0f).toDouble().takeIf { it > 0 },
         pixelSizeUm = cameraManager.activeCamera?.cameraInfo?.pixelSizeUm?.toDouble()?.takeIf { it > 0 }
             ?: prefs.getFloat("plate_pixel_size_um", 0f).toDouble().takeIf { it > 0 })
 
@@ -1266,8 +1317,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             return mountModule.rejectPrecisionGoto(name, app.getString(R.string.precision_goto_need_camera))
         }
         val preflight = runCatching {
+            _virtualObservation.value?.let { check(mountModule.virtualObservatory === it.model) { "Virtual mount is disconnected" } }
             val options = precisionSolveSettings()
-            val camera = synchronized(recordingLifecycleLock) { requirePointingReferenceReady(singleExposure = options) }
+            val camera = _virtualObservation.value?.primary ?: synchronized(recordingLifecycleLock) { requirePointingReferenceReady(singleExposure = options) }
             check(options.focalLengthMm != null && options.pixelSizeUm != null) { app.getString(R.string.plate_solve_need_optics) }
             options to camera
         }
@@ -1290,6 +1342,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private suspend fun captureAndSolveForPrecisionGoto(hint: MountCoordinates?, options: SolveCaptureSettings = precisionSolveSettings()): MountCoordinates = precisionSolveMutex.withLock {
+        _virtualObservation.value?.let { session ->
+            val result = retrySolveCapture(maxAttempts = 3) {
+                precisionSamples.execute(0, { captureTempFitsForPlateSolve(options.exposureUs, options.gain) },
+                    { com.indigo.mobileobservatory.simulation.VirtualObservatory.HEIGHT * com.indigo.mobileobservatory.simulation.VirtualObservatory.SCALE_ARCSEC / 3600 },
+                    { file, fov -> session.solve(file, fov, hint, options.searchRadiusDeg) })
+            }
+            check(result.success) { result.message }
+            val position = EquatorialEpoch.j2000DegToJnowHours(requireNotNull(result.raDeg), requireNotNull(result.decDeg))
+            return@withLock MountCoordinates(position.first, position.second)
+        }
         val camera = synchronized(recordingLifecycleLock) { requirePointingReferenceReady(singleExposure = options) }
         val info = requireNotNull(camera.cameraInfo)
         val roi = camera.currentRoi
@@ -1456,6 +1518,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun disconnectCamera() {
+        if (_virtualObservation.value != null) { stopVirtualObservation(); return }
         previewEpoch.invalidate()
         stopRecording()
         stopExposureTimer()
@@ -1540,6 +1603,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun disconnectGuideCamera() {
+        if (_virtualObservation.value != null) { stopVirtualObservation(); return }
         stopGuideOperations(invalidateCalibration = true)
         auxiliaryCaptureJob?.cancel(CancellationException("Auxiliary camera disconnected"))
         auxiliaryCollector.get()?.fail()
@@ -2255,7 +2319,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    private suspend fun pulseMount(direction: MountDirection, durationMs: Int) = guideTasks.pulse(direction, durationMs)
+    private suspend fun pulseMount(direction: MountDirection, durationMs: Int) {
+        val virtual = guideCameraManager.activeCamera as? com.indigo.mobileobservatory.simulation.VirtualCamera
+        check((virtual == null && mountModule.virtualObservatory == null) || virtual?.observatory === mountModule.virtualObservatory) {
+            "Virtual guide camera requires the matching virtual mount"
+        }
+        guideTasks.pulse(direction, durationMs)
+    }
 
     private fun startPreview() {
         val cam = cameraManager.activeCamera ?: return
@@ -3888,6 +3958,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     suspend fun captureTempFitsForPlateSolve(requestedExposureUs: Float? = null, requestedGain: Float? = null,
         focalLengthMm: Float? = null): File? = withContext(Dispatchers.IO) {
         captureSettingsMutex.withLock {
+            _virtualObservation.value?.let { session ->
+                check(cameraManager.activeCamera === session.primary) { app.getString(R.string.polar_capture_no_camera) }
+                _previewPaused.value = true
+                previewEpoch.invalidate(); previewPipeline.stop(clearFrame = false); stopExposureTimer()
+                return@withLock session.capture(requestedExposureUs ?: session.primary.currentExposureUs, requestedGain)
+            }
             val cam = cameraManager.activeCamera ?: error(app.getString(R.string.polar_capture_no_camera))
             check(cam.isOpen.value) { app.getString(R.string.polar_capture_no_camera) }
             check(cam.recordsLiveViewAsScience && cam.currentPixelFormat != PixelFormat.RGB24) {

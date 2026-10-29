@@ -1,0 +1,22 @@
+<resources>
+    <string name="virtual_title">Virtual observation</string>
+    <string name="virtual_description">Test polar alignment, guiding and centering indoors with a shared virtual mount and two cameras. Uses a recorded star field and synthetic solutions. No hardware connection or star database required.</string>
+    <string name="virtual_start">Connect virtual devices</string>
+    <string name="virtual_start_failed">Could not start virtual observation. Try connecting again; if it still fails, check the diagnostic log.</string>
+    <string name="virtual_disconnect_first">Disconnect the cameras and mount before starting virtual observation.</string>
+    <string name="virtual_badge">SIMULATION · Synthetic images and solutions</string>
+    <string name="virtual_controls">Simulation controls</string>
+    <string name="virtual_large_polar_offset">Set 1° polar offset</string>
+    <string name="virtual_small_polar_offset">Restore ~6′ polar offset</string>
+    <string name="virtual_errors">Specified polar offset: azimuth %1$.1f′ · altitude %2$.1f′</string>
+    <string name="virtual_east">East</string>
+    <string name="virtual_west">West</string>
+    <string name="virtual_up">Up</string>
+    <string name="virtual_down">Down</string>
+    <string name="virtual_step">Step %1$d′</string>
+    <string name="virtual_hide_stars">Hide stars</string>
+    <string name="virtual_show_stars">Restore stars</string>
+    <string name="virtual_fail_solve">Fail next solve + blind retry</string>
+    <string name="virtual_failure_queued">Solve failure queued</string>
+    <string name="virtual_backlash">DEC backlash %1$d ms</string>
+</resources>

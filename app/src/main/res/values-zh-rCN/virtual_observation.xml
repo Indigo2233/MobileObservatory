@@ -1,0 +1,22 @@
+<resources>
+    <string name="virtual_title">虚拟观测</string>
+    <string name="virtual_description">使用实拍星图、虚拟赤道仪和双相机，在室内检查对极轴、导星和居中流程。解析结果由模拟姿态生成，无需连接设备或下载星库。</string>
+    <string name="virtual_start">连接虚拟设备</string>
+    <string name="virtual_start_failed">虚拟观测启动失败。请重新连接；若仍失败，可查看诊断日志。</string>
+    <string name="virtual_disconnect_first">请先断开相机和赤道仪，再启动虚拟观测。</string>
+    <string name="virtual_badge">虚拟观测 · 图像与解析均为模拟</string>
+    <string name="virtual_controls">模拟控制</string>
+    <string name="virtual_large_polar_offset">设为 1° 极轴偏差</string>
+    <string name="virtual_small_polar_offset">恢复约 6′ 极轴偏差</string>
+    <string name="virtual_errors">设定极轴偏差：方位 %1$.1f′ · 高度 %2$.1f′</string>
+    <string name="virtual_east">向东</string>
+    <string name="virtual_west">向西</string>
+    <string name="virtual_up">向上</string>
+    <string name="virtual_down">向下</string>
+    <string name="virtual_step">步长 %1$d′</string>
+    <string name="virtual_hide_stars">遮挡星点</string>
+    <string name="virtual_show_stars">恢复星点</string>
+    <string name="virtual_fail_solve">下次解析与盲解失败</string>
+    <string name="virtual_failure_queued">已设置解析失败</string>
+    <string name="virtual_backlash">DEC 回差 %1$d ms</string>
+</resources>

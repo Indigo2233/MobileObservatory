@@ -302,6 +302,7 @@ class MountModule(
     }
 
     fun connectMount() {
+        if (controller.virtualSession != null) { _statusMessage.value = "Exit virtual observation before connecting hardware"; return }
         when (_mountTransport.value) {
             MountTransportType.USB_SERIAL -> {
                 connectUsbMount()
@@ -1133,6 +1134,10 @@ class MountModule(
         ) {
             _mountBusy.value = true
             try {
+                controller.virtualSession?.let {
+                    it.observatory.manualDegreesPerSecond = moveRateDegPerSec.coerceIn(.1, 20.0)
+                    it.setMoveRate(MountSlewRate.RATE_MAX)
+                }
                 val startRa = controller.readCoordinates().raDeg
                 val timeoutMs = ((targetDistanceDeg /
                     moveRateDegPerSec.coerceAtLeast(0.1)) * 2.0 * 1000.0)
@@ -1396,6 +1401,22 @@ class MountModule(
     }
 
     val isConnected: Boolean get() = controller.isConnected
+    val virtualObservatory get() = controller.virtualSession?.observatory
+
+    suspend fun connectVirtual(session: com.indigo.mobileobservatory.simulation.VirtualMountSession) = transportLock.withLock {
+        check(!controller.isConnected && mountConnectJob?.isActive != true && !pendingMountUsbConnect && !_mountBusy.value) {
+            "Disconnect the mount before starting simulation"
+        }
+        val coordinates = controller.connectVirtual(session)
+        _mountCoordinates.value = coordinates
+        _mountSite.value = session.readSite()
+        _mountTime.value = session.readTime()
+        _mountDetectedInfo.value = session.modelName
+        _mountTrackingRate.value = MountTrackingRate.SIDEREAL
+        _mountTrackingEnabled.value = true
+        _mountConnectionState.value = MountConnectionState.Connected
+        startMountCoordinatePolling()
+    }
 
     suspend fun setGuideRate() {
         controller.setMoveRate(MountSlewRate.GUIDE)

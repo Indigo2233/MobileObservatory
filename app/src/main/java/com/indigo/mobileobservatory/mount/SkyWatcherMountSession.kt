@@ -2,8 +2,8 @@ package com.indigo.mobileobservatory.mount
 
 import com.indigo.mobileobservatory.pointing.PointingMountCapabilities
 
-/** Common Sky-Watcher control surface used by hand-controller and motor Wi-Fi adapters. */
-interface SkyWatcherMountSession {
+/** Common control surface for protocol and in-process mount adapters. */
+interface MountSession {
     val modelName: String
     val supportsSync: Boolean
     val supportsTimeSync: Boolean
@@ -19,6 +19,7 @@ interface SkyWatcherMountSession {
     fun readCoordinatesWithAxes(): MountSessionCoordinates = MountSessionCoordinates(readCoordinates())
     fun slewTo(targetNow: MountCoordinates)
     fun startMove(direction: MountDirection)
+    fun startGuidePulse(direction: MountDirection, durationMs: Int) = startMove(direction)
     fun stopMove(direction: MountDirection?)
     fun abortMotion() = stopMove(null)
     fun setMoveRate(rate: MountSlewRate)
@@ -39,4 +40,8 @@ interface SkyWatcherMountSession {
     fun syncTo(coordinates: MountCoordinates)
     fun emergencyStopPayloads(): List<ByteArray>
     fun refreshTracking() {}
+    fun close() {}
 }
+
+/** Sky-Watcher hand-controller and motor Wi-Fi adapters share the mount control surface. */
+interface SkyWatcherMountSession : MountSession

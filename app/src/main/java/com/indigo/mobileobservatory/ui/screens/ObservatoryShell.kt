@@ -223,6 +223,7 @@ fun CameraScreen(viewModel: CameraViewModel, redNightMode: Boolean = false,
                     onDevice = { key -> if (key == "guide") open(ObservatoryDestination.GUIDE) else quickDevice = key })
                 if (showRoot && navigation.workspace != ObservatoryWorkspace.CAPTURE) EaaSessionBar(viewModel) { openStack(StackMode.LIVE) }
                 ObservatorySequenceSummary(viewModel, navigation.current, open)
+                VirtualObservationBar(viewModel)
                 Box(Modifier.weight(1f).fillMaxWidth()) {
                     val workspaceStacks = navigation.workspaceStacks
                     ObservatoryWorkspace.entries.filter { it in workspaceStacks }.forEach { owner ->
@@ -355,6 +356,7 @@ private fun ObservatoryContent(
             onBack = back
         )
         ObservatoryDestination.POLAR_ALIGNMENT -> {
+            val virtual by vm.virtualObservation.collectAsStateWithPageLifecycle()
             val site by vm.mountSite.collectAsStateWithPageLifecycle()
             val busy by vm.mountBusy.collectAsStateWithPageLifecycle()
             val moveStatus by vm.mountMoveStatus.collectAsStateWithPageLifecycle()
@@ -362,15 +364,16 @@ private fun ObservatoryContent(
             val preview by vm.previewBitmap.collectAsStateWithPageLifecycle()
             val exposure by vm.exposureUs.collectAsStateWithPageLifecycle()
             val camera = vm.cameraManager.activeCamera
-            PolarAlignmentScreen(mountCoordinates = coordinates, mountSite = site, mountBusy = busy,
+            key(virtual) { PolarAlignmentScreen(mountCoordinates = coordinates, mountSite = site, mountBusy = busy,
                 mountMoveStatus = moveStatus, mountStopSignal = stopSignal, cameraPixelSizeUm = cameraPixelSize,
                 cameraConnected = connection is ConnectionState.Connected, cameraPreviewBitmap = preview,
                 cameraExposureUs = exposure, cameraExposureMinUs = camera?.exposureRange?.min ?: 1000f,
                 cameraExposureMaxUs = camera?.hwExposureMaxUs ?: 30_000_000f,
                 cameraPreviewSettings = vm.cameraPreviewSettings(),
+                solver = virtual, simulation = virtual != null,
                 onReadMountSite = vm::readMountSite, onSyncPhoneSiteToMount = vm::syncPhoneSiteToMount,
                 onMoveMountRaBy = vm::moveMountRaBy, onStopMountRaMove = vm::stopMountRaMove,
-                onCaptureFits = { requested -> vm.captureTempFitsForPlateSolve(requested) }, onBack = back)
+                onCaptureFits = { requested -> vm.captureTempFitsForPlateSolve(requested) }, onBack = back) }
         }
         ObservatoryDestination.GUIDE -> GuideScreen(vm, back)
         ObservatoryDestination.TARGETS -> TargetLibraryScreen(onBack = back,

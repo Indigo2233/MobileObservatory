@@ -113,6 +113,7 @@ fun PolarAlignmentScreen(
     cameraExposureMaxUs: Float = 30_000_000f,
     cameraPreviewSettings: com.indigo.mobileobservatory.camera.CameraPreviewSettings = com.indigo.mobileobservatory.camera.CameraPreviewSettings(),
     solver: ImagePlateSolver? = null,
+    simulation: Boolean = false,
     onReadMountSite: () -> Unit = {},
     onSyncPhoneSiteToMount: (Double, Double) -> Unit = { _, _ -> },
     onMoveMountRaBy: (Double, Boolean, Double) -> Unit = { _, _, _ -> },
@@ -123,7 +124,7 @@ fun PolarAlignmentScreen(
     val context = LocalContext.current
     val activity = context as? Activity
     val scope = rememberCoroutineScope()
-    val sampleModel: PolarSamplesViewModel = androidx.lifecycle.viewmodel.compose.viewModel(key = "polar-samples")
+    val sampleModel: PolarSamplesViewModel = androidx.lifecycle.viewmodel.compose.viewModel(key = if (simulation) "virtual-polar-${System.identityHashCode(solver)}" else "polar-samples")
     val sampleSession = sampleModel.session
     val samples by sampleSession.samples.collectAsStateWithPageLifecycle()
     val stopMotion = rememberUpdatedState(onStopMountRaMove)
@@ -147,7 +148,7 @@ fun PolarAlignmentScreen(
     val threeSolvesRequired = stringResource(R.string.three_solves_required)
     val runner = remember { AstapRunner(context.applicationContext) }
     val solveEngine = solver ?: runner
-    val prefs = remember { context.applicationContext.getSharedPreferences("mobile_observatory", android.content.Context.MODE_PRIVATE) }
+    val prefs = remember(simulation) { context.applicationContext.getSharedPreferences(if (simulation) "virtual_observation" else "mobile_observatory", android.content.Context.MODE_PRIVATE) }
 
     // The workflow runs inside a coroutine, so it needs the freshest mount readings, not the ones
     // captured when the coroutine was launched.
@@ -155,12 +156,12 @@ fun PolarAlignmentScreen(
     val latestMountBusy = rememberUpdatedState(mountBusy)
 
     // Restore input drafts only; an interrupted solve/movement must not resume as a valid result.
-    var latitudeText by rememberSaveable { mutableStateOf(prefs.getFloat("polar_latitude_deg", 0f).toString()) }
-    var longitudeText by rememberSaveable { mutableStateOf(prefs.getFloat("polar_longitude_deg", 0f).toString()) }
+    var latitudeText by rememberSaveable { mutableStateOf(prefs.getFloat("polar_latitude_deg", if (simulation) 30f else 0f).toString()) }
+    var longitudeText by rememberSaveable { mutableStateOf(prefs.getFloat("polar_longitude_deg", if (simulation) 120f else 0f).toString()) }
     var elevationText by rememberSaveable { mutableStateOf(prefs.getFloat("polar_elevation_m", 0f).toString()) }
     var temperatureText by rememberSaveable { mutableStateOf(prefs.getFloat("polar_temperature_c", 15f).toString()) }
     var pressureText by rememberSaveable { mutableStateOf(prefs.getFloat("polar_pressure_hpa", 0f).takeIf { it > 0f }?.toString() ?: "") }
-    var focalLengthText by rememberSaveable { mutableStateOf(prefs.getFloat("plate_focal_length_mm", 0f).takeIf { it > 0f }?.toString() ?: "") }
+    var focalLengthText by rememberSaveable { mutableStateOf(prefs.getFloat("plate_focal_length_mm", if (simulation) 200f else 0f).takeIf { it > 0f }?.toString() ?: "") }
     var pixelSizeText by rememberSaveable {
         mutableStateOf(
             prefs.getFloat("plate_pixel_size_um", 0f).takeIf { it > 0f }?.let { formatPixelSizeUm(it.toDouble()) }
@@ -190,7 +191,7 @@ fun PolarAlignmentScreen(
     var workflowStatus by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var exposureSeconds by rememberSaveable {
-        mutableStateOf(prefs.getString("polar_exposure_seconds", null)
+        mutableStateOf(prefs.getString("polar_exposure_seconds", if (simulation) "0.5" else null)
             ?: PolarExposure.secondsText(cameraExposureUs?.takeIf { it > 0f } ?: 5_000_000f))
     }
     val requestedExposureUs = PolarExposure.parseUs(exposureSeconds, cameraExposureMinUs, cameraExposureMaxUs)
@@ -376,6 +377,7 @@ fun PolarAlignmentScreen(
     }
 
     fun currentRefraction(): RefractionParameters {
+        if (simulation) return RefractionParameters(pressureHPa = 0.0)
         val elevation = elevationText.toDoubleOrNull() ?: 0.0
         return RefractionParameters(
             pressureHPa = pressureText.toDoubleOrNull() ?: standardPressureHPa(elevation),

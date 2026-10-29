@@ -1354,6 +1354,14 @@ class DahengCameraManager(
         return true
     }
 
+    @Synchronized fun openVirtualCamera(camera: com.indigo.mobileobservatory.simulation.VirtualCamera): Boolean {
+        if (activeCamera != null || reservedUsbDevice != null ||
+            _connectionState.value !is ConnectionState.Disconnected && _connectionState.value !is ConnectionState.Error) return false
+        activeCamera = camera
+        _connectionState.value = ConnectionState.Connected(camera.cameraInfo)
+        return true
+    }
+
     fun closeCamera() {
         activeCamera?.close()
         activeCamera = null
