@@ -97,6 +97,7 @@ internal fun PolarCorrectionSummary(snapshot: PolarAdjustmentSnapshot, modifier:
                 stringResource(if (polarAdjustDown(result.altitudeErrorDeg, snapshot.determination.site.latitudeDeg)) R.string.move_down else R.string.move_up),
                 abs(result.altitudeErrorArcMin)), style = MaterialTheme.typography.titleSmall)
             Text(stringResource(R.string.polar_correction_legend), style = MaterialTheme.typography.bodySmall)
+            Text(stringResource(R.string.polar_reticle_hint), style = MaterialTheme.typography.bodySmall)
             if (snapshot.geometry == null) Text(stringResource(if (snapshot.projectionUnavailable)
                 R.string.polar_correction_no_projection else R.string.polar_correction_no_wcs),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)

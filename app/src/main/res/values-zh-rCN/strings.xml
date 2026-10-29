@@ -634,7 +634,7 @@
     <string name="temperature_c">温度（℃）</string>
     <string name="pressure_hpa">气压（hPa）</string>
     <string name="polar_refraction_hint">开启时将测得轴向与几何天极比较，关闭时与折射后的天极比较。</string>
-    <string name="polar_continuous_hint">连续修正会在三点测量后持续解析，边调旋钮边显示剩余误差。</string>
+    <string name="polar_continuous_hint">三点测量后可自动刷新，也可点击刷新一次测量剩余误差。</string>
     <string name="polar_initial_error">初始误差</string>
     <string name="polar_current_error">当前误差</string>
     <string name="polar_warn_dec_spread">三点之间赤纬变化了 %.1f 角秒，请只转动赤经轴以保证拟合可靠。</string>

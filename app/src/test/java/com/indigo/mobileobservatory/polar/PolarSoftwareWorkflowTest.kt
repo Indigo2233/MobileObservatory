@@ -120,4 +120,33 @@ class PolarSoftwareWorkflowTest {
         }
         enough.await(); task.cancelAndJoin(); advanceUntilIdle(); assertEquals(4, updates)
     }
+
+    @Test fun manualModeAfterThreePointsDoesNotTakeAFourthExposure(): Unit = runTest {
+        var captures = 0
+        runPolarCorrectionPhase(determine(points), 0.0, capture = { captures++; null },
+            onEstimate = { _, _ -> fail("Unexpected estimate") }, onUnstable = {}, onWithinTolerance = {},
+            shouldCapture = { false })
+        assertEquals(0, captures)
+    }
+
+    @Test fun switchingToManualFinishesCurrentMeasurementAndStopsBeforeNextExposure(): Unit = runTest {
+        val d = determine(points)
+        var automatic = true; var captures = 0; var updates = 0
+        runPolarCorrectionPhase(d, 0.0, capture = {
+            captures++; delay(1000); automatic = false
+            adjusted(d, .1, .05, 0)
+        }, onEstimate = { _, _ -> updates++ }, onUnstable = {}, onWithinTolerance = {},
+            shouldCapture = { automatic })
+        assertEquals(1, captures)
+        assertEquals(1, updates)
+    }
+
+    @Test fun switchingToManualAlsoStopsFailedFrameRetries(): Unit = runTest {
+        var automatic = true; var captures = 0
+        runPolarCorrectionPhase(determine(points), 0.0, capture = {
+            captures++; automatic = false; null
+        }, onEstimate = { _, _ -> fail("Invalid frame") }, onUnstable = {}, onWithinTolerance = {},
+            shouldCapture = { automatic })
+        assertEquals(1, captures)
+    }
 }

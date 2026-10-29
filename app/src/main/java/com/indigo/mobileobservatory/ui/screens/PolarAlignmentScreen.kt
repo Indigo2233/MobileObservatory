@@ -52,6 +52,7 @@ import com.indigo.mobileobservatory.astrometry.PlateSolveOptics
 import com.indigo.mobileobservatory.astrometry.PlateSolveResult
 import com.indigo.mobileobservatory.astrometry.ImagePlateSolver
 import com.indigo.mobileobservatory.astrometry.retrySolveCapture
+import com.indigo.mobileobservatory.astrometry.canRetryCapture
 import com.indigo.mobileobservatory.astrometry.solveWithFallback
 import com.indigo.mobileobservatory.astro.ObserverSite
 import com.indigo.mobileobservatory.astro.OpticsEquipment
@@ -97,7 +98,7 @@ import kotlin.coroutines.resume
 import kotlin.math.abs
 import kotlin.math.pow
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun PolarAlignmentScreen(
     mountCoordinates: MountCoordinates? = null,
@@ -132,13 +133,15 @@ fun PolarAlignmentScreen(
     val workflowBusy by workflowTask.busy.collectAsStateWithPageLifecycle()
     var importJob by remember { mutableStateOf<Job?>(null) }
     val taskBusy = workflowBusy || importJob != null
-    fun stopTask() { importJob?.cancel(); workflowTask.stop() }
+    var pendingAutomaticRefresh by remember { mutableStateOf(false) }
+    var adjustmentLoopActive by remember { mutableStateOf(false) }
+    fun stopTask() { pendingAutomaticRefresh = false; importJob?.cancel(); workflowTask.stop() }
     var inspectFile by remember { mutableStateOf<File?>(null) }
     val pageForeground = rememberPageForeground()
     DisposableEffect(workflowTask) { onDispose { stopTask() } }
-    LaunchedEffect(mountStopSignal) { workflowTask.stop() }
+    LaunchedEffect(mountStopSignal) { pendingAutomaticRefresh = false; workflowTask.stop() }
     // Document results can arrive before onResume; the bounded file import is independent of device acquisition.
-    LaunchedEffect(pageForeground) { if (!pageForeground) workflowTask.stop() }
+    LaunchedEffect(pageForeground) { if (!pageForeground) { pendingAutomaticRefresh = false; workflowTask.stop() } }
     BackHandler(enabled = taskBusy && pageForeground && inspectFile == null) { stopTask(); onBack() }
     BackHandler(enabled = inspectFile != null && pageForeground) { inspectFile = null }
     val phoneLocationFailed = stringResource(R.string.phone_location_failed)
@@ -172,6 +175,7 @@ fun PolarAlignmentScreen(
     var selectedSensorId by rememberSaveable { mutableStateOf(prefs.getString("plate_sensor_id", "") ?: "") }
     var computedFovDeg by remember { mutableStateOf<Double?>(null) }
     var manualMode by rememberSaveable { mutableStateOf(prefs.getBoolean("polar_manual_mode", false)) }
+    var automaticRefresh by rememberSaveable { mutableStateOf(prefs.getBoolean("polar_automatic_refresh", true)) }
     var startFromCurrent by rememberSaveable { mutableStateOf(prefs.getBoolean("polar_start_current", true)) }
     var eastDirection by rememberSaveable { mutableStateOf(prefs.getBoolean("polar_east_direction", true)) }
     var targetDistanceText by rememberSaveable { mutableStateOf(prefs.getInt("polar_target_distance_deg", 10).toString()) }
@@ -274,18 +278,52 @@ fun PolarAlignmentScreen(
     }
 
     suspend fun correctAlignment(solved: PolarErrorDetermination, configuration: PolarSolveConfiguration, exposure: Float) {
+        adjustmentLoopActive = true
+        var retryAttempt = 1
+        try {
         runPolarCorrectionPhase(solved, alignmentToleranceText.toDoubleOrNull() ?: 0.0,
             capture = {
                 workflowStatus = context.getString(R.string.polar_correction_capturing)
-                val result = captureSample(3, configuration, exposure)
-                val at = requireNotNull(sampleSession.samples.value[3].capturedAt)
-                if (result.success && result.raDeg != null && result.decDeg != null) PolarSolvePoint(result.raDeg, result.decDeg, at)
-                else error(result.message)
+                val result = executeSample(3, configuration) { onCaptureFits(exposure) }
+                if (result.success && result.raDeg != null && result.decDeg != null) {
+                    retryAttempt = 1
+                    val at = requireNotNull(sampleSession.samples.value[3].capturedAt)
+                    PolarSolvePoint(result.raDeg, result.decDeg, at)
+                } else {
+                    if (!result.canRetryCapture()) error(result.message)
+                    workflowStatus = context.getString(R.string.solve_retry_capture, ++retryAttempt, result.message)
+                    delay(1500)
+                    null
+                }
             },
             onEstimate = { result, _ -> publishAdjustment(solved, result, sampleSession.samples.value[3]) },
             onUnstable = { workflowStatus = context.getString(R.string.polar_estimate_unstable) },
             onWithinTolerance = { workflowStatus = context.getString(R.string.polar_tolerance_reached, it) },
-            seed = sampleModel.adjustment?.current ?: solved.initial)
+            seed = sampleModel.adjustment?.current ?: solved.initial,
+            shouldCapture = { automaticRefresh })
+        if (!automaticRefresh) workflowStatus = context.getString(R.string.polar_manual_refresh_ready)
+        } finally { adjustmentLoopActive = false }
+    }
+
+    fun startAutomaticRefresh() {
+        val existing = sampleModel.adjustment ?: return
+        val exposure = requestedExposureUs ?: return
+        if (!cameraConnected || mountBusy || taskBusy) return
+        if (!solveEngine.ready) { reportFailure(context.getString(R.string.database_required)); return }
+        val configuration = solveConfiguration()
+        workflowTask.start(stopMotionOnFinish = false) {
+            error = null
+            try { correctAlignment(existing.determination, configuration, exposure) }
+            catch (cancel: CancellationException) { workflowStatus = context.getString(R.string.stopped); throw cancel }
+            catch (failure: Exception) { error = failure.message ?: tppaFailed }
+        }
+    }
+
+    LaunchedEffect(pendingAutomaticRefresh, taskBusy, mountBusy, cameraConnected, requestedExposureUs) {
+        if (pendingAutomaticRefresh && !taskBusy && !mountBusy && cameraConnected && requestedExposureUs != null) {
+            pendingAutomaticRefresh = false
+            if (automaticRefresh) startAutomaticRefresh()
+        }
     }
 
     fun runSingleSample(index: Int, recapture: Boolean, blind: Boolean = false) {
@@ -562,6 +600,25 @@ fun PolarAlignmentScreen(
                             Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Text(stringResource(R.string.workflow), style = MaterialTheme.typography.titleSmall)
                                 Text(stringResource(R.string.polar_progress, samples.take(3).count { it.phase == PolarSamplePhase.COMPLETE }))
+                                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    FilterChip(selected = automaticRefresh, onClick = {
+                                        automaticRefresh = true
+                                        prefs.edit().putBoolean("polar_automatic_refresh", true).apply()
+                                        if (taskBusy && !adjustmentLoopActive && sampleModel.adjustment != null)
+                                            pendingAutomaticRefresh = true
+                                        else startAutomaticRefresh()
+                                    }, label = { Text(stringResource(R.string.polar_refresh_auto)) },
+                                        modifier = Modifier.testTag("polar-refresh-auto"))
+                                    FilterChip(selected = !automaticRefresh, onClick = {
+                                        automaticRefresh = false
+                                        pendingAutomaticRefresh = false
+                                        prefs.edit().putBoolean("polar_automatic_refresh", false).apply()
+                                        if (adjustment != null && !taskBusy) workflowStatus = context.getString(R.string.polar_manual_refresh_ready)
+                                    }, label = { Text(stringResource(R.string.polar_refresh_manual)) },
+                                        modifier = Modifier.testTag("polar-refresh-manual"))
+                                }
+                                Text(stringResource(if (automaticRefresh) R.string.polar_refresh_auto_hint else R.string.polar_refresh_manual_hint),
+                                    style = MaterialTheme.typography.bodySmall)
                                 error?.let { msg ->
                                     if (locationPermissionDeniedForever &&
                                         msg == stringResource(R.string.location_permission_denied_forever)
@@ -579,14 +636,7 @@ fun PolarAlignmentScreen(
                                             val exposure = requestedExposureUs ?: return@Button
                                             val existing = sampleModel.adjustment
                                             if (existing != null) {
-                                                if (!solveEngine.ready) { reportFailure(context.getString(R.string.database_required)); return@Button }
-                                                val configuration = solveConfiguration()
-                                                workflowTask.start(stopMotionOnFinish = false) {
-                                                    error = null
-                                                    try { correctAlignment(existing.determination, configuration, exposure) }
-                                                    catch (cancel: CancellationException) { workflowStatus = context.getString(R.string.stopped); throw cancel }
-                                                    catch (failure: Exception) { error = failure.message ?: tppaFailed }
-                                                }
+                                                if (automaticRefresh) startAutomaticRefresh() else runSingleSample(3, recapture = true)
                                                 return@Button
                                             }
                                             val site = currentSite()
@@ -735,6 +785,7 @@ fun PolarAlignmentScreen(
                                         Spacer(Modifier.width(6.dp))
                                         Text(stringResource(when {
                                             taskBusy -> R.string.running
+                                            adjustment != null && !automaticRefresh -> R.string.polar_refresh_once
                                             adjustment != null -> R.string.polar_start_adjustment
                                             samples.take(3).all { it.phase == PolarSamplePhase.COMPLETE } -> R.string.polar_restart
                                             !sampleModel.canResume && samples.take(3).any { it.phase != PolarSamplePhase.EMPTY } -> R.string.polar_restart
@@ -768,7 +819,9 @@ fun PolarAlignmentScreen(
                                     Text(workflowStatus, fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
                                 }
                                 Text(
-                                    if (manualMode) {
+                                    if (adjustment != null) {
+                                        stringResource(R.string.polar_adjustment_knobs_hint)
+                                    } else if (manualMode) {
                                         stringResource(R.string.polar_manual_mode_hint)
                                     } else {
                                         stringResource(R.string.polar_automatic_mode_hint)

@@ -634,7 +634,7 @@
     <string name="temperature_c">Temperature (C)</string>
     <string name="pressure_hpa">Pressure (hPa)</string>
     <string name="polar_refraction_hint">Refraction on compares the measured axis against the geometric pole, off compares it against the refracted pole.</string>
-    <string name="polar_continuous_hint">Continuous keeps solving after the three points and shows the remaining error while you turn the knobs.</string>
+    <string name="polar_continuous_hint">After three points, choose automatic refresh or tap Refresh once to measure the remaining error.</string>
     <string name="polar_initial_error">Initial error</string>
     <string name="polar_current_error">Current error</string>
     <string name="polar_warn_dec_spread">Declination moved by %.1f arcsec between the three points. Only rotate the RA axis for a reliable fit.</string>

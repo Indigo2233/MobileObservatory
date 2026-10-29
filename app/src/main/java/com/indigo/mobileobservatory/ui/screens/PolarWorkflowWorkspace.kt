@@ -201,6 +201,7 @@ internal fun PolarWorkflowPreview(
                 if (image != null) Box(Modifier.fillMaxSize().testTag("polar-main-preview")) {
                     PolarCorrectionImage(image, prepared?.originalWidth ?: image.width, prepared?.originalHeight ?: image.height,
                         imageAdjustment?.geometry, Modifier.fillMaxSize().clickable(enabled = source != null) { onInspect(source) })
+                    imageAdjustment?.let { PolarErrorReticleOverlay(it) }
                 }
                 else Text(stringResource(R.string.polar_preview_empty), Modifier.padding(16.dp), style = MaterialTheme.typography.bodySmall)
                 if (loading) CircularProgressIndicator(Modifier.size(28.dp))
@@ -269,17 +270,20 @@ internal fun PolarWorkflowPreview(
                         Column(Modifier.heightIn(max = 144.dp).verticalScroll(rememberScrollState())) { PolarCorrectionSummary(it) }
                     }
                     val image = bitmap; val decoded = prepared
-                    if (image != null && decoded != null) MediaImageInspection(
+                    if (image != null && decoded != null) Box(Modifier.weight(1f).fillMaxWidth()) {
+                        MediaImageInspection(
                         image = image, before = null, imageKey = key.orEmpty(), originalWidth = decoded.originalWidth,
                         originalHeight = decoded.originalHeight, nativeKey = decoded.settings to decoded.window,
                         renderNative = { region, _ ->
                             val task = currentCoroutineContext()
                             withContext(Dispatchers.IO) { CameraImagePreview.renderRegion(decoded, region) { !task.isActive } }
-                        }, navigation = navigation, modifier = Modifier.weight(1f).fillMaxWidth()
+                        }, navigation = navigation, modifier = Modifier.fillMaxSize()
                             .then(if (pinnedAdjustment?.geometry != null) Modifier.testTag("polar-correction-inspection") else Modifier),
                         overlay = pinnedAdjustment?.geometry?.let { geometry ->
                             { offset, imageSize -> drawPolarCorrection(geometry, offset, imageSize, overlayColors) }
                         })
+                        pinnedAdjustment?.let { PolarErrorReticleOverlay(it) }
+                    }
                     else Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                         if (loading) CircularProgressIndicator()
                         else Text(stringResource(R.string.polar_preview_failed, previewError.orEmpty()))

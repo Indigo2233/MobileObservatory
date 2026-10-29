@@ -9,4 +9,18 @@
     <string name="polar_correction_no_wcs">Complete image WCS is unavailable. Solve again to draw the correction guide.</string>
     <string name="polar_correction_outside">The target is outside this image. Follow the direction guidance; image scale is preserved.</string>
     <string name="polar_start_adjustment">Start continuous adjustment</string>
+    <string name="polar_refresh_auto">Auto refresh</string>
+    <string name="polar_refresh_manual">Manual refresh</string>
+    <string name="polar_refresh_once">Refresh once</string>
+    <string name="polar_refresh_auto_hint">After three points, capture and solve continuously to update the error.</string>
+    <string name="polar_refresh_manual_hint">During adjustment, tap Refresh once for one measurement. Switching modes finishes the current capture and solve.</string>
+    <string name="polar_manual_refresh_ready">Waiting for manual refresh. Adjust the knobs, then tap Refresh once.</string>
+    <string name="polar_adjustment_knobs_hint">Adjust the polar-axis knobs using the east/west and up/down directions.</string>
+    <string name="polar_reticle_title">Azimuth / altitude error</string>
+    <string name="polar_reticle_east">E</string>
+    <string name="polar_reticle_west">W</string>
+    <string name="polar_reticle_up">Up</string>
+    <string name="polar_reticle_down">Down</string>
+    <string name="polar_reticle_description">Azimuth and altitude error reticle, ring scale %1$s, east offset %2$+.2f arcminutes, up offset %3$+.2f arcminutes</string>
+    <string name="polar_reticle_hint">Rings show azimuth/altitude error with an automatic scale. Alignment improves as the white dot approaches the green centre.</string>
 </resources>

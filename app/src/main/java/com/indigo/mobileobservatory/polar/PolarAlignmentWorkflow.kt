@@ -37,13 +37,16 @@ suspend fun runPolarCorrectionPhase(
     onEstimate: (PolarAlignmentResult, CorrectionFieldInfo) -> Unit,
     onUnstable: () -> Unit,
     onWithinTolerance: (Double) -> Unit,
-    seed: PolarAlignmentResult = determination.initial
+    seed: PolarAlignmentResult = determination.initial,
+    shouldCapture: () -> Boolean = { true }
 ) {
     var seedAzimuth = seed.azimuthErrorDeg
     var seedAltitude = seed.altitudeErrorDeg
     var consecutiveWithinTolerance = 0
     while (true) {
         yield()
+        // Changing refresh mode lets an in-flight measurement finish, then prevents another exposure.
+        if (!shouldCapture()) return
         val frame = capture()
         if (frame == null) { consecutiveWithinTolerance = 0; continue }
         val estimate = ContinuousPolarErrorEstimator.estimate(determination, frame, seedAzimuth, seedAltitude)

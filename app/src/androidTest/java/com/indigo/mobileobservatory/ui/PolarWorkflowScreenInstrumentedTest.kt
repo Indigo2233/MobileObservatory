@@ -46,7 +46,7 @@ class PolarWorkflowScreenInstrumentedTest {
     private val keys = listOf("polar_latitude_deg", "polar_longitude_deg", "plate_focal_length_mm", "plate_pixel_size_um",
         "polar_manual_mode", "polar_continuous_estimator", "plate_sensor_id", "polar_exposure_seconds",
         "polar_refraction_adjustment", "polar_pressure_hpa", "polar_temperature_c", "polar_elevation_m",
-        "polar_alignment_tolerance_arcmin")
+        "polar_alignment_tolerance_arcmin", "polar_automatic_refresh")
     private var saved = emptyMap<String, Any?>()
     private lateinit var image: File
     private val generated = mutableListOf<File>()
@@ -57,6 +57,7 @@ class PolarWorkflowScreenInstrumentedTest {
         prefs.edit().putFloat("polar_latitude_deg", 30f).putFloat("polar_longitude_deg", 110f)
             .putFloat("plate_focal_length_mm", 100f).putFloat("plate_pixel_size_um", 2.9f)
             .putBoolean("polar_manual_mode", true).putBoolean("polar_continuous_estimator", false)
+            .putBoolean("polar_automatic_refresh", true)
             .putBoolean("polar_refraction_adjustment", true).putFloat("polar_pressure_hpa", 1013.25f)
             .putFloat("polar_temperature_c", 15f).putFloat("polar_elevation_m", 0f)
             .putFloat("polar_alignment_tolerance_arcmin", 0f)
@@ -208,7 +209,11 @@ class PolarWorkflowScreenInstrumentedTest {
         compose.activityRule.scenario.onActivity { it.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
     }
 
-    @Test fun threeSuccessfulSolvesShowTheCorrectionGuideAndLiveResiduals() {
+    @Test fun threeSuccessfulSolvesShowTheCorrectionGuideAndLiveResiduals() = exerciseCorrectionRefresh(false)
+
+    @Test fun manualRefreshWaitsAfterThreePointsAndCapturesOncePerClick() = exerciseCorrectionRefresh(true)
+
+    private fun exerciseCorrectionRefresh(startManual: Boolean) {
         context.getSharedPreferences("mobile_observatory", Context.MODE_PRIVATE).edit().putFloat("plate_focal_length_mm", 41.54f).commit()
         val at = Instant.parse("2026-10-25T10:00:00Z")
         val site = ObserverSite(30.0, 110.0, 0.0)
@@ -242,8 +247,9 @@ class PolarWorkflowScreenInstrumentedTest {
         screen(engine) {
             val index = captures.getAndIncrement()
             if (index == 3) allowAdjustment.await()
-            fixtures.getOrNull(index) ?: pending.await()
+            if (index <= 4) fixtures[minOf(index, fixtures.lastIndex)] else pending.await()
         }
+        if (startManual) compose.onNodeWithTag("polar-refresh-manual").performScrollTo().performClick()
         compose.onNodeWithTag("polar-run").performScrollTo().performClick()
         repeat(2) {
             compose.waitUntil(20_000) { compose.onAllNodesWithTag("polar-next-point").fetchSemanticsNodes().isNotEmpty() }
@@ -252,19 +258,43 @@ class PolarWorkflowScreenInstrumentedTest {
         }
         compose.waitUntil(20_000) { compose.onAllNodesWithTag("polar-correction-overlay").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithTag("polar-correction-overlay").assertIsDisplayed()
+        compose.onNodeWithTag("polar-error-reticle").assertIsDisplayed()
         compose.onNodeWithTag("polar-error-summary").assertIsDisplayed().assert(hasText("30.00", substring = true))
         screenshot("-three-point-result")
         compose.onNodeWithTag("polar-preview-expand").performClick()
         compose.onNodeWithTag("polar-correction-inspection").assertIsDisplayed()
+        compose.onNodeWithTag("polar-error-reticle").assertIsDisplayed()
         screenshot("-result-fullscreen")
         compose.onNodeWithTag("polar-preview-close").performClick()
-        // Three points enter adjustment automatically, without a second start action.
+        if (startManual) {
+            compose.waitUntil(10_000) { compose.onAllNodes(hasTestTag("polar-run") and isEnabled()).fetchSemanticsNodes().isNotEmpty() }
+            compose.onNodeWithTag("polar-run").performScrollTo().assertIsEnabled()
+            assertEquals(3, captures.get())
+            compose.onNodeWithTag("polar-run").performClick()
+        }
+        compose.waitUntil(10_000) { captures.get() == 4 }
+        // A running automatic exposure completes, then manual mode prevents the next exposure.
+        compose.onNodeWithTag("polar-refresh-manual").performScrollTo().performClick()
         compose.runOnIdle { allowAdjustment.complete(Unit) }
-        compose.waitUntil(20_000) { captures.get() >= 5 }
         compose.waitUntil(10_000) { compose.onAllNodes(hasTestTag("polar-error-summary") and hasText("6.71", substring = true)).fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(10_000) { compose.onAllNodes(hasTestTag("polar-run") and isEnabled()).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("polar-run").performScrollTo().assertIsEnabled()
+        assertEquals(4, captures.get())
+        compose.onNodeWithTag("polar-run").performClick()
+        compose.waitUntil(10_000) { captures.get() == 5 }
+        compose.waitUntil(10_000) { compose.onAllNodes(hasTestTag("polar-run") and isEnabled()).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("polar-run").performScrollTo().assertIsEnabled()
+        assertEquals(5, captures.get())
         compose.waitUntil(15_000) { compose.onAllNodesWithTag("polar-correction-overlay").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithTag("polar-correction-overlay").assertIsDisplayed()
+        screenshot("-manual-refreshed")
+        // Selecting automatic mode resumes continuous acquisition without a second start action.
+        compose.onNodeWithTag("polar-refresh-auto").performScrollTo().performClick()
+        compose.waitUntil(10_000) { captures.get() == 6 }
         compose.onNodeWithTag("polar-stop").performScrollTo().performClick()
+        compose.waitUntil(10_000) { compose.onAllNodes(hasTestTag("polar-run") and isEnabled()).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("polar-run").performScrollTo().assertIsEnabled()
+        assertEquals(6, captures.get())
         compose.onNodeWithTag("polar-error-summary").assert(hasText("6.71", substring = true))
     }
 
