@@ -59,6 +59,19 @@ class SingleExposureCaptureTest {
         assertTrue(camera.isCaptureStopped)
     }
 
+    @Test fun previewOnlyBoundaryCannotCompleteSingleExposure(): Unit = runTest {
+        val camera = StreamCamera()
+        val task = async { captureSingleExposureFrame(camera, 1000, { currentTime }) }
+        runCurrent()
+        val boundary = byteArrayOf(1, 1, 1, 1)
+        camera.emit(boundary, previewOnly = true)
+        assertFalse(task.isCompleted)
+        camera.emit(byteArrayOf(2, 2, 2, 2))
+        assertArrayEquals(byteArrayOf(2, 2, 2, 2), checkNotNull(task.await()).frame.data)
+        assertEquals(2, camera.recycled.size)
+        assertSame(boundary, camera.recycled[0])
+    }
+
     @Test fun cancelledExposureStopsAndRejectsLateCallbacks(): Unit = runTest {
         val camera = SingleCamera()
         val task = async { captureSingleExposureFrame(camera, 1000, { currentTime }) }
@@ -149,7 +162,9 @@ class SingleExposureCaptureTest {
         protected fun begin(callback: FrameCallback) { this.callback = callback; stopConfirmed = false; isCapturing.value = true }
         override fun startCapture(callback: FrameCallback) { streamStarts++; begin(callback) }
         override fun stopCapture() { stops++; isCapturing.value = false; stopConfirmed = confirmStop }
-        fun emit(bytes: ByteArray) { callback!!.onFrame(FrameData(bytes,2,2,PixelFormat.MONO8,++sequence,0)) }
+        fun emit(bytes: ByteArray, previewOnly: Boolean = false) {
+            callback!!.onFrame(FrameData(bytes,2,2,PixelFormat.MONO8,++sequence,0, previewOnly = previewOnly))
+        }
         override fun recycleBuffer(buf: ByteArray) { recycled += buf }
         override fun close() { isOpen.value = false }
         override fun setExposureTime(us: Float) {}

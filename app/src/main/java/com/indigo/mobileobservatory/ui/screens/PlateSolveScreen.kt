@@ -48,6 +48,7 @@ import com.indigo.mobileobservatory.mount.MountCoordinates
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -90,7 +91,8 @@ fun PlateSolveScreen(
         mutableStateOf(prefs.getString("plate_sensor_id", "") ?: "")
     }
     var hintText by remember { mutableStateOf("") }
-    var progress by remember { mutableStateOf(DownloadProgress()) }
+    val progressFlow = remember { MutableStateFlow(DownloadProgress()) }
+    val progress by progressFlow.collectAsState()
     var downloadJob by remember { mutableStateOf<Job?>(null) }
     val downloadFailedText = stringResource(R.string.download_failed)
     val downloadCancelledText = stringResource(R.string.download_cancelled)
@@ -326,24 +328,29 @@ fun PlateSolveScreen(
                 progress = progress,
                 onSelectDatabase = { selectedDatabase = it },
                 onDownload = {
+                    if (downloadJob?.isActive == true || progressFlow.value.active) return@DatabaseCard
+                    progressFlow.value = DownloadProgress(active = true, message = "Preparing ${selectedDatabase.displayName}...")
                     downloadJob = scope.launch {
                         error = null
                         try {
                             withContext(Dispatchers.IO) {
                                 d50Manager.downloadAndInstall(selectedDatabase) { update ->
-                                    scope.launch { progress = update }
+                                    progressFlow.value = update
                                 }
                             }
                             d50Status = d50Manager.status()
+                            progressFlow.value = DownloadProgress(active = false)
+                        } catch (e: CancellationException) {
+                            progressFlow.value = DownloadProgress(active = false, message = downloadCancelledText)
+                            throw e
                         } catch (e: Throwable) {
                             error = e.message ?: downloadFailedText
-                            progress = DownloadProgress(active = false)
+                            progressFlow.value = DownloadProgress(active = false)
                         }
                     }
                 },
                 onCancel = {
                     downloadJob?.cancel()
-                    progress = DownloadProgress(active = false, message = downloadCancelledText)
                 },
                 onDelete = {
                     d50Manager.deleteDatabase()
@@ -465,9 +472,14 @@ private fun DatabaseCard(
                 fontSize = 12.sp
             )
             if (progress.active) {
-                val fraction = if (progress.totalBytes > 0) progress.bytesRead.toFloat() / progress.totalBytes else 0f
-                LinearProgressIndicator(progress = fraction.coerceIn(0f, 1f), modifier = Modifier.fillMaxWidth())
-                Text("${progress.message}  ${formatBytes(progress.bytesRead)} / ${formatBytes(progress.totalBytes)}", fontSize = 12.sp)
+                if (progress.totalBytes > 0) {
+                    val fraction = progress.bytesRead.toFloat() / progress.totalBytes
+                    LinearProgressIndicator(progress = fraction.coerceIn(0f, 1f), modifier = Modifier.fillMaxWidth())
+                    Text("${progress.message}  ${formatBytes(progress.bytesRead)} / ${formatBytes(progress.totalBytes)}", fontSize = 12.sp)
+                } else {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    Text(progress.message, fontSize = 12.sp)
+                }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (progress.active) {

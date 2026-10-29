@@ -213,7 +213,7 @@
 
 **实现说明**
 
-- 关闭顺序为：取消 ViewModel 子任务和显式 Job → 注销自有广播 → 结束录制线程并关闭 writer → 关闭相机、导星相机、配件和赤道仪 transport。
+- 关闭顺序为：取消赤道仪专属任务并立即停止、关闭赤道仪 transport → 取消其余 ViewModel 子任务和显式 Job → 注销自有广播 → 结束录制线程并关闭 writer → 关闭相机、导星相机和配件。
 - `Lx200MountController.close()` 是同步、幂等的生命周期终止接口，不依赖 `viewModelScope`；正常业务断开仍使用 suspend `disconnect()`。
 - 销毁时不再启动 MP4 图库复制任务，避免依赖即将取消的 scope；录制原文件仍保留在应用目录。
 - 正在建立的 TCP、USB 或蓝牙连接从创建起即归 controller 所有，销毁可关闭底层资源解除阻塞。

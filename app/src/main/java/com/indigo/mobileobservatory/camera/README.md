@@ -40,9 +40,14 @@ scientific provenance. ZWO uses `ASIGetVideoData(..., timeout=0)` until an expli
 `ASI_ERROR_TIMEOUT`; Player One uses `isImageReady()` / `POAImageReady` and consumes
 ready images with a non-blocking read. The startup operation is bounded to 32 reads
 and 250 ms. Other errors, exhausted limits, or invalid settings read-back leave
-the run preview-only. Their reader discards the first further complete image
-before callback delivery, including Player One's delivery-slot enqueue; timeouts
-do not consume this discard. Native/direct buffers are reused by the capture loop.
+the run preview-only. ZWO and Player One deliver the first further complete image
+as `previewOnly`; Player One fixes that flag in its delivery slot. QHY's 8-bit live
+path similarly marks its first valid image, while its high-bit single-frame path
+retains its existing behavior. The main camera may render these boundary images;
+snapshots, recording, auto-exposure, stacking, guiding and auxiliary measurements
+must not consume them. Later images retain the existing provenance checks.
+Timeouts and invalid QHY image dimensions do not consume the boundary.
+Native/direct buffers are reused by the capture loop.
 
 SDK contracts used here: the bundled Player One API HTML documents stop as
 stopping exposure and transmission and exposes readiness/non-blocking image reads;
@@ -51,7 +56,7 @@ describes readiness as available image data. The vendor's
 [ASICamera2.h](https://sources.debian.org/src/libasi/1.27%2B20221218230335-3/ASICamera2.h)
 defines timeout as no image obtained and its video read consumes queued images.
 Neither contract explicitly promises that stop/start clears every internal camera
-DDR/USB cache. The empty-queue plus one-image discard is a conservative host-side
+DDR/USB cache. The empty-queue plus one-image science boundary is a conservative host-side
 boundary, not verified per-frame exposure telemetry or proof for arbitrary firmware.
 Testing exposure/gain/ROI switches on supported physical models remains required.
 

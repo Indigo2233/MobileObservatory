@@ -22,6 +22,10 @@ Use the project script from PowerShell:
 The `-NonCommercial` switch includes the Stellarium Web assets. Keep
 `AGPL_SOURCE_DELIVERY.md` synchronized with any redistributed Stellarium changes.
 
+For local builds that will not be published, keep the existing Android
+`versionCode` (build number) unchanged, including for Release builds. Change it
+when preparing a publication or when the user explicitly requests a build number.
+
 ### libusb Android FD patch
 
 `app/src/main/cpp/libusb` is an upstream submodule. The Android SELinux

@@ -7,6 +7,29 @@ import org.junit.Test
 
 class ToupTekDevicesTest {
     @Test
+    fun gpm585mUsesItsOfficialPidAfterTheActualUsbIdentity() {
+        for (vid in listOf(ToupTekDevices.CYPRESS_VENDOR_ID, ToupTekDevices.U3V_VENDOR_ID)) {
+            assertEquals(
+                listOf(
+                    ToupTekDevices.OpenHint(vid, 0x4D55, "GPM585M"),
+                    ToupTekDevices.OpenHint(0x0547, 0x1697, "GPM585M")
+                ),
+                ToupTekDevices.openHints(vid, 0x4D55, "ToupTek GPM-585_M")
+            )
+        }
+    }
+
+    @Test
+    fun gpm585mOfficialIdentityIsTriedOnce() {
+        assertEquals(
+            listOf(ToupTekDevices.OpenHint(0x0547, 0x1697, "GPM585M")),
+            ToupTekDevices.openHints(0x0547, 0x1697, "GPM585M")
+        )
+        assertEquals("GPM585M", ToupTekDevices.hintedModelName(null, "ToupTek GPM585M"))
+        assertEquals("ATR585M", ToupTekDevices.hintedModelName("ATR585M"))
+    }
+
+    @Test
     fun consumerScanAcceptsClassicCypressAndU3vVids() {
         assertTrue(ToupTekDevices.isVendor(0x0547))
         assertTrue(ToupTekDevices.isVendor(0x04B4))

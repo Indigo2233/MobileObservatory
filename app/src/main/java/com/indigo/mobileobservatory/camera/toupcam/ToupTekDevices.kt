@@ -7,6 +7,7 @@ import android.hardware.usb.UsbDevice
  * 把 fd 交给 SDK 的 `Toupcam_Open`；不要因为 getModelName 为空就从列表里丢掉。
  *
  * 官方 GPM462C/M（USB 2.0 导星）在 Windows 上是 `0x0547:0x14FF` / `0x1500`。
+ * GPM585M 为 `0x0547:0x1697`（SDK 60.33015.20261024 的官方驱动表）。
  * 部分机子在 Android 上报 Cypress `0x04B4`（官方 udev 也认）或 USB3 Vision
  * 通用号 `0x2BA2:0x4D55`。消费版要把这几个 VID 都交给图谱 SDK。
  * 工业 overlay 的 `0x2BA2` 走大恒 Galaxy，只能用 [isProtocolVendor]。
@@ -46,6 +47,7 @@ object ToupTekDevices {
             .lowercase()
         if (compact.isEmpty()) return null
         return when {
+            "gpm585m" in compact -> "GPM585M"
             "gpm462m" in compact -> "GPM462M"
             "gpm462c" in compact -> "GPM462C"
             "g3m462m" in compact -> "G3M462M"
@@ -67,6 +69,7 @@ object ToupTekDevices {
         val named = hintedModelName(productName, manufacturerName)
         val ids = linkedSetOf(usbVid to usbPid)
         when (named) {
+            "GPM585M" -> ids += VENDOR_ID to 0x1697
             "GPM462M" -> ids += VENDOR_ID to 0x1500
             "GPM462C" -> ids += VENDOR_ID to 0x14FF
             "G3M462M" -> {

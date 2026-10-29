@@ -1202,6 +1202,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private val resourceCleaner by lazy {
         DeterministicResourceCleaner(
+            ::closeMountTransport,
             ::cancelOwnedJobs,
             ::unregisterOwnedReceiver,
             { closeRecordingResources(saveToGallery = false) },
@@ -1216,7 +1217,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         previewPipeline.close()
         guidePreviewPipeline.close()
         stopExposureTimer()
-        mountModule.cancelJobs()
         coolingJobs.forEach { it.cancel() }
         coolingJobs.clear()
         _guideRunning.value = false
@@ -1240,6 +1240,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             .onFailure { Log.e(TAG, "Guide camera manager cleanup failed", it) }
         runCatching { accessoryManager.unregister() }
             .onFailure { Log.e(TAG, "Accessory manager cleanup failed", it) }
+    }
+
+    private fun closeMountTransport() {
+        // Release the mount USB handle before camera and accessory teardown can take longer.
+        runCatching { mountModule.cancelJobs() }
+            .onFailure { Log.e(TAG, "Mount job cancellation failed", it) }
         runCatching { mountModule.closeController() }
             .onFailure { Log.e(TAG, "Mount transport cleanup failed", it) }
     }
@@ -2135,6 +2141,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         cam.startCapture(object : FrameCallback {
             override fun onFrame(frame: FrameData) {
+                if (frame.previewOnly) { cam.recycleBuffer(frame.data); return }
                 guideMeasurements.delivered(frame.captureGeneration, frame.frameId, android.os.SystemClock.elapsedRealtime(), measurementRun)
                 if (auxiliaryMotionMonitor.get() != null) synchronized(guideDeliveryLock) {
                     val end = android.os.SystemClock.elapsedRealtime()
@@ -2377,6 +2384,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 val actualSelection = if (input.pixelFormat.isRgb) SerCfaInterpretation.AUTO else selection
                 val interpretedFrame = CameraCfaLayout.interpret(input, actualSelection)
                 val traits = runTraits.get()
+                if (input.previewOnly) {
+                    onFrameArrived()
+                    val processed = softwareBinning.apply(interpretedFrame, traits)
+                    if (processed.data !== interpretedFrame.data) cam.recycleBuffer(interpretedFrame.data)
+                    if (!previewEpoch.isCurrent(runEpoch)) { runRecycler(processed.data); return }
+                    val display = CameraCfaLayout.displayFrame(processed, traits)
+                    previewPipeline.submit(display, traits?.copy(bayerPatternAtOutput = true), previewRun, runRecycler)
+                    return
+                }
                 onFrameArrived()
                 updateFps()
 

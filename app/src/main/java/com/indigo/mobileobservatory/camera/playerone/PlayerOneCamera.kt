@@ -80,6 +80,7 @@ class PlayerOneCamera : Camera, CameraSingleExposureCapable, CameraOffsetCapable
         var frameId: Long = 0
         var timestamp: Long = 0
         var captureGeneration: Long = 0
+        var previewOnly: Boolean = false
     }
 
     private val _isOpen = MutableStateFlow(false)
@@ -820,11 +821,11 @@ class PlayerOneCamera : Camera, CameraSingleExposureCapable, CameraOffsetCapable
                 cam.getImageData(slot.buffer, GRAB_TIMEOUT_MS)
                 lastCaptureError = null
                 if (!captureGeneration.isActive(generation)) { freeSlots.offer(slot); slot = null; break }
-                if (!startup.acceptCompleteFrame()) { freeSlots.offer(slot); slot = null; continue }
+                val previewOnly = !startup.acceptCompleteFrame()
 
                 frameSeq++
                 if (frameSeq == 1L) {
-                    FileLogger.i(TAG, "First frame: ${w}x${h} fmt=${currentPixelFormat.name} bpp=$bpp")
+                    FileLogger.i(TAG, "First frame: ${w}x${h} fmt=${currentPixelFormat.name} bpp=$bpp previewOnly=$previewOnly")
                 }
                 val completedSlot = slot
                 completedSlot.width = w
@@ -834,6 +835,7 @@ class PlayerOneCamera : Camera, CameraSingleExposureCapable, CameraOffsetCapable
                 completedSlot.frameId = frameSeq
                 completedSlot.timestamp = System.currentTimeMillis()
                 completedSlot.captureGeneration = generation
+                completedSlot.previewOnly = previewOnly
                 pendingFrames.put(completedSlot)
                 slot = null
                 statsFrameCount++
@@ -924,7 +926,8 @@ class PlayerOneCamera : Camera, CameraSingleExposureCapable, CameraOffsetCapable
                             pixelFormat = pending.pixelFormat,
                             frameId = pending.frameId,
                             timestamp = pending.timestamp,
-                            captureGeneration = pending.captureGeneration
+                            captureGeneration = pending.captureGeneration,
+                            previewOnly = pending.previewOnly
                         )
                     )
                     handedOff = true

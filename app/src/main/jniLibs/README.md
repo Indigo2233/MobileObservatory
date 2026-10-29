@@ -41,6 +41,63 @@ llvm-readelf -d <库文件> | grep -E "SONAME|NEEDED"
 
 ## 其他文件
 
+### ToupTek SDK 60.33015.20261024 / GPM585M
+
+2026-10-29 从维护者提供的 `E:\download\toupcamsdk.20261024` 原样更新：
+`inc/toupcam.h` → `cpp/toupcam.h`；`android/arm64`、`android/arm`、
+`android/x86`、`android/x64` 分别对应本目录的 `arm64-v8a`、`armeabi-v7a`、
+`x86`、`x86_64`。此前版本为 `59.30405.20251228`。
+
+来源可核对[官方 SDK 下载中心](https://www.touptekphotonics.com.cn/download/?category=SDK)
+和[2026-10-24 SDK 包](https://www.touptekphotonics.com.cn/downloads/beta/toupcamsdk.20261024.zip)。
+该版本位于官方 Latest 通道；下载路径为 `beta`，当日 Stable 通道为 2026-05-19。
+升级时应同时替换四种 Android ABI 与公共头文件。
+
+| 文件 | SHA-256 |
+|---|---|
+| `arm64-v8a/libtoupcam.so` | `4a9adee403b79f0ba39ff0bc2d49e62e6403934f44444b3243541a8d7d901f58` |
+| `armeabi-v7a/libtoupcam.so` | `ec089b514cf2602bdcfb14a0bc40c71dfdeab61c28a141c25adf21735064ea6f` |
+| `x86/libtoupcam.so` | `47d620c361638a1bcc8ad1a1d9c46102bad28c5182dc16818b0db714ae57b357` |
+| `x86_64/libtoupcam.so` | `f37c9a0139c4bccb51358de259e842d0a16873f3942b52b063a0eb200c290fcc` |
+| `../cpp/toupcam.h` | `05ad780f5be89f32dbcccfbc9592fad325f9d86b97c6b5cb673dc09f23386b72` |
+
+官方包 `win/drivers/usb/x64/toupcam.inf` 将 GPM585M 关联到 `0547:1697`。
+在 Android ARM64 上实际调用 `Toupcam_get_Model(0x0547, 0x1697)` 返回
+`GPM585M`、3840×2160、2.9×2.9 μm、flags `0x885688219`，含单色、硬件 ROI、
+ST4、RAW8/RAW16、CGHDR。产品页的传感器 ADC 规格为 12 位；应用继续通过
+`get_MaxBitDepth` / `get_RawFormat` 获取采集格式，避免将 ADC 规格写死为输出位深。
+`ToupTekDevices` 识别 GPM585M USB 名称，先使用设备实际 VID/PID，再按官方 PID 回退。
+
+四种 ABI 均保留当前 JNI 使用的全部 30 个 SDK 导出，SONAME 为 `libtoupcam.so`，
+仅依赖系统 `libm.so`、`libdl.so`、`libc.so`。三份 libusb 的 SONAME 仍分别为
+`libusb-1.0.so`、`libusb1.0.so`、`libusb-1.0-po.so`；其他相机 SDK 二进制保持原字节。
+
+`scripts/tests/toupcam_sdk_probe.c` 在 Android 上通过 `RTLD_NOW` 实际加载库，检查版本、
+GPM585M 参数、GPM462M/C 型号及无效 USB ID。2026-10-29 已在 V2324HA 上通过。
+该检查仅执行库加载和型号查询；GPM585M USB 连接、首帧、曝光/增益、ROI、断开重连、
+导星与已有图谱相机采集仍需硬件验收。
+
+本次 `Build.ps1 -NonCommercial` 构建通过（1.0.9 / build 59），APK 内图谱库与上表
+ARM64 文件字节一致。设备识别、帧尺寸和 USB connection 保持共 13 项测试通过；
+Gradle 测试入口遇到 Kotlin 堆内存不足及共享缓存文件锁，最终使用 Kotlin 1.9.22 / JUnit 4
+在独立输出目录编译并运行对应现有测试源，结果为 13 tests / 0 failures。
+
+```powershell
+$ndkBin = 'D:/Unity/AndroidSDK34/ndk/25.1.8937393/toolchains/llvm/prebuilt/windows-x86_64/bin'
+$adb = 'D:/Unity/AndroidSDK34/platform-tools/adb.exe'
+$serial = '<adb devices 中的设备序列号>'
+New-Item -ItemType Directory -Path build/toupcam-sdk-upgrade -Force | Out-Null
+& "$ndkBin/clang.exe" --target=aarch64-linux-android26 -Wall -Wextra -Werror -fPIE -pie `
+    -I app/src/main/cpp scripts/tests/toupcam_sdk_probe.c -ldl `
+    -o build/toupcam-sdk-upgrade/toupcam_sdk_probe
+& $adb -s $serial shell mkdir -p /data/local/tmp/indigo-toupcam-20261024
+& $adb -s $serial push build/toupcam-sdk-upgrade/toupcam_sdk_probe `
+    app/src/main/jniLibs/arm64-v8a/libtoupcam.so /data/local/tmp/indigo-toupcam-20261024/
+& $adb -s $serial shell chmod 755 /data/local/tmp/indigo-toupcam-20261024/toupcam_sdk_probe
+& $adb -s $serial shell /data/local/tmp/indigo-toupcam-20261024/toupcam_sdk_probe `
+    /data/local/tmp/indigo-toupcam-20261024/libtoupcam.so
+```
+
 ### ASI676MM 的 PID 兼容修正
 
 2026-10-14 在上述官方 Android 库中确认：`ASIOpenCamera` 将 USB PID `0x676C`

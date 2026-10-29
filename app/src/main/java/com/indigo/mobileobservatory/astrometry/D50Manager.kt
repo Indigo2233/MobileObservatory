@@ -6,8 +6,6 @@ import kotlinx.coroutines.ensureActive
 import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileOutputStream
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.zip.ZipInputStream
 import kotlin.coroutines.coroutineContext
 
@@ -52,7 +50,10 @@ class D50Manager(private val context: Context) {
         tmpDir.mkdirs()
 
         try {
-            downloadZip(zipFile, database, progress)
+            AstapArchiveDownloader.download(
+                database.downloadUrls, zipFile, database.archiveBytes, database.archiveSha256,
+                database.displayName, progress
+            )
             progress(DownloadProgress(active = true, message = "Extracting ${database.displayName}..."))
             unzip(zipFile, tmpDir)
 
@@ -68,7 +69,7 @@ class D50Manager(private val context: Context) {
                 if (target.exists()) target.delete()
                 source.copyTo(target, overwrite = true)
             }
-            progress(DownloadProgress(active = false, message = "${database.displayName} installed: ${extracted.size} files"))
+            progress(DownloadProgress(active = true, message = "${database.displayName} installed: ${extracted.size} files"))
         } finally {
             zipFile.delete()
             if (tmpDir.exists()) tmpDir.deleteRecursively()
@@ -95,43 +96,6 @@ class D50Manager(private val context: Context) {
             if (!target.exists() || target.length() != source.length()) {
                 source.copyTo(target, overwrite = true)
             }
-        }
-    }
-
-    private suspend fun downloadZip(zipFile: File, database: AstapDatabase, progress: (DownloadProgress) -> Unit) {
-        val connection = (URL(database.downloadUrl).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 20_000
-            readTimeout = 30_000
-            instanceFollowRedirects = true
-            setRequestProperty("User-Agent", "MobileObservatory/1.0")
-        }
-        try {
-            val total = connection.contentLengthLong
-            if (connection.responseCode !in 200..299) {
-                error("${database.displayName} download failed: HTTP ${connection.responseCode}")
-            }
-            BufferedInputStream(connection.inputStream).use { input ->
-                FileOutputStream(zipFile).use { output ->
-                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                    var read: Int
-                    var done = 0L
-                    while (input.read(buffer).also { read = it } >= 0) {
-                        coroutineContext.ensureActive()
-                        output.write(buffer, 0, read)
-                        done += read
-                        progress(
-                            DownloadProgress(
-                                active = true,
-                                bytesRead = done,
-                                totalBytes = total,
-                                message = "Downloading ${database.displayName}"
-                            )
-                        )
-                    }
-                }
-            }
-        } finally {
-            connection.disconnect()
         }
     }
 

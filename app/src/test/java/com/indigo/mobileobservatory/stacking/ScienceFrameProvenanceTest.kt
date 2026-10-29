@@ -34,4 +34,27 @@ class ScienceFrameProvenanceTest {
         gate.clear()
         assertNull(gate.frame(frame(2), 2))
     }
+
+    @Test fun startupBoundaryFrameRemainsPreviewOnlyAfterLaterFramesAndBinning() {
+        val startup = CaptureStartupBarrier()
+        assertTrue(startup.drain { CaptureStartupBarrier.Read.EMPTY })
+        val first = frame(12).copy(previewOnly = !startup.acceptCompleteFrame())
+        val second = frame(12).copy(frameId = 2, previewOnly = !startup.acceptCompleteFrame())
+        val gate = ScienceFrameProvenance()
+        gate.bind(12, key(5_000_000.0))
+
+        // A delayed first delivery retains its own classification after the reader gets frame 2.
+        assertTrue(first.previewOnly)
+        assertFalse(second.previewOnly)
+        assertNull(gate.frame(first, 12))
+        assertNull(gate.latest(12))
+        assertNotNull(gate.frame(second, 12))
+        assertNull(gate.frame(first, 12))
+
+        val binning = SoftwareBinning().apply { factor = 2 }
+        val display = binning.apply(first)
+        assertTrue(display.previewOnly)
+        assertNull(gate.frame(display, 12))
+        assertTrue(binning.release(display.data))
+    }
 }
