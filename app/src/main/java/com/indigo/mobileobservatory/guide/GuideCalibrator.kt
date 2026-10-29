@@ -45,16 +45,10 @@ class GuideCalibrator(
 
     private suspend fun axis(forward: MountDirection, reverse: MountDirection, clearPhase: GuideCalibrationPhase,
                              outPhase: GuideCalibrationPhase, backPhase: GuideCalibrationPhase): Axis {
-        var stable = 0
-        for (i in 1..20) {
-            val shift = move(forward, config.initialPulseMs)
-            stable = if (shift.length >= .5f) stable + 1 else 0
-            progress(GuideCalibrationProgress(clearPhase, i, shift.length))
-            if (stable >= 3) break
-        }
-        check(stable >= 3) { "No consistent motion while clearing backlash" }
+        val clearingRate = clearBacklash(forward, clearPhase)
         val samples = mutableListOf(Sample(0, 0f, 0f))
-        var x = 0f; var y = 0f; var totalMs = 0; var stepMs = config.initialPulseMs
+        var x = 0f; var y = 0f; var totalMs = 0
+        var stepMs = ceil(config.distancePx / config.steps / clearingRate).toInt().coerceIn(50, config.initialPulseMs)
         for (i in 1..60) {
             val shift = move(forward, stepMs)
             x += shift.x; y += shift.y; totalMs += stepMs
@@ -106,5 +100,51 @@ class GuideCalibrator(
             "Forward and reverse calibration rates disagree"
         }
         return Axis(vx, vy, samples.size - 1, travel, backlash, residual)
+    }
+
+    /** Establish motion with short probes; take-up samples never enter the calibration fit. */
+    private suspend fun clearBacklash(direction: MountDirection, phase: GuideCalibrationPhase): Float {
+        var pulseMs = min(config.initialPulseMs, 100)
+        var commandedMs = 0
+        var totalX = 0f; var totalY = 0f
+        var blockX = 0f; var blockY = 0f; var blockMs = 0
+        var previous: GuideVector? = null
+        val rates = mutableListOf<Float>()
+        val travelLimit = max(3f, config.distancePx / 2)
+        repeat(80) { index ->
+            check(commandedMs < MAX_CLEARING_MS) { "No consistent motion while clearing backlash" }
+            val duration = min(pulseMs, MAX_CLEARING_MS - commandedMs)
+            val shift = move(direction, duration)
+            commandedMs += duration
+            totalX += shift.x; totalY += shift.y
+            val travel = hypot(totalX, totalY)
+            progress(GuideCalibrationProgress(phase, index + 1, travel))
+            check(travel <= travelLimit) { "Backlash clearing moved too far: $travel px (limit $travelLimit px)" }
+
+            blockX += shift.x; blockY += shift.y; blockMs += duration
+            val block = GuideVector(blockX, blockY)
+            if (block.length >= .5f) {
+                // Slow motion may need several short probes to rise above centroid noise.
+                // Direction reversals reset the three-measurement confirmation.
+                val aligned = previous?.let { block.x * it.x + block.y * it.y >= .8f * block.length * it.length } ?: true
+                if (!aligned) rates.clear()
+                val rate = block.length / blockMs
+                rates += rate
+                if (rates.size >= 3) return rates.sorted()[rates.size / 2]
+                // A partly consumed backlash pulse underestimates speed. Prefer the most
+                // recent response when choosing the next probe; keep its duration bounded.
+                val probeRate = max(rate, shift.length / duration)
+                pulseMs = ceil(1f / probeRate).toInt().coerceIn(50, 500)
+                previous = block
+                blockX = 0f; blockY = 0f; blockMs = 0
+            } else {
+                pulseMs = (pulseMs * 2).coerceAtMost(500)
+            }
+        }
+        error("No consistent motion while clearing backlash")
+    }
+
+    private companion object {
+        const val MAX_CLEARING_MS = 20_000
     }
 }

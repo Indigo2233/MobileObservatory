@@ -2,7 +2,7 @@
 <resources>
     <string name="gw_settings_title">Guide settings</string>
     <string name="gw_travel_label">Minimum travel per axis</string>
-    <string name="gw_pulse_label">Initial calibration pulse</string>
+    <string name="gw_pulse_label">First calibration step limit</string>
     <string name="gw_min_move_label">Minimum move</string>
     <string name="gw_focal_label">Guide focal length</string>
     <string name="gw_focal_optional">Set to 0 or leave blank to use pixels.</string>

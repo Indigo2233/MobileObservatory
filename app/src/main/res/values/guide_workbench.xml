@@ -34,7 +34,7 @@
     <string name="gw_readout">Camera readout mode</string>
     <string name="gw_apply_exposure">Apply exposure (0.05–5 s)</string>
     <string name="gw_raw_help">Guiding displays and measures raw single-channel pixels. Recalibrate after changing format or readout mode.</string>
-    <string name="gw_calibration_help">Clear backlash, measure at least the specified steps and travel, fit both axes, and measure reversal backlash on return. Step duration adapts to the measured response.</string>
+    <string name="gw_calibration_help">Clear backlash with short pulses, then measure at least the specified steps and travel. The pulse setting caps the first measurement step; later steps adapt to the measured response. Fit both axes and measure reversal backlash on return.</string>
     <string name="gw_steps">Minimum steps per axis</string>
     <string name="gw_distance">Minimum travel per axis (px)</string>
     <string name="gw_backlash">DEC reversal backlash compensation</string>
