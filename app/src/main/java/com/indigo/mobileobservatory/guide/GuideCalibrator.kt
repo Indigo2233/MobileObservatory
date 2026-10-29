@@ -5,11 +5,27 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlin.math.*
 
-data class GuideCalibrationConfig(val steps: Int = 7, val distancePx: Float = 15f, val initialPulseMs: Int = 1200) {
-    init { require(steps in 5..20 && distancePx in 10f..50f && initialPulseMs in 50..5000) }
+data class GuideCalibrationConfig(val steps: Int = 7, val distancePx: Float = 15f, val initialPulseMs: Int = 1200,
+    val arcsecPerPixel: Float? = null, val guideRateSidereal: Float = .5f, val declinationDeg: Float = 0f) {
+    init {
+        require(steps in 5..20 && distancePx in 10f..50f && initialPulseMs in 50..5000)
+        require(guideRateSidereal.isFinite() && guideRateSidereal in .1f..1f)
+        require(declinationDeg.isFinite() && declinationDeg in -90f..90f)
+        require(arcsecPerPixel == null || arcsecPerPixel.isFinite() && arcsecPerPixel > 0f)
+    }
+    fun pulseMs(@Suppress("UNUSED_PARAMETER") ra: Boolean): Int {
+        val scale = arcsecPerPixel ?: return initialPulseMs
+        val totalMs = 1000.0 * distancePx * scale / (15.0 * guideRateSidereal)
+        val projection = cos(Math.toRadians(declinationDeg.toDouble().coerceIn(-60.0, 60.0)))
+        return (ceil(min(totalMs / steps / projection, totalMs / 4.0) / 50.0) * 50.0).toInt().coerceIn(50, 5000)
+    }
 }
 enum class GuideCalibrationPhase { CLEAR_EAST, EAST, WEST, CLEAR_NORTH, NORTH, SOUTH }
-data class GuideCalibrationProgress(val phase: GuideCalibrationPhase, val step: Int, val distancePx: Float)
+enum class GuideCalibrationAdvisory {
+    TOO_FEW_STEPS, FIT_RESIDUAL, RA_RETURN_OFFSET, DEC_RETURN_OFFSET, REVERSE_RESPONSE, AXIS_ANGLE, BACKLASH_UNCERTAIN
+}
+data class GuideCalibrationProgress(val phase: GuideCalibrationPhase, val step: Int, val distancePx: Float,
+    val xPx: Float = 0f, val yPx: Float = 0f, val pulseMs: Int = 0)
 data class GuideCalibrationResult(val calibration: GuideCalibration, val stars: List<GuideStar>)
 
 /** Measures incremental shifts, regresses cumulative positions, and excludes take-up from the fit. */
@@ -22,14 +38,14 @@ class GuideCalibrator(
     private val module = GuideModule()
     private var stars = emptyList<GuideStar>()
     private data class Sample(val ms: Int, val x: Float, val y: Float)
-    private data class Axis(val x: Float, val y: Float, val steps: Int, val travel: Float, val backlash: Int, val residual: Float)
+    private data class Axis(val x: Float, val y: Float, val steps: Int, val travel: Float, val backlash: Int, val residual: Float, val returnResidual: Float)
 
     suspend fun run(): GuideCalibrationResult {
         stars = measure(); check(stars.isNotEmpty()) { "No usable calibration stars" }
         val east = axis(MountDirection.EAST, MountDirection.WEST, GuideCalibrationPhase.CLEAR_EAST, GuideCalibrationPhase.EAST, GuideCalibrationPhase.WEST)
         val north = axis(MountDirection.NORTH, MountDirection.SOUTH, GuideCalibrationPhase.CLEAR_NORTH, GuideCalibrationPhase.NORTH, GuideCalibrationPhase.SOUTH)
         val calibration = GuideCalibration(east.x, east.y, north.x, north.y, config.initialPulseMs,
-            east.steps, north.steps, east.travel, north.travel, east.backlash, north.backlash, max(east.residual, north.residual))
+            east.steps, north.steps, east.travel, north.travel, east.backlash, north.backlash, max(east.residual, north.residual), east.returnResidual, north.returnResidual)
         check(module.projectError(calibration, 0f, 0f) != null) { "Calibration axes are degenerate" }
         return GuideCalibrationResult(calibration, stars)
     }
@@ -54,7 +70,7 @@ class GuideCalibrator(
             x += shift.x; y += shift.y; totalMs += stepMs
             samples += Sample(totalMs, x, y)
             val distance = hypot(x, y)
-            progress(GuideCalibrationProgress(outPhase, i, distance))
+            progress(GuideCalibrationProgress(outPhase, i, distance, x, y, stepMs))
             if (i >= config.steps && distance >= config.distancePx) break
             // Use measured response to approach the requested travel in the requested step count.
             if (distance > .5f) stepMs = ceil(config.distancePx / config.steps * totalMs / distance).toInt().coerceIn(50, 5000)
@@ -89,7 +105,7 @@ class GuideCalibrator(
                 returnRates += projected / ms
                 if (moving <= 3) backlash = (commanded - returned / rate).roundToInt().coerceAtLeast(0)
             }
-            progress(GuideCalibrationProgress(backPhase, i, returned))
+            progress(GuideCalibrationProgress(backPhase, i, max(0f, travel - returned), x + returnX, y + returnY, ms))
             // Crossing the origin ends reverse motion. Further reverse pulses increase
             // the error; the endpoint and rate checks below still reject a bad return.
             if (returned >= travel || abs(travel - returned) <= max(.5f, rate * 60)) { reached = true; break }
@@ -99,7 +115,7 @@ class GuideCalibrator(
         check(returnRates.size >= 3 && returnRates.sorted()[returnRates.size / 2] / rate in .8f..1.25f) {
             "Forward and reverse calibration rates disagree"
         }
-        return Axis(vx, vy, samples.size - 1, travel, backlash, residual)
+        return Axis(vx, vy, samples.size - 1, travel, backlash, residual, hypot(x + returnX, y + returnY))
     }
 
     /** Establish motion with short probes; take-up samples never enter the calibration fit. */
@@ -118,7 +134,7 @@ class GuideCalibrator(
             commandedMs += duration
             totalX += shift.x; totalY += shift.y
             val travel = hypot(totalX, totalY)
-            progress(GuideCalibrationProgress(phase, index + 1, travel))
+            progress(GuideCalibrationProgress(phase, index + 1, travel, totalX, totalY, duration))
             check(travel <= travelLimit) { "Backlash clearing moved too far: $travel px (limit $travelLimit px)" }
 
             blockX += shift.x; blockY += shift.y; blockMs += duration

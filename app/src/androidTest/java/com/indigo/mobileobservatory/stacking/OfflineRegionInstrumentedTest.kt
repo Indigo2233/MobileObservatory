@@ -71,17 +71,51 @@ class OfflineRegionInstrumentedTest {
         }
     }
 
+    @Test fun multiFrameDeepSkyBin2MatchesAdmissionAndExportsTransferredPixelsWithFilters() = runBlocking {
+        workspace { c, dir, cleanup ->
+            val stars = recording(dir, true, frames = 3)
+            main { c.open(StackMode.PLANETARY); assertTrue(c.setTarget(StackMode.PLANETARY, StackTarget.DEEP_SKY)); c.loadFile(stars) }
+            phase(c, StackTaskPhase.READY)
+            val plan = c.offlinePlan(softwareBin = 2)!!
+            assertTrue(plan.workingBytes < 93L shl 20)
+            assertNull(plan.issue(c.memoryBudgetBytes))
+            main { c.stackDeepSky(softwareBin = 2) }; phase(c, StackTaskPhase.COMPLETE)
+            val stats = c.task.value.deepSkyStats!!
+            assertEquals(3, stats.stack.accepted)
+            assertEquals(3L, stats.unknownExposureFrames)
+            assertEquals(plan.workingBytes, stats.stack.estimatedWorkingBytes)
+            main { c.updateProcessing(StackProcessingParameters.preset(ProcessingPreset.INTENSE).copy(sharpening = .3)) }
+            settled(c)
+            main { c.export() }; phase(c, StackTaskPhase.COMPLETE)
+            val files = c.task.value.exportedFiles.map(::File); cleanup += files
+            assertTrue(files.single { it.extension == "png" }.length() > 0)
+            val fits = files.single { it.extension == "fits" }
+            val image = StackFitsReader.read(fits)
+            assertEquals(1928, image.width); assertEquals(1090, image.height); assertEquals(3, image.channels)
+            assertTrue(image.pixels.all { it.isFinite() })
+            assertTrue(image.pixels.maxOrNull()!! > .1f)
+            val metadata = StackFitsReader.readMetadata(fits)
+            assertEquals("[0,0,3856,2180]", metadata["sourceRegion"])
+            assertEquals("2", metadata["softwareBin"])
+            val memory = JSONObject(metadata["memoryEstimate"]!!)
+            assertEquals(plan.workingBytes, memory.getLong("peakBytes"))
+            assertEquals("transferred_accumulation", memory.getString("resultOwnership"))
+            assertEquals(maxOf(memory.getLong("stackingBytes"), memory.getLong("previewBytes"),
+                memory.getLong("exportBytes")), memory.getLong("peakBytes"))
+        }
+    }
+
     companion object {
-    internal fun recording(directory: File, stars: Boolean): File {
+    internal fun recording(directory: File, stars: Boolean, frames: Int = 1): File {
         val width = 3856; val height = 2180
         val file = File(directory, if (stars) "585-stars.ser" else "585-planet.ser")
         val header = ByteBuffer.allocate(178).order(ByteOrder.LITTLE_ENDIAN)
         header.put("LUCAM-RECORDER".toByteArray()); header.position(18)
-        header.putInt(8); header.putInt(0); header.putInt(width); header.putInt(height); header.putInt(16); header.putInt(1)
+        header.putInt(8); header.putInt(0); header.putInt(width); header.putInt(height); header.putInt(16); header.putInt(frames)
         RandomAccessFile(file, "rw").use { out ->
             out.write(header.array())
             val row = ByteArray(width * 2)
-            for (y in 0 until height) {
+            repeat(frames) { for (y in 0 until height) {
                 for (x in 0 until width) {
                     val signal = if (stars) {
                         val dx = (x + 200) % 400 - 200; val dy = (y + 150) % 300 - 150
@@ -95,7 +129,7 @@ class OfflineRegionInstrumentedTest {
                     row[x * 2] = value.toByte(); row[x * 2 + 1] = (value ushr 8).toByte()
                 }
                 out.write(row)
-            }
+            } }
         }
         return file
     }

@@ -88,7 +88,15 @@ class GuideModuleTest {
     fun hysteresisKeepsSmallFractionOfPreviousCorrection() {
         module.filter(100f, raAxis = true, GuideAlgorithm.HYSTERESIS, aggressiveness = 1.0f)
         val second = module.filter(0f, raAxis = true, GuideAlgorithm.HYSTERESIS, aggressiveness = 1.0f)
-        assertEquals(10f, second, 0.01f)
+        assertEquals(9f, second, 0.01f)
+    }
+
+    @Test fun resettingDecDoesNotDiscardRaFilterHistory() {
+        module.filter(100f, true, GuideAlgorithm.HYSTERESIS, 1f)
+        module.resetFilter(false)
+        assertEquals(9f, module.filter(0f, true, GuideAlgorithm.HYSTERESIS, 1f), .001f)
+        module.resetFilter(true)
+        assertEquals(0f, module.filter(0f, true, GuideAlgorithm.HYSTERESIS, 1f), 0f)
     }
 
     @Test fun liveCorrectionPolicyRespectsDeadbandEvenWithFilterHistory() {
@@ -105,13 +113,13 @@ class GuideModuleTest {
         val calibration = GuideCalibration(.004f, 0f, 0f, .006f, 1200, decBacklashMs = 1800)
         val backlash = GuideBacklashCompensation().apply { accepted(com.indigo.mobileobservatory.mount.MountDirection.NORTH) }
         val forward = requireNotNull(module.solveCorrection(calibration, 100f, 100f, GuideAlgorithm.HYSTERESIS, .7f, .7f, .15f, backlash)).correction
-        assertEquals(2000, forward.raPulseMs); assertEquals(3800, forward.decPulseMs)
+        assertEquals(2500, forward.raPulseMs); assertEquals(4300, forward.decPulseMs)
         assertEquals(com.indigo.mobileobservatory.mount.MountDirection.WEST, forward.raDirection)
         assertEquals(com.indigo.mobileobservatory.mount.MountDirection.SOUTH, forward.decDirection)
         val reversed = requireNotNull(module.solveCorrection(calibration, 100f, 100f, GuideAlgorithm.HYSTERESIS, .7f, .7f, .15f, backlash,
             reverseRa = true, reverseDec = true)).correction
         assertEquals(com.indigo.mobileobservatory.mount.MountDirection.EAST, reversed.raDirection)
         assertEquals(com.indigo.mobileobservatory.mount.MountDirection.NORTH, reversed.decDirection)
-        assertEquals(2000, reversed.decPulseMs)
+        assertEquals(2500, reversed.decPulseMs)
     }
 }

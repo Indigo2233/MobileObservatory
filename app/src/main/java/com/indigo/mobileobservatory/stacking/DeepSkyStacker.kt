@@ -14,7 +14,8 @@ data class DeepSkySnapshot(val image: LinearImage, val weights: FloatArray, val 
  * Cancellation discards this engine's accumulation; live pause lets an in-flight frame finish,
  * while reset/close cancels and discards the engine. Previously returned snapshots stay valid.
  */
-class DeepSkyStacker(private val config: DeepSkyConfig = DeepSkyConfig(), private val livePreviewOverlap: Boolean = true) {
+class DeepSkyStacker(private val config: DeepSkyConfig = DeepSkyConfig(), private val livePreviewOverlap: Boolean = true,
+                     private val reusableOfflineInput: Boolean = false) {
     private val starDetectionWorkspace = StarRegistration.Workspace()
     private var reference: StarField? = null
     private var width = 0; private var height = 0; private var channels = 0
@@ -37,10 +38,10 @@ class DeepSkyStacker(private val config: DeepSkyConfig = DeepSkyConfig(), privat
         }
         if (image.pixels.any { !it.isFinite() } || !exposureSeconds.isFinite() || exposureSeconds < 0) return reject(DeepSkyRejection.INVALID_PIXELS)
         if (reference != null && (image.width != width || image.height != height || image.channels != channels)) return reject(DeepSkyRejection.GEOMETRY)
-        // mean, M2, current, bounded raw queue, immutable snapshot, background and processed
-        // preview, plus mono detail filters/weights/masks. Fail before allocating accumulation.
+        // Admission precedes accumulation. Offline rendering starts after the engine releases
+        // its workspace; live decoding/accumulation and immutable previews can overlap.
         val workingBytes = if (livePreviewOverlap) estimateWorkingBytes(image.width, image.height, image.channels)
-            else estimateOfflineWorkingBytes(image.width, image.height, image.channels)
+            else estimateOfflineWorkingBytes(image.width, image.height, image.channels, reusableOfflineInput)
         if (workingBytes > config.memoryBudgetBytes) return reject(DeepSkyRejection.MEMORY_BUDGET)
         val field = StarRegistration.detect(image, workspace = starDetectionWorkspace, cancelled = cancelled)
         stats = stats.copy(stars = field.stars.size, estimatedWorkingBytes = workingBytes)
@@ -106,6 +107,16 @@ class DeepSkyStacker(private val config: DeepSkyConfig = DeepSkyConfig(), privat
 
     fun snapshot(): DeepSkySnapshot? = if (stats.accepted == 0) null else DeepSkySnapshot(LinearImage(width, height, channels, mean.copyOf()), weights.copyOf(), stats)
 
+    /** Finish a sequential offline pass by moving its accumulated arrays into the result.
+     * Reset/reuse can never mutate that result. Live callers must keep using snapshot(). */
+    internal fun takeResult(): DeepSkySnapshot? {
+        check(!livePreviewOverlap) { "Live accumulation requires an independent snapshot" }
+        val result = if (stats.accepted == 0) null else
+            DeepSkySnapshot(LinearImage(width, height, channels, mean), weights, stats)
+        reset()
+        return result
+    }
+
     companion object {
         // A slow renderer may retain snapshot A while the latest result is B and the
         // science worker allocates C. Budget all three transient image/weight pairs,
@@ -113,11 +124,10 @@ class DeepSkyStacker(private val config: DeepSkyConfig = DeepSkyConfig(), privat
         // and simultaneous sharpening/local-contrast scratch. Calibration is added by
         // the coordinator because its masters and sensor geometry can differ after binning.
         fun estimateWorkingBytes(width: Int, height: Int, channels: Int): Long = width.toLong() * height * (channels * 40L + 32L) + 8L * 1024 * 1024
-        // Sequential offline work has no live raw queue or three concurrent previews.
-        // Reserve mean/M2, old/new input and final snapshot (5 channel planes), two
-        // weight planes and filter/registration headroom. Native tile scratch is extra.
-        fun estimateOfflineWorkingBytes(width: Int, height: Int, channels: Int): Long =
-            width.toLong() * height * (channels * 20L + 24L) + 8L * 1024 * 1024
+        // Decoder/master storage is supplied separately by the offline coordinator. Generic
+        // sources keep old/new read headroom; only the explicit buffered contract saves it.
+        fun estimateOfflineWorkingBytes(width: Int, height: Int, channels: Int, reusableInput: Boolean = false): Long =
+            OfflineDeepSkyMemory.estimate(width, height, channels, reusableInput).peakBytes
         const val REJECTION_LIMITATION = "Temporal sigma rejection starts after 5 valid samples per pixel. Early outliers and persistent hot pixels are not guaranteed to be removed; use dark calibration/dithering for persistent defects. Uncalibrated by default."
     }
 }

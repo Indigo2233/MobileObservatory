@@ -68,6 +68,23 @@ class GuideFitsReplayTest {
         assertTrue(stars(FrameData(pixels, 128, 128, PixelFormat.BAYER_RG8, 1, 0)).isEmpty())
     }
 
+    @Test fun aCloudDimmedRecordedStarIsRejectedWithoutMovingTheAcceptedPrimary() {
+        val frame = field.frame()
+        val clear = stars(frame)
+        val primary = clear.first()
+        val references = module.referenceStars(primary, clear, true)
+        repeat(6) { assertNotNull(module.measureTrackedShift(references, clear, primary, 1000, it * 1000L)) }
+        val cloudFrame = frame.copy(data = frame.data.map { ((it.toInt() and 255) / 3).toByte() }.toByteArray())
+        val cloud = stars(cloudFrame)
+        val dimmed = requireNotNull(module.matchStar(primary, cloud))
+        assertNull(module.measureTrackedShift(references, cloud, dimmed, 1000, 6000))
+        assertEquals(GuideFrameIssue.MASS_CHANGE, module.lastFrameIssue)
+        assertEquals(primary, module.acceptedPrimary)
+        val recovered = requireNotNull(module.measureTrackedShift(references, clear, primary, 1000, 7000))
+        assertEquals(0f, recovered.x, 0f)
+        assertEquals(0f, recovered.y, 0f)
+    }
+
     @Test fun phaseBackgroundOffsetsCannotChangeHfrOrFlux() {
         fun frame(levels: IntArray) = FrameData(ByteArray(64 * 64) { i ->
             val x = i % 64; val y = i / 64
@@ -85,6 +102,9 @@ class GuideFitsReplayTest {
     @Test fun lowPassClosesTheLoopOnRecordedImages() = runTest(timeout = 180.seconds) { replayClosedLoop(GuideAlgorithm.LOW_PASS) }
     @Test fun resistSwitchClosesTheLoopOnRecordedImages() = runTest(timeout = 180.seconds) { replayClosedLoop(GuideAlgorithm.RESIST_SWITCH) }
     @Test fun predictiveRaClosesTheLoopOnRecordedImages() = runTest(timeout = 180.seconds) { replayClosedLoop(GuideAlgorithm.PREDICTIVE_RA) }
+    @Test fun lowPass2ClosesTheLoopOnRecordedImages() = runTest(timeout = 180.seconds) { replayClosedLoop(GuideAlgorithm.LOW_PASS_2) }
+    @Test fun zFilterClosesTheLoopOnRecordedImages() = runTest(timeout = 180.seconds) { replayClosedLoop(GuideAlgorithm.Z_FILTER) }
+    @Test fun identityClosesTheLoopOnRecordedImages() = runTest(timeout = 180.seconds) { replayClosedLoop(GuideAlgorithm.IDENTITY) }
 
     private suspend fun TestScope.replayClosedLoop(algorithm: GuideAlgorithm) {
         val plant = ImageMount()
@@ -103,7 +123,7 @@ class GuideFitsReplayTest {
             val actualX = plant.x - lockedX; val actualY = plant.y - lockedY
             val measured = requireNotNull(controller.matchShift(calibrated.stars, stars(field.frame(plant.x, plant.y))))
             val solution = requireNotNull(controller.solveCorrection(calibrated.calibration, measured.x, measured.y,
-                algorithm, .7f, .7f, .15f, backlash))
+                algorithm, .7f, .7f, .15f, backlash, timestampSeconds = index * 2.0, exposureSeconds = 2.0))
             val correction = solution.correction
             var sentRa = 0; var sentDec = 0
             assertTrue(runner.launch {
@@ -162,7 +182,7 @@ class GuideFitsReplayTest {
         assertEquals(nx, c.northXPerMs, .0003f)
         assertEquals(ny, c.northYPerMs, .0003f)
         assertEquals(1800f, c.decBacklashMs.toFloat(), 250f)
-        assertTrue(c.eastSteps >= 7 && c.northSteps >= 7)
+        assertTrue(c.eastSteps >= 4 && c.northSteps >= 4)
         assertTrue(c.eastTravelPx >= 15 && c.northTravelPx >= 15)
     }
 

@@ -20,7 +20,7 @@ $classes = Join-Path $root 'build/stacking-diagnostics-classes'
 New-Item -ItemType Directory -Force -Path $classes | Out-Null
 $mainDirectory = Join-Path $root 'app/src/main/java/com/indigo/mobileobservatory/stacking'
 $testDirectory = Join-Path $root 'app/src/test/java/com/indigo/mobileobservatory/stacking'
-$sources = @('LinearImage.kt','StarRegistration.kt','DeepSkyStacker.kt','BackgroundGradient.kt','StackPostProcessor.kt') | ForEach-Object { Join-Path $mainDirectory $_ }
+$sources = @('LinearImage.kt','StarRegistration.kt','DeepSkyStacker.kt','OfflineDeepSkyMemory.kt','BackgroundGradient.kt','StackPostProcessor.kt') | ForEach-Object { Join-Path $mainDirectory $_ }
 $sources += @('DeepSkyAlgorithmsTest.kt','StackPostProcessorTest.kt','StackingDiagnostics.kt') | ForEach-Object { Join-Path $testDirectory $_ }
 & $java -cp "$GradleLib/*" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler -no-stdlib -no-reflect -jvm-target 17 -cp $classpath -d $classes @sources
 if ($LASTEXITCODE -ne 0) { throw 'Kotlin diagnostic compilation failed.' }

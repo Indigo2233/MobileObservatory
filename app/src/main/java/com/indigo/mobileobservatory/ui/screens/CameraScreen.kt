@@ -70,6 +70,7 @@ internal fun CaptureWorkspaceScreen(
     val roi by viewModel.roi.collectAsStateWithPageLifecycle()
     val binning by viewModel.binning.collectAsStateWithPageLifecycle()
     val binningUsesHardware by viewModel.binningUsesHardware.collectAsStateWithPageLifecycle()
+    val binningUsesSdk by viewModel.binningUsesSdk.collectAsStateWithPageLifecycle()
     val binningUsesSoftware by viewModel.binningUsesSoftware.collectAsStateWithPageLifecycle()
     val imagingWidth by viewModel.imagingWidth.collectAsStateWithPageLifecycle()
     val imagingHeight by viewModel.imagingHeight.collectAsStateWithPageLifecycle()
@@ -519,6 +520,7 @@ internal fun CaptureWorkspaceScreen(
                         showHostRoi = supportsHostRoi,
                         binning = binning,
                         binningUsesHardware = binningUsesHardware,
+                        binningUsesSdk = binningUsesSdk,
                         binningUsesSoftware = binningUsesSoftware,
                         onBinningChange = { viewModel.setBinning(it) },
                         coolingInfo = coolingInfo,

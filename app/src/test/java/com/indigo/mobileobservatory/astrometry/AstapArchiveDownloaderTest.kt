@@ -1,11 +1,13 @@
 package com.indigo.mobileobservatory.astrometry
 
-import com.sun.net.httpserver.HttpServer
 import java.io.File
 import java.io.IOException
-import java.net.InetSocketAddress
+import java.net.InetAddress
+import java.net.ServerSocket
+import java.net.SocketException
 import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.concurrent.thread
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -21,7 +23,8 @@ import org.junit.rules.TemporaryFolder
 
 class AstapArchiveDownloaderTest {
     @get:Rule val temp = TemporaryFolder()
-    private lateinit var server: HttpServer
+    private lateinit var server: ServerSocket
+    private lateinit var serverThread: Thread
     private val original = "original star database archive".toByteArray()
     private val corrupt = "corrupt! star database archive".toByteArray()
     private val hits = AtomicInteger()
@@ -32,31 +35,34 @@ class AstapArchiveDownloaderTest {
     @Before fun setup() {
         assertEquals(original.size, corrupt.size)
         destination = temp.newFile("archive.zip")
-        server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
-        server.createContext("/missing") { exchange ->
-            exchange.sendResponseHeaders(404, -1)
-            exchange.close()
+        server = ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"))
+        serverThread = thread(isDaemon = true, name = "astap-http-test") {
+            try {
+                while (!server.isClosed) server.accept().use { socket ->
+                    socket.soTimeout = 5000
+                    val reader = socket.getInputStream().bufferedReader(Charsets.US_ASCII)
+                    val path = reader.readLine().split(" ")[1]
+                    while (!reader.readLine().isNullOrEmpty()) { }
+                    val (status, body, extra) = when (path) {
+                        "/missing" -> Triple("404 Not Found", byteArrayOf(), "")
+                        "/corrupt" -> Triple("200 OK", corrupt, "")
+                        "/redirect" -> Triple("302 Found", byteArrayOf(), "Location: /valid\r\n")
+                        "/valid" -> { hits.incrementAndGet(); Triple("200 OK", original, "") }
+                        else -> Triple("404 Not Found", byteArrayOf(), "")
+                    }
+                    val output = socket.getOutputStream()
+                    output.write("HTTP/1.1 $status\r\nContent-Length: ${body.size}\r\n${extra}Connection: close\r\n\r\n".toByteArray(Charsets.US_ASCII))
+                    output.write(body)
+                    output.flush()
+                }
+            } catch (e: SocketException) {
+                if (!server.isClosed) throw e
+            }
         }
-        server.createContext("/corrupt") { exchange ->
-            exchange.sendResponseHeaders(200, corrupt.size.toLong())
-            exchange.responseBody.use { it.write(corrupt) }
-        }
-        server.createContext("/redirect") { exchange ->
-            exchange.responseHeaders.add("Location", "/valid")
-            exchange.sendResponseHeaders(302, -1)
-            exchange.close()
-        }
-        server.createContext("/valid") { exchange ->
-            hits.incrementAndGet()
-            exchange.sendResponseHeaders(200, original.size.toLong())
-            exchange.responseBody.use { it.write(original) }
-        }
-        server.start()
     }
 
-    @After fun cleanup() { server.stop(0) }
-
-    private fun url(path: String) = "http://127.0.0.1:${server.address.port}/$path"
+    @After fun cleanup() { server.close(); serverThread.join(5000) }
+    private fun url(path: String) = "http://127.0.0.1:${server.localPort}/$path"
 
     @Test fun httpAndDigestFailuresFallBackToACompleteValidArchive() = runBlocking {
         val updates = mutableListOf<DownloadProgress>()

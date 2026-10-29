@@ -1,0 +1,27 @@
+{
+  "exclusions": "Frame construction, capture, preview rendering, PSF profiles; these measurements do not establish Android device latency",
+  "compiler": "Both variants compile the production source with Kotlin 1.9.22 CLI, JVM target 17, without Compose instrumentation",
+  "baselineRevision": "ca0278142caa8cd417ca0dcadf68b6caecaa5878",
+  "currentSources": [
+    {
+      "currentSha256": "75BA898EDC62658FF48E6D34569B0299C3143335F63676DFF5A3A32619D58490",
+      "path": "app/src/main/java/com/indigo/mobileobservatory/guide/GuideImage.kt"
+    },
+    {
+      "currentSha256": "EE1F0E8CF961307FDA7DB7036DF5B131859C08004D723DC3144146648B5755F7",
+      "path": "app/src/main/java/com/indigo/mobileobservatory/guide/GuideModule.kt"
+    },
+    {
+      "currentSha256": "CCF8BC3A1B399B2F824EAC82D19B13C3F84881B6DA502D0739013D9133F98D4D",
+      "path": "app/src/main/java/com/indigo/mobileobservatory/guide/Phd2StarMeasurement.kt"
+    }
+  ],
+  "protocol": "Desktop; 30 warmups, 21 measured runs; separate JVM per case; serial execution; synthetic RAW14, 20 stars; detector maxStars=16",
+  "currentRevision": "working tree based on ca0278142caa8cd417ca0dcadf68b6caecaa5878",
+  "environment": "Windows x64; JDK 21 HotSpot; both variants compiled with the project Kotlin 1.9.22 CLI; identical JVM options -Xms512m -Xmx512m -XX:+UseG1GC",
+  "limitations": [
+    "Desktop microbenchmark without JMH; scheduling, JIT and GC affect timing.",
+    "Full detection retains a complete RAW scan; reconstruction is demand-driven.",
+    "Numbers supersede the initial measurements with different compiler configurations."
+  ]
+}

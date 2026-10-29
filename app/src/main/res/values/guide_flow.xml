@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="gw_guide_rate">Guide rate for pulse estimates (sidereal multiplier)</string>
+    <string name="gw_guide_rate_help">Starts at 0.5×; confirm the mount setting. It estimates the fixed calibration pulse. Calibration measures the actual response.</string>
+    <string name="gw_auto_pulse">Fixed calibration pulse: RA %1$d ms · DEC %2$d ms</string>
+    <string name="gw_star_saturated">Saturated samples detected</string>
+    <string name="gw_star_not_saturated">No saturated samples detected</string>
+</resources>

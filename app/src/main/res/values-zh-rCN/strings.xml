@@ -126,6 +126,8 @@
     <string name="bin_hardware">硬件</string>
     <string name="bin_software">软件</string>
     <string name="bin_mixed">硬件+软件</string>
+    <string name="bin_sdk">SDK</string>
+    <string name="bin_sdk_mixed">SDK+软件</string>
 
     <!-- ROI -->
     <string name="roi_full">全幅</string>
@@ -396,7 +398,7 @@
     <string name="guide_algorithm_hysteresis">滞后</string>
     <string name="guide_algorithm_low_pass">低通</string>
     <string name="guide_algorithm_resist_switch">抗翻转</string>
-    <string name="guide_algorithm_predictive_ra">赤经预测</string>
+    <string name="guide_algorithm_predictive_ra">周期误差预测（PHD2 PPEC）</string>
     <string name="cover_status">%1$s  盖板：%2$s  灯：%3$s</string>
     <string name="brightness_value">亮度 %1$d / %2$d</string>
     <string name="rotator_status">%1$s  角度：%2$.2f°  步数：%3$d%4$s</string>

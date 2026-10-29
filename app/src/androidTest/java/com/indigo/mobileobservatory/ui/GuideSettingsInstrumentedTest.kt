@@ -44,7 +44,13 @@ class GuideSettingsInstrumentedTest {
     private val app get() = instrumentation.targetContext.applicationContext as Application
     private val prefs get() = app.getSharedPreferences("mobile_observatory", Context.MODE_PRIVATE)
     private val keys = listOf("guide_calibration_steps", "guide_calibration_distance", "guide_calibration_pulse_ms",
-        "guide_ra_aggressiveness", "guide_dec_aggressiveness", "guide_min_move_px", "guide_focal_length_mm", "update_auto_check")
+        "guide_ra_aggressiveness", "guide_dec_aggressiveness", "guide_min_move_px", "guide_focal_length_mm", "update_auto_check",
+        "guide_algorithm", "guide_dec_algorithm", "guide_dec_min_move_px", "guide_hysteresis", "guide_dec_hysteresis",
+        "guide_slope_weight", "guide_dec_slope_weight", "guide_fast_switch", "guide_dec_fast_switch",
+        "guide_prediction_gain", "guide_period_seconds", "guide_estimate_period", "guide_exposure_factor", "guide_dec_exposure_factor") +
+        com.indigo.mobileobservatory.guide.GuideAlgorithm.entries.flatMap {
+            listOf("guide_ra_aggressiveness_${it.name}", "guide_dec_aggressiveness_${it.name}",
+                "guide_ra_min_move_${it.name}", "guide_dec_min_move_${it.name}") }
     private lateinit var saved: Map<String, Any?>
     private val store = ViewModelStore()
     private lateinit var vm: CameraViewModel
@@ -64,6 +70,7 @@ class GuideSettingsInstrumentedTest {
                 is Int -> putInt(key, value)
                 is Float -> putFloat(key, value)
                 is Boolean -> putBoolean(key, value)
+                is String -> putString(key, value)
                 else -> remove(key)
             } }
         }.commit()
@@ -100,6 +107,8 @@ class GuideSettingsInstrumentedTest {
         input("steps", "7.5")
         compose.onNodeWithTag("guide-steps-apply").assertIsNotEnabled()
         assertEquals(7, vm.guideCalibrationSteps.value)
+        input("steps", "11"); apply("steps")
+        assertEquals(11, vm.guideCalibrationSteps.value)
         input("steps", "12"); apply("steps")
         assertEquals(12, vm.guideCalibrationSteps.value)
         compose.onNodeWithTag("guide-steps-increase").performScrollTo().performClick()
@@ -110,6 +119,22 @@ class GuideSettingsInstrumentedTest {
         compose.onNodeWithTag("guide-pulse-increase").performScrollTo().performClick()
         assertEquals(1334, vm.guideCalibrationPulseMs.value)
         screenshot("calibration-portrait")
+    }
+
+    @Test fun axisAlgorithmsMinMoveAndHysteresisAreIndependent() {
+        instrumentation.runOnMainSync {
+            vm.setGuideDecAlgorithm(com.indigo.mobileobservatory.guide.GuideAlgorithm.HYSTERESIS)
+            vm.setGuideDecFilterParameters(vm.guideDecFilterParameters.value.copy(hysteresis = .3))
+            vm.setGuideDecMinMove(.25f)
+        }
+        start(); category(R.string.gw_algorithms)
+        compose.onNodeWithTag("guide-ra-hysteresis-input").performScrollTo().assertTextContains("10")
+        compose.onNodeWithTag("guide-dec-hysteresis-input").performScrollTo().assertTextContains("30")
+        input("ra-hysteresis", "20"); apply("ra-hysteresis")
+        assertEquals(.2, vm.guideFilterParameters.value.hysteresis, 0.0)
+        assertEquals(.3, vm.guideDecFilterParameters.value.hysteresis, 0.0)
+        input("min-move", "0.15"); apply("min-move")
+        assertEquals(.25f, vm.guideDecMinMovePx.value, 0f)
     }
 
     @Test fun pixelTravelAcceptsWholeNumbersAndPreciseFractionalSteps() {

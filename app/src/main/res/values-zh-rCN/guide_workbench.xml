@@ -18,22 +18,22 @@
     <string name="gw_sample_count">%1$d / %2$d</string>
     <string name="gw_rms_compact">RMS RA %1$.2f · DEC %2$.2f · 总计\u00a0%3$.2f\u00a0%4$s</string>
     <string name="gw_star_details">查看星点详情与能量分布</string>
-    <string name="gw_image">导星原始灰度图像，可平移缩放与点选星点</string>
+    <string name="gw_image">导星灰度图像，可平移缩放与点选星点</string>
     <string name="gw_algorithms">算法</string>
     <string name="gw_optics">光学</string>
     <string name="gw_focal_mm">导星焦距（mm，留空使用 px）</string>
-    <string name="gw_scale_help">填写导星镜焦距并读取有效像元尺寸后，曲线、散点和 HFR 使用角秒。焦距缺省或像元未知时使用 px。</string>
+    <string name="gw_scale_help">填写导星镜焦距并读取有效像元尺寸后，导星曲线与散点使用角秒。HFR 与星点剖面固定使用传感器像素 px。</string>
     <string name="gw_pixel_um">有效像元：%1$.2f μm</string>
     <string name="gw_peak">峰值 %1$.0f ADU</string>
     <string name="gw_flux">背景扣除流量 %1$.0f ADU</string>
     <string name="gw_profile">星点能量分布</string>
-    <string name="gw_profile_legend" formatted="false">蓝：环带平均强度 · 黄：包围能量 0–100%</string>
+    <string name="gw_profile_legend" formatted="false">蓝：横向 · 黄：纵向 · 中心 0 px · 白：±HFR · 红：饱和线</string>
     <string name="gw_profile_radius">半径 0–%1$.1f %2$s · 竖线 HFR</string>
     <string name="gw_rms">RMS  RA %1$.2f · DEC %2$.2f · 总计 %3$.2f %4$s  |  %5$d / %6$d 点</string>
-    <string name="gw_bit_depth">原始格式 / 位深</string>
+    <string name="gw_bit_depth">图像格式 / 位深</string>
     <string name="gw_readout">相机读出模式</string>
     <string name="gw_apply_exposure">应用曝光（0.05–5 s）</string>
-    <string name="gw_raw_help">导星显示与测量使用原始单通道数据。相机格式和读出模式改变后需要重新校准。</string>
+    <string name="gw_raw_help">Bayer 预览和缩略图采用 2×2 CFA 亮度合成，星点测量和校准使用原始像素。相机提供 RGB 时使用亮度通道。更改格式或读出模式后需要重新校准。</string>
     <string name="gw_calibration_help">先用短脉冲消除空程，再测量不少于指定步数和位移。脉冲设置限制首次正式测量的时长，后续步长根据响应调整。拟合双轴响应，在返回时测量回差。</string>
     <string name="gw_steps">每轴最少步数</string>
     <string name="gw_distance">每轴最小位移（px）</string>

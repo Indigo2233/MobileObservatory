@@ -37,9 +37,9 @@ object CameraScienceLayouts {
      * low zero padding = 1. RAW=1 bypasses the SDK color/ISP pipeline; RAW=-1 does not.
      * SDK source: https://www.touptekphotonics.com/download/?category=SDK (doc/en.html).
      */
-    fun toupcam(fourCC: Int, deliveredBits: Int, processedRgb: Boolean = false, zeroPadding: Int = 0): PixelTraits? {
-        if (processedRgb || zeroPadding !in 0..1 || toupcamFormat(fourCC, deliveredBits) == null) return null
+    fun toupcam(fourCC: Int, deliveredBits: Int, processedRgb: Boolean = false, zeroPadding: Int = 0, sensorBin: Int = 1): PixelTraits? {
+        if (processedRgb || zeroPadding !in 0..1 || sensorBin < 1 || toupcamFormat(fourCC, deliveredBits) == null) return null
         return PixelTraits(alignment = if (zeroPadding == 1) SampleAlignment.LEFT else SampleAlignment.RIGHT,
-            validBits = deliveredBits, bayerPatternAtOutput = false)
+            validBits = deliveredBits, binning = sensorBin, bayerPatternAtOutput = sensorBin > 1)
     }
 }

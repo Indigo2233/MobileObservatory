@@ -98,6 +98,10 @@ object ToupcamJni {
 
     fun getSize(): IntArray = nGetSize()
     fun getFinalSize(): IntArray = nGetFinalSize()
+    fun hardwareBinningValues(): Array<String> = nHardwareBinningValues()
+    fun hardwareBinningMethods(): Array<String> = nHardwareBinningMethods()
+    fun getHardwareBinning(): Array<String>? = nGetHardwareBinning()
+    fun putHardwareBinning(value: String, method: String): Boolean = nPutHardwareBinning(value, method)
     fun pullImageRawWithSize(buf: ByteArray, bits: Int, dimensions: IntArray): Int = nPullImageRawWithSize(buf, bits, dimensions)
     fun putSize(w: Int, h: Int): Boolean = nPutSize(w, h)
 
@@ -151,6 +155,10 @@ object ToupcamJni {
     private external fun nPullImageRaw(buf: ByteArray, bits: Int): Int
     private external fun nGetSize(): IntArray
     private external fun nGetFinalSize(): IntArray
+    private external fun nHardwareBinningValues(): Array<String>
+    private external fun nHardwareBinningMethods(): Array<String>
+    private external fun nGetHardwareBinning(): Array<String>?
+    private external fun nPutHardwareBinning(value: String, method: String): Boolean
     private external fun nPullImageRawWithSize(buf: ByteArray, bits: Int, dimensions: IntArray): Int
     private external fun nPutSize(w: Int, h: Int): Boolean
     private external fun nGetExpoTime(): Int

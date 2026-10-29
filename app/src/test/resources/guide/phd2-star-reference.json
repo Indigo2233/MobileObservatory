@@ -1,0 +1,9 @@
+{
+  "commit": "70e9fd178b3122b6553646c60f462cb09335dcc5",
+  "method": "Unmodified upstream QuickLRecon, hfr and Star::Find bodies; only wx/image containers and logging are shimmed.",
+  "samples": 82,
+  "sha256": {
+    "image_math.cpp": "86827573fba54638cd4ecfd9da34995aaeebd430b1058688320436d80ee4f1bb",
+    "star.cpp": "ab44faa287a4e4daeca2336b117f304fcaf2020ed04352c433287c71a6b5355f"
+  }
+}

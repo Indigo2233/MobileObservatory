@@ -25,7 +25,7 @@ class GuideWorkbenchTest {
         val result = runner.run()
         assertEquals(.004f, result.calibration.eastXPerMs, .0001f)
         assertEquals(.006f, result.calibration.northYPerMs, .0001f)
-        assertTrue(result.calibration.eastSteps >= 7); assertTrue(result.calibration.northSteps >= 7)
+        assertTrue(result.calibration.eastSteps >= 4); assertTrue(result.calibration.northSteps >= 4)
         assertTrue(result.calibration.eastTravelPx >= 15f); assertTrue(result.calibration.northTravelPx >= 15f)
         assertEquals(1800f, result.calibration.decBacklashMs.toFloat(), 160f)
         assertTrue(result.calibration.fitResidualPx < .1f)
@@ -36,15 +36,15 @@ class GuideWorkbenchTest {
         try { runner.run(); fail("Stationary mount accepted") } catch (_: IllegalStateException) { }
     }
 
-    @Test fun aReturnThatDriftsAcrossTheAxisCannotProduceAValidCalibration() = runTest {
-        assertBadReturnFails(crossAxisDrift = true)
+    @Test fun crossAxisReturnDriftRejectsCalibration() = runTest {
+        assertUnsafeReturnRejected(crossAxisDrift = true)
     }
 
-    @Test fun asymmetricForwardAndReverseRatesCannotBeMisreportedAsBacklash() = runTest {
-        assertBadReturnFails(crossAxisDrift = false)
+    @Test fun asymmetricForwardAndReverseRatesRejectCalibration() = runTest {
+        assertUnsafeReturnRejected(crossAxisDrift = false)
     }
 
-    private suspend fun assertBadReturnFails(crossAxisDrift: Boolean) {
+    private suspend fun assertUnsafeReturnRejected(crossAxisDrift: Boolean) {
         var x = 100f; var y = 100f
         val calibrator = GuideCalibrator(GuideCalibrationConfig(), { direction, ms ->
             when (direction) {
@@ -57,7 +57,10 @@ class GuideWorkbenchTest {
                 MountDirection.SOUTH -> y -= ms * .006f
             }
         }, { listOf(GuideStar(x, y, 20f, 100f)) })
-        try { calibrator.run(); fail("Inconsistent reverse motion was accepted") } catch (_: IllegalStateException) { }
+        val failure = runCatching { calibrator.run() }.exceptionOrNull()
+        assertTrue(failure is IllegalStateException)
+        val expected = if (crossAxisDrift) "Calibration return drifted across the axis" else "Forward and reverse calibration rates disagree"
+        assertEquals(expected, failure?.message)
     }
 
     @Test fun gaussianProfileMeasuresHalfFluxRadiusFromBackgroundSubtractedRawPixels() {

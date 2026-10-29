@@ -141,10 +141,12 @@ interface CameraNativeReadoutModeCapable {
     fun setNativeReadoutMode(id: String): Boolean
 }
 
-/** Optional on-camera NxN binning. App bin uses this when the factor is listed. */
+/** Native SDK NxN binning. Sensor mode confirmation is separate from the SDK output factor. */
 interface CameraBinningCapable {
     val supportedHardwareBins: List<Int>
     val currentHardwareBin: Int
+    val binningStateVerified: Boolean get() = true
+    val sensorHardwareBinningActive: Boolean get() = false
 
     fun setHardwareBin(bin: Int): Boolean
 }

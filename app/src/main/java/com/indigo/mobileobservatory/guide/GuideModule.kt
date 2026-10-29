@@ -1,11 +1,9 @@
 package com.indigo.mobileobservatory.guide
 
 import com.indigo.mobileobservatory.camera.FrameData
-import com.indigo.mobileobservatory.camera.PixelFormat
 import com.indigo.mobileobservatory.mount.MountDirection
 import kotlin.math.abs
 import kotlin.math.hypot
-import kotlin.math.sign
 import kotlin.math.sqrt
 import kotlin.math.roundToInt
 
@@ -15,7 +13,9 @@ data class GuideStar(
     val snr: Float,
     val flux: Float = snr,
     val radiusPx: Float = Float.NaN,
-    val saturated: Boolean = false
+    val saturated: Boolean = false,
+    val hfdPx: Float = Float.NaN,
+    val peakFraction: Float = Float.NaN
 )
 
 data class GuideCorrection(
@@ -38,8 +38,11 @@ data class GuideHistoryPoint(
 )
 
 enum class GuideAlgorithm {
+    IDENTITY,
     HYSTERESIS,
     LOW_PASS,
+    LOW_PASS_2,
+    Z_FILTER,
     RESIST_SWITCH,
     PREDICTIVE_RA
 }
@@ -63,7 +66,10 @@ data class GuideCalibration(
     val northTravelPx: Float = 0f,
     val raBacklashMs: Int = 0,
     val decBacklashMs: Int = 0,
-    val fitResidualPx: Float = 0f
+    val fitResidualPx: Float = 0f,
+    val raReturnResidualPx: Float = 0f,
+    val decReturnResidualPx: Float = 0f,
+    val advisories: List<GuideCalibrationAdvisory> = emptyList()
 ) {
     val eastRatePxPerSec: Float get() = hypot(eastXPerMs, eastYPerMs) * 1000f
     val northRatePxPerSec: Float get() = hypot(northXPerMs, northYPerMs) * 1000f
@@ -76,96 +82,120 @@ data class GuideVector(val x: Float, val y: Float) {
 data class GuideRms(val raPx: Float, val decPx: Float, val totalPx: Float)
 data class GuideSolution(val raErrorPx: Float, val decErrorPx: Float, val correction: GuideCorrection)
 
+enum class GuideFrameIssue { PRIMARY_LOST, MASS_CHANGE, MATCH_LOST }
+
 /** Pure guide-domain implementation: star detection, matching, calibration projection and filtering. */
 class GuideModule {
-    private var lastRaOutput = 0f
-    private var lastDecOutput = 0f
-    private var lastRaError = 0f
-    private var lastDecError = 0f
+    private val raFilter = Phd2GuideFilter(true)
+    private val decFilter = Phd2GuideFilter(false)
+    private val massChecker = Phd2MassChecker()
+    private val massLimits = DoubleArray(4)
+    @Volatile var lastFrameIssue: GuideFrameIssue? = null
+        private set
+    @Volatile var acceptedPrimary: GuideStar? = null
+        private set
 
-    fun detectStars(frame: FrameData, maxStars: Int = 16, saturationLevel: Int? = null): List<GuideStar> {
+    @Synchronized fun resetTrackingQuality() { massChecker.reset(); lastFrameIssue = null; acceptedPrimary = null }
+
+    /** Dropped frames preserve filter/GP history. A usable primary is required before any correction. */
+    @Synchronized fun measureTrackedShift(reference: List<GuideStar>, current: List<GuideStar>, primary: GuideStar?,
+        exposureMs: Int, nowMs: Long): GuideVector? {
+        lastFrameIssue = null
+        if (primary == null || primary !in current || !isUsableStar(primary)) {
+            lastFrameIssue = GuideFrameIssue.PRIMARY_LOST
+            return null
+        }
+        massChecker.setExposure(exposureMs)
+        val rejected = massChecker.checkMass(primary.flux.toDouble(), .5, massLimits)
+        // PHD2 includes mass-rejected observations so sustained sky changes can enter the history.
+        massChecker.append(primary.flux.toDouble(), nowMs)
+        if (rejected) {
+            lastFrameIssue = GuideFrameIssue.MASS_CHANGE
+            return null
+        }
+        return matchShift(reference, current).also {
+            if (it == null) lastFrameIssue = GuideFrameIssue.MATCH_LOST else acceptedPrimary = primary
+        }
+    }
+
+    fun detectStars(frame: FrameData, maxStars: Int = 16, saturationLevel: Int? = null,
+        preferred: GuideStar? = null, includeRejected: Boolean = false): List<GuideStar> {
         val width = frame.width
         val height = frame.height
         if (width < 16 || height < 16) return emptyList()
         if (frame.data.size.toLong() < width.toLong() * height * frame.pixelFormat.bytesPerPixel) return emptyList()
 
-        val bayer = frame.pixelFormat.isBayer
-        val phases = if (bayer) 4 else 1
-        fun phase(x: Int, y: Int) = if (bayer) (y and 1) * 2 + (x and 1) else 0
-        val sums = DoubleArray(phases)
-        val squares = DoubleArray(phases)
-        val counts = IntArray(phases)
+        val image = GuideImage(frame)
+        var sum = 0.0; var square = 0.0; var count = 0
+        val phaseSums = DoubleArray(4)
+        var phaseCount = 0
         for (y in 0 until height step 8) for (x in 0 until width step 8) {
-            for (dy in 0..if (bayer) 1 else 0) for (dx in 0..if (bayer) 1 else 0) {
-                val sx = x + dx; val sy = y + dy
-                if (sx >= width || sy >= height) continue
-                val index = phase(sx, sy)
-                val value = rawValue(frame, sx, sy).toDouble()
-                sums[index] += value; squares[index] += value * value; counts[index]++
+            val value = image.value(x, y).toDouble()
+            sum += value; square += value * value; count++
+            if (image.bayer && x + 1 < width && y + 1 < height) {
+                for (dy in 0..1) for (dx in 0..1)
+                    phaseSums[dy * 2 + dx] += rawValue(frame, x + dx, y + dy).toDouble()
+                phaseCount++
             }
         }
-        if (counts.any { it == 0 }) return emptyList()
-        val means = DoubleArray(phases) { sums[it] / counts[it] }
-        val sigmas = DoubleArray(phases) { sqrt((squares[it] / counts[it] - means[it] * means[it]).coerceAtLeast(0.0)) }
-        val thresholds = DoubleArray(phases) { means[it] + sigmas[it] * 4.0 }
-        fun signal(x: Int, y: Int) = rawValue(frame, x, y) - means[phase(x, y)]
+        if (count == 0) return emptyList()
+        val mean = sum / count
+        val threshold = mean + 4 * sqrt((square / count - mean * mean).coerceAtLeast(0.0))
+        val signal = if (image.bayer) GuideCandidateMask(frame, DoubleArray(4) { phaseSums[it] / phaseCount }, threshold) else null
         val candidates = ArrayList<Candidate>()
         for (y in 2 until height - 2) {
+            signal?.prepareRow(y)
             for (x in 2 until width - 2) {
-                val value = rawValue(frame, x, y).toDouble()
-                if (value <= thresholds[phase(x, y)]) continue
-                val centered = value - means[phase(x, y)]
-                if (centered >= signal(x - 1, y) && centered >= signal(x + 1, y) &&
-                    centered >= signal(x, y - 1) && centered >= signal(x, y + 1)) {
+                if (signal != null && !signal.mayContainSignal(x)) continue
+                val value = image.value(x, y).toDouble()
+                if (value <= threshold) continue
+                if (value >= image.value(x - 1, y) && value >= image.value(x + 1, y) &&
+                    value >= image.value(x, y - 1) && value >= image.value(x, y + 1)) {
                     candidates += Candidate(x, y, value)
                 }
             }
         }
+        // Tracking a selected target uses local photometry even below the global discovery threshold.
+        if (preferred != null && preferred.x.isFinite() && preferred.y.isFinite()) {
+            val x = (preferred.x - image.sensorOffset).roundToInt()
+            val y = (preferred.y - image.sensorOffset).roundToInt()
+            if (x in 12 until width - 12 && y in 12 until height - 12)
+                candidates += Candidate(x, y, image.value(x, y).toDouble())
+        }
 
         val stars = ArrayList<GuideStar>()
         val rejected = ArrayList<GuideStar>()
-        for (candidate in candidates.sortedByDescending { it.value }) {
+        // Reserve the selected target before the global brightness limit is applied.
+        val ordered = if (preferred == null) candidates.sortedByDescending { it.value } else candidates.sortedWith(
+            compareBy<Candidate> {
+                val distance = hypot(it.x + image.sensorOffset - preferred.x, it.y + image.sensorOffset - preferred.y)
+                if (distance <= 24.0) distance else Double.MAX_VALUE
+            }.thenByDescending { it.value })
+        for (candidate in ordered) {
             if (stars.size >= maxStars) break
             if (candidate.x < 12 || candidate.y < 12 || candidate.x >= width - 12 || candidate.y >= height - 12) continue
             if (stars.any { hypot(it.x - candidate.x, it.y - candidate.y) < 24f }) continue
-            var weightSum = 0.0
-            var xSum = 0.0
-            var ySum = 0.0
-            var squaredRadiusSum = 0.0
             var aperturePeak = 0
             for (y in (candidate.y - 10).coerceAtLeast(0)..(candidate.y + 10).coerceAtMost(height - 1)) {
                 for (x in (candidate.x - 10).coerceAtLeast(0)..(candidate.x + 10).coerceAtMost(width - 1)) {
                     aperturePeak = maxOf(aperturePeak, peakValue(frame, x, y))
-                    val weight = (rawValue(frame, x, y) - thresholds[phase(x, y)]).coerceAtLeast(0.0)
-                    weightSum += weight
-                    xSum += x * weight
-                    ySum += y * weight
-                    squaredRadiusSum += (x.toDouble() * x + y.toDouble() * y) * weight
                 }
             }
-            if (weightSum > 0.0) {
-                val centerX = (xSum / weightSum).toFloat()
-                val centerY = (ySum / weightSum).toFloat()
-                if (centerX.roundToInt() !in 12..width - 13 || centerY.roundToInt() !in 12..height - 13) continue
-                val star = GuideStar(
-                    x = centerX,
-                    y = centerY,
-                    snr = ((candidate.value - means[phase(candidate.x, candidate.y)]) / sigmas[phase(candidate.x, candidate.y)].coerceAtLeast(1.0)).toFloat(),
-                    flux = weightSum.toFloat(),
-                    radiusPx = sqrt((squaredRadiusSum / weightSum - (xSum / weightSum).let { it * it } -
-                        (ySum / weightSum).let { it * it }).coerceAtLeast(0.0)).toFloat(),
-                    saturated = run {
-                        val peak = aperturePeak
-                        val nominal = (1 shl frame.pixelFormat.nativeBits) - 1
-                        val maximum = saturationLevel ?: if (peak > nominal) 65535 else nominal
-                        peak >= maximum - maxOf(1, maximum / 1000)
-                    }
-                )
-                // Rejected peaks must not consume the slots reserved for usable guide stars.
-                if (isUsableStar(star)) stars += star else if (rejected.size < maxStars) rejected += star
-            }
+            val nominal = (1 shl frame.pixelFormat.nativeBits) - 1
+            val maximum = saturationLevel ?: if (aperturePeak > nominal) 65535 else nominal
+            val measured = Phd2StarMeasurement.find(image, candidate.x, candidate.y, maxADU = maximum)
+            if (measured.mass <= 0 || !measured.x.isFinite() || !measured.y.isFinite()) continue
+            val centerX = (measured.x + image.sensorOffset).toFloat()
+            val centerY = (measured.y + image.sensorOffset).toFloat()
+            if (centerX.roundToInt() !in 12..width - 13 || centerY.roundToInt() !in 12..height - 13) continue
+            if (stars.any { hypot(it.x - centerX, it.y - centerY) < 24f } ||
+                rejected.any { hypot(it.x - centerX, it.y - centerY) < 1f }) continue
+            val star = GuideStar(centerX, centerY, measured.snr.toFloat(), measured.mass.toFloat(), measured.radius.toFloat(),
+                measured.result == Phd2StarMeasurement.Result.SATURATED || aperturePeak >= maximum - maxOf(1, maximum / 1000),
+                measured.hfd.toFloat(), aperturePeak.toFloat() / maximum)
+            if (measured.found && isUsableStar(star)) stars += star else if (rejected.size < maxStars) rejected += star
         }
-        return stars.ifEmpty { rejected }.sortedByDescending { it.flux }
+        return (if (includeRejected) stars + rejected else stars.ifEmpty { rejected }).sortedByDescending { it.flux }
     }
 
     /** Track an explicitly selected star without replacing it with a brighter neighbour. */
@@ -229,50 +259,38 @@ class GuideModule {
     }
 
     fun filter(
-        errorMs: Float,
+        errorPx: Float,
         raAxis: Boolean,
         algorithm: GuideAlgorithm,
-        aggressiveness: Float
+        aggressiveness: Float,
+        minMovePx: Float = 0f,
+        parameters: GuideFilterParameters = GuideFilterParameters(),
+        snr: Float = 20f,
+        exposureSeconds: Double = 1.0,
+        timestampSeconds: Double = System.nanoTime() / 1e9
     ): Float {
-        val previous = if (raAxis) lastRaOutput else lastDecOutput
-        val previousError = if (raAxis) lastRaError else lastDecError
-        val result = when (algorithm) {
-            GuideAlgorithm.HYSTERESIS -> errorMs * aggressiveness + previous * 0.10f
-            GuideAlgorithm.LOW_PASS -> (previous * 0.65f + errorMs * 0.35f) * aggressiveness
-            GuideAlgorithm.RESIST_SWITCH -> {
-                val base = errorMs * aggressiveness
-                if (previous != 0f && sign(base) != sign(previous) && abs(base) < abs(previous) * 1.5f) {
-                    base * 0.35f
-                } else base
-            }
-            GuideAlgorithm.PREDICTIVE_RA -> {
-                // Only RA gets a light first-difference prediction; DEC stays proportional.
-                val predicted = if (raAxis) errorMs + (errorMs - previousError) * 0.35f else errorMs
-                predicted * aggressiveness
-            }
-        }
-        if (raAxis) {
-            lastRaOutput = result
-            lastRaError = errorMs
-        } else {
-            lastDecOutput = result
-            lastDecError = errorMs
-        }
-        return result
+        return (if (raAxis) raFilter else decFilter).result(errorPx.toDouble(), algorithm, aggressiveness.toDouble(),
+            minMovePx.toDouble(), parameters, snr.toDouble(), exposureSeconds, timestampSeconds).toFloat()
     }
 
     /** Shared by the live camera loop and recorded-image replays. Only accepted pulses update backlash state. */
     fun solveCorrection(calibration: GuideCalibration, dx: Float, dy: Float, algorithm: GuideAlgorithm,
         raAggressiveness: Float, decAggressiveness: Float, minMovePx: Float,
         backlash: GuideBacklashCompensation, backlashEnabled: Boolean = true,
-        reverseRa: Boolean = false, reverseDec: Boolean = false): GuideSolution? {
+        reverseRa: Boolean = false, reverseDec: Boolean = false,
+        decAlgorithm: GuideAlgorithm = algorithm, decMinMovePx: Float = minMovePx,
+        raParameters: GuideFilterParameters = GuideFilterParameters(), decParameters: GuideFilterParameters = GuideFilterParameters(),
+        snr: Float = 20f, exposureSeconds: Double = 1.0, timestampSeconds: Double = System.nanoTime() / 1e9,
+        maxRaPulseMs: Int = 2500, maxDecPulseMs: Int = 2500): GuideSolution? {
         val axes = projectError(calibration, dx, dy) ?: return null
         val raError = -axes.first * hypot(calibration.eastXPerMs, calibration.eastYPerMs)
         val decError = -axes.second * hypot(calibration.northXPerMs, calibration.northYPerMs)
-        val ra = filter(axes.first, true, algorithm, raAggressiveness)
-        val dec = filter(axes.second, false, algorithm, decAggressiveness)
-        val raMs = if (abs(raError) >= minMovePx) abs(ra).roundToInt().coerceIn(20, 2000) else 0
-        val decMs = if (abs(decError) >= minMovePx) abs(dec).roundToInt().coerceIn(20, 2000) else 0
+        val raRate = hypot(calibration.eastXPerMs, calibration.eastYPerMs)
+        val decRate = hypot(calibration.northXPerMs, calibration.northYPerMs)
+        val ra = filter(-raError, true, algorithm, raAggressiveness, minMovePx, raParameters, snr, exposureSeconds, timestampSeconds) / raRate
+        val dec = filter(-decError, false, decAlgorithm, decAggressiveness, decMinMovePx, decParameters, snr, exposureSeconds, timestampSeconds) / decRate
+        val raMs = abs(ra).roundToInt().coerceIn(0, maxRaPulseMs.coerceIn(1, 5000))
+        val decMs = abs(dec).roundToInt().coerceIn(0, maxDecPulseMs.coerceIn(1, 5000))
         val raDirection = if (raMs == 0) null else if ((ra > 0) xor reverseRa) MountDirection.EAST else MountDirection.WEST
         val decDirection = if (decMs == 0) null else if ((dec > 0) xor reverseDec) MountDirection.NORTH else MountDirection.SOUTH
         return GuideSolution(raError, decError, GuideCorrection(dx, dy, raMs,
@@ -286,11 +304,9 @@ class GuideModule {
         return GuideRms(ra, dec, hypot(ra, dec))
     }
 
-    fun resetFilter() {
-        lastRaOutput = 0f
-        lastDecOutput = 0f
-        lastRaError = 0f
-        lastDecError = 0f
+    fun resetFilter(raAxis: Boolean? = null) {
+        if (raAxis != false) raFilter.reset()
+        if (raAxis != true) decFilter.reset()
     }
 
     // Centroid precision improves with SNR and decreases with the spread of the star.
@@ -301,46 +317,19 @@ class GuideModule {
             star.snr / radius
         }
 
+    fun autoSelectStar(stars: List<GuideStar>): GuideStar? {
+        val eligible = usableStars(stars).filter { it.snr >= 6f }
+        return eligible.firstOrNull { it.peakFraction.isNaN() || it.peakFraction < .9f } ?: eligible.firstOrNull()
+    }
+
     private fun isUsableStar(star: GuideStar): Boolean =
-        star.x.isFinite() && star.y.isFinite() && star.snr.isFinite() && star.snr >= 5f &&
-            star.flux.isFinite() && star.flux > 0 && !star.saturated && (star.radiusPx.isNaN() || star.radiusPx in .6f..8f)
+        star.x.isFinite() && star.y.isFinite() && star.snr.isFinite() && star.snr >= 3f &&
+            star.flux.isFinite() && star.flux > 0 && !star.saturated && (star.radiusPx.isNaN() || star.radiusPx in .6f..8f) &&
+            (star.hfdPx.isNaN() || star.hfdPx in 1.5f..20f)
 
-    internal fun rawValue(frame: FrameData, x: Int, y: Int): Int {
-        val index = y * frame.width + x
-        return when {
-            frame.pixelFormat == PixelFormat.RGB24 -> {
-                val base = index * 3
-                ((frame.data[base].toInt() and 255) * 299 + (frame.data[base + 1].toInt() and 255) * 587 +
-                    (frame.data[base + 2].toInt() and 255) * 114) / 1000
-            }
-            frame.pixelFormat == PixelFormat.RGB48 -> {
-                val base = index * 6
-                if (base + 5 >= frame.data.size) return 0
-                val red = u16(frame.data, base)
-                val green = u16(frame.data, base + 2)
-                val blue = u16(frame.data, base + 4)
-                (red * 299 + green * 587 + blue * 114) / 1000
-            }
-            frame.pixelFormat.bytesPerPixel == 1 ->
-                if (index >= frame.data.size) 0 else frame.data[index].toInt() and 0xFF
-            else -> {
-                val base = index * 2
-                if (base + 1 >= frame.data.size) 0 else u16(frame.data, base)
-            }
-        }
-    }
+    internal fun rawValue(frame: FrameData, x: Int, y: Int): Int = GuidePixelAccess.raw(frame, x, y)
 
-    private fun peakValue(frame: FrameData, x: Int, y: Int): Int {
-        val index = (y * frame.width + x) * frame.pixelFormat.bytesPerPixel
-        return when (frame.pixelFormat) {
-            PixelFormat.RGB24 -> maxOf(frame.data[index].toInt() and 255, frame.data[index + 1].toInt() and 255, frame.data[index + 2].toInt() and 255)
-            PixelFormat.RGB48 -> maxOf(u16(frame.data, index), u16(frame.data, index + 2), u16(frame.data, index + 4))
-            else -> rawValue(frame, x, y)
-        }
-    }
-
-    private fun u16(data: ByteArray, index: Int): Int =
-        (data[index].toInt() and 0xFF) or ((data[index + 1].toInt() and 0xFF) shl 8)
+    private fun peakValue(frame: FrameData, x: Int, y: Int): Int = GuidePixelAccess.peak(frame, x, y)
 
     private data class Candidate(val x: Int, val y: Int, val value: Double)
 }

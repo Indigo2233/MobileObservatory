@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="gw_calibration_west">Calibration: RA west</string>
+    <string name="gw_calibration_nudge">Calibration: nudge south</string>
+    <string name="gw_calibration_return">Return offset: RA %1$.2f px · DEC %2$.2f px</string>
+    <string name="gw_calibration_advisory_status"> · Review calibration advisories in settings</string>
+    <string name="gw_advisory_steps">Few calibration samples. Reduce the calibration pulse and repeat.</string>
+    <string name="gw_advisory_fit">Motion varied during calibration. Check the guide star and mount response.</string>
+    <string name="gw_advisory_ra_return">RA returned with a position offset. Check drift and tracking.</string>
+    <string name="gw_advisory_dec_return">DEC returned with a position offset. Check drift and backlash.</string>
+    <string name="gw_advisory_reverse">Reverse movement was weak or changed direction. Check mount response.</string>
+    <string name="gw_advisory_axes">RA and DEC directions differ substantially from perpendicular.</string>
+    <string name="gw_advisory_backlash">DEC backlash estimate is uncertain. Automatic compensation for this estimate is disabled.</string>
+    <string name="gw_algorithm_lowpass2">Lowpass2</string>
+    <string name="gw_algorithm_identity">Identity</string>
+    <string name="gw_algorithm_zfilter">Z-filter</string>
+    <string name="gw_exposure_factor">Z-filter exposure factor</string>
+    <string name="gw_ra_algorithm">RA algorithm</string>
+    <string name="gw_dec_algorithm">DEC algorithm</string>
+    <string name="gw_ra_min_move">RA minimum move</string>
+    <string name="gw_dec_min_move">DEC minimum move</string>
+    <string name="gw_hysteresis">Hysteresis</string>
+    <string name="gw_slope_weight">Lowpass slope weight</string>
+    <string name="gw_fast_switch">ResistSwitch fast switch</string>
+    <string name="gw_prediction_weight">PPEC prediction weight</string>
+    <string name="gw_worm_period">PPEC worm period</string>
+    <string name="gw_estimate_period">Automatically estimate period</string>
+</resources>

@@ -31,6 +31,10 @@ import androidx.compose.ui.window.DialogProperties
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.camera.ConnectionState
 import com.indigo.mobileobservatory.guide.GuideAlgorithm
+import com.indigo.mobileobservatory.guide.GuideCalibrationConfig
+import com.indigo.mobileobservatory.guide.GuideCalibrationAdvisory
+import com.indigo.mobileobservatory.guide.GuideFilterParameters
+import com.indigo.mobileobservatory.guide.GuideStarAnalysis
 import com.indigo.mobileobservatory.ui.components.GainControl
 import com.indigo.mobileobservatory.ui.settings.GuideNumberSpec
 import com.indigo.mobileobservatory.ui.viewmodel.CameraViewModel
@@ -42,6 +46,7 @@ private val pulseSpec = GuideNumberSpec("300", "5000", "100")
 private val aggressionSpec = GuideNumberSpec("10", "100", "1")
 private val minMoveSpec = GuideNumberSpec("0.05", "1", "0.01", 2)
 private val focalSpec = GuideNumberSpec("0", "10000", "1", 2, blankIsZero = true)
+private val guideRateSpec = GuideNumberSpec("0.1", "1", "0.1", 2)
 
 @Composable
 internal fun GuideSettingsDialog(vm: CameraViewModel, onDismiss: () -> Unit, guiding: Boolean, exposing: Boolean) {
@@ -170,6 +175,16 @@ private fun GuideCalibrationSettings(vm: CameraViewModel) {
         Text(stringResource(R.string.guide_rates, it.eastRatePxPerSec, it.northRatePxPerSec), style = MaterialTheme.typography.bodySmall)
         Text(stringResource(R.string.gw_calibration_result, it.eastSteps, it.northSteps, it.raBacklashMs, it.decBacklashMs, it.fitResidualPx),
             style = MaterialTheme.typography.bodySmall)
+        Text(stringResource(R.string.gw_calibration_return, it.raReturnResidualPx, it.decReturnResidualPx), style = MaterialTheme.typography.bodySmall)
+        it.advisories.forEach { advisory -> Text(stringResource(when (advisory) {
+            GuideCalibrationAdvisory.TOO_FEW_STEPS -> R.string.gw_advisory_steps
+            GuideCalibrationAdvisory.FIT_RESIDUAL -> R.string.gw_advisory_fit
+            GuideCalibrationAdvisory.RA_RETURN_OFFSET -> R.string.gw_advisory_ra_return
+            GuideCalibrationAdvisory.DEC_RETURN_OFFSET -> R.string.gw_advisory_dec_return
+            GuideCalibrationAdvisory.REVERSE_RESPONSE -> R.string.gw_advisory_reverse
+            GuideCalibrationAdvisory.AXIS_ANGLE -> R.string.gw_advisory_axes
+            GuideCalibrationAdvisory.BACKLASH_UNCERTAIN -> R.string.gw_advisory_backlash
+        }), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary) }
     }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedButton(onClick = { if (calibrating) vm.setGuideRunning(false) else vm.startGuideCalibration() }, enabled = !running) {
@@ -182,28 +197,65 @@ private fun GuideCalibrationSettings(vm: CameraViewModel) {
 @Composable
 private fun GuideAlgorithmSettings(vm: CameraViewModel) {
     val algorithm by vm.guideAlgorithm.collectAsStateWithPageLifecycle()
+    val decAlgorithm by vm.guideDecAlgorithm.collectAsStateWithPageLifecycle()
+    val parameters by vm.guideFilterParameters.collectAsStateWithPageLifecycle()
+    val decParameters by vm.guideDecFilterParameters.collectAsStateWithPageLifecycle()
     val multi by vm.guideMultiStarEnabled.collectAsStateWithPageLifecycle()
     val ra by vm.guideRaAggressiveness.collectAsStateWithPageLifecycle()
     val dec by vm.guideDecAggressiveness.collectAsStateWithPageLifecycle()
     val minMove by vm.guideMinMovePx.collectAsStateWithPageLifecycle()
+    val decMinMove by vm.guideDecMinMovePx.collectAsStateWithPageLifecycle()
     val reverseRa by vm.guideReverseRa.collectAsStateWithPageLifecycle()
     val reverseDec by vm.guideReverseDec.collectAsStateWithPageLifecycle()
     val names = GuideAlgorithm.entries.associateWith { stringResource(when (it) {
+        GuideAlgorithm.IDENTITY -> R.string.gw_algorithm_identity
+        GuideAlgorithm.Z_FILTER -> R.string.gw_algorithm_zfilter
         GuideAlgorithm.HYSTERESIS -> R.string.guide_algorithm_hysteresis
         GuideAlgorithm.LOW_PASS -> R.string.guide_algorithm_low_pass
+        GuideAlgorithm.LOW_PASS_2 -> R.string.gw_algorithm_lowpass2
         GuideAlgorithm.RESIST_SWITCH -> R.string.guide_algorithm_resist_switch
         GuideAlgorithm.PREDICTIVE_RA -> R.string.guide_algorithm_predictive_ra
     }) }
+    GuideSettingsHeading(stringResource(R.string.gw_ra_algorithm))
     GuideSettingsChoice(GuideAlgorithm.entries, algorithm, { names.getValue(it) }, vm::setGuideAlgorithm)
-    GuideToggle(stringResource(R.string.gw_multistar), multi, vm::setGuideMultiStarEnabled)
     GuideNumberSetting(stringResource(R.string.gw_ra_aggression), ra * 100, aggressionSpec, "%", "ra",
-        { vm.setGuideRaAggressiveness(it / 100) })
-    GuideNumberSetting(stringResource(R.string.gw_dec_aggression), dec * 100, aggressionSpec, "%", "dec",
-        { vm.setGuideDecAggressiveness(it / 100) })
-    GuideNumberSetting(stringResource(R.string.gw_min_move_label), minMove, minMoveSpec, "px", "min-move", vm::setGuideMinMovePx)
+        { vm.setGuideRaAggressiveness(it / 100) }, enabled = algorithm !in listOf(GuideAlgorithm.LOW_PASS, GuideAlgorithm.IDENTITY, GuideAlgorithm.Z_FILTER))
+    GuideNumberSetting(stringResource(R.string.gw_ra_min_move), minMove, minMoveSpec, "px", "min-move", vm::setGuideMinMovePx, enabled = algorithm != GuideAlgorithm.IDENTITY)
+    GuideFilterTuning(algorithm, parameters, "ra", vm::setGuideFilterParameters)
     Divider()
+    GuideSettingsHeading(stringResource(R.string.gw_dec_algorithm))
+    GuideSettingsChoice(GuideAlgorithm.entries.filter { it != GuideAlgorithm.PREDICTIVE_RA }, decAlgorithm, { names.getValue(it) }, vm::setGuideDecAlgorithm)
+    GuideNumberSetting(stringResource(R.string.gw_dec_aggression), dec * 100, aggressionSpec, "%", "dec",
+        { vm.setGuideDecAggressiveness(it / 100) }, enabled = decAlgorithm !in listOf(GuideAlgorithm.LOW_PASS, GuideAlgorithm.IDENTITY, GuideAlgorithm.Z_FILTER))
+    GuideNumberSetting(stringResource(R.string.gw_dec_min_move), decMinMove, minMoveSpec, "px", "dec-min-move", vm::setGuideDecMinMove, enabled = decAlgorithm != GuideAlgorithm.IDENTITY)
+    GuideFilterTuning(decAlgorithm, decParameters, "dec", vm::setGuideDecFilterParameters)
+    Divider()
+    GuideToggle(stringResource(R.string.gw_multistar), multi, vm::setGuideMultiStarEnabled)
     GuideToggle(stringResource(R.string.gw_reverse_ra), reverseRa, vm::setGuideReverseRa)
     GuideToggle(stringResource(R.string.gw_reverse_dec), reverseDec, vm::setGuideReverseDec)
+}
+
+@Composable
+private fun GuideFilterTuning(algorithm: GuideAlgorithm, parameters: GuideFilterParameters, axis: String,
+    apply: (GuideFilterParameters) -> Unit) {
+    if (algorithm == GuideAlgorithm.HYSTERESIS)
+        GuideNumberSetting(stringResource(R.string.gw_hysteresis), (parameters.hysteresis * 100).toFloat(),
+            GuideNumberSpec("0", "99", "1"), "%", "$axis-hysteresis", { apply(parameters.copy(hysteresis = it / 100.0)) })
+    if (algorithm == GuideAlgorithm.LOW_PASS)
+        GuideNumberSetting(stringResource(R.string.gw_slope_weight), parameters.slopeWeight.toFloat(),
+            GuideNumberSpec("0", "20", "0.1", 2), "", "$axis-slope", { apply(parameters.copy(slopeWeight = it.toDouble())) })
+    if (algorithm == GuideAlgorithm.RESIST_SWITCH)
+        GuideToggle(stringResource(R.string.gw_fast_switch), parameters.fastSwitch) { apply(parameters.copy(fastSwitch = it)) }
+    if (algorithm == GuideAlgorithm.Z_FILTER)
+        GuideNumberSetting(stringResource(R.string.gw_exposure_factor), parameters.exposureFactor.toFloat(),
+            GuideNumberSpec("1", "20", "0.1", 2), "", "$axis-exposure-factor", { apply(parameters.copy(exposureFactor = it.toDouble())) })
+    if (algorithm == GuideAlgorithm.PREDICTIVE_RA) {
+        GuideNumberSetting(stringResource(R.string.gw_prediction_weight), (parameters.predictionGain * 100).toFloat(),
+            GuideNumberSpec("0", "100", "1"), "%", "prediction", { apply(parameters.copy(predictionGain = it / 100.0)) })
+        GuideNumberSetting(stringResource(R.string.gw_worm_period), parameters.periodSeconds.toFloat(),
+            GuideNumberSpec("10", "2000", "1", 2), "s", "period", { apply(parameters.copy(periodSeconds = it.toDouble())) })
+        GuideToggle(stringResource(R.string.gw_estimate_period), parameters.estimatePeriod) { apply(parameters.copy(estimatePeriod = it)) }
+    }
 }
 
 @Composable

@@ -17,7 +17,7 @@ import kotlin.math.roundToInt
 class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
     CameraUsbBandwidthCapable, CameraBinningCapable {
 
-    override val sciencePixelTraits get() = CameraScienceLayouts.fullContainer(currentPixelFormat)
+    override val sciencePixelTraits get() = if (binningStateValid) CameraScienceLayouts.fullContainer(currentPixelFormat) else null
     private val captureGeneration = CaptureGeneration()
     override val scienceCaptureGeneration get() = captureGeneration.scienceGeneration
     override val requiresHighBitScienceCapture get() = !useSingleFrameMode
@@ -63,7 +63,9 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
     private var sensorWidth = 0
     private var sensorHeight = 0
     private var currentBin = 1
+    private var binningStateValid = true
     override val currentHardwareBin: Int get() = currentBin
+    override val binningStateVerified: Boolean get() = binningStateValid
     override val roiSensorScale: Int get() = currentBin
     override var supportedHardwareBins: List<Int> = listOf(1); private set
     private var maxBpp = 16
@@ -169,8 +171,10 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
             currentRoi = Roi(0, 0, sensorWidth, sensorHeight)
             cropInfo = CropInfo(0, 0, sensorWidth, sensorHeight)
 
-            QhyccdJni.setBinMode(1, 1)
-            QhyccdJni.setResolution(0, 0, sensorWidth, sensorHeight)
+            check(QhyccdJni.setBinMode(1, 1) == QhyccdJni.QHYCCD_SUCCESS) { "Cannot initialize camera binning" }
+            check(QhyccdJni.setResolution(0, 0, sensorWidth, sensorHeight) == QhyccdJni.QHYCCD_SUCCESS) { "Cannot initialize camera ROI" }
+            currentBin = 1
+            binningStateValid = true
             QhyccdJni.setDebayerOnOff(false)
             currentBin = 1
             supportedHardwareBins = probeSupportedBins()
@@ -420,6 +424,7 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
     }
 
     @Synchronized override fun startCapture(callback: FrameCallback) {
+        check(binningStateValid) { "Camera binning state is unknown; reconnect camera" }
         if (!_isOpen.value || _isCapturing.value) return
         if (captureThread?.isAlive == true || captureStopFailed) {
             Log.w(TAG, "Cannot start while the previous capture has not stopped")
@@ -958,28 +963,34 @@ class QhyCamera : Camera, CameraOffsetCapable, CameraNativeReadoutModeCapable,
     @Synchronized override fun setHardwareBin(bin: Int): Boolean {
         captureGeneration.invalidateScience()
         val b = if (bin in supportedHardwareBins) bin else return false
-        if (b == currentBin) return true
+        if (b == currentBin && binningStateValid) return true
         val wasCapturing = _isCapturing.value
         val cb = frameCallback
         if (wasCapturing) stopCapture()
         if (captureThread?.isAlive == true || captureStopFailed) return false
         val previous = currentBin
+        val previousRoi = currentRoi
         val applied = try {
-            if (QhyccdJni.setBinMode(b, b) != QhyccdJni.QHYCCD_SUCCESS) {
-                Log.w(TAG, "setBinMode($b) failed")
-                false
-            } else {
-                currentBin = b
-                val maxW = sensorWidth / b
-                val maxH = sensorHeight / b
-                QhyccdJni.setResolution(0, 0, maxW, maxH)
-                currentRoi = Roi(0, 0, maxW, maxH)
-                cropInfo = CropInfo(0, 0, maxW, maxH)
-                FileLogger.i(TAG, "Bin -> $b, imageSize=${maxW}x${maxH}")
-                true
-            }
+            check(QhyccdJni.setBinMode(b, b) == QhyccdJni.QHYCCD_SUCCESS) { "Camera bin mode rejected" }
+            val maxW = sensorWidth / b
+            val maxH = sensorHeight / b
+            check(QhyccdJni.setResolution(0, 0, maxW, maxH) == QhyccdJni.QHYCCD_SUCCESS) { "Binned ROI rejected" }
+            currentBin = b
+            binningStateValid = true
+            currentRoi = Roi(0, 0, maxW, maxH)
+            cropInfo = CropInfo(0, 0, maxW, maxH)
+            FileLogger.i(TAG, "Bin -> $b, imageSize=${maxW}x${maxH}")
+            true
         } catch (e: Throwable) {
             Log.e(TAG, "setHardwareBin($b) failed", e)
+            val restored = runCatching {
+                check(QhyccdJni.setBinMode(previous, previous) == QhyccdJni.QHYCCD_SUCCESS)
+                check(QhyccdJni.setResolution(previousRoi.x, previousRoi.y, previousRoi.width, previousRoi.height) == QhyccdJni.QHYCCD_SUCCESS)
+            }.isSuccess
+            if (!restored) {
+                binningStateValid = false
+                throw IllegalStateException("Cannot restore camera binning; reconnect camera", e)
+            }
             currentBin = previous
             false
         }

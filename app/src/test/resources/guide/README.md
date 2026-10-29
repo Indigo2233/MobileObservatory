@@ -20,4 +20,6 @@ Run the original full frame and render CSV evidence (Python with numpy, astropy 
 .\scripts\Test-GuideFitsReplay.ps1 -FitsPath '<absolute FITS path>'
 ```
 
-Reports default to `app/build/reports/guide-fits-full/`, including known/measured shifts, fitted calibration, star profiles, four 72-cycle closed-loop traces, summary JSON and PNG figures. Gradle tracks the external FITS as a task input.
+Reports default to `app/build/reports/guide-fits-full/`, including known/measured shifts, fitted calibration, star profiles, seven algorithm closed-loop traces, summary JSON and PNG figures. Gradle tracks the external FITS as a task input.
+
+The `phd2-filter-reference`, `phd2-star-reference` and `phd2-mass-reference` resources contain outputs from compiled, pinned upstream C++ bodies. Their JSON sidecars identify source commits and hashes. The mass reference contains 1,786 samples, including cloud transitions, exposure changes and history expiry; its generator reads Git objects and injects a deterministic millisecond clock. See `docs/validation/guiding-quality/README.md` for frame-quality and profile validation.
