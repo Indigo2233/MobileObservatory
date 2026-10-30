@@ -1277,37 +1277,44 @@ class DahengCameraManager(
 
         try {
             val listedUsb = _devices.value.firstOrNull { it.serialNumber == serialNumber }?.usbDevice
-            if (listedUsb != null) reserveUsbDevice(listedUsb)
-            trace("Connecting Player One sn=$serialNumber usbId=${listedUsb?.deviceId}")
-            val found = if (listedUsb != null) {
-                PlayerOneSdkHost.findForAndroidDevice(context, listedUsb.deviceId, listedUsb.deviceName)
-            } else {
-                PlayerOneSdkHost.findDeviceBySerial(context, serialNumber)
-            }
-            if (found == null) {
+            if (listedUsb == null) {
                 abandonReservation()
                 _connectionState.value = ConnectionState.Error("Player One camera $serialNumber not found")
                 return
             }
-            val sdkUsb = found.usb
-            val androidDevice = found.androidDevice ?: listedUsb
-            if (sdkUsb == null || androidDevice == null) {
+            reserveUsbDevice(listedUsb)
+            trace("Connecting Player One sn=$serialNumber usbId=${listedUsb.deviceId}")
+            val sdkUsb = PlayerOneSdkHost.findUsbForAndroidDevice(context, listedUsb.deviceName)
+            if (sdkUsb == null) {
                 abandonReservation()
                 _connectionState.value = ConnectionState.Error(
-                    "Player One camera $serialNumber has no USB device to authorize"
+                    "Player One USB device $serialNumber not found in SDK"
                 )
                 return
             }
-            reserveUsbDevice(androidDevice)
-            val cameraId = found.properties.cameraId
             PlayerOneSdkHost.requestPermission(sdkUsb) { granted ->
-                if (!granted) {
-                    Log.w(TAG, "Player One USB permission denied for $serialNumber")
+                if (!holdsUsbDevice(listedUsb)) return@requestPermission
+                try {
+                    if (!granted) {
+                        Log.w(TAG, "Player One USB permission or binding failed for $serialNumber")
+                        abandonReservation()
+                        _connectionState.value = ConnectionState.Error("Player One USB permission or binding failed")
+                        return@requestPermission
+                    }
+                    val found = PlayerOneSdkHost.findForAndroidDevice(
+                        context, listedUsb.deviceId, listedUsb.deviceName
+                    )
+                    if (found == null) {
+                        abandonReservation()
+                        _connectionState.value = ConnectionState.Error("Player One camera $serialNumber not found after USB authorization")
+                        return@requestPermission
+                    }
+                    openPlayerOneDevice(found.properties.cameraId, serialNumber, listedUsb)
+                } catch (e: Throwable) {
+                    Log.e(TAG, "Player One lookup after authorization failed: ${e.message}", e)
                     abandonReservation()
-                    _connectionState.value = ConnectionState.Error("USB permission denied")
-                    return@requestPermission
+                    _connectionState.value = ConnectionState.Error("Player One open failed: ${e.message}")
                 }
-                openPlayerOneDevice(cameraId, serialNumber, androidDevice)
             }
         } catch (e: Throwable) {
             Log.e(TAG, "requestPlayerOnePermission failed: ${e.message}", e)

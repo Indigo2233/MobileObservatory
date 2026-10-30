@@ -417,6 +417,19 @@ class ObservingUiWiringTest {
     }
 
     @Test
+    fun playerOneConnectionAuthorizesSelectedUsbBeforeEnumeratingSdkCameras() {
+        val manager = read("src/main/java/com/indigo/mobileobservatory/camera/DahengCameraManager.kt")
+        val start = manager.indexOf("private fun requestPlayerOnePermission(")
+        val end = manager.indexOf("private fun openPlayerOneDevice(", start)
+        assertTrue(start >= 0 && end > start)
+        val connect = manager.substring(start, end)
+        val select = connect.indexOf("PlayerOneSdkHost.findUsbForAndroidDevice")
+        val authorize = connect.indexOf("PlayerOneSdkHost.requestPermission", select)
+        val lookup = connect.indexOf("PlayerOneSdkHost.findForAndroidDevice", authorize)
+        assertTrue("select the USB device, authorize it, then enumerate SDK cameras", select >= 0 && authorize > select && lookup > authorize)
+    }
+
+    @Test
     fun guideCameraDoesNotTakeTheUsbDeviceHeldByMain() {
         val manager = read(
             "src/main/java/com/indigo/mobileobservatory/camera/DahengCameraManager.kt"
