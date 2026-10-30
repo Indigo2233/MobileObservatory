@@ -32,9 +32,10 @@ APK 使用的 `stellarium-web-engine.js`、`stellarium-web-engine.wasm`、许可
 GitHub Release 只上传 APK、SHA-256 和构建信息，不附带
 `MobileObservatory_Source_*.zip` 或 `StellariumWebEngine_*.zip`。
 
-对应源码就是发布标签指向的本仓库提交（含 libusb 子模块与
-`patches/libusb-android-fd.patch`），以及上文固定的 Stellarium Web Engine
-上游提交。构建信息中的 `commit` 必须与该标签一致。
+每个 APK 的对应源码包括其构建信息中 `commit` 指向的本仓库提交（含 libusb
+子模块与 `patches/libusb-android-fd.patch`），以及上文固定的 Stellarium Web
+Engine 上游提交。每个构建的源码标签必须指向其构建信息中的 `commit`。
+同一 Release 页面包含多个构建时，页面应分别链接各构建的源码标签。
 
 需要离线打包时仍可执行：
 

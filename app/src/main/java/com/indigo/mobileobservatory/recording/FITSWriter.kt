@@ -5,8 +5,7 @@ import com.indigo.mobileobservatory.camera.GainControlKind
 import com.indigo.mobileobservatory.camera.PixelFormat
 import java.io.File
 import java.io.FileOutputStream
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
+import java.io.OutputStream
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
@@ -16,6 +15,7 @@ class FITSWriter {
     companion object {
         private const val HEADER_BLOCK = 2880
         private const val CARD_LEN = 80
+        private const val DATA_CHUNK_BYTES = 64 * 1024
     }
 
     fun write(
@@ -114,8 +114,7 @@ class FITSWriter {
             val headerBytes = buildHeader(cards)
             fos.write(headerBytes)
 
-            val dataBytes = buildDataBlock(frame, is16, effectiveFormat.nativeBits)
-            fos.write(dataBytes)
+            writeDataBlock(fos, frame, is16, effectiveFormat.nativeBits)
         }
     }
 
@@ -133,36 +132,46 @@ class FITSWriter {
         return header
     }
 
-    private fun buildDataBlock(frame: FrameData, is16: Boolean, targetBits: Int): ByteArray {
-        val pixelCount = frame.width * frame.height
-        val rawSize = pixelCount * (if (is16) 2 else 1)
-        val blocksNeeded = (rawSize + HEADER_BLOCK - 1) / HEADER_BLOCK
-        val paddedSize = blocksNeeded * HEADER_BLOCK
-        val data = ByteArray(paddedSize)
-
+    private fun writeDataBlock(output: OutputStream, frame: FrameData, is16: Boolean, targetBits: Int) {
+        val pixels = frame.width.toLong() * frame.height.toLong()
+        require(frame.width > 0 && frame.height > 0 && pixels <= Int.MAX_VALUE) { "Invalid FITS dimensions" }
+        val pixelCount = pixels.toInt()
+        val rawSize = pixels * (if (is16) 2 else 1)
+        val buffer = ByteArray(DATA_CHUNK_BYTES)
         if (is16) {
             val frameBpp = frame.pixelFormat.bytesPerPixel
-            val buf = ByteBuffer.wrap(data).order(ByteOrder.BIG_ENDIAN)
-            if (frameBpp < 2) {
-                val shift = (targetBits - 8).coerceAtLeast(0)
-                for (i in 0 until pixelCount) {
-                    val v = if (i < frame.data.size) (frame.data[i].toInt() and 0xFF) shl shift else 0
-                    val signed = v - 32768
-                    buf.putShort(signed.toShort())
-                }
-            } else {
-                for (i in 0 until pixelCount) {
-                    val lo = frame.data[i * 2].toInt() and 0xFF
-                    val hi = frame.data[i * 2 + 1].toInt() and 0xFF
-                    val unsigned = (hi shl 8) or lo
+            if (frameBpp >= 2) require(pixels * 2 <= frame.data.size) { "Truncated FITS frame" }
+            val shift = (targetBits - 8).coerceAtLeast(0)
+            var index = 0
+            while (index < pixelCount) {
+                val count = minOf(buffer.size / 2, pixelCount - index)
+                for (i in 0 until count) {
+                    val source = index + i
+                    val unsigned = if (frameBpp < 2) {
+                        if (source < frame.data.size) (frame.data[source].toInt() and 0xff) shl shift else 0
+                    } else {
+                        (frame.data[source * 2].toInt() and 0xff) or
+                            ((frame.data[source * 2 + 1].toInt() and 0xff) shl 8)
+                    }
                     val signed = unsigned - 32768
-                    buf.putShort(signed.toShort())
+                    buffer[i * 2] = (signed shr 8).toByte()
+                    buffer[i * 2 + 1] = signed.toByte()
                 }
+                output.write(buffer, 0, count * 2)
+                index += count
             }
         } else {
-            System.arraycopy(frame.data, 0, data, 0, pixelCount.coerceAtMost(frame.data.size))
+            val available = minOf(pixelCount, frame.data.size)
+            output.write(frame.data, 0, available)
+            var missing = pixelCount - available
+            while (missing > 0) {
+                val count = minOf(missing, buffer.size)
+                output.write(buffer, 0, count)
+                missing -= count
+            }
         }
-        return data
+        val padding = ((HEADER_BLOCK - rawSize % HEADER_BLOCK) % HEADER_BLOCK).toInt()
+        if (padding > 0) output.write(ByteArray(padding))
     }
 
     private fun fitsCard(keyword: String, value: String, comment: String): String {

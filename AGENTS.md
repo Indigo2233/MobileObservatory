@@ -26,6 +26,20 @@ For local builds that will not be published, keep the existing Android
 `versionCode` (build number) unchanged, including for Release builds. Change it
 when preparing a publication or when the user explicitly requests a build number.
 
+For publication, prefer the locally signed build produced by
+`.\Build.ps1 -Release -NonCommercial`. Use the configured maintainer and legacy
+signing identities, verify the release commit, version, signing lineage and APK
+hash, and generate `update.json` before uploading the release assets. GitHub
+Actions release builds are optional and should be used only when explicitly
+requested or needed to resolve a local build problem. See `docs/RELEASE_PROCESS.md`
+and `docs/APP_UPDATE.md`.
+
+Before reporting that local signing is unavailable, inspect the maintainer and
+legacy keystores and the Windows-protected credential described in
+`docs/RELEASE_PROCESS.md`. Release variables are process-scoped, so an empty
+environment-variable check does not establish that the signing material is
+missing.
+
 ### libusb Android FD patch
 
 `app/src/main/cpp/libusb` is an upstream submodule. The Android SELinux

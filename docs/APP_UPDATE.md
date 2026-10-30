@@ -39,25 +39,24 @@ missing or malformed.
 
 ## Publishing a release
 
-Run the `Android Release Publish` workflow, either by pushing a `v*` tag or by
-dispatching it manually with a tag such as `v1.0.8`. The workflow:
-
-1. builds and signs the release APK through `Build.ps1 -Release -NonCommercial`;
-2. keeps the unfinished sequence feature hidden (`-ShowSequence` opts in for
-   development);
-3. generates `update.json` from the build information written by `Build.ps1`;
-4. attaches the APK, checksum, build information, and `update.json` to the
-   GitHub Release.
-
-`scripts/Write-UpdateManifest.ps1` can be run locally against an existing
-`bin/Installer` directory:
+Build and sign the release locally, then generate the update manifest from the
+resulting build information:
 
 ```powershell
 .\Build.ps1 -Release -NonCommercial
 .\scripts\Write-UpdateManifest.ps1 -Tag v1.0.8 -NotesFile release-notes.md
 ```
 
-The tag must contain the version name recorded in the APK build information.
+Verify the exact source commit, version code, signing lineage and SHA-256, then
+create the GitHub Release for that commit and attach the versioned APK, the
+latest-name APK, its checksum, build information and `update.json`. The tag must
+contain the version name recorded in the APK build information. Keep the
+unfinished sequence feature hidden in release builds.
+
+The `Android Release Publish` workflow is available for explicit manual use.
+A release tag does not start a GitHub build when its commit includes the
+manual-only workflow configuration. See `docs/RELEASE_PROCESS.md` for local
+signing configuration and release checks.
 
 ## Verification
 

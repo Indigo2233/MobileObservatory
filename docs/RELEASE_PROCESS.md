@@ -44,14 +44,56 @@ The keystore Base64 value can be generated locally with:
 ) | Set-Clipboard
 ```
 
-For local release builds, set `ANDROID_RELEASE_KEYSTORE` and
-`ANDROID_RELEASE_OLD_KEYSTORE` to their keystore paths and set the other six
-variables directly. Gradle validates the maintainer key before `Build.ps1`
-applies and verifies the rotation lineage.
+## Local maintainer workstation
+
+The Windows maintainer workstation keeps its signing files outside the
+repository:
+
+- Current maintainer keystore:
+  `%USERPROFILE%\.android\indigo-observatory-release.jks`, alias
+  `indigo-observatory`, with the maintainer fingerprint listed above.
+- Maintainer credential:
+  `%USERPROFILE%\.android\indigo-observatory-release.credential.xml`. This is a
+  PowerShell `PSCredential` file protected for the Windows user who created it.
+  Import it with `Import-Clixml` under that same account. Its username is the
+  key alias; its password is available to the build process without printing it.
+- Legacy keystore:
+  `%USERPROFILE%\.android\debug.keystore`, alias `androiddebugkey`, with the
+  legacy fingerprint listed above. This particular file is part of the
+  production signing lineage despite its filename. Preserve it; do not delete,
+  regenerate, or replace it with another Android debug keystore.
+
+`Build.ps1` and Gradle read release credentials from process environment
+variables or Gradle properties; they do not automatically import the
+`PSCredential` file. A new agent or shell may therefore have no
+`ANDROID_RELEASE_*` variables while the local signing material remains
+available. Check the files above and load the credential before concluding
+that local signing is unavailable.
+
+The maintainer values can be loaded into the current PowerShell process without
+printing the password:
+
+```powershell
+$releaseCredential = Import-Clixml -LiteralPath (
+  Join-Path $env:USERPROFILE ".android\indigo-observatory-release.credential.xml"
+)
+$releasePassword = $releaseCredential.GetNetworkCredential().Password
+$env:ANDROID_RELEASE_KEYSTORE = Join-Path $env:USERPROFILE ".android\indigo-observatory-release.jks"
+$env:ANDROID_RELEASE_KEY_ALIAS = $releaseCredential.UserName
+$env:ANDROID_RELEASE_STORE_PASSWORD = $releasePassword
+$env:ANDROID_RELEASE_KEY_PASSWORD = $releasePassword
+```
+
+For the legacy signer, set `ANDROID_RELEASE_OLD_KEYSTORE` to the local
+`debug.keystore`, `ANDROID_RELEASE_OLD_KEY_ALIAS` to `androiddebugkey`, and set
+the two legacy password variables from that keystore's configured credentials.
+The maintainer `.credential.xml` stores only the current maintainer credential.
+Do not print or commit any password. Gradle validates the maintainer key before
+`Build.ps1` applies and verifies the rotation lineage.
 
 ## Build a release candidate
 
-Run the `Android Release Candidate` workflow manually, or build locally:
+Build and sign locally using the configured maintainer and legacy credentials:
 
 ```powershell
 .\Build.ps1 -Clean -Release -NonCommercial
@@ -82,15 +124,19 @@ GitHub Releases attach only those installer artifacts. Application and Stellariu
 source stay in this repository at the release tag; do not upload
 `MobileObservatory_Source_*.zip` or `StellariumWebEngine_*.zip`.
 
-The workflow uploads a 14-day release-candidate artifact. It does not publish a
-GitHub Release. Publication remains a separate go/no-go decision after validation.
+The optional `Android Release Candidate` workflow uploads a 14-day candidate
+artifact and does not publish a GitHub Release. Publication remains a separate
+go/no-go decision after validation.
 
 ## Publish a release
 
-After the go/no-go gates pass, run the `Android Release Publish` workflow by
-pushing the release tag (`v1.0.8`) or dispatching it manually. It builds the
-signed APK, generates `update.json`, and creates the GitHub Release with the APK,
-checksum, build information, and manifest attached.
+After the go/no-go gates pass, run `scripts/Write-UpdateManifest.ps1` against the
+local signed build and the intended release tag. Create the GitHub Release at
+the verified source commit and attach both APK names, the checksum, the build
+information and `update.json`. The normal release path uses these local artifacts.
+The `Android Release Publish` workflow remains available for explicit manual use;
+publishing a tag does not start a GitHub build when the release commit includes
+the updated manual-only workflow configuration.
 
 `Write-UpdateManifest.ps1` rejects debug variants, missing Stellarium assets,
 enabled sequence entry points, and unexpected current or legacy certificate

@@ -1,7 +1,7 @@
 name: Android Release Publish
 
-# Builds a signed APK, generates update.json for the in-app updater, and
-# publishes the GitHub Release that the update feed points at.
+# Optional manually dispatched build and publication. Normal releases use the
+# locally signed APK and release assets described in docs/RELEASE_PROCESS.md.
 on:
   workflow_dispatch:
     inputs:
@@ -20,10 +20,6 @@ on:
         description: "Minimum version code allowed to keep running (0 disables)"
         required: false
         default: "0"
-  push:
-    tags:
-      - "v*"
-
 permissions:
   contents: write
 
