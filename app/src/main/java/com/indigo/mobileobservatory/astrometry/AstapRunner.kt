@@ -54,7 +54,10 @@ class AstapRunner(private val context: Context) : ImagePlateSolver {
         inputFile: File, fovDeg: Double, mountCoordinates: MountCoordinates?, searchRadiusDeg: Double?
     ): PlateSolveResult = withContext(Dispatchers.IO) {
         val started = System.currentTimeMillis()
-        val original = solveAttempt(inputFile, fovDeg, mountCoordinates, searchRadiusDeg)
+        val first = solveAttempt(inputFile, fovDeg, mountCoordinates, searchRadiusDeg)
+        val original = retryDenseJpegSolve(inputFile, first) { maxStars ->
+            solveAttempt(inputFile, fovDeg, mountCoordinates, searchRadiusDeg, maxStars = maxStars)
+        }
         if (!astapNeedsSum2Retry(original)) return@withContext original
         val sum = AstapSum2Input.inspect(inputFile) ?: return@withContext original
         val base = createAstapOutputBase(context.cacheDir)
@@ -75,7 +78,8 @@ class AstapRunner(private val context: Context) : ImagePlateSolver {
         mountCoordinates: MountCoordinates?,
         searchRadiusDeg: Double?,
         outputOverride: File? = null,
-        solverBinning: Int? = null
+        solverBinning: Int? = null,
+        maxStars: Int? = null
     ): PlateSolveResult = withContext(Dispatchers.IO) {
         val status = d50Manager.status()
         val database = status.database
@@ -114,7 +118,8 @@ class AstapRunner(private val context: Context) : ImagePlateSolver {
             mountCoordinates = mountCoordinates,
             searchRadiusDeg = effectiveSearchRadiusDeg,
             outputBase = outputBase,
-            solverBinning = solverBinning
+            solverBinning = solverBinning,
+            maxStars = maxStars
         )
         val diagHeader = buildString {
             appendLine("ABIs=${Build.SUPPORTED_ABIS.joinToString()}")
@@ -251,6 +256,22 @@ class AstapRunner(private val context: Context) : ImagePlateSolver {
 
 internal const val ASTAP_NATIVE_LIBRARY = "libastap_cli.so"
 
+/** Retry the same JPEG once when ASTAP's default star limit was reached without a match. */
+internal suspend fun retryDenseJpegSolve(
+    inputFile: File,
+    first: PlateSolveResult,
+    retry: suspend (Int) -> PlateSolveResult
+): PlateSolveResult {
+    if (first.success || (!inputFile.extension.equals("jpg", true) && !inputFile.extension.equals("jpeg", true)) ||
+        !first.log.contains("No solution found", ignoreCase = true)) return first
+    val selected = Regex("(\\d+) stars?,\\s*\\d+ quads selected in the image", RegexOption.IGNORE_CASE)
+        .find(first.log)?.groupValues?.get(1)?.toIntOrNull() ?: return first
+    if (selected < 450) return first
+    val second = retry(1000)
+    return second.copy(elapsedMs = first.elapsedMs + second.elapsedMs,
+        log = first.log + "\nattempt=dense_jpeg maxStars=1000\n" + second.log)
+}
+
 internal fun astapNativeExecutable(nativeLibraryDir: File): File =
     File(nativeLibraryDir, ASTAP_NATIVE_LIBRARY)
 
@@ -280,7 +301,8 @@ internal fun buildAstapCommand(
     mountCoordinates: MountCoordinates?,
     searchRadiusDeg: Double,
     outputBase: File,
-    solverBinning: Int? = null
+    solverBinning: Int? = null,
+    maxStars: Int? = null
 ): List<String> {
     val command = mutableListOf(
         executable.absolutePath,
@@ -292,6 +314,7 @@ internal fun buildAstapCommand(
         "-fov", "%.6f".format(Locale.US, if (fovDeg == 0.0) 0.0 else fovDeg.coerceIn(0.2, 90.0))
     )
     solverBinning?.let { command += listOf("-z", it.toString()) }
+    maxStars?.let { command += listOf("-s", it.toString()) }
     if (mountCoordinates != null) {
         command += listOf(
             "-ra", "%.6f".format(Locale.US, mountCoordinates.raHours),
