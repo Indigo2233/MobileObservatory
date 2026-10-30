@@ -186,6 +186,12 @@ object PlayerOneSdkHost {
         }
     }
 
+    /** Find the selected USB registration without requiring a native camera handle. */
+    fun findUsbForAndroidDevice(context: Context, deviceName: String): UsbCameraDevice? {
+        ensureStarted(context)
+        return refreshDevices().firstOrNull { it.deviceName == deviceName }
+    }
+
     /**
      * Match a camera the user already picked from the Android USB list.
      * Starts the vendor SDK; call this only when connecting that camera.
