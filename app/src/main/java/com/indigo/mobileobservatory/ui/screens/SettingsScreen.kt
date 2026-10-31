@@ -219,6 +219,11 @@ private fun DiagnosticsSettingsPage() = SettingsPage {
         ),
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )
+    Text(
+        stringResource(R.string.build_identity, BuildConfig.SOURCE_BUILD_ID),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
     Spacer(Modifier.height(8.dp))
     Lp750Credit()
 }

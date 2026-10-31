@@ -120,6 +120,14 @@ The build produces:
 - SHA-256 checksum;
 - build information containing version, commit, variant, timestamp, and hash.
 
+`Build.ps1` also passes a source build identity containing the branch, commit
+and timestamp through `observatoryBuildId`. The application records
+`BuildConfig.SOURCE_BUILD_ID` at startup and displays it under Settings / About.
+The same value is written as `buildIdentity` in the build information file.
+This identifies local packages that intentionally share an Android build number.
+Direct Gradle builds can pass `-PobservatoryBuildId=...`; otherwise they identify
+themselves as `development`.
+
 GitHub Releases attach only those installer artifacts. Application and Stellarium
 source stay in this repository at the release tag; do not upload
 `MobileObservatory_Source_*.zip` or `StellariumWebEngine_*.zip`.

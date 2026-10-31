@@ -88,6 +88,15 @@ try {
         throw "Failed to apply libusb Android FD patch."
     }
 
+    $commit = (& git -C $root rev-parse HEAD).Trim()
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to resolve the source commit."
+    }
+    $sourceBranch = (& git -C $root branch --show-current).Trim()
+    if ([string]::IsNullOrWhiteSpace($sourceBranch)) { $sourceBranch = "detached" }
+    $branchLabel = $sourceBranch -replace '[^A-Za-z0-9._-]', '-'
+    $buildIdentity = "{0}-{1}-{2}" -f $branchLabel, $commit.Substring(0, 12), [DateTimeOffset]::Now.ToString("yyyyMMdd-HHmmsszzz")
+
     $gradleArgs = @()
     if ($Clean) {
         $gradleArgs += "clean"
@@ -98,6 +107,7 @@ try {
     }
     $gradleArgs += "-PsequenceEnabled=$($sequenceEnabled.ToString().ToLowerInvariant())"
     $gradleArgs += "-PemulatorTest=$($EmulatorTest.IsPresent.ToString().ToLowerInvariant())"
+    $gradleArgs += "-PobservatoryBuildId=$buildIdentity"
 
     & .\gradlew.bat @gradleArgs
     if ($LASTEXITCODE -ne 0) {
@@ -199,10 +209,6 @@ try {
     $checksumOut = "$versionedApkOut.sha256"
     Set-Content -LiteralPath $checksumOut -Encoding ascii -Value "$sha256  $([IO.Path]::GetFileName($versionedApkOut))"
 
-    $commit = (& git -C $root rev-parse HEAD).Trim()
-    if ($LASTEXITCODE -ne 0) {
-        throw "Unable to resolve the source commit for build metadata."
-    }
     $buildInfoOut = [IO.Path]::ChangeExtension($versionedApkOut, ".build-info.txt")
     @(
         "application=Indigo Observatory"
@@ -210,6 +216,8 @@ try {
         "versionName=$($apkElement.versionName)"
         "versionCode=$($apkElement.versionCode)"
         "commit=$commit"
+        "sourceBranch=$sourceBranch"
+        "buildIdentity=$buildIdentity"
         "sha256=$sha256"
         "signingCertificateSha256=$signingCertificateSha256"
         "legacySigningCertificateSha256=$legacySigningCertificateSha256"

@@ -41,6 +41,9 @@ val sequenceEnabled =
 val emulatorTest =
     providers.gradleProperty("emulatorTest").orNull?.toBooleanStrictOrNull() ?: false
 
+val observatoryBuildId =
+    providers.gradleProperty("observatoryBuildId").orNull?.takeIf { it.isNotBlank() } ?: "development"
+
 val updateManifestUrl =
     providers.gradleProperty("updateManifestUrl").orNull
         ?.takeIf { it.isNotBlank() }
@@ -88,6 +91,7 @@ android {
         buildConfigField("boolean", "STELLARIUM_ENABLED", stellariumNonCommercial.toString())
         buildConfigField("boolean", "SEQUENCE_ENABLED", sequenceEnabled.toString())
         buildConfigField("boolean", "EMULATOR_TEST", emulatorTest.toString())
+        buildConfigField("String", "SOURCE_BUILD_ID", buildConfigString(observatoryBuildId))
         buildConfigField("String", "UPDATE_MANIFEST_URL", buildConfigString(updateManifestUrl))
         buildConfigField(
             "String",

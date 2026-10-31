@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="build_identity">构建标识：%1$s</string>
+</resources>
