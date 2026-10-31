@@ -23,7 +23,7 @@ class GuideBacklashClearingTest {
         var clearingStartY: Float? = null
         var clearingTravel = 0f
         var firstNorthStepMs = 0
-        val calibrator = GuideCalibrator(GuideCalibrationConfig(initialPulseMs = initialMs), pulse = { direction, ms ->
+        val calibrator = GuideCalibrator(GuideCalibrationConfig(7, 15f, initialMs), pulse = { direction, ms ->
             pulses += Pulse(direction, ms)
             when (direction) {
                 MountDirection.EAST -> x += ms * .004f
@@ -54,10 +54,11 @@ class GuideBacklashClearingTest {
         assertEquals(.006f, run.result.calibration.northYPerMs, .0001f)
     }
 
-    @Test fun aLongConfiguredPulseDoesNotRestartAfterClearing() = runTest {
+    @Test fun aLongFallbackPulseDoesNotIncreaseClearingPulses() = runTest {
         val run = simulate(5000)
         assertTrue("Clearing moved ${run.clearingTravel} px", run.clearingTravel <= 5f)
-        assertTrue("First fitted step reused ${run.firstNorthStepMs} ms", run.firstNorthStepMs * .006f <= 15f / 7 * 1.1f)
+        assertTrue(run.clearPulses.all { it.ms <= 500 })
+        assertEquals("Formal measurement uses the fixed fallback pulse", 5000, run.firstNorthStepMs)
         assertEquals(.006f, run.result.calibration.northYPerMs, .0001f)
     }
 
@@ -70,9 +71,9 @@ class GuideBacklashClearingTest {
     }
 
     @Test fun firstFittedStepRespectsTheConfiguredPulseLimit() = runTest {
-        val run = simulate(300, northRate = .0005f)
+        val run = simulate(300, northRate = .001f)
         assertTrue("First fitted step exceeded 300 ms: ${run.firstNorthStepMs}", run.firstNorthStepMs <= 300)
-        assertEquals(.0005f, run.result.calibration.northYPerMs, .00001f)
+        assertEquals(.001f, run.result.calibration.northYPerMs, .00001f)
     }
 
     @Test fun slowMotionCanAccumulateAcrossShortProbes() = runTest {
@@ -83,10 +84,17 @@ class GuideBacklashClearingTest {
     }
 
     @Test fun directionReversalsCannotSatisfyClearingConfirmation() = runTest {
-        var x = 100f; var pulses = 0; var fitted = false
+        var x = 100f; var y = 100f; var pulses = 0; var fitted = false
         val failure = runCatching {
-            GuideCalibrator(GuideCalibrationConfig(), { _, _ -> x += if (++pulses % 2 == 0) -1f else 1f },
-                { listOf(GuideStar(x, 100f, 20f, 100f)) }, { if (it.phase == GuideCalibrationPhase.EAST) fitted = true }).run()
+            GuideCalibrator(GuideCalibrationConfig(), { direction, ms ->
+                when (direction) {
+                    MountDirection.WEST -> x -= ms * .004f
+                    MountDirection.EAST -> x += ms * .004f
+                    MountDirection.NORTH -> y += if (++pulses % 2 == 0) -1f else 1f
+                    MountDirection.SOUTH -> y -= ms * .006f
+                }
+            }, { listOf(GuideStar(x, y, 20f, 100f)) },
+                { if (it.phase == GuideCalibrationPhase.NORTH) fitted = true }).run()
         }.exceptionOrNull()
         assertTrue(failure is IllegalStateException)
         assertEquals("No consistent motion while clearing backlash", failure?.message)
@@ -95,22 +103,34 @@ class GuideBacklashClearingTest {
     }
 
     @Test fun excessiveClearingTravelStopsBeforeAnotherPulseOrFit() = runTest {
-        var x = 100f; var pulses = 0; var fitted = false
+        var x = 100f; var y = 100f; var pulses = 0; var fitted = false
         val failure = runCatching {
-            GuideCalibrator(GuideCalibrationConfig(), { _, _ -> x += 8f; pulses++ },
-                { listOf(GuideStar(x, 100f, 20f, 100f)) }, { if (it.phase == GuideCalibrationPhase.EAST) fitted = true }).run()
+            GuideCalibrator(GuideCalibrationConfig(7, 15f, 1200), { direction, ms ->
+                when (direction) {
+                    MountDirection.WEST -> x -= ms * .004f
+                    MountDirection.EAST -> x += ms * .004f
+                    MountDirection.NORTH -> { y += 8f; pulses++ }
+                    MountDirection.SOUTH -> y -= ms * .006f
+                }
+            }, { listOf(GuideStar(x, y, 20f, 100f)) },
+                { if (it.phase == GuideCalibrationPhase.NORTH) fitted = true }).run()
         }.exceptionOrNull()
         assertTrue(failure?.message.orEmpty().startsWith("Backlash clearing moved too far"))
         assertEquals(1, pulses)
         assertFalse(fitted)
     }
 
-    @Test fun aStationaryMountHasABoundedPulseBudget() = runTest {
-        var commanded = 0; var largest = 0
+    @Test fun aStationaryDecAxisHasABoundedClearingBudget() = runTest {
+        var x = 100f; var commanded = 0; var largest = 0
         val failure = runCatching {
-            GuideCalibrator(GuideCalibrationConfig(initialPulseMs = 5000), { _, ms ->
-                commanded += ms; largest = maxOf(largest, ms)
-            }, { listOf(GuideStar(100f, 100f, 20f, 100f)) }).run()
+            GuideCalibrator(GuideCalibrationConfig(initialPulseMs = 5000), { direction, ms ->
+                when (direction) {
+                    MountDirection.WEST -> x -= ms * .004f
+                    MountDirection.EAST -> x += ms * .004f
+                    MountDirection.NORTH -> { commanded += ms; largest = maxOf(largest, ms) }
+                    MountDirection.SOUTH -> Unit
+                }
+            }, { listOf(GuideStar(x, 100f, 20f, 100f)) }).run()
         }.exceptionOrNull()
         assertTrue(failure is IllegalStateException)
         assertTrue(commanded <= 20_000)
@@ -118,16 +138,24 @@ class GuideBacklashClearingTest {
     }
 
     @Test fun stoppingAfterAClearingMeasurementPreventsTheNextPulse() = runTest {
-        var pulses = 0
+        var x = 100f; var y = 100f; var clearingPulses = 0
         val stopped = CompletableDeferred<Unit>()
         val task = launch {
             val context = currentCoroutineContext()
-            GuideCalibrator(GuideCalibrationConfig(), { _, _ -> pulses++ },
-                { listOf(GuideStar(100f + pulses, 100f, 20f, 100f)) }, {
+            GuideCalibrator(GuideCalibrationConfig(), { direction, ms ->
+                when (direction) {
+                    MountDirection.WEST -> x -= ms * .004f
+                    MountDirection.EAST -> x += ms * .004f
+                    MountDirection.NORTH -> { y += ms * .006f; clearingPulses++ }
+                    MountDirection.SOUTH -> y -= ms * .006f
+                }
+            }, { listOf(GuideStar(x, y, 20f, 100f)) }, {
+                if (it.phase == GuideCalibrationPhase.CLEAR_NORTH) {
                     context.cancel(); stopped.complete(Unit)
+                }
                 }).run()
         }
         stopped.await(); task.cancelAndJoin()
-        assertEquals(1, pulses)
+        assertEquals(1, clearingPulses)
     }
 }

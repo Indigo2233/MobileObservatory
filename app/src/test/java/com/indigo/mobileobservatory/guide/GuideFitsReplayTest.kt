@@ -177,13 +177,14 @@ class GuideFitsReplayTest {
         report("calibration", "eastX,eastY,northX,northY,raBacklash,decBacklash,eastSteps,northSteps,residual", listOf(
             result.calibration.let { "${it.eastXPerMs},${it.eastYPerMs},${it.northXPerMs},${it.northYPerMs},${it.raBacklashMs},${it.decBacklashMs},${it.eastSteps},${it.northSteps},${it.fitResidualPx}" }))
         val c = result.calibration
-        assertEquals(ex, c.eastXPerMs, .0002f)
-        assertEquals(ey, c.eastYPerMs, .0002f)
+        val raEffectiveFraction = 1f - 600f / (c.eastSteps * c.pulseMs)
+        assertEquals(ex * raEffectiveFraction, c.eastXPerMs, .0002f)
+        assertEquals(ey * raEffectiveFraction, c.eastYPerMs, .0002f)
         assertEquals(nx, c.northXPerMs, .0003f)
         assertEquals(ny, c.northYPerMs, .0003f)
         assertEquals(1800f, c.decBacklashMs.toFloat(), 250f)
         assertTrue(c.eastSteps >= 4 && c.northSteps >= 4)
-        assertTrue(c.eastTravelPx >= 15 && c.northTravelPx >= 15)
+        assertTrue(c.eastTravelPx >= 25 && c.northTravelPx >= 25)
     }
 
     private fun stars(frame: FrameData) = module.usableStars(module.detectStars(frame))

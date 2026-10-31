@@ -46,13 +46,13 @@ class GuideCalibrationFlowTest {
         return progress
     }
 
-    @Test fun trackingRaStartsWithBoundedBacklashClearing() = runTest {
-        assertEquals(GuideCalibrationPhase.CLEAR_EAST, calibration().first().phase)
+    @Test fun trackingRaStartsMeasuringWithoutBacklashPreload() = runTest {
+        assertEquals(GuideCalibrationPhase.WEST, calibration().first().phase)
     }
 
     @Test fun returnDistanceIsTheRemainingDistanceFromTheAxisOrigin() = runTest {
         val progress = calibration()
-        for (phase in listOf(GuideCalibrationPhase.WEST, GuideCalibrationPhase.SOUTH)) {
+        for (phase in listOf(GuideCalibrationPhase.EAST, GuideCalibrationPhase.SOUTH)) {
             val distances = progress.filter { it.phase == phase }.map { it.distancePx }
             assertTrue("Return distances must decrease toward zero: $distances",
                 distances.zipWithNext().all { (a, b) -> b <= a + .1f })
@@ -60,11 +60,12 @@ class GuideCalibrationFlowTest {
         }
     }
 
-    @Test fun returnUsesABoundedNumberOfPulses() = runTest {
+    @Test fun measuredReturnUsesFewerPulsesThanOutwardSampling() = runTest {
         val progress = calibration()
-        for (phase in listOf(GuideCalibrationPhase.WEST, GuideCalibrationPhase.SOUTH)) {
-            assertTrue(progress.count { it.phase == phase } in 1..80)
-        }
+        assertTrue(progress.count { it.phase == GuideCalibrationPhase.EAST } <
+            progress.count { it.phase == GuideCalibrationPhase.WEST })
+        assertTrue(progress.count { it.phase == GuideCalibrationPhase.SOUTH } <
+            progress.count { it.phase == GuideCalibrationPhase.NORTH })
     }
 
     @Test fun samePsfHasConsistentHfrAcrossStellarBrightness() {

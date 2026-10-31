@@ -2,7 +2,7 @@
 <resources>
     <string name="gw_settings_title">导星设置</string>
     <string name="gw_travel_label">每轴最小位移</string>
-    <string name="gw_pulse_label">首步校准脉冲上限</string>
+    <string name="gw_pulse_label">备用脉冲（焦距或像元未知时）</string>
     <string name="gw_min_move_label">最小修正量</string>
     <string name="gw_focal_label">导星镜焦距</string>
     <string name="gw_focal_optional">设为 0 或留空时使用像素单位。</string>

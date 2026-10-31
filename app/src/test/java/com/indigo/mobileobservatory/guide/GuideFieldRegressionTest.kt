@@ -9,24 +9,22 @@ class GuideFieldRegressionTest {
     @Test fun crossingTheRaOriginCannotSendAnotherReturnPulse() = runTest {
         var x = 100f
         var y = 100f
-        var origin = 0f
+        val origin = x
         var crossed = false
         var pulsesAfterCrossing = 0
         val runner = GuideCalibrator(GuideCalibrationConfig(), pulse = { direction, ms ->
             when (direction) {
-                MountDirection.EAST -> x += ms * .004f
-                MountDirection.WEST -> {
+                MountDirection.WEST -> x -= ms * .004f
+                MountDirection.EAST -> {
                     if (crossed) pulsesAfterCrossing++
-                    x -= ms * .004f
+                    x += ms * .004f
                     // A small measured overshoot beyond the narrow return tolerance.
-                    if (!crossed && x - origin <= .5f) { x = origin - .8f; crossed = true }
+                    if (!crossed && x - origin >= -.5f) { x = origin + .8f; crossed = true }
                 }
                 MountDirection.NORTH -> y += ms * .006f
                 MountDirection.SOUTH -> y -= ms * .006f
             }
-        }, measure = { listOf(GuideStar(x, y, 20f, 100f)) }, progress = {
-            if (it.phase == GuideCalibrationPhase.CLEAR_EAST) origin = x
-        })
+        }, measure = { listOf(GuideStar(x, y, 20f, 100f)) })
         val result = runCatching { runner.run() }
         assertTrue("Test must cross the RA origin", crossed)
         assertEquals("Return pulses must stop on crossing", 0, pulsesAfterCrossing)

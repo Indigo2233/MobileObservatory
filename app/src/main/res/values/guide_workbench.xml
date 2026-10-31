@@ -34,12 +34,11 @@
     <string name="gw_readout">Camera readout mode</string>
     <string name="gw_apply_exposure">Apply exposure (0.05–5 s)</string>
     <string name="gw_raw_help">Bayer previews and thumbnails use 2×2 CFA cell luminance. Star measurements and calibration use original pixels. Delivered RGB uses luminance. Recalibrate after changing format or readout mode.</string>
-    <string name="gw_calibration_help">Clear backlash with short pulses, then measure at least the specified steps and travel. The pulse setting caps the first measurement step; later steps adapt to the measured response. Fit both axes and measure reversal backlash on return.</string>
-    <string name="gw_steps">Minimum steps per axis</string>
+    <string name="gw_calibration_help">RA measures west and returns east. DEC takes up backlash with short pulses, measures north and returns south. Measurement pulses stay fixed; returns have a command-time limit. Review any calibration advisories.</string>
+    <string name="gw_steps">Desired calibration steps</string>
     <string name="gw_distance">Minimum travel per axis (px)</string>
     <string name="gw_backlash">DEC reversal backlash compensation</string>
     <string name="gw_calibration_result">RA / DEC: %1$d / %2$d steps\nBacklash RA %3$d ms · DEC %4$d ms\nFit residual %5$.2f px</string>
-    <string name="gw_clear_east">Clearing RA backlash</string>
     <string name="gw_clear_north">Clearing DEC backlash</string>
     <string name="gw_calibration_progress">%1$s · step %2$d · %3$.2f px</string>
     <string name="gw_multistar">Multi-star guiding</string>

@@ -162,11 +162,23 @@ private fun GuideCalibrationSettings(vm: CameraViewModel) {
     val calibrating by vm.guideCalibrating.collectAsStateWithPageLifecycle()
     val running by vm.guideRunning.collectAsStateWithPageLifecycle()
     val backlash by vm.guideBacklashEnabled.collectAsStateWithPageLifecycle()
+    val focal by vm.guideFocalLength.collectAsStateWithPageLifecycle()
+    val geometry by vm.guideCameraGeometry.collectAsStateWithPageLifecycle()
+    val guideRate by vm.guideRateSidereal.collectAsStateWithPageLifecycle()
+    val coordinates by vm.mountCoordinates.collectAsStateWithPageLifecycle()
+    val scale = GuideStarAnalysis.arcsecPerPixel(geometry?.let { it.pixelSizeUm * it.binning }, focal)
+    val estimate = GuideCalibrationConfig(steps, distance, pulse, scale, guideRate,
+        coordinates?.decDeg?.toFloat()?.coerceIn(-90f, 90f) ?: 0f)
     GuideNumberSetting(stringResource(R.string.gw_steps), steps.toFloat(), stepsSpec, "", "steps",
         { vm.setGuideCalibrationSteps(it.toInt()) }, !calibrating)
     GuideNumberSetting(stringResource(R.string.gw_travel_label), distance, distanceSpec, "px", "distance",
         vm::setGuideCalibrationDistance, !calibrating)
-    GuideNumberSetting(stringResource(R.string.gw_pulse_label), pulse.toFloat(), pulseSpec, "ms", "pulse",
+    GuideNumberSetting(stringResource(R.string.gw_guide_rate), guideRate, guideRateSpec, "×", "guide-rate",
+        vm::setGuideRateSidereal, !calibrating)
+    GuideSettingsHelp(stringResource(R.string.gw_guide_rate_help))
+    if (scale != null) Text(stringResource(R.string.gw_auto_pulse, estimate.pulseMs(true), estimate.pulseMs(false)),
+        style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("guide-auto-pulse"))
+    else GuideNumberSetting(stringResource(R.string.gw_pulse_label), pulse.toFloat(), pulseSpec, "ms", "pulse",
         { vm.setGuideCalibrationPulseMs(it.toInt()) }, !calibrating)
     Divider()
     GuideToggle(stringResource(R.string.gw_backlash), backlash, vm::setGuideBacklashEnabled)

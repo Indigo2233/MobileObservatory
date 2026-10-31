@@ -23,10 +23,11 @@ class GuideWorkbenchTest {
             }
         }, measure = { listOf(GuideStar(x, y, 20f, 100f)) })
         val result = runner.run()
-        assertEquals(.004f, result.calibration.eastXPerMs, .0001f)
+        val raEffectiveFraction = 1f - 600f / (result.calibration.eastSteps * result.calibration.pulseMs)
+        assertEquals(.004f * raEffectiveFraction, result.calibration.eastXPerMs, .0001f)
         assertEquals(.006f, result.calibration.northYPerMs, .0001f)
         assertTrue(result.calibration.eastSteps >= 4); assertTrue(result.calibration.northSteps >= 4)
-        assertTrue(result.calibration.eastTravelPx >= 15f); assertTrue(result.calibration.northTravelPx >= 15f)
+        assertTrue(result.calibration.eastTravelPx >= 25f); assertTrue(result.calibration.northTravelPx >= 25f)
         assertEquals(1800f, result.calibration.decBacklashMs.toFloat(), 160f)
         assertTrue(result.calibration.fitResidualPx < .1f)
     }
@@ -36,15 +37,15 @@ class GuideWorkbenchTest {
         try { runner.run(); fail("Stationary mount accepted") } catch (_: IllegalStateException) { }
     }
 
-    @Test fun crossAxisReturnDriftRejectsCalibration() = runTest {
-        assertUnsafeReturnRejected(crossAxisDrift = true)
+    @Test fun aReturnOffsetIsReportedWithoutRejectingTheMeasuredAxes() = runTest {
+        assertReturnAdvisory(crossAxisDrift = true)
     }
 
-    @Test fun asymmetricForwardAndReverseRatesRejectCalibration() = runTest {
-        assertUnsafeReturnRejected(crossAxisDrift = false)
+    @Test fun asymmetricForwardAndReverseRatesCannotBeMisreportedAsBacklash() = runTest {
+        assertReturnAdvisory(crossAxisDrift = false)
     }
 
-    private suspend fun assertUnsafeReturnRejected(crossAxisDrift: Boolean) {
+    private suspend fun assertReturnAdvisory(crossAxisDrift: Boolean) {
         var x = 100f; var y = 100f
         val calibrator = GuideCalibrator(GuideCalibrationConfig(), { direction, ms ->
             when (direction) {
@@ -57,10 +58,10 @@ class GuideWorkbenchTest {
                 MountDirection.SOUTH -> y -= ms * .006f
             }
         }, { listOf(GuideStar(x, y, 20f, 100f)) })
-        val failure = runCatching { calibrator.run() }.exceptionOrNull()
-        assertTrue(failure is IllegalStateException)
-        val expected = if (crossAxisDrift) "Calibration return drifted across the axis" else "Forward and reverse calibration rates disagree"
-        assertEquals(expected, failure?.message)
+        val result = calibrator.run().calibration
+        assertTrue(result.advisories.isNotEmpty())
+        assertTrue(result.raReturnResidualPx > 2f)
+        assertEquals(0, result.raBacklashMs)
     }
 
     @Test fun gaussianProfileMeasuresHalfFluxRadiusFromBackgroundSubtractedRawPixels() {

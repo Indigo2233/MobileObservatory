@@ -34,12 +34,11 @@
     <string name="gw_readout">相机读出模式</string>
     <string name="gw_apply_exposure">应用曝光（0.05–5 s）</string>
     <string name="gw_raw_help">Bayer 预览和缩略图采用 2×2 CFA 亮度合成，星点测量和校准使用原始像素。相机提供 RGB 时使用亮度通道。更改格式或读出模式后需要重新校准。</string>
-    <string name="gw_calibration_help">先用短脉冲消除空程，再测量不少于指定步数和位移。脉冲设置限制首次正式测量的时长，后续步长根据响应调整。拟合双轴响应，在返回时测量回差。</string>
-    <string name="gw_steps">每轴最少步数</string>
+    <string name="gw_calibration_help">RA 向西测量、向东返回；DEC 先用短脉冲消除空程，再向北测量、向南返回。测量脉冲固定，返回受累计指令时间限制。完成后可查看校准提示。</string>
+    <string name="gw_steps">期望校准步数</string>
     <string name="gw_distance">每轴最小位移（px）</string>
     <string name="gw_backlash">DEC 换向回差补偿</string>
     <string name="gw_calibration_result">RA / DEC：%1$d / %2$d 步\n回差 RA %3$d ms · DEC %4$d ms\n拟合残差 %5$.2f px</string>
-    <string name="gw_clear_east">消除 RA 空程</string>
     <string name="gw_clear_north">消除 DEC 空程</string>
     <string name="gw_calibration_progress">%1$s · 第 %2$d 步 · %3$.2f px</string>
     <string name="gw_multistar">多星导星</string>

@@ -497,9 +497,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val guideProfile = _guideProfile.asStateFlow()
     private val _guideDisplayFrame = MutableStateFlow<com.indigo.mobileobservatory.guide.GuideDisplayFrame?>(null)
     val guideDisplayFrame = _guideDisplayFrame.asStateFlow()
-    private val _guideCalibrationSteps = MutableStateFlow(7)
+    private val _guideCalibrationSteps = MutableStateFlow(12)
     val guideCalibrationSteps = _guideCalibrationSteps.asStateFlow()
-    private val _guideCalibrationDistance = MutableStateFlow(15f)
+    private val _guideCalibrationDistance = MutableStateFlow(25f)
     val guideCalibrationDistance = _guideCalibrationDistance.asStateFlow()
     private val _guideFocalLength = MutableStateFlow(0f)
     val guideFocalLength = _guideFocalLength.asStateFlow()
@@ -957,8 +957,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         prefs.registerOnSharedPreferenceChangeListener(pointingOpticsPreferenceListener)
         _guideExposureUs.value = prefs.getFloat("guide_exposure_us", 1_000_000f)
             .coerceIn(50_000f, 5_000_000f)
-        _guideCalibrationSteps.value = prefs.getInt("guide_calibration_steps", 7).coerceIn(5, 20)
-        _guideCalibrationDistance.value = prefs.getFloat("guide_calibration_distance", 15f).coerceIn(10f, 50f)
+        _guideCalibrationSteps.value = prefs.getInt("guide_calibration_steps", 12).coerceIn(5, 20)
+        _guideCalibrationDistance.value = prefs.getFloat("guide_calibration_distance", 25f).coerceIn(10f, 50f)
         _guideCalibrationPulseMs.value = prefs.getInt("guide_calibration_pulse_ms", 1200).coerceIn(300, 5000)
         _guideRateSidereal.value = prefs.getFloat("guide_rate_sidereal", .5f).takeIf { it.isFinite() }?.coerceIn(.1f, 1f) ?: .5f
         _guideFocalLength.value = prefs.getFloat("guide_focal_length_mm", 0f)
@@ -2150,12 +2150,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         },
                         progress = { value ->
                             val phase = when (value.phase) {
-                                com.indigo.mobileobservatory.guide.GuideCalibrationPhase.CLEAR_EAST -> R.string.gw_clear_east
-                                com.indigo.mobileobservatory.guide.GuideCalibrationPhase.EAST -> R.string.calibration_ra_east
-                                com.indigo.mobileobservatory.guide.GuideCalibrationPhase.WEST -> R.string.calibration_ra_return
+                                com.indigo.mobileobservatory.guide.GuideCalibrationPhase.WEST -> R.string.gw_calibration_west
+                                com.indigo.mobileobservatory.guide.GuideCalibrationPhase.EAST -> R.string.calibration_ra_return
                                 com.indigo.mobileobservatory.guide.GuideCalibrationPhase.CLEAR_NORTH -> R.string.gw_clear_north
                                 com.indigo.mobileobservatory.guide.GuideCalibrationPhase.NORTH -> R.string.calibration_dec_north
                                 com.indigo.mobileobservatory.guide.GuideCalibrationPhase.SOUTH -> R.string.calibration_dec_return
+                                com.indigo.mobileobservatory.guide.GuideCalibrationPhase.NUDGE_SOUTH -> R.string.gw_calibration_nudge
                             }
                             _guideStatus.value = app.getString(R.string.gw_calibration_progress, app.getString(phase), value.step, value.distancePx)
                             FileLogger.i("GuideCalibration", "phase=${value.phase} step=${value.step} originDx=${value.xPx} " +
