@@ -1,6 +1,7 @@
 package com.indigo.mobileobservatory.ui
 
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.graphics.Bitmap
@@ -13,6 +14,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import android.os.ParcelFileDescriptor
@@ -32,6 +35,7 @@ import org.junit.runner.RunWith
 import org.junit.rules.TestName
 import java.io.File
 import java.util.UUID
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.atomic.AtomicInteger
@@ -46,7 +50,9 @@ class PolarWorkflowScreenInstrumentedTest {
     private val keys = listOf("polar_latitude_deg", "polar_longitude_deg", "plate_focal_length_mm", "plate_pixel_size_um",
         "polar_manual_mode", "polar_continuous_estimator", "plate_sensor_id", "polar_exposure_seconds",
         "polar_refraction_adjustment", "polar_pressure_hpa", "polar_temperature_c", "polar_elevation_m",
-        "polar_alignment_tolerance_arcmin", "polar_automatic_refresh")
+        "polar_alignment_tolerance_arcmin", "polar_automatic_refresh", "polar_use_mount_hint",
+        "polar_blind_fallback", "polar_east_direction", "polar_target_distance_deg",
+        "polar_move_rate_deg_sec", "polar_search_radius_deg", "polar_monochrome_preview")
     private var saved = emptyMap<String, Any?>()
     private lateinit var image: File
     private val generated = mutableListOf<File>()
@@ -102,17 +108,67 @@ class PolarWorkflowScreenInstrumentedTest {
         generated.forEach { it.delete() }
     }
 
-    private fun screen(engine: ImagePlateSolver, fontScale: Float = 1f, compact: Boolean = false, capture: suspend (Float) -> File?) {
+    private fun screen(engine: ImagePlateSolver, fontScale: Float = 1f, compact: Boolean = false,
+        chinese: Boolean = false, automaticMount: Boolean = false,
+        prepareTracking: suspend () -> Unit = {}, capture: suspend (Float) -> File?) {
+        if (automaticMount) context.getSharedPreferences("mobile_observatory", Context.MODE_PRIVATE)
+            .edit().putBoolean("polar_manual_mode", false).commit()
+        val configuration = Configuration(context.resources.configuration).apply {
+            if (chinese) setLocale(Locale.SIMPLIFIED_CHINESE)
+        }
+        val localizedResources = compose.activity.createConfigurationContext(configuration).resources
+        val localized: Context = if (chinese) object : ContextWrapper(compose.activity) {
+            override fun getResources() = localizedResources
+        } else compose.activity
         compose.setContent { MobileObservatoryTheme {
             val density = LocalDensity.current
-            CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale)) {
+            CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale),
+                LocalContext provides localized, LocalConfiguration provides configuration) {
             Box(if (compact) Modifier.size(360.dp, 480.dp) else Modifier) {
             PolarAlignmentScreen(cameraConnected = true, cameraPixelSizeUm = 2.9f, cameraExposureUs = 5_000_000f,
                 cameraExposureMinUs = 1000f, cameraExposureMaxUs = 20_000_000f,
+                mountCoordinates = if (automaticMount) MountCoordinates(10.0, 20.0) else null,
+                onEnsureMountTracking = prepareTracking,
                 solver = engine, onCaptureFits = capture, onBack = {})
             }
             }
         } }
+    }
+
+    @Test fun automaticPolarChecksTrackingBeforeItsFirstExposure() {
+        val prepared = AtomicBoolean()
+        val captured = AtomicBoolean()
+        val engine = object : ImagePlateSolver {
+            override val ready = true
+            override suspend fun solve(inputFile: File, fovDeg: Double, mountCoordinates: MountCoordinates?,
+                searchRadiusDeg: Double?): PlateSolveResult = error("Capture is held by this test")
+        }
+        screen(engine, automaticMount = true, prepareTracking = { prepared.set(true) }) {
+            assertTrue("Tracking must be checked before exposure", prepared.get())
+            captured.set(true)
+            awaitCancellation()
+        }
+        compose.onNodeWithTag("polar-run").performScrollTo().performClick()
+        compose.waitUntil(15_000) { captured.get() }
+        compose.onNodeWithTag("polar-stop").performScrollTo().performClick()
+        compose.waitUntil(5000) { compose.onAllNodes(hasTestTag("polar-run") and isEnabled()).fetchSemanticsNodes().isNotEmpty() }
+    }
+
+    @Test fun automaticPolarTrackingFailurePreventsExposureAndShowsTheFailure() {
+        val captures = AtomicInteger()
+        val engine = object : ImagePlateSolver {
+            override val ready = true
+            override suspend fun solve(inputFile: File, fovDeg: Double, mountCoordinates: MountCoordinates?,
+                searchRadiusDeg: Double?): PlateSolveResult = error("No exposure expected")
+        }
+        screen(engine, automaticMount = true, prepareTracking = { error("Tracking verification failed") }) {
+            captures.incrementAndGet()
+            image
+        }
+        compose.onNodeWithTag("polar-run").performScrollTo().performClick()
+        compose.waitUntil(5000) { compose.onAllNodesWithTag("polar-current-failure").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("polar-current-failure").assert(hasText("Tracking verification failed", substring = true))
+        assertEquals(0, captures.get())
     }
 
     @Test fun exposureAndTestCaptureAreAvailableBeforeAnyPlateSolve() {
@@ -174,6 +230,104 @@ class PolarWorkflowScreenInstrumentedTest {
         compose.onNodeWithTag("polar-run").performScrollTo().performClick()
         compose.waitUntil(15_000) { compose.onAllNodesWithTag("polar-current-failure").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithTag("polar-current-failure").assertIsDisplayed().assert(hasText("USB disconnected", substring = true))
+    }
+
+    @Test fun advancedSettingsAlignFieldsAndRetainDrafts() {
+        val engine = object : ImagePlateSolver {
+            override val ready = false
+            override suspend fun solve(inputFile: File, fovDeg: Double, mountCoordinates: MountCoordinates?,
+                searchRadiusDeg: Double?): PlateSolveResult = error("Settings do not start a solve")
+        }
+        screen(engine, chinese = true) { image }
+        val labels = context.createConfigurationContext(Configuration(context.resources.configuration).apply {
+            setLocale(Locale.SIMPLIFIED_CHINESE)
+        })
+        compose.onNodeWithText(labels.getString(com.indigo.mobileobservatory.R.string.polar_refresh_auto_hint)).assertDoesNotExist()
+        compose.onNodeWithText(labels.getString(com.indigo.mobileobservatory.R.string.polar_setup_summary,
+            "30.0", "110.0", "100.0", "2.900")).assertDoesNotExist()
+        screenshot("-main")
+        compose.onNodeWithTag("polar-parameters-toggle").performScrollTo().performClick()
+        compose.onNodeWithTag("polar-latitude").performScrollTo()
+        val latitude = compose.onNodeWithTag("polar-latitude").fetchSemanticsNode().boundsInRoot
+        val longitude = compose.onNodeWithTag("polar-longitude").fetchSemanticsNode().boundsInRoot
+        assertEquals(latitude.top, longitude.top, 1f)
+        assertTrue(latitude.right <= longitude.left)
+        compose.onNodeWithTag("solve-focal").performScrollTo()
+        val focal = compose.onNodeWithTag("solve-focal").fetchSemanticsNode().boundsInRoot
+        val pixel = compose.onNodeWithTag("solve-pixel").fetchSemanticsNode().boundsInRoot
+        assertEquals(focal.top, pixel.top, 1f)
+        assertTrue(focal.right <= pixel.left)
+        screenshot("-optics")
+        compose.onNodeWithTag("solve-focal").performTextClearance()
+        compose.onNodeWithTag("solve-focal").performTextInput("528")
+        compose.onNodeWithTag("polar-parameters-toggle").performScrollTo().performClick()
+        compose.onNodeWithTag("polar-parameters-toggle").performClick()
+        compose.onNodeWithTag("solve-focal").performScrollTo().assertTextContains("528")
+    }
+
+    @Test fun largeFontAdvancedSettingsStackFieldsAndKeepControlsReachable() {
+        val engine = object : ImagePlateSolver {
+            override val ready = false
+            override suspend fun solve(inputFile: File, fovDeg: Double, mountCoordinates: MountCoordinates?,
+                searchRadiusDeg: Double?): PlateSolveResult = error("Settings do not start a solve")
+        }
+        screen(engine, fontScale = 2f, compact = true, chinese = true) { image }
+        compose.onNodeWithTag("polar-parameters-toggle").performScrollTo().performClick()
+        compose.onNodeWithTag("polar-latitude").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("polar-longitude").performScrollTo().assertIsDisplayed()
+        val latitude = compose.onNodeWithTag("polar-latitude").fetchSemanticsNode().boundsInRoot
+        val longitude = compose.onNodeWithTag("polar-longitude").fetchSemanticsNode().boundsInRoot
+        assertTrue(longitude.top >= latitude.bottom)
+        compose.onNodeWithTag("solve-focal").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("solve-pixel").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("polar-mount-hint").performScrollTo().assertIsDisplayed().assertHasClickAction()
+        screenshot("-advanced")
+    }
+
+    @Test fun diagnosticsKeepsStopAvailableDuringAHangingSolve() = cancelHangingSolve("diagnostics")
+
+    @Test fun fullScreenKeepsStopAvailableDuringAHangingSolve() = cancelHangingSolve("fullscreen")
+
+    @Test fun previewKeepsStopAvailableDuringAHangingSolve() = cancelHangingSolve("preview")
+
+    @Test fun largeFontDiagnosticsKeepsStopAvailableDuringAHangingSolve() =
+        cancelHangingSolve("diagnostics", fontScale = 2f, compact = true)
+
+    private fun cancelHangingSolve(surface: String, fontScale: Float = 1f, compact: Boolean = false) {
+        val started = AtomicBoolean()
+        val cancelled = AtomicBoolean()
+        val captures = AtomicInteger()
+        val engine = object : ImagePlateSolver {
+            override val ready = true
+            override suspend fun solve(inputFile: File, fovDeg: Double, mountCoordinates: MountCoordinates?,
+                searchRadiusDeg: Double?): PlateSolveResult {
+                started.set(true)
+                try { awaitCancellation() } finally { cancelled.set(true) }
+            }
+        }
+        screen(engine, fontScale = fontScale, compact = compact) { captures.incrementAndGet(); image }
+        compose.onNodeWithTag("polar-run").performScrollTo().performClick()
+        compose.waitUntil(15_000) { started.get() }
+        when (surface) {
+            "diagnostics" -> {
+                compose.onNodeWithTag("polar-diagnostics-expand").performClick()
+                screenshot("-before-stop")
+                compose.onNodeWithTag("polar-diagnostics-stop").assertIsDisplayed().performClick()
+            }
+            "fullscreen" -> {
+                compose.onNodeWithTag("polar-preview-expand").performClick()
+                screenshot("-before-stop")
+                compose.onNodeWithTag("polar-inspection-stop").assertIsDisplayed().performClick()
+                compose.onNodeWithTag("polar-preview-close").performClick()
+            }
+            else -> {
+                screenshot("-before-stop")
+                compose.onNodeWithTag("polar-preview-stop").assertIsDisplayed().performClick()
+            }
+        }
+        compose.waitUntil(5000) { cancelled.get() }
+        compose.onNodeWithTag("polar-run").performScrollTo().assertIsEnabled()
+        assertEquals(1, captures.get())
     }
 
     @Test fun compactLargeFontLayoutKeepsTheImageAndFailureVisible() {
@@ -263,7 +417,8 @@ class PolarWorkflowScreenInstrumentedTest {
         screenshot("-three-point-result")
         compose.onNodeWithTag("polar-preview-expand").performClick()
         compose.onNodeWithTag("polar-correction-inspection").assertIsDisplayed()
-        compose.onNodeWithTag("polar-error-reticle").assertIsDisplayed()
+        compose.onNode(hasTestTag("polar-error-reticle") and
+            hasAnyAncestor(hasTestTag("polar-fullscreen-preview"))).assertIsDisplayed()
         screenshot("-result-fullscreen")
         compose.onNodeWithTag("polar-preview-close").performClick()
         if (startManual) {

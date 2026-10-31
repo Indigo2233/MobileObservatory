@@ -1485,6 +1485,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         mountModule.moveMountRaBy(distanceDeg, east, rateDegPerSec)
     }
     fun stopMountRaMove() = mountModule.stopMountRaMove()
+    suspend fun ensureMountTracking() = mountModule.ensureMountTracking()
     fun stopMountMotion() {
         _mountStopSignal.value += 1L
         stopGuideOperations()

@@ -1,6 +1,9 @@
 package com.indigo.mobileobservatory.astrometry
 
 import com.indigo.mobileobservatory.util.FitsHeaderParser
+import com.indigo.mobileobservatory.camera.FrameData
+import com.indigo.mobileobservatory.camera.PixelFormat
+import com.indigo.mobileobservatory.recording.FITSWriter
 import kotlinx.coroutines.CancellationException
 import org.junit.Assert.*
 import org.junit.Rule
@@ -47,10 +50,66 @@ class AstapSum2InputTest {
     }
 
     @Test fun unsupportedImagesAndOddDimensionsAreLeftForTheOriginalSolver() {
-        assertNull(AstapSum2Input.inspect(source(4, 4, ByteArray(16), bitpix = 16)))
+        assertNull(AstapSum2Input.inspect(source(4, 4, ByteArray(64), bitpix = 32)))
         assertNull(AstapSum2Input.inspect(source(5, 4, ByteArray(20))))
         assertNull(AstapSum2Input.inspect(source(4, 5, ByteArray(20))))
         assertNull(AstapSum2Input.inspect(source(4, 4, ByteArray(16), scale = .5)))
+    }
+
+    @Test fun unsignedSixteenBitSumsPreserveFaintSignalAndDoNotClipBrightStars() {
+        val input = temp.newFile("unsigned16.fits")
+        val pixels = listOf(65535, 65535, 10, 11, 65535, 65535, 12, 13,
+            1000, 1001, 2, 3, 1002, 1003, 4, 5)
+        val cards = listOf("SIMPLE" to "T", "BITPIX" to "16", "NAXIS" to "2",
+            "NAXIS1" to "4", "NAXIS2" to "4", "BSCALE" to "1", "BZERO" to "32768")
+        val text = cards.joinToString("") { (key, value) ->
+            (key.padEnd(8) + "= " + value).padEnd(80)
+        } + "END".padEnd(80)
+        java.io.DataOutputStream(input.outputStream()).use { output ->
+            output.write(text.padEnd(2880).toByteArray(Charsets.US_ASCII))
+            pixels.forEach { output.writeShort(it - 32768) }
+        }
+        val before = sha(input)
+        val output = File(temp.root, "sum32.fits")
+        requireNotNull(AstapSum2Input.inspect(input)).write(output)
+        val header = FitsHeaderParser.read(output)
+        assertEquals(32, header.intValue("BITPIX"))
+        assertEquals(0, header.intValue("BZERO") ?: 0)
+        assertEquals(2, header.intValue("NAXIS1"))
+        RandomAccessFile(output, "r").use {
+            it.seek(header.dataOffset)
+            assertEquals(listOf(262140, 46, 4006, 14), List(4) { _ -> it.readInt() })
+        }
+        assertEquals(before, sha(input))
+    }
+
+    @Test fun highBitReplayMatchesTheIndependentNativeSolveInput() {
+        val original = temp.newFile("real8.fits")
+        GZIPInputStream(requireNotNull(javaClass.getResourceAsStream("/astrometry/weak-cfa.fits.gz"))).use { source ->
+            original.outputStream().use { source.copyTo(it) }
+        }
+        val header = FitsHeaderParser.read(original)
+        val width = requireNotNull(header.intValue("NAXIS1"))
+        val height = requireNotNull(header.intValue("NAXIS2"))
+        val raw = ByteArray(width * height)
+        RandomAccessFile(original, "r").use { it.seek(header.dataOffset); it.readFully(raw) }
+        val highBit = ByteArray(raw.size * 2)
+        raw.indices.forEach { index ->
+            val value = (raw[index].toInt() and 255) * 64
+            highBit[index * 2] = value.toByte()
+            highBit[index * 2 + 1] = (value ushr 8).toByte()
+        }
+        val input = temp.newFile("real16.fits")
+        FITSWriter().write(input, FrameData(highBit, width, height, PixelFormat.BAYER_RG16, 1, 0),
+            exposureSeconds = 2f, gain = 0f)
+        val before = sha(input)
+        val output = File(temp.root, "real32.fits")
+        requireNotNull(AstapSum2Input.inspect(input)).write(output)
+        val summed = FitsHeaderParser.read(output)
+        assertEquals(32, summed.intValue("BITPIX"))
+        assertEquals("4ce101fb24ba42fe6cf25e2ebd235d917d5b85e37cfc976ae6bd692dcd90060e",
+            sha(output, summed.dataOffset, width.toLong() * height))
+        assertEquals(before, sha(input))
     }
 
     @Test fun cancelledPreparationDeletesOnlyThePartialOutput() {

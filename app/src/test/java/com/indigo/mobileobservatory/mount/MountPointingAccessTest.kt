@@ -121,7 +121,7 @@ class MountPointingAccessTest {
     }
 
     @Test fun wirePolicyAllowsImplementedQueriesAndStopsAndRejectsUnknownOrMotionPackets() {
-        listOf(":GR#", ":GEP#", ":MountInfo#", ":Q#", ":qR#", ":Td#", ":ST0#", ":j1\r", ":L2\r", ":K1\r", "Kx", "e")
+        listOf(":GR#", ":GEP#", ":MountInfo#", ":Q#", ":qR#", ":Td#", ":ST0#", ":GU#", ":GT#", ":GLS#", ":j1\r", ":i1\r", ":L2\r", ":K1\r", "Kx", "e", "t")
             .forEach { assertTrue(it, MountReadOnlyWirePolicy.permits(it.toByteArray())) }
         listOf(":GUNKNOWN#", ":CM#", ":MS#", ":Sr12:00:00#", ":ST1#", ":F1\r", ":E1000000\r", ":J1\r", "r00000000,00000000", "H")
             .forEach { assertFalse(it, MountReadOnlyWirePolicy.permits(it.toByteArray())) }

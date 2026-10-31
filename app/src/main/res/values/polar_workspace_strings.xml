@@ -16,8 +16,8 @@
     <string name="polar_test_capturing">Taking a test exposure…</string>
     <string name="polar_test_complete">Test exposure ready · inspect focus and stars</string>
     <string name="polar_test_image">Test exposure</string>
-    <string name="polar_camera_preview">Camera preview · before sampling</string>
-    <string name="polar_preview_empty">Take a test exposure to inspect focus and stars.</string>
+    <string name="polar_camera_preview">Camera preview</string>
+    <string name="polar_preview_empty">No image</string>
     <string name="polar_preview_ready">Set exposure, then take a test image or start alignment.</string>
     <string name="polar_detected_stars">Detected stars: %1$d</string>
     <string name="polar_reason_capture">Camera capture failed</string>

@@ -6,6 +6,35 @@ import org.junit.Test
 import java.time.Instant
 
 class SkyWatcherMotorAdapterTest {
+    @Test fun trackingReadsMotorStatusAndActualPeriodIncludingTrackingEnabledBeforeConnection() {
+        val queue = motorReplies()
+        var status = "=111\r"
+        // 12,960,000 counts/revolution; timer 16 MHz; sidereal period from board geometry.
+        val geometry = SkyWatcherAxisGeometry(12_960_000, 16_000_000, 16)
+        var period = SkyWatcherEquatorialMath.rateCode(SkyWatcherEquatorialMath.SIDEREAL_ARCSEC_PER_SEC, geometry).second
+        val sent = mutableListOf<String>()
+        val adapter = SkyWatcherMotorAdapter(exchange = { payload ->
+            val command = payload.toString(Charsets.US_ASCII)
+            sent += command
+            when {
+                queue.isNotEmpty() -> queue.removeFirst()
+                command == ":f1\r" -> status
+                command == ":f2\r" -> "=101\r"
+                command == ":i1\r" -> "=${SkyWatcherMotorCodec.intToHex(period, 6)}\r"
+                else -> error("Unexpected tracking write/query: $command")
+            }.toByteArray()
+        }).also { it.open() }
+        sent.clear()
+        assertEquals(MountTrackingState(true, MountTrackingRate.SIDEREAL), adapter.readTracking())
+        assertEquals(listOf(":f1\r", ":f2\r", ":i1\r"), sent)
+        period /= 8 // A slow manual slew is not evidence of astronomical tracking.
+        assertEquals(MountTrackingState(), adapter.readTracking())
+        status = "=011\r" // Active GOTO.
+        assertEquals(MountTrackingState(), adapter.readTracking())
+        status = "=101\r" // Idle board retains the speed-mode bit.
+        assertEquals(MountTrackingState(false, MountTrackingRate.OFF), adapter.readTracking())
+    }
+
     @Test
     fun openReadsGeometryAndCoordinatesFromMotorReplies() {
         val queue = motorReplies()

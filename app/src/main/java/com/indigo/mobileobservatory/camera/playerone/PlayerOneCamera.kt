@@ -451,13 +451,11 @@ class PlayerOneCamera : Camera, CameraSingleExposureCapable, CameraOffsetCapable
             var handedOff = false
             var output: ByteArray? = null
             try {
-                while (running.get() && !disconnected && captureGeneration.isActive(generation)) {
-                    try { buffer.clear(); cam.getImageData(buffer, GRAB_TIMEOUT_MS) }
-                    catch (error: PoaException) {
-                        if (error.error == com.playeroneastronomy.camera.PoaError.TIMEOUT) continue
-                        throw error
-                    }
-                    if (!running.get() || !captureGeneration.isActive(generation)) break
+                val ready = awaitPlayerOneSingleImage(
+                    active = { running.get() && !disconnected && captureGeneration.isActive(generation) },
+                    imageReady = { cam.isImageReady },
+                    readImage = { buffer.clear(); cam.getImageData(buffer, GRAB_TIMEOUT_MS) })
+                if (ready) {
                     singleFrameCompleted = true
                     val width = currentRoi.width; val height = currentRoi.height
                     val size = width * height * currentPixelFormat.bytesPerPixel
@@ -467,7 +465,6 @@ class PlayerOneCamera : Camera, CameraSingleExposureCapable, CameraOffsetCapable
                     callback.onFrame(FrameData(owned, width, height, currentPixelFormat, 1,
                         System.currentTimeMillis(), generation))
                     handedOff = true
-                    break
                 }
             } catch (error: Throwable) {
                 if (running.get() && !disconnected) {

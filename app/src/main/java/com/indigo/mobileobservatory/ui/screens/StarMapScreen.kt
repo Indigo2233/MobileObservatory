@@ -2267,11 +2267,12 @@ fun StarMapScreen(
         }
 
         if (showGlobalStop) {
-            val stopDetail = precisionGotoProgress.message.takeIf { it.isNotBlank() }
+            val stopDetail = precisionGotoProgress.message.takeIf { precisionGotoProgress.isActive && it.isNotBlank() }
             MountMotionStopBanner(
                 state = mountMotionState,
                 onStop = onStopMount,
                 detail = stopDetail,
+                onDetails = onPrecisionDetails.takeIf { precisionGotoProgress.isActive },
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()

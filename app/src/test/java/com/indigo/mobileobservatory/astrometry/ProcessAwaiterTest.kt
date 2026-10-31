@@ -28,6 +28,17 @@ class ProcessAwaiterTest {
         assertTrue(process.destroyed)
         assertTrue(work.isCancelled)
     }
+    @Test fun cancelBeforeTheWaitStartsStillDestroysTheLaunchedProcess() = runBlocking {
+        val process = FakeProcess()
+        val work = launch(start = CoroutineStart.UNDISPATCHED) {
+            cancel()
+            awaitSolverProcess(process, 360_000)
+        }
+        work.join()
+        assertTrue(work.isCancelled)
+        assertEquals(0, process.calls.get())
+        assertTrue("The launched process survived cancellation before IO dispatch", process.destroyed)
+    }
     @Test fun timeoutAndNormalCompletionRemainDifferent() = runBlocking {
         val timed = FakeProcess(); assertFalse(awaitSolverProcess(timed, 20)); assertTrue(timed.destroyed)
         val exited = FakeProcess(true); assertTrue(awaitSolverProcess(exited, 1000)); assertFalse(exited.destroyed)

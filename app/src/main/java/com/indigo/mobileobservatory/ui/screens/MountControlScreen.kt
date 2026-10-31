@@ -126,6 +126,7 @@ fun MountControlScreen(
     val moveStatus by viewModel.mountMoveStatus.collectAsStateWithPageLifecycle()
     val slewRate by viewModel.mountSlewRate.collectAsStateWithPageLifecycle()
     val trackingRate by viewModel.mountTrackingRate.collectAsStateWithPageLifecycle()
+    val trackingEnabled by viewModel.mountTrackingEnabled.collectAsStateWithPageLifecycle()
     val accessMode by viewModel.mountAccessMode.collectAsStateWithPageLifecycle()
     val capabilities by viewModel.mountPointingCapabilities.collectAsStateWithPageLifecycle()
     val motion by viewModel.mountMotionState.collectAsStateWithPageLifecycle()
@@ -730,7 +731,11 @@ fun MountControlScreen(
                         Text(moveStatus, color = MaterialTheme.colorScheme.primary)
                     }
                     Text(
-                        stringResource(R.string.tracking_rate),
+                        stringResource(when (trackingEnabled) {
+                            null -> R.string.tracking_unknown
+                            true -> if (trackingRate == null) R.string.tracking else R.string.tracking_rate
+                            false -> R.string.tracking_rate
+                        }),
                         style = MaterialTheme.typography.labelLarge,
                         modifier = Modifier.fillMaxWidth()
                     )

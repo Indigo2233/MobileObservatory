@@ -52,13 +52,14 @@ internal fun ObservatoryDeviceBar(viewModel: CameraViewModel, redNightMode: Bool
     val mountPillValue = when {
         !mountConnected -> null
         globalMountMotionState.showsGlobalStop -> stringResource(R.string.stop)
-        mountTrackingEnabled -> stringResource(R.string.tracking)
-        else -> stringResource(R.string.tracking_stopped)
+        mountTrackingEnabled == true -> stringResource(R.string.tracking)
+        mountTrackingEnabled == false -> stringResource(R.string.tracking_stopped)
+        else -> stringResource(R.string.tracking_unknown)
     }
     val mountPillCode = when {
         !mountConnected -> DeviceStatusCode.OFF
         globalMountMotionState.showsGlobalStop -> DeviceStatusCode.ACTIVE
-        mountTrackingEnabled -> DeviceStatusCode.ACTIVE
+        mountTrackingEnabled == true -> DeviceStatusCode.ACTIVE
         else -> DeviceStatusCode.READY
     }
     val guidePillValue = when {

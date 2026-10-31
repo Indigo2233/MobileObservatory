@@ -80,12 +80,12 @@ internal object MountReadOnlyWirePolicy {
         if (text.startsWith(":") && text.endsWith("#")) {
             return text in setOf(":GR#", ":GD#", ":Gt#", ":Gg#", ":GC#", ":GL#", ":GG#", ":GUT#", ":GLS#", ":GEP#",
                 ":GVP#", ":GVN#", ":GVR#", ":MountInfo#", ":Q#", ":Qn#", ":Qs#", ":Qe#", ":Qw#",
-                ":qD#", ":qR#", ":Td#", ":ST0#")
+                ":qD#", ":qR#", ":Td#", ":ST0#", ":GU#", ":GT#")
         }
         if (text.startsWith(":") && text.endsWith("\r") && payload.size == 4) {
-            return text[1] in "eabgjfKL" && text[2] in "12"
+            return text[1] in "eabgijfKL" && text[2] in "12"
         }
-        if (text in setOf("Kx", "J", "m", "e", "w", "h", "p")) return true
+        if (text in setOf("Kx", "J", "m", "e", "w", "h", "p", "t")) return true
         if (payload.size == 2 && payload[0] == 'T'.code.toByte() && payload[1] == 0.toByte()) return true
         return payload.size == 8 && payload[0] == 'P'.code.toByte() && payload[1].toInt() == 2 &&
             payload[2].toInt() in 16..17 && payload[3].toInt() in 36..37 &&

@@ -373,6 +373,7 @@ private fun ObservatoryContent(
                 solver = virtual, simulation = virtual != null,
                 onReadMountSite = vm::readMountSite, onSyncPhoneSiteToMount = vm::syncPhoneSiteToMount,
                 onMoveMountRaBy = vm::moveMountRaBy, onStopMountRaMove = vm::stopMountRaMove,
+                onEnsureMountTracking = vm::ensureMountTracking,
                 onCaptureFits = { requested -> vm.captureTempFitsForPlateSolve(requested) }, onBack = back) }
         }
         ObservatoryDestination.GUIDE -> GuideScreen(vm, back)

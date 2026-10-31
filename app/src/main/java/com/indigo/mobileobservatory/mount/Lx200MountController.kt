@@ -208,6 +208,9 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
         get() = pointingCapabilities.value.sync
     val supportsTimeSync: Boolean
         get() = pointingCapabilities.value.writeTime
+    val supportsTrackingReadback: Boolean
+        get() = skyWatcherAdapter?.supportsTrackingReadback
+            ?: (activeProtocol == MountProtocolType.IOPTRON || isOnStepFirmware)
 
     val isConnected: Boolean
         get() = (socket?.isConnected == true && socket?.isClosed == false) ||
@@ -565,7 +568,7 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
             return@withContext snapshot.coordinates
         }
         if (activeProtocol == MountProtocolType.IOPTRON) {
-            val response = sendFixedCommand(":GEP#", 20)
+            val response = sendCommand(":GEP#")
             return@withContext MountProtocolCodec.parseIoptronCoordinates(response)
         }
         MountProtocolCodec.parseLx200Coordinates(
@@ -578,10 +581,27 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
         if (accessMode.value == MountAccessMode.READ_WRITE) skyWatcherAdapter?.refreshTracking()
     }
 
+    suspend fun readTracking(): MountTrackingState = withContext(Dispatchers.IO) {
+        skyWatcherAdapter?.let { return@withContext it.readTracking() }
+        if (activeProtocol == MountProtocolType.IOPTRON) {
+            return@withContext MountTrackingCodec.ioptron(sendCommand(":GLS#", 750))
+        }
+        if (isOnStepFirmware) {
+            val status = sendCommand(":GU#", 750)
+            val state = MountTrackingCodec.onStep(status)
+            if (state.enabled == false) return@withContext state
+            // GU reports enablement. GT supplies the rate; generic LX200 GT alone cannot
+            // establish enablement, so unsupported firmware deliberately remains unknown.
+            val frequency = runCatching { sendCommand(":GT#", 750).toDoubleOrNull() }.getOrNull()
+            return@withContext MountTrackingCodec.onStep(status, frequency)
+        }
+        MountTrackingState()
+    }
+
     suspend fun readSite(): MountSite = withContext(Dispatchers.IO) {
         skyWatcherAdapter?.let { return@withContext it.readSite() }
         if (activeProtocol == MountProtocolType.IOPTRON) {
-            val response = sendFixedCommand(":GLS#", 23)
+            val response = sendCommand(":GLS#")
             require(response.length == 23) { "Invalid iOptron site response: $response" }
             val longitude = response.substring(0, 9).toInt() / 360000.0
             val latitude = response.substring(9, 17).toInt() / 360000.0 - 90.0
@@ -629,7 +649,7 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
     suspend fun readTime(): MountTime = withContext(Dispatchers.IO) {
         skyWatcherAdapter?.let { return@withContext it.readTime() }
         if (activeProtocol == MountProtocolType.IOPTRON) {
-            val response = sendFixedCommand(":GUT#", 18)
+            val response = sendCommand(":GUT#")
             require(response.matches(Regex("[+-]\\d{3}[01]\\d{13}"))) {
                 "Invalid iOptron UTC time response: $response"
             }
@@ -949,6 +969,13 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
         } else {
             sendNoReplyCommand(":hC#")
         }
+    }
+
+    /** Sessions implementing home through an ordinary slew must stop tracking on arrival. */
+    suspend fun completeHome() = withContext(Dispatchers.IO) {
+        pointingAccess.requireWritable()
+        skyWatcherAdapter?.setTrackingRate(MountTrackingRate.OFF)
+        Unit
     }
 
     suspend fun setHomeHere() = withContext(Dispatchers.IO) {
@@ -1275,7 +1302,14 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
             }
             error("Mount Bluetooth read timeout.")
         }
-        return inp.read()
+        val tcp = socket ?: return inp.read()
+        val previousTimeout = tcp.soTimeout
+        return try {
+            tcp.soTimeout = timeoutMs
+            inp.read()
+        } finally {
+            if (!tcp.isClosed) tcp.soTimeout = previousTimeout
+        }
     }
 
     /**

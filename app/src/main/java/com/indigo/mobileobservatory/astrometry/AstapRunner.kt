@@ -67,8 +67,9 @@ class AstapRunner(private val context: Context) : ImagePlateSolver {
             sum.write(temporary) { task.ensureActive() }
             val retry = solveAttempt(temporary, fovDeg, mountCoordinates, searchRadiusDeg, base, 1)
             val restored = sum.restore(retry)
+            val attempt = if (sum.outputBitpix == 32) "int32_sum2" else "uint16_sum2"
             restored.copy(elapsedMs = elapsed(started), log = original.log +
-                "\nattempt=uint16_sum2 originalDims=${sum.width}x${sum.height} solverDims=${sum.width / 2}x${sum.height / 2}\n" + restored.log)
+                "\nattempt=$attempt originalDims=${sum.width}x${sum.height} solverDims=${sum.width / 2}x${sum.height / 2}\n" + restored.log)
         } finally { temporary.delete() }
     }
 

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="polar_site_environment">Location and environment</string>
+    <string name="polar_optics_settings">Optics</string>
+    <string name="polar_axis_settings">RA motion</string>
+    <string name="polar_solve_settings">Solving</string>
+    <string name="polar_move_rate_deg_sec">Rate (°/s)</string>
+    <string name="polar_search_radius_deg">Search radius (°)</string>
+    <string name="polar_blind_retry">Blind fallback</string>
+    <string name="polar_coordinate_hint">Mount coordinates</string>
+</resources>

@@ -21,3 +21,11 @@ remain failed after detecting 7 stars. Full-database validation is recorded loca
 under `bin/Diagnostics/fits-e3522db`.
 
 The resource is included in test APK assets only. It is excluded from release APKs.
+
+The UInt16 replay scales the same measured samples by 64 and writes them through
+the production FITS writer. Its Int32 2x2-sum payload has SHA-256
+`4ce101fb24ba42fe6cf25e2ebd235d917d5b85e37cfc976ae6bd692dcd90060e`.
+An independent NumPy preparation with this payload and ASTAP CLI 2026.09.19/D20
+detects 7 stars and matches 15 quads; the unbinned UInt16 replay detects 4 stars.
+This derived replay verifies the high-bit input path; it does not introduce
+additional sensor precision into the original eight-bit observation.

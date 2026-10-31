@@ -142,6 +142,56 @@ class PrecisionGotoVerificationInstrumentedTest {
         }
     }
 
+    @Test fun precisionExposureWaitsForThreeSecondsOfSettling() = runBlocking {
+        withMount { module, _ ->
+            val settlingAt = CompletableDeferred<Long>()
+            val observing = launch(start = CoroutineStart.UNDISPATCHED) {
+                module.precisionGotoProgress.first { it.phase == PrecisionGotoPhase.SETTLING }
+                settlingAt.complete(android.os.SystemClock.elapsedRealtime())
+            }
+            val captured = CompletableDeferred<Long>()
+            assertTrue(module.startPrecisionGoto("settling", 10.0, 20.0) {
+                captured.complete(android.os.SystemClock.elapsedRealtime())
+                awaitCancellation()
+            })
+            try {
+                val time = withTimeout(15_000) { captured.await() }
+                assertTrue("Exposure started before a three-second quiet period", time - settlingAt.await() >= 3000)
+            } finally {
+                module.stopMountMotion()
+                withTimeout(5000) { module.motionState.first { !it.isActive } }
+                observing.cancelAndJoin()
+            }
+        }
+    }
+
+    @Test fun stopDuringTheFirstSolveKillsItsNativeProcessAndPreventsFurtherSlews() = runBlocking {
+        withMount { module, fake ->
+            val entered = CompletableDeferred<Process>()
+            val cancelled = CompletableDeferred<Unit>()
+            val captures = AtomicInteger()
+            assertTrue(module.startPrecisionGoto("cancel solver", 10.0, 20.0) {
+                captures.incrementAndGet()
+                val process = ProcessBuilder("/system/bin/sleep", "300").start()
+                entered.complete(process)
+                try {
+                    com.indigo.mobileobservatory.astrometry.awaitSolverProcess(process, 360_000)
+                    error("Unexpected solver completion")
+                } finally { cancelled.complete(Unit) }
+            })
+            val process = withTimeout(15_000) { entered.await() }
+            try {
+                assertEquals(PrecisionGotoPhase.SOLVING, module.precisionGotoProgress.value.phase)
+                module.stopMountMotion()
+                withTimeout(3000) { cancelled.await() }
+                assertTrue(process.waitFor(2, java.util.concurrent.TimeUnit.SECONDS))
+                withTimeout(5000) { module.precisionGotoProgress.first { it.phase == PrecisionGotoPhase.CANCELLED } }
+                assertEquals(1, captures.get())
+                assertEquals(1, fake.events.count { it == ":MS#" })
+            } finally { process.destroyForcibly() }
+        }
+    }
+
     @Test fun automaticCalibrationKeepsStopDuringEachCaptureAndNeverWritesSync() = runBlocking {
         withMount { module, fake ->
             withTimeout(15_000) {

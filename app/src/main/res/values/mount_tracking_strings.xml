@@ -1,0 +1,7 @@
+<resources>
+    <string name="tracking_unknown">Tracking status unknown</string>
+    <string name="tracking_checking">Checking tracking</string>
+    <string name="mount_tracking_connection_required">Connect the mount before checking tracking.</string>
+    <string name="mount_tracking_read_failed">Mount tracking status is unavailable. Check the mount connection before continuing.</string>
+    <string name="mount_tracking_enable_unconfirmed">Mount tracking could not be confirmed after enabling. Check the mount status.</string>
+</resources>

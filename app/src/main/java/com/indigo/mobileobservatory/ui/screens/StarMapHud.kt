@@ -569,7 +569,8 @@ internal fun MountMotionStopBanner(
     state: MountMotionState,
     onStop: () -> Unit,
     detail: String? = null,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onDetails: (() -> Unit)? = null
 ) {
     if (!state.showsGlobalStop) return
     Card(modifier = modifier) {
@@ -577,14 +578,23 @@ internal fun MountMotionStopBanner(
             modifier = Modifier.padding(10.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            if (!detail.isNullOrBlank()) {
-                Text(
-                    detail,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
+            if (!detail.isNullOrBlank() || onDetails != null) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (!detail.isNullOrBlank()) Text(
+                        detail,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    ) else Spacer(Modifier.weight(1f))
+                    onDetails?.let { open ->
+                        TextButton(onClick = open, modifier = Modifier.testTag("precision-goto-details")) {
+                            Text(stringResource(R.string.precision_goto_show_progress))
+                        }
+                    }
+                }
             }
             Row(
                 modifier = Modifier.fillMaxWidth(),

@@ -6,6 +6,7 @@ import com.indigo.mobileobservatory.mount.*
 class VirtualMountSession(val observatory: VirtualObservatory) : MountSession {
     override val modelName = "Virtual observatory / SIMULATION"
     override val supportsSync = true
+    override val supportsTrackingReadback = true
     override val supportsTimeSync = true
     override val coordinateMode = "SIMULATION"
     private var rate = MountSlewRate.RATE_MAX
@@ -18,6 +19,8 @@ class VirtualMountSession(val observatory: VirtualObservatory) : MountSession {
     override fun stopMove(direction: MountDirection?) = observatory.stop()
     override fun setMoveRate(rate: MountSlewRate) { this.rate = rate }
     override fun setTracking(enabled: Boolean) = observatory.tracking(enabled)
+    override fun readTracking() = if (observatory.isTracking) MountTrackingState(true, MountTrackingRate.SIDEREAL)
+        else MountTrackingState(false, MountTrackingRate.OFF)
     override fun readSite() = MountSite(observatory.site.latitudeDeg, observatory.site.longitudeDeg)
     override fun setSite(site: MountSite) { require(site == readSite()) { "Virtual site is fixed at 30 N, 120 E" } }
     override fun readTime() = MountTime(System.currentTimeMillis())

@@ -5,7 +5,7 @@
     <string name="polar_point_solved">第 %1$d 点解算完成</string>
     <string name="polar_calculating">正在计算极轴误差</string>
     <string name="polar_failure_at_stage">%1$s：%2$s</string>
-    <string name="polar_parameters">位置、光学与高级设置</string>
+    <string name="polar_parameters">高级设置</string>
     <string name="polar_progress">已成功采样：%1$d / 3</string>
     <string name="polar_continue">从当前点继续</string>
     <string name="polar_restart">在当前位置重新开始</string>

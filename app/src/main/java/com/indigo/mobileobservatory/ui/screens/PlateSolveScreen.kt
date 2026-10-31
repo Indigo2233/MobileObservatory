@@ -98,6 +98,7 @@ fun PlateSolveScreen(
     val downloadCancelledText = stringResource(R.string.download_cancelled)
     val plateSolveFailedText = stringResource(R.string.plate_solve_failed)
     var solving by remember { mutableStateOf(false) }
+    var solveJob by remember { mutableStateOf<Job?>(null) }
     var result by remember { mutableStateOf<PlateSolveResult?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var showLog by remember { mutableStateOf(false) }
@@ -218,7 +219,7 @@ fun PlateSolveScreen(
             pixel?.let { putFloat("plate_pixel_size_um", it) }
             putString("plate_sensor_id", selectedSensorId)
         }.apply()
-        scope.launch {
+        solveJob = scope.launch {
             solving = true
             error = null
             result = null
@@ -258,6 +259,9 @@ fun PlateSolveScreen(
                 } else {
                     PlateSolveResult(false, "ASTAP requires a confirmed external focal length of at least 200 mm.")
                 }
+            } catch (cancelled: CancellationException) {
+                result = PlateSolveResult(false, context.getString(R.string.stopped))
+                throw cancelled
             } catch (e: Throwable) {
                 result = PlateSolveResult(
                     success = false,
@@ -266,6 +270,7 @@ fun PlateSolveScreen(
                 )
             } finally {
                 solving = false
+                solveJob = null
             }
         }
     }
@@ -413,6 +418,10 @@ fun PlateSolveScreen(
 
             if (solving) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                OutlinedButton(onClick = { solveJob?.cancel() },
+                    modifier = Modifier.testTag("plate-solve-stop")) {
+                    Text(stringResource(R.string.stop))
+                }
             }
 
             error?.let {

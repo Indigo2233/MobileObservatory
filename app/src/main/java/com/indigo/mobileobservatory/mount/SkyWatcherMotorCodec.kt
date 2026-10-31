@@ -31,6 +31,9 @@ internal object SkyWatcherMotorCodec {
     const val POSITION_OFFSET = 0x800000L
     const val STATUS_ACTIVE_MASK = 0x010
     const val STATUS_NOT_INITIALIZED = 0x100
+    const val STATUS_SPEED_MODE_MASK = 0x100L
+    const val STATUS_REVERSE_MASK = 0x200L
+    const val STATUS_HIGH_SPEED_MASK = 0x400L
 
     fun command(cmd: Char, axis: SkyWatcherAxis, data: Long? = null, digits: Int = 6): ByteArray {
         val payload = if (data == null) "" else intToHex(data, digits)
@@ -83,6 +86,8 @@ internal object SkyWatcherMotorCodec {
     }
 
     fun isAxisActive(status: Long): Boolean = (status and STATUS_ACTIVE_MASK.toLong()) != 0L
+    fun isLowSpeedContinuous(status: Long): Boolean =
+        status and (STATUS_SPEED_MODE_MASK or STATUS_HIGH_SPEED_MASK) == STATUS_SPEED_MODE_MASK
 
     fun needsInitialize(status: Long): Boolean =
         status == 0L || status == STATUS_NOT_INITIALIZED.toLong()

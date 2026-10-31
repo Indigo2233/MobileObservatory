@@ -6,6 +6,7 @@ import com.indigo.mobileobservatory.pointing.PointingMountCapabilities
 interface MountSession {
     val modelName: String
     val supportsSync: Boolean
+    val supportsTrackingReadback: Boolean get() = false
     val supportsTimeSync: Boolean
         get() = false
     val pointingCapabilities: PointingMountCapabilities
@@ -24,6 +25,7 @@ interface MountSession {
     fun abortMotion() = stopMove(null)
     fun setMoveRate(rate: MountSlewRate)
     fun setTracking(enabled: Boolean)
+    fun readTracking(): MountTrackingState = MountTrackingState()
     fun setTrackingRate(rate: MountTrackingRate) {
         setTracking(rate.tracks)
     }

@@ -16,8 +16,8 @@
     <string name="polar_test_capturing">正在试拍…</string>
     <string name="polar_test_complete">试拍完成，可检查对焦与星点</string>
     <string name="polar_test_image">试拍图像</string>
-    <string name="polar_camera_preview">相机预览 · 尚未采样</string>
-    <string name="polar_preview_empty">试拍后可在这里检查对焦与星点。</string>
+    <string name="polar_camera_preview">相机预览</string>
+    <string name="polar_preview_empty">暂无图像</string>
     <string name="polar_preview_ready">设置曝光后，可试拍或开始极轴校准。</string>
     <string name="polar_detected_stars">检测到的星点：%1$d</string>
     <string name="polar_reason_capture">相机拍摄失败</string>

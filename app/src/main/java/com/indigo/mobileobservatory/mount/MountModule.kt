@@ -57,7 +57,10 @@ class MountModule(
             MountAccessMode.valueOf(prefs.getString("mount_access_mode", MountAccessMode.READ_WRITE.name) ?: MountAccessMode.READ_WRITE.name)
         }.getOrDefault(MountAccessMode.READ_WRITE))
     }
-    private val motionRunner = MountMotionRunner(scope) { controller.abortMotion() }
+    private val motionRunner = MountMotionRunner(scope) {
+        controller.abortMotion()
+        refreshMountTracking()
+    }
     val motionState: StateFlow<MountMotionState> = motionRunner.state
 
     private val _statusMessage = MutableStateFlow("")
@@ -162,11 +165,14 @@ class MountModule(
     )
     val mountSlewRate: StateFlow<MountSlewRate> = _mountSlewRate.asStateFlow()
 
-    private val _mountTrackingRate = MutableStateFlow(MountTrackingRate.OFF)
-    val mountTrackingRate: StateFlow<MountTrackingRate> = _mountTrackingRate.asStateFlow()
+    private val _mountTrackingRate = MutableStateFlow<MountTrackingRate?>(null)
+    val mountTrackingRate: StateFlow<MountTrackingRate?> = _mountTrackingRate.asStateFlow()
 
-    private val _mountTrackingEnabled = MutableStateFlow(false)
-    val mountTrackingEnabled: StateFlow<Boolean> = _mountTrackingEnabled.asStateFlow()
+    private val _mountTrackingEnabled = MutableStateFlow<Boolean?>(null)
+    val mountTrackingEnabled: StateFlow<Boolean?> = _mountTrackingEnabled.asStateFlow()
+    private val trackingLock = Mutex()
+    @Volatile private var trackingStartedByApplication = false
+    private var requestedTrackingRate = MountTrackingRate.SIDEREAL
 
     private val _precisionGotoProgress = MutableStateFlow(PrecisionGotoProgress())
     val precisionGotoProgress: StateFlow<PrecisionGotoProgress> = _precisionGotoProgress.asStateFlow()
@@ -224,16 +230,19 @@ class MountModule(
 
     fun setMountAccessMode(mode: MountAccessMode) {
         if (mode == mountAccessMode.value) return
-        val ownedTracking = _mountTrackingEnabled.value
         controller.setAccessMode(mode) // Immediately deny all subsequent device writes.
         prefs.edit().putString("mount_access_mode", mode.name).apply()
         if (mode == MountAccessMode.READ_ONLY) {
             scope.launch {
                 motionRunner.stop()
-                if (ownedTracking && controller.isConnected) {
-                    runCatching { controller.stopTrackingForSafety() }
-                        .onSuccess { _mountTrackingRate.value = MountTrackingRate.OFF; _mountTrackingEnabled.value = false }
-                        .onFailure { _statusMessage.value = "Read-only. Tracking stop was not confirmed: ${it.message}" }
+                if (controller.isConnected) {
+                    trackingLock.withLock {
+                        if (trackingStartedByApplication) {
+                            runCatching { controller.stopTrackingForSafety() }
+                                .onFailure { _statusMessage.value = "Read-only. Tracking stop was not confirmed: ${it.message}" }
+                        }
+                        readMountTrackingLocked()
+                    }
                 }
                 _mountBusy.value = false
             }
@@ -305,6 +314,7 @@ class MountModule(
 
     fun connectMount() {
         if (controller.virtualSession != null) { _statusMessage.value = "Exit virtual observation before connecting hardware"; return }
+        resetMountTracking()
         when (_mountTransport.value) {
             MountTransportType.USB_SERIAL -> {
                 connectUsbMount()
@@ -347,7 +357,9 @@ class MountModule(
                 runCatching { controller.readSite() }
                     .onSuccess { _mountSite.value = it }
                 val timeWarning = initializeMountTime()
+                refreshMountTracking()
                 _mountConnectionState.value = MountConnectionState.Connected
+                startMountCoordinatePolling()
                 updateDetectedMountInfo()
                 _statusMessage.value = "Mount connected: ${coordinates.formatRa()} ${coordinates.formatDec()}" + timeWarning
             } catch (e: Throwable) {
@@ -434,7 +446,9 @@ class MountModule(
                 runCatching { controller.readSite() }
                     .onSuccess { _mountSite.value = it }
                 val timeWarning = initializeMountTime()
+                refreshMountTracking()
                 _mountConnectionState.value = MountConnectionState.Connected
+                startMountCoordinatePolling()
                 updateDetectedMountInfo()
                 _statusMessage.value = "Mount connected USB: ${coordinates.formatRa()} ${coordinates.formatDec()}" + timeWarning
                 FileLogger.i(TAG, "connectUsb ok ${_statusMessage.value} model=${controller.mountModel}")
@@ -501,7 +515,9 @@ class MountModule(
                 runCatching { controller.readSite() }
                     .onSuccess { _mountSite.value = it }
                 val timeWarning = initializeMountTime()
+                refreshMountTracking()
                 _mountConnectionState.value = MountConnectionState.Connected
+                startMountCoordinatePolling()
                 _mountConnectionMessage.value = "\u84dd\u7259\u5df2\u8fde\u63a5"
                 updateDetectedMountInfo()
                 _statusMessage.value =
@@ -571,6 +587,7 @@ class MountModule(
                 runCatching { controller.readSite() }
                     .onSuccess { _mountSite.value = it }
                 val timeWarning = initializeMountTime()
+                refreshMountTracking()
                 _mountConnectionState.value = MountConnectionState.Connected
                 updateDetectedMountInfo()
                 startMountCoordinatePolling()
@@ -619,6 +636,7 @@ class MountModule(
         mountConnectJob?.cancel()
         mountConnectJob = null
         controller.cancelPendingBluetoothConnection()
+        resetMountTracking()
         _mountBusy.value = false
         _mountConnectionState.value = MountConnectionState.Disconnected
         _mountConnectionMessage.value = "\u5df2\u53d6\u6d88"
@@ -645,6 +663,7 @@ class MountModule(
                 _mountSite.value = null
                 _mountTime.value = null
                 _mountDetectedInfo.value = ""
+                resetMountTracking()
                 _mountConnectionState.value = MountConnectionState.Disconnected
                 _mountBusy.value = false
                 FileLogger.i(TAG, "disconnectMount done")
@@ -956,7 +975,9 @@ class MountModule(
                         maxIterations = maxIterations,
                         message = "Settling for plate solve"
                     )
-                    delay(1_000)
+                    awaitMountSettled(coordinates = {
+                        controller.readCoordinates().also { _mountCoordinates.value = it }
+                    })
 
                     val hint = runCatching { controller.readCoordinates() }.getOrNull()
                     publishPrecisionProgress(
@@ -1115,7 +1136,7 @@ class MountModule(
                 motionRunner.update { it.copy(slewing = true) }
             }
             if (decision == GotoArrival.Decision.ARRIVED) {
-                restoreTrackingAfterSlew()
+                ensureMountTracking()
                 return
             }
         }
@@ -1136,6 +1157,7 @@ class MountModule(
         ) {
             _mountBusy.value = true
             try {
+                ensureMountTracking()
                 controller.virtualSession?.let {
                     it.observatory.manualDegreesPerSecond = moveRateDegPerSec.coerceIn(.1, 20.0)
                     it.setMoveRate(MountSlewRate.RATE_MAX)
@@ -1157,6 +1179,8 @@ class MountModule(
                         .format(java.util.Locale.US, distance, targetDistanceDeg)
                 }
                 controller.stopRaMove()
+                // Several controllers alter tracking when an axis stop is sent.
+                ensureMountTracking()
                 val finalCoordinates = controller.readCoordinates()
                 _mountCoordinates.value = finalCoordinates
                 val finalDistance = raDistanceDeg(startRa, finalCoordinates.raDeg)
@@ -1195,6 +1219,7 @@ class MountModule(
             _mountMoveStatus.value = "Mount stopped"
             _statusMessage.value = _mountMoveStatus.value
             refreshMountCoordinatesAfterCommand()
+            refreshMountTracking()
         }
     }
     fun startMountManualMove(direction: MountDirection) {
@@ -1233,9 +1258,11 @@ class MountModule(
     private fun startMountCoordinatePolling() {
         mountCoordinatePollingJob?.cancel()
         mountCoordinatePollingJob = scope.launch {
+            var trackingPoll = 0
             while (controller.isConnected) {
                 refreshMountCoordinatesAfterCommand()
                 runCatching { controller.refreshTracking() }
+                if (trackingPoll++ % 4 == 0 && !motionState.value.isActive) refreshMountTracking()
                 kotlinx.coroutines.delay(500)
             }
         }
@@ -1275,9 +1302,15 @@ class MountModule(
         scope.launch {
             _mountBusy.value = true
             try {
-                controller.setTrackingRate(rate)
-                _mountTrackingRate.value = rate
-                _mountTrackingEnabled.value = rate.tracks
+                trackingLock.withLock {
+                    try {
+                        if (rate.tracks) trackingStartedByApplication = true
+                        controller.setTrackingRate(rate)
+                        requestedTrackingRate = rate
+                    } finally {
+                        readMountTrackingLocked()
+                    }
+                }
                 _mountMoveStatus.value = if (rate.tracks) {
                     "Tracking ${rate.name.lowercase(java.util.Locale.US)}"
                 } else {
@@ -1294,10 +1327,51 @@ class MountModule(
         }
     }
 
-    private suspend fun restoreTrackingAfterSlew() {
-        val rate = _mountTrackingRate.value
-        if (!rate.tracks) return
-        runCatching { controller.setTrackingRate(rate) }
+    /** Required workflows may enable once after a confirmed OFF, followed by independent readback. */
+    suspend fun ensureMountTracking() = trackingLock.withLock {
+        check(controller.isConnected) { application.getString(R.string.mount_tracking_connection_required) }
+        check(controller.accessMode.value == MountAccessMode.READ_WRITE) { "Mount connection is read-only." }
+        val observed = readMountTrackingLocked()
+        check(observed.enabled != null || !controller.supportsTrackingReadback) {
+            application.getString(R.string.mount_tracking_read_failed)
+        }
+        if (observed.enabled != false) return@withLock
+        val rate = requestedTrackingRate.takeIf { it.tracks } ?: MountTrackingRate.SIDEREAL
+        // A write can reach the device before its acknowledgement returns.
+        trackingStartedByApplication = true
+        controller.setTrackingRate(rate)
+        repeat(3) { attempt ->
+            if (attempt > 0) delay(150)
+            if (readMountTrackingLocked().enabled == true) return@withLock
+        }
+        error(application.getString(R.string.mount_tracking_enable_unconfirmed))
+    }
+
+    private fun resetMountTracking() {
+        trackingStartedByApplication = false
+        requestedTrackingRate = MountTrackingRate.SIDEREAL
+        _mountTrackingEnabled.value = null
+        _mountTrackingRate.value = null
+    }
+
+    private suspend fun refreshMountTracking() = trackingLock.withLock { readMountTrackingLocked() }
+
+    private suspend fun readMountTrackingLocked(): MountTrackingState {
+        val connection = controller.modelRevision.value.connection
+        val observed = try {
+            if (controller.isConnected) controller.readTracking() else MountTrackingState()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            FileLogger.w(TAG, "Tracking readback unavailable: ${error.message}")
+            MountTrackingState()
+        }
+        if (connection != controller.modelRevision.value.connection) return MountTrackingState()
+        _mountTrackingEnabled.value = observed.enabled
+        _mountTrackingRate.value = observed.rate
+        if (observed.enabled == true && observed.rate?.tracks == true) requestedTrackingRate = observed.rate
+        if (observed.enabled == false) trackingStartedByApplication = false
+        return observed
     }
 
     fun goMountHome() {
@@ -1318,6 +1392,8 @@ class MountModule(
                 _mountMoveStatus.value = "Mount going home"
                 _statusMessage.value = _mountMoveStatus.value
                 awaitMountStopped()
+                controller.completeHome()
+                refreshMountTracking()
                 _mountMoveStatus.value = "Mount home complete"
                 _statusMessage.value = _mountMoveStatus.value
             } finally {
@@ -1361,6 +1437,7 @@ class MountModule(
             _mountBusy.value = true
             try {
                 controller.setHomeHere()
+                refreshMountTracking()
                 _mountMoveStatus.value = "Mount home reset"
                 _statusMessage.value = _mountMoveStatus.value
                 refreshMountCoordinatesAfterCommand()
@@ -1391,6 +1468,7 @@ class MountModule(
             try {
                 val coordinates = controller.readCoordinates()
                 _mountCoordinates.value = coordinates
+                refreshMountTracking()
                 _mountConnectionState.value = MountConnectionState.Connected
                 _statusMessage.value = "Mount: ${coordinates.formatRa()} ${coordinates.formatDec()}"
             } catch (e: Throwable) {
@@ -1414,8 +1492,8 @@ class MountModule(
         _mountSite.value = session.readSite()
         _mountTime.value = session.readTime()
         _mountDetectedInfo.value = session.modelName
-        _mountTrackingRate.value = MountTrackingRate.SIDEREAL
-        _mountTrackingEnabled.value = true
+        resetMountTracking()
+        refreshMountTracking()
         _mountConnectionState.value = MountConnectionState.Connected
         startMountCoordinatePolling()
     }
@@ -1470,6 +1548,7 @@ class MountModule(
     fun closeController() {
         FileLogger.i(TAG, "closeController connected=${controller.isConnected}")
         controller.close()
+        resetMountTracking()
         FileLogger.i(TAG, "closeController complete connected=${controller.isConnected}")
     }
 

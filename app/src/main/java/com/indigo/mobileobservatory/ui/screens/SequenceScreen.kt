@@ -414,7 +414,8 @@ fun SequenceScreen(
                     Column(Modifier.padding(12.dp)) {
                         Text(stringResource(R.string.sequence_mount_attitude))
                         Text("RA ${displayCoordinates?.formatRa().orEmpty()}  Dec ${displayCoordinates?.formatDec().orEmpty()}")
-                        Text(stringResource(R.string.sequence_tracking, if (displayTracking) 1 else 0))
+                        Text(if (displayTracking == null) stringResource(R.string.tracking_unknown)
+                            else stringResource(R.string.sequence_tracking, if (displayTracking) 1 else 0))
                         Text(stringResource(R.string.sequence_camera_temp, displaySensorTemp / 10.0, if (displayCoolerOn) 1 else 0))
                         Text(stringResource(R.string.sequence_guide_rms, displayGuideRms, if (displayGuideRunning) 1 else 0))
                         Text(displayFilterNames.joinToString())

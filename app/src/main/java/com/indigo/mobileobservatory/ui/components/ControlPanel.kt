@@ -82,7 +82,7 @@ fun ControlPanel(
     mountBusy: Boolean,
     mountMoveStatus: String = "",
     mountSlewRate: MountSlewRate = MountSlewRate.DEFAULT,
-    mountTrackingEnabled: Boolean = false,
+    mountTrackingEnabled: Boolean? = null,
     detectedBitDepth: Int,
     onExposureChange: (Float) -> Unit,
     onGainChange: (Float) -> Unit,
@@ -1192,7 +1192,7 @@ private fun MountControlPad(
     onStopAll: () -> Unit,
     moveStatus: String,
     slewRate: MountSlewRate,
-    trackingEnabled: Boolean,
+    trackingEnabled: Boolean?,
     onSlewRateChange: (MountSlewRate) -> Unit,
     onTracking: (Boolean) -> Unit,
     onHome: () -> Unit,
@@ -1244,13 +1244,17 @@ private fun MountControlPad(
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
             MountDirectionButton("S", MountDirection.SOUTH, enabled, onMoveStart, onMoveStop)
         }
+        if (trackingEnabled == null) {
+            Text(stringResource(R.string.tracking_unknown), fontSize = 10.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             FilledTonalButton(
-                onClick = { onTracking(!trackingEnabled) },
+                onClick = { onTracking(trackingEnabled != true) },
                 enabled = enabled,
                 modifier = Modifier.height(34.dp).weight(1f),
                 contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
-            ) { Text(stringResource(if (trackingEnabled) R.string.tracking_off else R.string.tracking_on), fontSize = 10.sp) }
+            ) { Text(stringResource(if (trackingEnabled == true) R.string.tracking_off else R.string.tracking_on), fontSize = 10.sp) }
             FilledTonalButton(
                 onClick = { confirmHome = true },
                 enabled = enabled,

@@ -8,18 +8,22 @@ import java.io.File
 import java.io.RandomAccessFile
 import kotlin.math.pow
 
-/** Lossless 2x2 sums of an 8-bit plane: 0..1020 stored as UInt16, using two source rows. */
+/** Lossless 2x2 sums: byte inputs use UInt16; UInt16 inputs use Int32 to retain the full sum. */
 internal class AstapSum2Input private constructor(val source: File, val header: FitsHeader, val width: Int, val height: Int) {
+    private val sourceBytesPerPixel = if (header.intValue("BITPIX") == 16) 2 else 1
+    val outputBitpix = if (sourceBytesPerPixel == 2) 32 else 16
     companion object {
         fun inspect(source: File): AstapSum2Input? {
             if (source.extension.lowercase() !in setOf("fit", "fits")) return null
             val h = FitsHeaderParser.read(source)
             val w = h.intValue("NAXIS1") ?: return null
             val height = h.intValue("NAXIS2") ?: return null
-            if (h.intValue("BITPIX") != 8 || h.intValue("NAXIS") != 2 ||
-                (h.doubleValue("BSCALE") ?: 1.0) != 1.0 || (h.doubleValue("BZERO") ?: 0.0) != 0.0 ||
+            val bitpix = h.intValue("BITPIX") ?: return null
+            val expectedOffset = if (bitpix == 16) 32768.0 else 0.0
+            if (bitpix !in listOf(8, 16) || h.intValue("NAXIS") != 2 ||
+                (h.doubleValue("BSCALE") ?: 1.0) != 1.0 || (h.doubleValue("BZERO") ?: 0.0) != expectedOffset ||
                 w !in 2..32768 || height < 2 || w % 2 != 0 || height % 2 != 0) return null
-            require(source.length() >= h.dataOffset + w.toLong() * height) { "Truncated FITS image" }
+            require(source.length() >= h.dataOffset + w.toLong() * height * (bitpix / 8)) { "Truncated FITS image" }
             return AstapSum2Input(source, h, w, height)
         }
     }
@@ -28,9 +32,9 @@ internal class AstapSum2Input private constructor(val source: File, val header: 
         require(source.canonicalFile != target.canonicalFile && !target.exists()) { "Independent solver input required" }
         val numericKeys = setOf("EXPOSURE", "EXPTIME", "GAIN", "GAINDB", "XPIXSZ", "YPIXSZ", "FOCALLEN", "FOVH", "FOVW", "RA", "DEC")
         val stringKeys = setOf("DATE-OBS", "DATE_OBS", "INSTRUME", "SOFTWARE", "OBJECT", "FILTER", "TELESCOP", "OBJCTRA", "OBJCTDEC")
-        val cards = mutableListOf(fitsCard("SIMPLE", "T"), fitsCard("BITPIX", "16"), fitsCard("NAXIS", "2"),
+        val cards = mutableListOf(fitsCard("SIMPLE", "T"), fitsCard("BITPIX", outputBitpix.toString()), fitsCard("NAXIS", "2"),
             fitsCard("NAXIS1", (width / 2).toString()), fitsCard("NAXIS2", (height / 2).toString()),
-            fitsCard("BSCALE", "1"), fitsCard("BZERO", "32768"))
+            fitsCard("BSCALE", "1"), fitsCard("BZERO", if (outputBitpix == 16) "32768" else "0"))
         header.cards.forEach { (key, value) ->
             if (key in numericKeys && header.doubleValue(key)?.isFinite() == true) cards += fitsCard(key, value)
             if (key in stringKeys) cards += fitsCard(key, "'${value.replace("'", "''")}'")
@@ -45,16 +49,19 @@ internal class AstapSum2Input private constructor(val source: File, val header: 
                 DataOutputStream(BufferedOutputStream(target.outputStream(), 65536)).use { output ->
                     val text = (cards + "END".padEnd(80)).joinToString("")
                     output.write(text.padEnd(((text.length + 2879) / 2880) * 2880).toByteArray(Charsets.US_ASCII))
-                    val first = ByteArray(width); val second = ByteArray(width)
+                    val first = ByteArray(width * sourceBytesPerPixel)
+                    val second = ByteArray(width * sourceBytesPerPixel)
+                    fun value(row: ByteArray, x: Int): Int = if (sourceBytesPerPixel == 1) row[x].toInt() and 255
+                        else (((row[x * 2].toInt() and 255) shl 8) or
+                            (row[x * 2 + 1].toInt() and 255)).toShort().toInt() + 32768
                     repeat(height / 2) {
                         check(); input.readFully(first); input.readFully(second)
                         for (x in 0 until width step 2) {
-                            val sum = (first[x].toInt() and 255) + (first[x + 1].toInt() and 255) +
-                                (second[x].toInt() and 255) + (second[x + 1].toInt() and 255)
-                            output.writeShort(sum - 32768)
+                            val sum = value(first, x) + value(first, x + 1) + value(second, x) + value(second, x + 1)
+                            if (outputBitpix == 32) output.writeInt(sum) else output.writeShort(sum - 32768)
                         }
                     }
-                    val bytes = width.toLong() * height / 2
+                    val bytes = width.toLong() * height / 4 * (outputBitpix / 8)
                     output.write(ByteArray(((2880 - bytes % 2880) % 2880).toInt()))
                 }
             }

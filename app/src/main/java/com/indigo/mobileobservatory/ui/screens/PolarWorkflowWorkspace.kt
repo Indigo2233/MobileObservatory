@@ -43,6 +43,7 @@ internal fun PolarWorkflowLayout(
     modifier: Modifier,
     failureVisible: Boolean,
     resultVisible: Boolean = false,
+    settingsVisible: Boolean = false,
     preview: @Composable (Modifier) -> Unit,
     controls: @Composable (Modifier) -> Unit
 ) {
@@ -54,7 +55,11 @@ internal fun PolarWorkflowLayout(
             }
         } else {
             Column(Modifier.fillMaxSize()) {
-                val fraction = if (failureVisible || resultVisible) .62f else .46f
+                val fraction = when {
+                    settingsVisible -> if (failureVisible) .38f else .25f
+                    failureVisible || resultVisible -> .62f
+                    else -> .46f
+                }
                 preview(Modifier.fillMaxWidth().weight(fraction))
                 controls(Modifier.fillMaxWidth().weight(1f - fraction))
             }
@@ -68,7 +73,6 @@ internal fun PolarExposureControls(
     onSecondsChange: (String) -> Unit,
     minimumUs: Float,
     maximumUs: Float,
-    actualUs: Float?,
     connected: Boolean,
     busy: Boolean,
     onCapture: () -> Unit
@@ -76,21 +80,16 @@ internal fun PolarExposureControls(
     val focus = LocalFocusManager.current
     var presets by remember { mutableStateOf(false) }
     val valid = PolarExposure.parseUs(seconds, minimumUs, maximumUs) != null
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically) {
     OutlinedTextField(
         value = seconds, onValueChange = onSecondsChange,
         label = { Text(stringResource(R.string.polar_exposure_seconds)) },
-        modifier = Modifier.fillMaxWidth().testTag("polar-exposure-seconds"),
+        modifier = Modifier.weight(1f).testTag("polar-exposure-seconds"),
         enabled = !busy, singleLine = true, isError = !valid,
+        textStyle = MaterialTheme.typography.bodyMedium,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
         keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }),
-        supportingText = {
-            Text(when {
-                busy -> stringResource(R.string.polar_exposure_locked)
-                !valid -> stringResource(R.string.polar_exposure_out_of_range, minimumUs / 1_000_000f, maximumUs / 1_000_000f)
-                actualUs != null && connected -> stringResource(R.string.polar_exposure_actual, PolarExposure.secondsText(actualUs))
-                else -> stringResource(R.string.polar_exposure_applied_on_capture)
-            })
-        },
         trailingIcon = {
             Box {
                 IconButton(onClick = { presets = true }, enabled = !busy) {
@@ -109,9 +108,13 @@ internal fun PolarExposureControls(
     )
     OutlinedButton(onClick = { focus.clearFocus(); onCapture() },
         enabled = connected && !busy && valid,
-        modifier = Modifier.fillMaxWidth().testTag("polar-test-capture")) {
+        modifier = Modifier.heightIn(min = 48.dp).testTag("polar-test-capture")) {
         Text(stringResource(R.string.polar_test_capture))
     }
+    }
+    if (!valid) Text(stringResource(R.string.polar_exposure_out_of_range,
+        minimumUs / 1_000_000f, maximumUs / 1_000_000f), color = MaterialTheme.colorScheme.error,
+        style = MaterialTheme.typography.bodySmall)
     if (!connected) Text(stringResource(R.string.polar_capture_no_camera), style = MaterialTheme.typography.bodySmall)
 }
 
@@ -182,7 +185,9 @@ internal fun PolarWorkflowPreview(
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(label, Modifier.weight(1f), style = MaterialTheme.typography.labelLarge, maxLines = 1,
                     overflow = TextOverflow.Ellipsis)
-                if (busy) OutlinedButton(onClick = onStop) { Text(stringResource(R.string.stop)) }
+                if (busy) OutlinedButton(onClick = onStop, modifier = Modifier.testTag("polar-preview-stop")) {
+                    Text(stringResource(R.string.stop))
+                }
                 TextButton(onClick = { source?.let { onInspect(it) } }, enabled = source?.isFile == true,
                     modifier = Modifier.testTag("polar-preview-expand")) { Text(stringResource(R.string.polar_view_sample)) }
                 if (source != null || details != null || error != null) IconButton(onClick = {
@@ -203,7 +208,7 @@ internal fun PolarWorkflowPreview(
                         imageAdjustment?.geometry, Modifier.fillMaxSize().clickable(enabled = source != null) { onInspect(source) })
                     imageAdjustment?.let { PolarErrorReticleOverlay(it) }
                 }
-                else Text(stringResource(R.string.polar_preview_empty), Modifier.padding(16.dp), style = MaterialTheme.typography.bodySmall)
+                else Text(stringResource(R.string.polar_preview_empty), Modifier.padding(4.dp), style = MaterialTheme.typography.bodySmall)
                 if (loading) CircularProgressIndicator(Modifier.size(28.dp))
                 previewError?.let {
                     Text(stringResource(R.string.polar_preview_failed, it), Modifier.padding(12.dp), color = MaterialTheme.colorScheme.error)
@@ -212,12 +217,8 @@ internal fun PolarWorkflowPreview(
             Column(Modifier.heightIn(max = footerMaxHeight).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 if (details == null && error == null) adjustment?.let { PolarCorrectionSummary(it) }
-                inputFormat?.let { Text(stringResource(R.string.solve_input_format, it), style = MaterialTheme.typography.bodySmall) }
-                if (sample?.result?.log?.contains("attempt=uint16_sum2") == true) {
-                    Text(stringResource(R.string.solve_sum_retry), style = MaterialTheme.typography.bodySmall)
-                }
-                if (details == null && error == null && (adjustment == null || busy)) {
-                    Text(status.ifBlank { stringResource(R.string.polar_preview_ready) },
+                if (status.isNotBlank() && details == null && error == null && (adjustment == null || busy)) {
+                    Text(status,
                         style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
                 if (details != null || error != null) {
@@ -228,7 +229,6 @@ internal fun PolarWorkflowPreview(
                                 Text(stringResource(failureTitle(details.reason)), style = MaterialTheme.typography.labelLarge)
                                 details.detectedStars?.let { Text(stringResource(R.string.polar_detected_stars, it), style = MaterialTheme.typography.bodySmall) }
                                 Text(details.nativeMessage, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                Text(stringResource(failureAdvice(details.reason)), style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                             } else Text(error.orEmpty(), style = MaterialTheme.typography.bodySmall, maxLines = 3, overflow = TextOverflow.Ellipsis)
                         }
                     }
@@ -252,7 +252,15 @@ internal fun PolarWorkflowPreview(
                 Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState()),
                 style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace) } },
             confirmButton = { TextButton(onClick = { showLog = false }) { Text(stringResource(R.string.close)) } },
-            dismissButton = { TextButton(onClick = { clipboard.setText(AnnotatedString(diagnostics)) }) { Text(stringResource(R.string.polar_copy_diagnostics)) } })
+            dismissButton = {
+                Row {
+                    if (busy) TextButton(onClick = { onStop(); showLog = false },
+                        modifier = Modifier.testTag("polar-diagnostics-stop")) { Text(stringResource(R.string.stop)) }
+                    TextButton(onClick = { clipboard.setText(AnnotatedString(diagnostics)) }) {
+                        Text(stringResource(R.string.polar_copy_diagnostics))
+                    }
+                }
+            })
     }
     if (inspectFile != null) {
         val navigation = remember { MediaInspectionNavigation() }
@@ -262,10 +270,11 @@ internal fun PolarWorkflowPreview(
                 Column {
                     Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(stringResource(R.string.polar_image_inspection), Modifier.weight(1f))
-                        if (busy) TextButton(onClick = onStop) { Text(stringResource(R.string.stop)) }
+                        if (busy) TextButton(onClick = onStop, modifier = Modifier.testTag("polar-inspection-stop")) {
+                            Text(stringResource(R.string.stop))
+                        }
                         TextButton(onClick = { onInspect(null) }, modifier = Modifier.testTag("polar-preview-close")) { Text(stringResource(R.string.close)) }
                     }
-                    Text(stringResource(R.string.solve_input_raw_hint), Modifier.padding(horizontal = 12.dp), style = MaterialTheme.typography.bodySmall)
                     pinnedAdjustment?.let {
                         Column(Modifier.heightIn(max = 144.dp).verticalScroll(rememberScrollState())) { PolarCorrectionSummary(it) }
                     }
@@ -304,16 +313,4 @@ private fun failureTitle(reason: PolarFailureReason): Int = when (reason) {
     PolarFailureReason.IMAGE -> R.string.polar_reason_image
     PolarFailureReason.MEMORY -> R.string.polar_reason_memory
     PolarFailureReason.NO_SOLUTION -> R.string.polar_reason_no_solution
-}
-
-private fun failureAdvice(reason: PolarFailureReason): Int = when (reason) {
-    PolarFailureReason.CAPTURE -> R.string.polar_capture_advice
-    PolarFailureReason.OPTICS -> R.string.polar_optics_advice
-    PolarFailureReason.STARS -> R.string.polar_stars_advice
-    PolarFailureReason.DATABASE -> R.string.polar_database_advice
-    PolarFailureReason.TIMEOUT -> R.string.polar_timeout_advice
-    PolarFailureReason.EXECUTION -> R.string.polar_execution_advice
-    PolarFailureReason.IMAGE -> R.string.polar_image_advice
-    PolarFailureReason.MEMORY -> R.string.polar_memory_advice
-    PolarFailureReason.NO_SOLUTION -> R.string.polar_solve_advice
 }

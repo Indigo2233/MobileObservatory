@@ -1,0 +1,7 @@
+<resources>
+    <string name="tracking_unknown">跟踪状态未知</string>
+    <string name="tracking_checking">正在检查跟踪状态</string>
+    <string name="mount_tracking_connection_required">请先连接赤道仪，再检查跟踪状态。</string>
+    <string name="mount_tracking_read_failed">无法读取跟踪状态，请检查赤道仪连接后重试。</string>
+    <string name="mount_tracking_enable_unconfirmed">开启后仍未确认赤道仪正在跟踪，请检查设备状态后重试。</string>
+</resources>

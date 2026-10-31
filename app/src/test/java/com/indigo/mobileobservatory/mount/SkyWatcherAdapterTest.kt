@@ -6,6 +6,21 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SkyWatcherAdapterTest {
+    @Test fun trackingQueryReadsTheDeviceModeWithoutSendingAnEnableCommand() {
+        var mode = 2
+        val sent = mutableListOf<String>()
+        val adapter = SkyWatcherAdapter { payload, _ ->
+            sent += payload.toString(Charsets.US_ASCII)
+            byteArrayOf(mode.toByte(), '#'.code.toByte())
+        }
+        assertEquals(MountTrackingState(true), adapter.readTracking())
+        mode = 0
+        assertEquals(MountTrackingState(false, MountTrackingRate.OFF), adapter.readTracking())
+        assertEquals(listOf("t", "t"), sent)
+        mode = 9
+        assertThrows(IllegalArgumentException::class.java) { adapter.readTracking() }
+    }
+
     @Test
     fun openRejectsMountThatHasNotBeenAligned() {
         val adapter = SkyWatcherAdapter { payload, _ ->

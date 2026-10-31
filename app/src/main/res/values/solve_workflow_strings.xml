@@ -9,12 +9,13 @@
     <string name="solve_single_capture_hint">Each measurement takes one exposure and stops acquisition before solving. Failed solves retry with a new image, up to three captures.</string>
     <string name="solve_retry_capture">Solve failed. Retaking image (attempt %1$d): %2$s</string>
     <string name="solve_view_capture">Image and solve details</string>
+    <string name="precision_goto_show_progress">View progress</string>
     <string name="solve_monochrome_preview">Monochrome preview</string>
     <string name="solve_input_format">ASTAP input: %1$s</string>
     <string name="solve_input_raw_hint">Raw FITS pixels are preserved. Preview stretch and colour settings affect display only.</string>
-    <string name="solve_sum_retry">Additional solver input: 2×2 pixel sums in a 16-bit monochrome FITS. Original image preserved.</string>
+    <string name="solve_sum_retry">Additional solver input: lossless 2×2 pixel sums in a monochrome FITS. Original image preserved.</string>
     <string name="polar_turn_west">Move west</string>
     <string name="polar_turn_east">Move east</string>
     <string name="polar_adjust_directions">%1$s %2$.1f′ · %3$s %4$.1f′</string>
-    <string name="polar_sample_details">Sample history and manual recovery</string>
+    <string name="polar_sample_details">Sample details</string>
 </resources>

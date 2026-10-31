@@ -32,10 +32,15 @@ import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.unit.dp
 import com.indigo.mobileobservatory.mount.MountMotionState
 import com.indigo.mobileobservatory.mount.MountMotionType
+import com.indigo.mobileobservatory.mount.PrecisionGotoProgress
+import com.indigo.mobileobservatory.mount.PrecisionGotoPhase
 import com.indigo.mobileobservatory.ui.screens.StarMapScreen
 import com.indigo.mobileobservatory.ui.screens.StarMapTarget
 import com.indigo.mobileobservatory.ui.theme.MobileObservatoryTheme
@@ -116,6 +121,82 @@ class StarMapPanelInteractionTest {
         compose.runOnIdle { assertEquals(0, stops) }
         compose.onNodeWithText("STOP").assertIsDisplayed().performClick()
         compose.runOnIdle { assertEquals(1, stops) }
+    }
+
+    @Test fun precisionProgressCanBeReopenedWhileTheTargetCardIsHidden() {
+        val open = mutableStateOf(false)
+        var stops = 0
+        var starts = 0
+        var details = 0
+        compose.setContent {
+            MaterialTheme {
+                StarMapScreen(
+                    mountCoordinates = null, mountSite = null, mountConnected = true, mountBusy = true,
+                    mountMotionState = MountMotionState(MountMotionType.GOTO, "Point and center M42", holdStop = true),
+                    precisionGotoProgress = PrecisionGotoProgress(phase = PrecisionGotoPhase.SOLVING,
+                        targetName = "M42", message = "Plate solving"),
+                    selectedObservationTarget = StarMapTarget("M42", 5.5, -5.0, "J2000"),
+                    onPrecisionDetails = { details++; open.value = true },
+                    onPrecisionGoto = { _, _ -> starts++ },
+                    onGoto = { starts++ }, onStopMount = { stops++ }, onBack = {})
+                if (open.value) androidx.compose.material3.AlertDialog(
+                    onDismissRequest = { open.value = false },
+                    title = { Text("Current centering task") },
+                    text = { Text("M42 · Plate solving") },
+                    confirmButton = { TextButton(onClick = { open.value = false }) { Text("Close progress") } })
+            }
+        }
+        compose.onNodeWithTag("star-map-target-card").assertDoesNotExist()
+        repeat(2) {
+            compose.onNodeWithTag("precision-goto-details").assertIsDisplayed().performClick()
+            compose.onNodeWithText("Current centering task").assertIsDisplayed()
+            compose.onNodeWithText("Close progress").performClick()
+        }
+        compose.onNodeWithText("STOP").assertIsDisplayed().performClick()
+        compose.runOnIdle {
+            assertEquals(2, details)
+            assertEquals(0, starts)
+            assertEquals(1, stops)
+        }
+    }
+
+    @Test fun precisionProgressAndStopRemainReachableWithLargeFonts() {
+        var details = 0
+        var stops = 0
+        compose.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, 2f)) {
+                MaterialTheme {
+                    Box(Modifier.size(320.dp, 480.dp)) {
+                        StarMapScreen(mountCoordinates = null, mountSite = null,
+                            mountConnected = true, mountBusy = true,
+                            mountMotionState = MountMotionState(MountMotionType.GOTO, "Point and center M42", holdStop = true),
+                            precisionGotoProgress = PrecisionGotoProgress(phase = PrecisionGotoPhase.SOLVING,
+                                targetName = "M42", message = "Solving the captured image"),
+                            onPrecisionDetails = { details++ }, onGoto = {}, onBack = {},
+                            onStopMount = { stops++ })
+                    }
+                }
+            }
+        }
+        compose.onNodeWithTag("precision-goto-details").assertIsDisplayed().performClick()
+        compose.onNodeWithText("STOP").assertIsDisplayed().performClick()
+        compose.runOnIdle { assertEquals(1, details); assertEquals(1, stops) }
+    }
+
+    @Test fun ordinaryGotoDoesNotExposePrecisionProgress() {
+        compose.setContent {
+            MaterialTheme {
+                StarMapScreen(mountCoordinates = null, mountSite = null,
+                    mountConnected = true, mountBusy = true,
+                    mountMotionState = MountMotionState(MountMotionType.GOTO, "GOTO", slewing = true),
+                    precisionGotoProgress = PrecisionGotoProgress(phase = PrecisionGotoPhase.SUCCEEDED,
+                        message = "Previous centering task"),
+                    onGoto = {}, onStopMount = {}, onBack = {})
+            }
+        }
+        compose.onNodeWithTag("precision-goto-details").assertDoesNotExist()
+        compose.onNodeWithText("Previous centering task").assertDoesNotExist()
+        compose.onNodeWithText("STOP").assertIsDisplayed()
     }
 
     @Test fun allOrdinaryControlsHideTogetherAndCanvasTapWakesThem() {

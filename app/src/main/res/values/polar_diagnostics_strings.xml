@@ -5,7 +5,7 @@
     <string name="polar_point_solved">Point %1$d solved</string>
     <string name="polar_calculating">Calculating polar alignment error</string>
     <string name="polar_failure_at_stage">%1$s: %2$s</string>
-    <string name="polar_parameters">Location, optics and advanced settings</string>
+    <string name="polar_parameters">Advanced settings</string>
     <string name="polar_progress">Successful samples: %1$d / 3</string>
     <string name="polar_continue">Continue from current point</string>
     <string name="polar_restart">Start again here</string>

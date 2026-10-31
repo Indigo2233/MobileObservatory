@@ -187,6 +187,11 @@ internal fun SkyWorkspaceScreen(viewModel: CameraViewModel, selectedTarget: Star
                 TextButton(onClick = { showOptics = true }) { Text(stringResource(R.string.wf_optics_title)) }
                 TextButton(onClick = { siteDialog = true }) { Text(observerSiteLabel) }
                 TextButton(onClick = onPreparation) { Text(stringResource(R.string.wf_preparation)) }
+                if (precisionGotoProgress.phase != com.indigo.mobileobservatory.mount.PrecisionGotoPhase.IDLE) {
+                    TextButton(onClick = { showPrecision = true }) {
+                        Text(stringResource(R.string.precision_goto_show_progress))
+                    }
+                }
             }
             selectedTarget?.let { target ->
                 Card(Modifier.fillMaxWidth()) {
@@ -221,6 +226,9 @@ internal fun SkyWorkspaceScreen(viewModel: CameraViewModel, selectedTarget: Star
                 Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(stringResource(R.string.precision_goto_label), Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                        if (precisionGotoProgress.isActive) TextButton(onClick = viewModel::stopMountMotion) {
+                            Text(stringResource(R.string.stop))
+                        }
                         TextButton(onClick = { showPrecision = false; inspectPrecision = null }) { Text(stringResource(R.string.close)) }
                     }
                     Text(stage)

@@ -20,6 +20,7 @@ class SkyWatcherAdapter(
     override var modelName: String = "Sky-Watcher SynScan"
         private set
     override val supportsSync: Boolean = false
+    override val supportsTrackingReadback: Boolean = true
     override val supportsTimeSync: Boolean = true
     var aligned: Boolean = false
         private set
@@ -106,6 +107,13 @@ class SkyWatcherAdapter(
         val mode = if (enabled) 2 else 0 // 2 = sidereal EQ tracking.
         val response = command(byteArrayOf('T'.code.toByte(), mode.toByte()))
         require(response.isEmpty() || response.toString(Charsets.US_ASCII) == "1") { "SynScan rejected tracking command." }
+    }
+
+    override fun readTracking(): MountTrackingState {
+        val response = command("t")
+        require(response.size == 1 && response[0].toInt() in 0..3) { "Invalid SynScan tracking mode." }
+        return if (response[0].toInt() == 0) MountTrackingState(false, MountTrackingRate.OFF)
+        else MountTrackingState(true) // This command reports the mode, not the selected rate.
     }
 
     override fun readSite(): MountSite {

@@ -2,6 +2,8 @@ package com.indigo.mobileobservatory.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.text.KeyboardOptions
@@ -18,6 +20,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -38,7 +42,8 @@ fun SolveOpticsFields(
     onPixelSizeChange: (String) -> Unit,
     sensors: List<SensorSpec>,
     computedFovHeightDeg: Double?,
-    enabled: Boolean = true
+    enabled: Boolean = true,
+    compact: Boolean = false
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     val selected = sensors.firstOrNull { it.id == selectedSensorId }
@@ -46,7 +51,7 @@ fun SolveOpticsFields(
     val showPixelField = selected == null ||
         selected.id == OpticsEquipment.CUSTOM_SENSOR_ID
 
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    val focalField: @Composable (Modifier) -> Unit = { modifier ->
         OutlinedTextField(
             value = focalLengthText,
             onValueChange = onFocalLengthChange,
@@ -54,8 +59,26 @@ fun SolveOpticsFields(
             singleLine = true,
             enabled = enabled,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-            modifier = Modifier.widthIn(max = 320.dp).fillMaxWidth()
+            textStyle = if (compact) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodyLarge,
+            modifier = modifier.testTag("solve-focal")
         )
+    }
+    val pixelField: @Composable (Modifier) -> Unit = { modifier ->
+        OutlinedTextField(
+            value = if (showPixelField) pixelSizeText else formatPixelSizeUm(requireNotNull(selected).pixelSizeUm),
+            onValueChange = onPixelSizeChange,
+            readOnly = !showPixelField,
+            label = { Text(stringResource(R.string.sensor_pixel_size_um)) },
+            singleLine = true,
+            enabled = enabled,
+            textStyle = if (compact) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodyLarge,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            modifier = modifier.testTag("solve-pixel")
+        )
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 8.dp)) {
+        if (compact) SolveParameterPair(focalField, pixelField)
+        else focalField(Modifier.widthIn(max = 320.dp).fillMaxWidth())
         ExposedDropdownMenuBox(
             expanded = menuOpen,
             onExpandedChange = { if (enabled) menuOpen = it }
@@ -67,7 +90,10 @@ fun SolveOpticsFields(
                 enabled = enabled,
                 label = { Text(stringResource(R.string.fov_sensor)) },
                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(menuOpen) },
-                modifier = Modifier.menuAnchor().widthIn(max = 320.dp).fillMaxWidth()
+                textStyle = if (compact) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.menuAnchor()
+                    .then(if (compact) Modifier else Modifier.widthIn(max = 320.dp))
+                    .fillMaxWidth().testTag("solve-sensor")
             )
             ExposedDropdownMenu(
                 expanded = menuOpen,
@@ -84,17 +110,9 @@ fun SolveOpticsFields(
                 }
             }
         }
-        if (showPixelField) {
-            OutlinedTextField(
-                value = pixelSizeText,
-                onValueChange = onPixelSizeChange,
-                label = { Text(stringResource(R.string.sensor_pixel_size_um)) },
-                singleLine = true,
-                enabled = enabled,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                modifier = Modifier.widthIn(max = 320.dp).fillMaxWidth()
-            )
-        } else if (selected != null) {
+        if (!compact && showPixelField) {
+            pixelField(Modifier.widthIn(max = 320.dp).fillMaxWidth())
+        } else if (!compact && selected != null) {
             Text(
                 stringResource(
                     R.string.sensor_pixel_summary,
@@ -112,12 +130,31 @@ fun SolveOpticsFields(
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.outline
             )
-        } else {
+        } else if (!compact || focalLengthText.toDoubleOrNull()?.let { it > 0 } != true ||
+            (if (showPixelField) pixelSizeText.toDoubleOrNull() else selected?.pixelSizeUm)?.let { it > 0 } != true) {
             Text(
                 stringResource(R.string.plate_solve_need_optics),
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.outline
             )
+        }
+    }
+}
+
+@Composable
+internal fun SolveParameterPair(first: @Composable (Modifier) -> Unit, second: @Composable (Modifier) -> Unit) {
+    val fontScale = LocalDensity.current.fontScale
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        if (maxWidth >= 280.dp && fontScale < 1.5f) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                first(Modifier.weight(1f))
+                second(Modifier.weight(1f))
+            }
+        } else {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                first(Modifier.fillMaxWidth())
+                second(Modifier.fillMaxWidth())
+            }
         }
     }
 }

@@ -17,6 +17,7 @@ internal class SkyWatcherMotorAdapter(
     override var modelName: String = "Sky-Watcher Wi-Fi"
         private set
     override val supportsSync: Boolean = true
+    override val supportsTrackingReadback: Boolean = true
     override val coordinateMode: String get() = mode.name
     override val pointingCapabilities get() = super.pointingCapabilities.copy(
         axisReading = AxisReadingKind.MOTOR_COUNTER, observesReleasedClutch = false,
@@ -163,6 +164,32 @@ internal class SkyWatcherMotorAdapter(
         trackingEnabled = rate.tracks
         trackingRate = rate
         applyTracking(trackingEnabled)
+    }
+
+    override fun readTracking(): MountTrackingState {
+        val raStatus = queryStatus(SkyWatcherAxis.RA)
+        val decStatus = queryStatus(SkyWatcherAxis.DEC)
+        if (!SkyWatcherMotorCodec.isAxisActive(raStatus) && !SkyWatcherMotorCodec.isAxisActive(decStatus)) {
+            return MountTrackingState(false, MountTrackingRate.OFF)
+        }
+        if (mode == SkyWatcherMountMode.ALTAZ) {
+            // Only the application owns the time-varying Alt/Az target/rate calculation.
+            return if (trackingEnabled && listOf(raStatus, decStatus).all {
+                !SkyWatcherMotorCodec.isAxisActive(it) || SkyWatcherMotorCodec.isLowSpeedContinuous(it)
+            }) MountTrackingState(true, trackingRate) else MountTrackingState()
+        }
+        // f: first hex digit = speed mode/direction, second = running, third = initialized.
+        // A moving motor alone can also be a manual slew or GOTO.
+        if (!SkyWatcherMotorCodec.isAxisActive(raStatus) || !SkyWatcherMotorCodec.isLowSpeedContinuous(raStatus) ||
+            (raStatus and SkyWatcherMotorCodec.STATUS_REVERSE_MASK != 0L) != (site.latitudeDeg < 0)) return MountTrackingState()
+        val period = queryLong('i', SkyWatcherAxis.RA)
+        val rate = MountTrackingRate.entries.filter { it.tracks }.firstOrNull {
+            val expected = SkyWatcherEquatorialMath.rateCode(
+                SkyWatcherEquatorialMath.SIDEREAL_ARCSEC_PER_SEC * it.siderealFraction, geometry.ra
+            ).second
+            kotlin.math.abs(period - expected) <= 1L
+        }
+        return if (rate != null) MountTrackingState(true, rate) else MountTrackingState()
     }
 
     override fun readSite(): MountSite = site

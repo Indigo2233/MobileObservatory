@@ -35,6 +35,7 @@ class VirtualObservatory(private val clock: () -> Long = System::currentTimeMill
     private var moving: MountDirection? = null
     private var guide = false
     private var tracking = true
+    val isTracking: Boolean @Synchronized get() = tracking
     private var previousDec: MountDirection? = null
     private var slackMs = 0.0
     private var pulseDeadline: Long? = null

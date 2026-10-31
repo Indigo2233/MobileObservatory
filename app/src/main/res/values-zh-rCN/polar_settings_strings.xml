@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="polar_site_environment">位置与环境</string>
+    <string name="polar_optics_settings">光学</string>
+    <string name="polar_axis_settings">赤经轴</string>
+    <string name="polar_solve_settings">解析</string>
+    <string name="polar_move_rate_deg_sec">转速（°/s）</string>
+    <string name="polar_search_radius_deg">搜索半径（°）</string>
+    <string name="polar_blind_retry">失败后盲解</string>
+    <string name="polar_coordinate_hint">赤道仪坐标</string>
+</resources>

@@ -27,6 +27,7 @@ class MountReadOnlyLoopbackTest {
                     val reply = when (text) {
                         ":GR#" -> "05:00:00#"; ":GD#" -> "+40*00:00#"; ":GVP#" -> "OnStep local test#"
                         ":GC#" -> "10/14/26#"; ":GL#" -> "00:00:00#"; ":GG#" -> "+00#"; ":Td#" -> "1"
+                        ":GU#" -> "NpEW160#"; ":GT#" -> "60.16427#"
                         else -> ""
                     }
                     if (reply.isNotEmpty()) { output.write(reply.toByteArray()); output.flush() }
@@ -40,6 +41,7 @@ class MountReadOnlyLoopbackTest {
             assertTrue(controller.pointingCapabilities.value.readCoordinates && controller.pointingCapabilities.value.readTime)
             assertFalse(controller.pointingCapabilities.value.goto || controller.supportsSync)
             assertTrue(controller.readTime().epochMillis > 0)
+            assertEquals(MountTrackingState(true, MountTrackingRate.SIDEREAL), controller.readTracking())
             assertThrows(IllegalStateException::class.java) { runBlocking { controller.slewTo(MountCoordinates(6.0, 35.0)) } }
             // A future caller bypassing the public facade still cannot send a movement packet.
             val wire = Lx200MountController::class.java.getDeclaredMethod("sendNoReplyCommand", String::class.java).apply { isAccessible = true }

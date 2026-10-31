@@ -37,9 +37,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
@@ -119,6 +123,7 @@ fun PolarAlignmentScreen(
     onSyncPhoneSiteToMount: (Double, Double) -> Unit = { _, _ -> },
     onMoveMountRaBy: (Double, Boolean, Double) -> Unit = { _, _, _ -> },
     onStopMountRaMove: () -> Unit = {},
+    onEnsureMountTracking: suspend () -> Unit = {},
     onCaptureFits: suspend (Float) -> File? = { null },
     onBack: () -> Unit
 ) {
@@ -133,6 +138,7 @@ fun PolarAlignmentScreen(
     val workflowBusy by workflowTask.busy.collectAsStateWithPageLifecycle()
     var importJob by remember { mutableStateOf<Job?>(null) }
     val taskBusy = workflowBusy || importJob != null
+    val parametersEnabled = !taskBusy && !mountBusy
     var pendingAutomaticRefresh by remember { mutableStateOf(false) }
     var adjustmentLoopActive by remember { mutableStateOf(false) }
     fun stopTask() { pendingAutomaticRefresh = false; importJob?.cancel(); workflowTask.stop() }
@@ -176,7 +182,6 @@ fun PolarAlignmentScreen(
     var computedFovDeg by remember { mutableStateOf<Double?>(null) }
     var manualMode by rememberSaveable { mutableStateOf(prefs.getBoolean("polar_manual_mode", false)) }
     var automaticRefresh by rememberSaveable { mutableStateOf(prefs.getBoolean("polar_automatic_refresh", true)) }
-    var startFromCurrent by rememberSaveable { mutableStateOf(prefs.getBoolean("polar_start_current", true)) }
     var eastDirection by rememberSaveable { mutableStateOf(prefs.getBoolean("polar_east_direction", true)) }
     var targetDistanceText by rememberSaveable { mutableStateOf(prefs.getInt("polar_target_distance_deg", 10).toString()) }
     var moveRateText by rememberSaveable { mutableStateOf(prefs.getFloat("polar_move_rate_deg_sec", 3f).toString()) }
@@ -250,6 +255,18 @@ fun PolarAlignmentScreen(
 
     fun currentAstapFov(hints: FitsSolveHints = FitsSolveHints()): Double? = solveConfiguration().fieldOfView(hints)
 
+    suspend fun settledCapture(exposure: Float): File? {
+        if (!manualMode) {
+            workflowStatus = context.getString(R.string.tracking_checking)
+            onEnsureMountTracking()
+        }
+        workflowStatus = context.getString(R.string.polar_settling)
+        com.indigo.mobileobservatory.mount.awaitMountSettled(
+            moving = { latestMountBusy.value },
+            coordinates = { latestMountCoordinates.value })
+        return onCaptureFits(exposure)
+    }
+
     suspend fun executeSample(index: Int, configuration: PolarSolveConfiguration, capture: suspend () -> File?): PlateSolveResult =
         sampleSession.execute(index, capture,
             fieldOfView = { file ->
@@ -264,9 +281,9 @@ fun PolarAlignmentScreen(
             exposureTime = ::exposureTimeOf)
 
     suspend fun captureSample(index: Int, configuration: PolarSolveConfiguration, exposure: Float): PlateSolveResult =
-        retrySolveCapture(onRetry = { attempt, result ->
+        retrySolveCapture(maxAttempts = 3, onRetry = { attempt, result ->
             workflowStatus = context.getString(R.string.solve_retry_capture, attempt, result.message)
-        }) { executeSample(index, configuration) { onCaptureFits(exposure) } }
+        }) { executeSample(index, configuration) { settledCapture(exposure) } }
 
     fun publishAdjustment(solved: PolarErrorDetermination, result: PolarAlignmentResult, sample: PolarSample) {
         determination = solved
@@ -284,7 +301,7 @@ fun PolarAlignmentScreen(
         runPolarCorrectionPhase(solved, alignmentToleranceText.toDoubleOrNull() ?: 0.0,
             capture = {
                 workflowStatus = context.getString(R.string.polar_correction_capturing)
-                val result = executeSample(3, configuration) { onCaptureFits(exposure) }
+                val result = executeSample(3, configuration) { settledCapture(exposure) }
                 if (result.success && result.raDeg != null && result.decDeg != null) {
                     retryAttempt = 1
                     val at = requireNotNull(sampleSession.samples.value[3].capturedAt)
@@ -349,7 +366,7 @@ fun PolarAlignmentScreen(
             error = null
             if (index < 3) { determination = null; currentResult = null; sampleModel.adjustment = null }
             try {
-                val solved = executeSample(index, configuration) { if (recapture) onCaptureFits(requireNotNull(exposure)) else file }
+                val solved = executeSample(index, configuration) { if (recapture) settledCapture(requireNotNull(exposure)) else file }
                 workflowStatus = context.getString(if (solved.success) R.string.polar_point_solved else R.string.tppa_failed, index + 1)
                 if (!solved.success) error = solved.message
                 val previous = sampleModel.adjustment
@@ -549,6 +566,7 @@ fun PolarAlignmentScreen(
                 modifier = Modifier.weight(1f),
                 failureVisible = latestSample?.phase == PolarSamplePhase.FAILED || error != null,
                 resultVisible = adjustment != null,
+                settingsVisible = showParameters,
                 preview = { modifier ->
                     val label = if (previewFile != null && latestSample?.file == null)
                         stringResource(R.string.polar_previous_image, previewLabel) else previewLabel
@@ -565,17 +583,10 @@ fun PolarAlignmentScreen(
                         modifier = modifier.verticalScroll(rememberScrollState()).padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(stringResource(R.string.solve_monochrome_preview), Modifier.weight(1f))
-                            Switch(checked = monochromePreview, onCheckedChange = {
-                                monochromePreview = it
-                                prefs.edit().putBoolean("polar_monochrome_preview", it).apply()
-                            })
-                        }
                         PolarExposureControls(seconds = exposureSeconds, onSecondsChange = {
                             exposureSeconds = it
                             prefs.edit().putString("polar_exposure_seconds", it).apply()
-                        }, minimumUs = cameraExposureMinUs, maximumUs = cameraExposureMaxUs, actualUs = cameraExposureUs,
+                        }, minimumUs = cameraExposureMinUs, maximumUs = cameraExposureMaxUs,
                             connected = cameraConnected, busy = taskBusy || mountBusy,
                             onCapture = {
                                 val exposure = requestedExposureUs
@@ -596,10 +607,16 @@ fun PolarAlignmentScreen(
                                     }
                                 }
                             })
-                        Surface(shape = MaterialTheme.shapes.medium, tonalElevation = 1.dp) {
-                            Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Text(stringResource(R.string.workflow), style = MaterialTheme.typography.titleSmall)
-                                Text(stringResource(R.string.polar_progress, samples.take(3).count { it.phase == PolarSamplePhase.COMPLETE }))
+                            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                    Text(stringResource(R.string.polar_progress, samples.take(3).count { it.phase == PolarSamplePhase.COMPLETE }),
+                                        Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                                    LabeledSwitch(stringResource(R.string.solve_monochrome_preview), monochromePreview,
+                                        modifier = Modifier.widthIn(max = 180.dp)) {
+                                        monochromePreview = it
+                                        prefs.edit().putBoolean("polar_monochrome_preview", it).apply()
+                                    }
+                                }
                                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     FilterChip(selected = automaticRefresh, onClick = {
                                         automaticRefresh = true
@@ -617,8 +634,6 @@ fun PolarAlignmentScreen(
                                     }, label = { Text(stringResource(R.string.polar_refresh_manual)) },
                                         modifier = Modifier.testTag("polar-refresh-manual"))
                                 }
-                                Text(stringResource(if (automaticRefresh) R.string.polar_refresh_auto_hint else R.string.polar_refresh_manual_hint),
-                                    style = MaterialTheme.typography.bodySmall)
                                 error?.let { msg ->
                                     if (locationPermissionDeniedForever &&
                                         msg == stringResource(R.string.location_permission_denied_forever)
@@ -726,8 +741,6 @@ fun PolarAlignmentScreen(
                                                                     error(context.getString(R.string.polar_short_move, travelled, distance))
                                                                 }
                                                             }
-                                                            workflowStatus = context.getString(R.string.polar_settling)
-                                                            delay(SETTLE_MILLIS)
                                                             sampleModel.positionedPoint = index
                                                             sampleModel.canResume = true
                                                         }
@@ -815,86 +828,53 @@ fun PolarAlignmentScreen(
                                         sampleModel.adjustment = null
                                     }) { Text(stringResource(R.string.polar_restart)) }
                                 }
-                                if (workflowStatus.isNotBlank()) {
-                                    Text(workflowStatus, fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
-                                }
-                                Text(
-                                    if (adjustment != null) {
-                                        stringResource(R.string.polar_adjustment_knobs_hint)
-                                    } else if (manualMode) {
-                                        stringResource(R.string.polar_manual_mode_hint)
-                                    } else {
-                                        stringResource(R.string.polar_automatic_mode_hint)
-                                    },
-                                    fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.outline
-                                )
-                            }
                         }
 
-                        if (showParameters) determination?.let { solved ->
-                            PolarAlignmentResultCard(
-                                determination = solved,
-                                current = currentResult ?: solved.initial,
-                                correctionField = correctionField
-                            )
-                        }
-
-                        Text(stringResource(R.string.polar_setup_summary, latitudeText, longitudeText,
-                            focalLengthText.ifBlank { "—" }, pixelSizeText.ifBlank { "—" }), style = MaterialTheme.typography.bodySmall)
-                        OutlinedButton(onClick = { showParameters = !showParameters }, modifier = Modifier.fillMaxWidth(), enabled = !taskBusy) {
+                        TextButton(onClick = { showParameters = !showParameters },
+                            modifier = Modifier.fillMaxWidth().testTag("polar-parameters-toggle"), enabled = !taskBusy) {
                             Text(stringResource(R.string.polar_parameters), modifier = Modifier.weight(1f))
                             Icon(if (showParameters) Icons.Default.ExpandLess else Icons.Default.ExpandMore, null)
                         }
                         if (showParameters) {
-                            Surface(shape = MaterialTheme.shapes.medium, tonalElevation = 1.dp) {
-                                Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Text(stringResource(R.string.site), style = MaterialTheme.typography.titleSmall)
-                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        OutlinedTextField(
-                                            value = latitudeText,
-                                            onValueChange = { latitudeText = it.filterCoordinateText() },
-                                            label = { Text(stringResource(R.string.latitude_deg)) },
-                                            singleLine = true,
-                                            modifier = Modifier.weight(1f)
-                                        )
-                                        OutlinedTextField(
-                                            value = longitudeText,
-                                            onValueChange = { longitudeText = it.filterCoordinateText() },
-                                            label = { Text(stringResource(R.string.longitude_deg)) },
-                                            singleLine = true,
-                                            modifier = Modifier.weight(1f)
-                                        )
-                                    }
-                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        OptionField(stringResource(R.string.elevation_m), elevationText, Modifier.weight(1f)) {
+                                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Text(stringResource(R.string.polar_site_environment), style = MaterialTheme.typography.titleSmall)
+                                    SolveParameterPair(
+                                        first = { modifier ->
+                                            OptionField(stringResource(R.string.latitude_deg), latitudeText,
+                                                modifier.testTag("polar-latitude"), parametersEnabled) { latitudeText = it.filterCoordinateText() }
+                                        },
+                                        second = { modifier ->
+                                            OptionField(stringResource(R.string.longitude_deg), longitudeText,
+                                                modifier.testTag("polar-longitude"), parametersEnabled) { longitudeText = it.filterCoordinateText() }
+                                        })
+                                    SolveParameterPair(first = { modifier ->
+                                        OptionField(stringResource(R.string.elevation_m), elevationText,
+                                            modifier.testTag("polar-elevation"), parametersEnabled) {
                                             elevationText = it.filterCoordinateText()
                                             it.toFloatOrNull()?.let { value ->
                                                 prefs.edit().putFloat("polar_elevation_m", value).apply()
                                             }
                                         }
-                                    }
-                                    SolveOpticsFields(
-                                        focalLengthText = focalLengthText,
-                                        onFocalLengthChange = { focalLengthText = it },
-                                        selectedSensorId = selectedSensorId,
-                                        onSensorSelected = { sensor ->
-                                            selectedSensorId = sensor.id
-                                            pixelSizeText = formatPixelSizeUm(sensor.pixelSizeUm)
-                                        },
-                                        pixelSizeText = pixelSizeText,
-                                        onPixelSizeChange = { pixelSizeText = it },
-                                        sensors = sensors,
-                                        computedFovHeightDeg = computedFovDeg,
-                                        enabled = !runningAuto && solvingSlot == null
-                                    )
-                                    if (mountCoordinates != null) {
-                                        Text(
-                                            "Mount hint ${mountCoordinates.formatRa()}  ${mountCoordinates.formatDec()}",
-                                            fontSize = 12.sp,
-                                            color = MaterialTheme.colorScheme.outline
-                                        )
-                                    }
+                                    }, second = { modifier ->
+                                        OptionField(stringResource(R.string.temperature_c), temperatureText,
+                                            modifier.testTag("polar-temperature"), parametersEnabled) {
+                                            temperatureText = it.filterCoordinateText()
+                                            it.toFloatOrNull()?.let { value -> prefs.edit().putFloat("polar_temperature_c", value).apply() }
+                                        }
+                                    })
+                                    SolveParameterPair(first = { modifier ->
+                                        OptionField(stringResource(R.string.pressure_hpa), pressureText,
+                                            modifier.testTag("polar-pressure"), parametersEnabled) {
+                                            pressureText = it.filterCoordinateText()
+                                            prefs.edit().putFloat("polar_pressure_hpa", it.toFloatOrNull() ?: 0f).apply()
+                                        }
+                                    }, second = { modifier ->
+                                        LabeledSwitch(stringResource(R.string.refraction), refractionAdjustment,
+                                            modifier, parametersEnabled) {
+                                            refractionAdjustment = it
+                                            prefs.edit().putBoolean("polar_refraction_adjustment", it).apply()
+                                        }
+                                    })
                                     phoneSite?.let {
                                         Text(stringResource(R.string.phone_gps_value, it.format()), fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
                                     }
@@ -911,8 +891,8 @@ fun PolarAlignmentScreen(
                                             )
                                         }
                                     }
-                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        Button(
+                                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        TextButton(
                                             onClick = {
                                                 if (hasLocationPermission(context)) {
                                                     scope.launch {
@@ -941,15 +921,15 @@ fun PolarAlignmentScreen(
                                                 }
                                             }
                                         ) { Text(stringResource(R.string.phone_gps)) }
-                                        OutlinedButton(
+                                        TextButton(
                                             onClick = onReadMountSite,
                                             enabled = !mountBusy
                                         ) { Text(stringResource(if (mountBusy) R.string.mount_busy else R.string.read_mount)) }
                                     }
-                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        OutlinedButton(
+                                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        TextButton(
                                             onClick = {
-                                                val site = mountSite ?: return@OutlinedButton
+                                                val site = mountSite ?: return@TextButton
                                                 latitudeText = "%.6f".format(Locale.US, site.latitudeDeg)
                                                 longitudeText = "%.6f".format(Locale.US, site.longitudeDeg)
                                                 prefs.edit()
@@ -959,109 +939,106 @@ fun PolarAlignmentScreen(
                                             },
                                             enabled = mountSite != null
                                         ) { Text(stringResource(R.string.mount_to_app)) }
-                                        OutlinedButton(
+                                        TextButton(
                                             onClick = {
-                                                val site = phoneSite ?: return@OutlinedButton
+                                                val site = phoneSite ?: return@TextButton
                                                 onSyncPhoneSiteToMount(site.latitudeDeg, site.longitudeDeg)
                                             },
                                             enabled = phoneSite != null && !mountBusy
                                         ) { Text(stringResource(R.string.phone_to_mount)) }
                                     }
+                                    Divider()
+                                    Text(stringResource(R.string.polar_optics_settings), style = MaterialTheme.typography.titleSmall)
+                                    SolveOpticsFields(
+                                        focalLengthText = focalLengthText,
+                                        onFocalLengthChange = { focalLengthText = it },
+                                        selectedSensorId = selectedSensorId,
+                                        onSensorSelected = { sensor ->
+                                            selectedSensorId = sensor.id
+                                            pixelSizeText = formatPixelSizeUm(sensor.pixelSizeUm)
+                                        },
+                                        pixelSizeText = pixelSizeText,
+                                        onPixelSizeChange = { pixelSizeText = it },
+                                        sensors = sensors,
+                                        computedFovHeightDeg = computedFovDeg,
+                                        enabled = parametersEnabled,
+                                        compact = true
+                                    )
                                 }
-                            }
 
-                            Surface(shape = MaterialTheme.shapes.medium, tonalElevation = 1.dp) {
-                                Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Text(stringResource(R.string.nina_tppa_options), style = MaterialTheme.typography.titleSmall)
-                                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                        LabeledSwitch(stringResource(R.string.manual), manualMode) {
+                                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Divider()
+                                    Text(stringResource(R.string.polar_axis_settings), style = MaterialTheme.typography.titleSmall)
+                                    SolveParameterPair(first = { modifier ->
+                                        LabeledSwitch(stringResource(R.string.manual), manualMode, modifier, parametersEnabled) {
                                             manualMode = it
                                             prefs.edit().putBoolean("polar_manual_mode", it).apply()
                                         }
-                                        LabeledSwitch(stringResource(R.string.start_current), startFromCurrent) {
-                                            startFromCurrent = it
-                                            prefs.edit().putBoolean("polar_start_current", it).apply()
-                                        }
-                                        LabeledSwitch(stringResource(R.string.east), eastDirection) {
+                                    }, second = { modifier ->
+                                        LabeledSwitch(stringResource(R.string.east), eastDirection, modifier, parametersEnabled) {
                                             eastDirection = it
                                             prefs.edit().putBoolean("polar_east_direction", it).apply()
                                         }
-                                    }
-                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        OptionField(stringResource(R.string.distance_deg), targetDistanceText, Modifier.weight(1f)) {
+                                    })
+                                    SolveParameterPair(first = { modifier ->
+                                        OptionField(stringResource(R.string.distance_deg), targetDistanceText, modifier, parametersEnabled) {
                                             targetDistanceText = it.filterCoordinateText()
                                             it.toIntOrNull()?.let { value -> prefs.edit().putInt("polar_target_distance_deg", value.coerceIn(1, 90)).apply() }
                                         }
-                                        OptionField(stringResource(R.string.move_rate), moveRateText, Modifier.weight(1f)) {
+                                    }, second = { modifier ->
+                                        OptionField(stringResource(R.string.polar_move_rate_deg_sec), moveRateText, modifier, parametersEnabled) {
                                             moveRateText = it.filterCoordinateText()
                                             it.toFloatOrNull()?.let { value -> prefs.edit().putFloat("polar_move_rate_deg_sec", value.coerceIn(0.1f, 20f)).apply() }
                                         }
+                                    })
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        TextButton(onClick = {
+                                            onMoveMountRaBy(
+                                                targetDistanceText.toDoubleOrNull()?.coerceIn(1.0, 90.0) ?: 10.0,
+                                                eastDirection,
+                                                moveRateText.toDoubleOrNull()?.coerceIn(0.1, 20.0) ?: 3.0)
+                                        }, enabled = mountCoordinates != null && parametersEnabled && !manualMode) {
+                                            Text(stringResource(R.string.move_ra))
+                                        }
+                                        OutlinedButton(onClick = onStopMountRaMove, enabled = mountBusy) {
+                                            Text(stringResource(R.string.stop))
+                                        }
                                     }
-                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        OptionField(stringResource(R.string.search_radius), searchRadiusText, Modifier.weight(1f)) {
+                                    if (mountMoveStatus.isNotBlank()) {
+                                        Text(mountMoveStatus, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                                    }
+                                    Divider()
+                                    Text(stringResource(R.string.polar_solve_settings), style = MaterialTheme.typography.titleSmall)
+                                    SolveParameterPair(first = { modifier ->
+                                        OptionField(stringResource(R.string.polar_search_radius_deg), searchRadiusText,
+                                            modifier.testTag("polar-search-radius"), parametersEnabled) {
                                             searchRadiusText = it.filterCoordinateText()
                                             it.toFloatOrNull()?.let { value -> prefs.edit().putFloat("polar_search_radius_deg", value.coerceIn(.1f, 180f)).apply() }
                                         }
-                                        OptionField(stringResource(R.string.tolerance_arcmin), alignmentToleranceText, Modifier.weight(1f)) {
+                                    }, second = { modifier ->
+                                        OptionField(stringResource(R.string.tolerance_arcmin), alignmentToleranceText,
+                                            modifier.testTag("polar-tolerance"), parametersEnabled) {
                                             alignmentToleranceText = it.filterCoordinateText()
                                             it.toFloatOrNull()?.let { value -> prefs.edit().putFloat("polar_alignment_tolerance_arcmin", value.coerceAtLeast(0f)).apply() }
                                         }
-                                    }
-                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        OptionField(stringResource(R.string.temperature_c), temperatureText, Modifier.weight(1f)) {
-                                            temperatureText = it.filterCoordinateText()
-                                            it.toFloatOrNull()?.let { value -> prefs.edit().putFloat("polar_temperature_c", value).apply() }
-                                        }
-                                        OptionField(stringResource(R.string.pressure_hpa), pressureText, Modifier.weight(1f)) {
-                                            pressureText = it.filterCoordinateText()
-                                            prefs.edit().putFloat("polar_pressure_hpa", it.toFloatOrNull() ?: 0f).apply()
-                                        }
-                                    }
-                                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                        LabeledSwitch(stringResource(R.string.refraction), refractionAdjustment) {
-                                            refractionAdjustment = it
-                                            prefs.edit().putBoolean("polar_refraction_adjustment", it).apply()
-                                        }
-                                        LabeledSwitch(stringResource(R.string.solve_blind_fallback), blindFallback) {
+                                    })
+                                    SolveParameterPair(first = { modifier ->
+                                        LabeledSwitch(stringResource(R.string.polar_blind_retry), blindFallback, modifier, parametersEnabled) {
                                             blindFallback = it
                                             prefs.edit().putBoolean("polar_blind_fallback", it).apply()
                                         }
-                                    }
-                                    LabeledSwitch(stringResource(R.string.mount_hint), useMountHint) {
-                                    useMountHint = it
-                                    prefs.edit().putBoolean("polar_use_mount_hint", it).apply()
-                                }
-                                Text(
-                                        stringResource(R.string.polar_refraction_hint),
-                                        fontSize = 11.sp,
-                                        color = MaterialTheme.colorScheme.outline
-                                    )
-                                    Text(
-                                        stringResource(R.string.polar_continuous_hint),
-                                        fontSize = 11.sp,
-                                        color = MaterialTheme.colorScheme.outline
-                                    )
-                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                        Button(
-                                            onClick = {
-                                                onMoveMountRaBy(
-                                                    targetDistanceText.toDoubleOrNull()?.coerceIn(1.0, 90.0) ?: 10.0,
-                                                    eastDirection,
-                                                    moveRateText.toDoubleOrNull()?.coerceIn(0.1, 20.0) ?: 3.0
-                                                )
-                                            },
-                                            enabled = mountCoordinates != null && !mountBusy && !manualMode
-                                        ) { Text(stringResource(R.string.move_ra)) }
-                                        OutlinedButton(
-                                            onClick = onStopMountRaMove,
-                                            enabled = mountBusy
-                                        ) { Text(stringResource(R.string.stop)) }
-                                    }
-                                    if (mountMoveStatus.isNotBlank()) {
-                                        Text(mountMoveStatus, fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
+                                    }, second = { modifier ->
+                                        LabeledSwitch(stringResource(R.string.polar_coordinate_hint), useMountHint,
+                                            modifier.testTag("polar-mount-hint"), parametersEnabled) {
+                                            useMountHint = it
+                                            prefs.edit().putBoolean("polar_use_mount_hint", it).apply()
+                                        }
+                                    })
+                                    if (useMountHint && mountCoordinates != null) {
+                                        Text("${mountCoordinates.formatRa()}  ${mountCoordinates.formatDec()}",
+                                            fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
                                     }
                                 }
-                            }
 
                         }
 
@@ -1070,6 +1047,13 @@ fun PolarAlignmentScreen(
                             Icon(if (showSamples) Icons.Default.ExpandLess else Icons.Default.ExpandMore, null)
                         }
                         if (showSamples) {
+                            determination?.let { solved ->
+                                PolarAlignmentResultCard(
+                                    determination = solved,
+                                    current = currentResult ?: solved.initial,
+                                    correctionField = correctionField
+                                )
+                            }
                             (0..3).filter { it < 3 || adjustment != null || samples[3].file != null ||
                                 samples[3].phase != PolarSamplePhase.EMPTY }.forEach { index ->
                                 MeasurementCard(
@@ -1150,7 +1134,6 @@ fun PolarAlignmentScreen(
     }
 }
 
-private const val SETTLE_MILLIS = 3_000L
 
 /** Barometric pressure of the standard atmosphere at a given elevation. */
 private fun standardPressureHPa(elevationMeters: Double): Double =
@@ -1271,6 +1254,7 @@ private fun OptionField(
     label: String,
     value: String,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
     onValueChange: (String) -> Unit
 ) {
     OutlinedTextField(
@@ -1278,6 +1262,9 @@ private fun OptionField(
         onValueChange = onValueChange,
         label = { Text(label) },
         singleLine = true,
+        enabled = enabled,
+        textStyle = MaterialTheme.typography.bodyMedium,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
         modifier = modifier
     )
 }
@@ -1286,11 +1273,15 @@ private fun OptionField(
 private fun LabeledSwitch(
     label: String,
     checked: Boolean,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
     onCheckedChange: (Boolean) -> Unit
 ) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(label, fontSize = 12.sp)
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+    Row(modifier.heightIn(min = 48.dp).toggleable(value = checked, enabled = enabled,
+        role = Role.Switch, onValueChange = onCheckedChange),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(label, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+        Switch(checked = checked, onCheckedChange = null, enabled = enabled)
     }
 }
 
