@@ -17,6 +17,9 @@ import androidx.lifecycle.LifecycleRegistry
 /** A covered task retains drafts/results. Hidden tasks cannot receive system Back. */
 internal val LocalObservatoryPageVisible = staticCompositionLocalOf { true }
 
+/** Device tasks observe the host even while their retained page is covered. */
+internal val LocalObservatoryHostLifecycleOwner = staticCompositionLocalOf<LifecycleOwner?> { null }
+
 @Composable
 internal fun rememberPageForeground(): Boolean {
     val owner = LocalLifecycleOwner.current
@@ -32,6 +35,7 @@ internal fun rememberPageForeground(): Boolean {
 @Composable
 internal fun ObservatoryPageHost(visible: Boolean, content: @Composable () -> Unit) {
     val parent = LocalLifecycleOwner.current
+    val host = LocalObservatoryHostLifecycleOwner.current ?: parent
     val owner = remember {
         object : LifecycleOwner {
             val registry = LifecycleRegistry(this)
@@ -48,7 +52,8 @@ internal fun ObservatoryPageHost(visible: Boolean, content: @Composable () -> Un
         onDispose { parent.lifecycle.removeObserver(observer) }
     }
     DisposableEffect(owner) { onDispose { owner.registry.currentState = Lifecycle.State.DESTROYED } }
-    CompositionLocalProvider(LocalLifecycleOwner provides owner, LocalObservatoryPageVisible provides visible) {
+    CompositionLocalProvider(LocalLifecycleOwner provides owner, LocalObservatoryPageVisible provides visible,
+        LocalObservatoryHostLifecycleOwner provides host) {
         Box(if (visible) Modifier.fillMaxSize() else Modifier.size(0.dp).clipToBounds().clearAndSetSemantics {}) { content() }
     }
 }

@@ -36,6 +36,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardOptions
@@ -48,6 +49,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.indigo.mobileobservatory.astrometry.AstapRunner
 import com.indigo.mobileobservatory.astrometry.FitsHeaderReader
 import com.indigo.mobileobservatory.astrometry.FitsSolveHintReader
@@ -136,7 +139,7 @@ fun PolarAlignmentScreen(
     val samples by sampleSession.samples.collectAsStateWithPageLifecycle()
     val stopMotion = rememberUpdatedState(onStopMountRaMove)
     val workflowTask = remember(scope) { PolarWorkflowTask(scope) { stopMotion.value() } }
-    val workflowBusy by workflowTask.busy.collectAsStateWithPageLifecycle()
+    val workflowBusy by workflowTask.busy.collectAsStateWithHostLifecycle()
     var importJob by remember { mutableStateOf<Job?>(null) }
     val taskBusy = workflowBusy || importJob != null
     val parametersEnabled = !taskBusy && !mountBusy
@@ -145,10 +148,19 @@ fun PolarAlignmentScreen(
     fun stopTask() { pendingAutomaticRefresh = false; importJob?.cancel(); workflowTask.stop() }
     var inspectFile by remember { mutableStateOf<File?>(null) }
     val pageForeground = rememberPageForeground()
-    DisposableEffect(workflowTask) { onDispose { stopTask() } }
+    val hostLifecycle = (LocalObservatoryHostLifecycleOwner.current ?: LocalLifecycleOwner.current).lifecycle
+    DisposableEffect(workflowTask, hostLifecycle) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP || event == Lifecycle.Event.ON_DESTROY) {
+                pendingAutomaticRefresh = false
+                workflowTask.stop()
+            }
+        }
+        hostLifecycle.addObserver(observer)
+        onDispose { hostLifecycle.removeObserver(observer); stopTask() }
+    }
     LaunchedEffect(mountStopSignal) { pendingAutomaticRefresh = false; workflowTask.stop() }
-    // Document results can arrive before onResume; the bounded file import is independent of device acquisition.
-    LaunchedEffect(pageForeground) { if (!pageForeground) { pendingAutomaticRefresh = false; workflowTask.stop() } }
+    // Workspace switches retain this composition and its workflow; app background and explicit exit stop it.
     BackHandler(enabled = taskBusy && pageForeground && inspectFile == null) { stopTask(); onBack() }
     BackHandler(enabled = inspectFile != null && pageForeground) { inspectFile = null }
     val phoneLocationFailed = stringResource(R.string.phone_location_failed)

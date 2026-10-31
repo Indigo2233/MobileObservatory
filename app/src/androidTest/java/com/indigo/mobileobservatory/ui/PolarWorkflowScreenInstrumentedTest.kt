@@ -12,6 +12,9 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
@@ -22,12 +25,17 @@ import android.os.ParcelFileDescriptor
 import android.view.KeyEvent
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.lifecycle.Lifecycle
 import com.indigo.mobileobservatory.astrometry.*
 import com.indigo.mobileobservatory.astro.*
 import com.indigo.mobileobservatory.camera.CameraInfo
 import com.indigo.mobileobservatory.polar.*
 import com.indigo.mobileobservatory.mount.MountCoordinates
 import com.indigo.mobileobservatory.ui.screens.PolarAlignmentScreen
+import com.indigo.mobileobservatory.ui.screens.ObservatoryPageHost
+import com.indigo.mobileobservatory.ui.screens.ObservatoryNavigation
+import com.indigo.mobileobservatory.ui.screens.ObservatoryWorkspace
+import com.indigo.mobileobservatory.ui.screens.ObservatoryDestination
 import com.indigo.mobileobservatory.ui.theme.MobileObservatoryTheme
 import kotlinx.coroutines.*
 import org.junit.*
@@ -112,6 +120,8 @@ class PolarWorkflowScreenInstrumentedTest {
 
     private fun screen(engine: ImagePlateSolver, fontScale: Float = 1f, compact: Boolean = false,
         chinese: Boolean = false, automaticMount: Boolean = false,
+        pageVisible: () -> Boolean = { true }, stopSignal: () -> Long = { 0L },
+        pagePresent: () -> Boolean = { true },
         prepareTracking: suspend () -> Unit = {}, capture: suspend (Float) -> File?) {
         if (automaticMount) context.getSharedPreferences("mobile_observatory", Context.MODE_PRIVATE)
             .edit().putBoolean("polar_manual_mode", false).commit()
@@ -127,16 +137,130 @@ class PolarWorkflowScreenInstrumentedTest {
             CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale),
                 LocalContext provides localized, LocalConfiguration provides configuration) {
             Box(if (compact) Modifier.size(360.dp, 480.dp) else Modifier) {
+            if (pagePresent()) ObservatoryPageHost(pageVisible()) {
             PolarAlignmentScreen(cameraConnected = true,
                 cameraInfo = CameraInfo("Test camera", "polar-test", 384, 256, 16, pixelSizeUm = 2.9f),
                 cameraExposureUs = 5_000_000f,
                 cameraExposureMinUs = 1000f, cameraExposureMaxUs = 20_000_000f,
                 mountCoordinates = if (automaticMount) MountCoordinates(10.0, 20.0) else null,
+                mountStopSignal = stopSignal(),
                 onEnsureMountTracking = prepareTracking,
                 solver = engine, onCaptureFits = capture, onBack = {})
             }
             }
+            }
         } }
+    }
+
+    @Test fun switchingToCaptureAndMediaKeepsPolarSolveAndItsResult() {
+        var navigation by mutableStateOf(ObservatoryNavigation()
+            .select(ObservatoryWorkspace.TOOLS).open(ObservatoryDestination.POLAR_ALIGNMENT))
+        val pageId = navigation.pages.last().id
+        val started = AtomicBoolean()
+        val cancelled = AtomicBoolean()
+        val finished = AtomicBoolean()
+        val release = CompletableDeferred<PlateSolveResult>()
+        val engine = object : ImagePlateSolver {
+            override val ready = true
+            override suspend fun solve(inputFile: File, fovDeg: Double, mountCoordinates: MountCoordinates?,
+                searchRadiusDeg: Double?): PlateSolveResult {
+                started.set(true)
+                try {
+                    return release.await().also { finished.set(true) }
+                } finally {
+                    if (!currentCoroutineContext().isActive) cancelled.set(true)
+                }
+            }
+        }
+        screen(engine, pageVisible = { navigation.workspace == ObservatoryWorkspace.TOOLS }) { image }
+        compose.onNodeWithTag("polar-run").performScrollTo().performClick()
+        compose.waitUntil(15_000) { started.get() }
+        compose.runOnIdle { navigation = navigation.select(ObservatoryWorkspace.CAPTURE) }
+        compose.waitForIdle()
+        assertFalse("Switching to capture must preserve the polar solve", cancelled.get())
+        compose.runOnIdle { navigation = navigation.select(ObservatoryWorkspace.MEDIA) }
+        compose.waitForIdle()
+        assertFalse("Switching to media must preserve the polar solve", cancelled.get())
+        release.complete(PlateSolveResult(false, "Navigation regression: retained solve result"))
+        compose.waitUntil(5_000) { finished.get() || cancelled.get() }
+        assertFalse("The solve must finish normally while its page is hidden", cancelled.get())
+        assertTrue(finished.get())
+        compose.runOnIdle { navigation = navigation.select(ObservatoryWorkspace.TOOLS) }
+        assertEquals(pageId, navigation.pages.last().id)
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithTag("polar-current-failure").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithTag("polar-current-failure")
+            .assert(hasText("Navigation regression: retained solve result", substring = true))
+        assertFalse(cancelled.get())
+    }
+
+    @Test fun globalStopCancelsPolarSolveWhileItsPageIsHidden() {
+        var visible by mutableStateOf(true)
+        var stopSignal by mutableStateOf(0L)
+        val started = AtomicBoolean()
+        val cancelled = AtomicBoolean()
+        val engine = object : ImagePlateSolver {
+            override val ready = true
+            override suspend fun solve(inputFile: File, fovDeg: Double, mountCoordinates: MountCoordinates?,
+                searchRadiusDeg: Double?): PlateSolveResult {
+                started.set(true)
+                try { awaitCancellation() } finally { cancelled.set(true) }
+            }
+        }
+        screen(engine, pageVisible = { visible }, stopSignal = { stopSignal }) { image }
+        compose.onNodeWithTag("polar-run").performScrollTo().performClick()
+        compose.waitUntil(15_000) { started.get() }
+        compose.runOnIdle { visible = false }
+        compose.waitForIdle()
+        assertFalse(cancelled.get())
+        compose.runOnIdle { stopSignal++ }
+        compose.waitUntil(5_000) { cancelled.get() }
+        compose.runOnIdle { visible = true }
+        compose.waitUntil(5_000) {
+            compose.onAllNodes(hasTestTag("polar-run") and isEnabled()).fetchSemanticsNodes().isNotEmpty()
+        }
+    }
+
+    @Test fun actualAppBackgroundStopsPolarSolve() {
+        val started = AtomicBoolean()
+        val cancelled = AtomicBoolean()
+        val engine = object : ImagePlateSolver {
+            override val ready = true
+            override suspend fun solve(inputFile: File, fovDeg: Double, mountCoordinates: MountCoordinates?,
+                searchRadiusDeg: Double?): PlateSolveResult {
+                started.set(true)
+                try { awaitCancellation() } finally { cancelled.set(true) }
+            }
+        }
+        screen(engine) { image }
+        compose.onNodeWithTag("polar-run").performScrollTo().performClick()
+        compose.waitUntil(15_000) { started.get() }
+        compose.activityRule.scenario.moveToState(Lifecycle.State.CREATED)
+        try {
+            compose.waitUntil(5_000) { cancelled.get() }
+        } finally {
+            compose.activityRule.scenario.moveToState(Lifecycle.State.RESUMED)
+        }
+    }
+
+    @Test fun leavingPolarPageStopsItsActiveSolve() {
+        var present by mutableStateOf(true)
+        val started = AtomicBoolean()
+        val cancelled = AtomicBoolean()
+        val engine = object : ImagePlateSolver {
+            override val ready = true
+            override suspend fun solve(inputFile: File, fovDeg: Double, mountCoordinates: MountCoordinates?,
+                searchRadiusDeg: Double?): PlateSolveResult {
+                started.set(true)
+                try { awaitCancellation() } finally { cancelled.set(true) }
+            }
+        }
+        screen(engine, pagePresent = { present }) { image }
+        compose.onNodeWithTag("polar-run").performScrollTo().performClick()
+        compose.waitUntil(15_000) { started.get() }
+        compose.runOnIdle { present = false }
+        compose.waitUntil(5_000) { cancelled.get() }
     }
 
     @Test fun automaticPolarChecksTrackingBeforeItsFirstExposure() {

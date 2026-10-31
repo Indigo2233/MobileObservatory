@@ -32,7 +32,8 @@ data class ObservatoryNavigation(
         // older-looking screen backed by a newer source. Global tools also reuse their page.
         val calibrationAliases = setOf(ObservatoryDestination.POINTING_SETUP, ObservatoryDestination.AUXILIARY_CALIBRATION)
         val sharedCalibration = destination in calibrationAliases
-        if (sharedCalibration || destination in setOf(ObservatoryDestination.STACK, ObservatoryDestination.SETTINGS, ObservatoryDestination.GUIDE)) {
+        if (sharedCalibration || destination in setOf(ObservatoryDestination.STACK, ObservatoryDestination.SETTINGS,
+                ObservatoryDestination.GUIDE, ObservatoryDestination.POLAR_ALIGNMENT)) {
             workspaceStacks.forEach { (owner, stack) ->
                 val existing = stack.indexOfLast { if (sharedCalibration) it.destination in calibrationAliases
                     else it.destination == destination && it.argument == argument }

@@ -105,6 +105,17 @@ class ObservatoryNavigationTest {
         assertEquals(1, settings.allPages.count { it.destination == SETTINGS })
     }
 
+    @Test fun polarAlignmentReopensItsExistingTaskFromAnotherWorkspace() {
+        val polar = ObservatoryNavigation().select(TOOLS).open(POLAR_ALIGNMENT)
+        val capture = polar.select(CAPTURE).open(PLATE_SOLVE)
+        val reopened = capture.open(POLAR_ALIGNMENT)
+        assertEquals(TOOLS, reopened.workspace)
+        assertEquals(polar.pages, reopened.pages)
+        assertEquals(1, reopened.allPages.count { it.destination == POLAR_ALIGNMENT })
+        assertEquals(PLATE_SOLVE, reopened.select(CAPTURE).current)
+        assertEquals(reopened, ObservatoryNavigation.restore(reopened.save()))
+    }
+
     @Test fun calibrationAliasesReuseTheSamePageAndItsSelectedSource() {
         val calibration = ObservatoryNavigation().select(STAR_MAP).open(PREPARATION).open(POINTING_SETUP)
         val reopened = calibration.open(PLATE_SOLVE).open(AUXILIARY_CALIBRATION)

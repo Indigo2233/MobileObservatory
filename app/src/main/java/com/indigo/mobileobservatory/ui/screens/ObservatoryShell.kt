@@ -361,18 +361,26 @@ private fun ObservatoryContent(
             onBack = back
         )
         ObservatoryDestination.POLAR_ALIGNMENT -> {
-            val virtual by vm.virtualObservation.collectAsStateWithPageLifecycle()
-            val site by vm.mountSite.collectAsStateWithPageLifecycle()
-            val busy by vm.mountBusy.collectAsStateWithPageLifecycle()
-            val moveStatus by vm.mountMoveStatus.collectAsStateWithPageLifecycle()
-            val stopSignal by vm.mountStopSignal.collectAsStateWithPageLifecycle()
+            val virtual by vm.virtualObservation.collectAsStateWithHostLifecycle()
+            val site by vm.mountSite.collectAsStateWithHostLifecycle()
+            val busy by vm.mountBusy.collectAsStateWithHostLifecycle()
+            val moveStatus by vm.mountMoveStatus.collectAsStateWithHostLifecycle()
+            val stopSignal by vm.mountStopSignal.collectAsStateWithHostLifecycle()
+            val polarCoordinates by vm.mountCoordinates.collectAsStateWithHostLifecycle()
+            val polarConnection by vm.connectionState.collectAsStateWithHostLifecycle()
+            val polarRoi by vm.roi.collectAsStateWithHostLifecycle()
+            val polarBinning by vm.binning.collectAsStateWithHostLifecycle()
             val preview by vm.previewBitmap.collectAsStateWithPageLifecycle()
-            val exposure by vm.exposureUs.collectAsStateWithPageLifecycle()
+            val exposure by vm.exposureUs.collectAsStateWithHostLifecycle()
             val camera = vm.cameraManager.activeCamera
-            key(virtual) { PolarAlignmentScreen(mountCoordinates = coordinates, mountSite = site, mountBusy = busy,
-                mountMoveStatus = moveStatus, mountStopSignal = stopSignal, cameraInfo = cameraInfo,
-                cameraFrameHints = cameraFrameHints,
-                cameraConnected = connection is ConnectionState.Connected, cameraPreviewBitmap = preview,
+            val polarCameraInfo = (polarConnection as? ConnectionState.Connected)?.info
+            val polarFrameHints = remember(polarConnection, polarRoi, polarBinning) {
+                PlateSolveOptics.cameraHints(polarCameraInfo, polarRoi, camera?.roiSensorScale ?: 1, polarBinning)
+            }
+            key(virtual) { PolarAlignmentScreen(mountCoordinates = polarCoordinates, mountSite = site, mountBusy = busy,
+                mountMoveStatus = moveStatus, mountStopSignal = stopSignal, cameraInfo = polarCameraInfo,
+                cameraFrameHints = polarFrameHints,
+                cameraConnected = polarConnection is ConnectionState.Connected, cameraPreviewBitmap = preview,
                 cameraExposureUs = exposure, cameraExposureMinUs = camera?.exposureRange?.min ?: 1000f,
                 cameraExposureMaxUs = camera?.hwExposureMaxUs ?: 30_000_000f,
                 cameraPreviewSettings = vm.cameraPreviewSettings(),

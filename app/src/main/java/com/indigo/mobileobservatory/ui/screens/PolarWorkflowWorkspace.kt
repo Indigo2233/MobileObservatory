@@ -152,6 +152,7 @@ internal fun PolarWorkflowPreview(
     val pinnedAdjustment = remember(inspectFile) { adjustment?.takeIf { it.file == inspectFile } }
     val imageAdjustment = (if (inspectFile != null) pinnedAdjustment else adjustment)?.takeIf { it.file == source }
     val overlayColors = polarOverlayColors()
+    val foreground = rememberPageForeground()
     val key = source?.let { "${it.absolutePath}:${it.length()}:${it.lastModified()}" }
     var loadState by remember(key, previewSettings) { mutableStateOf(PolarPreviewLoadState(loading = source != null)) }
     val prepared = loadState.image
@@ -159,8 +160,8 @@ internal fun PolarWorkflowPreview(
     val loading = loadState.loading
     val previewError = loadState.error
     val inputFormat = loadState.format
-    LaunchedEffect(key, previewSettings) {
-        if (source == null) return@LaunchedEffect
+    LaunchedEffect(key, previewSettings, foreground) {
+        if (source == null || !foreground) return@LaunchedEffect
         val task = currentCoroutineContext()
         var owned: Bitmap? = null
         var published = false
