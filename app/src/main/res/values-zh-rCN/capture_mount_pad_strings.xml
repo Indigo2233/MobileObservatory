@@ -1,0 +1,5 @@
+<resources>
+    <string name="capture_mount_pad">赤道仪方向控制</string>
+    <string name="capture_mount_speed">移动速度</string>
+    <string name="capture_mount_speed_value">移动速度：%1$s</string>
+</resources>

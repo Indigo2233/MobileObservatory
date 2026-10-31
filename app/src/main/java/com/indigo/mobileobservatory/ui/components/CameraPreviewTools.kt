@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.OpenWith
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
@@ -45,6 +46,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -82,6 +84,9 @@ fun CameraPreviewTools(
     portrait: Boolean = false,
     showSequence: Boolean = false,
     onOpenSequence: () -> Unit = {},
+    mountConnected: Boolean = false,
+    showMountPad: Boolean = false,
+    onToggleMountPad: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var menuOpen by rememberSaveable { mutableStateOf(false) }
@@ -138,6 +143,13 @@ fun CameraPreviewTools(
                 if (simulated || canStartSimulation) DropdownMenuItem(
                     text = { Text(stringResource(if (simulated) R.string.sim_camera_stop else R.string.sim_camera_start)) },
                     onClick = { menuOpen = false; if (simulated) onStopSimulation() else onStartSimulation() })
+                if (mountConnected) DropdownMenuItem(
+                    text = { Text(stringResource(R.string.capture_mount_pad)) },
+                    onClick = { menuOpen = false; onToggleMountPad() },
+                    leadingIcon = { Icon(Icons.Default.OpenWith, null) },
+                    trailingIcon = { Switch(checked = showMountPad, onCheckedChange = null) },
+                    modifier = Modifier.testTag("capture-mount-pad-toggle")
+                )
                 if (connected) {
                     DropdownMenuItem(text = { Text(stringResource(R.string.camera_cfa_title)) },
                         onClick = { menuOpen = false; onCfaSettings() })

@@ -16,6 +16,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.input.pointer.pointerInput
@@ -33,6 +35,8 @@ import com.indigo.mobileobservatory.ui.components.*
 import com.indigo.mobileobservatory.ui.theme.ObservatoryTheme
 import com.indigo.mobileobservatory.ui.viewmodel.CameraViewModel
 import com.indigo.mobileobservatory.mount.MountMotionState
+import com.indigo.mobileobservatory.mount.MountMotionType
+import com.indigo.mobileobservatory.mount.MountConnectionState
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.sequence.SequenceFeature
 import com.indigo.mobileobservatory.stacking.StackMode
@@ -123,6 +127,15 @@ internal fun CaptureWorkspaceScreen(
     val mountMoveStatus by viewModel.mountMoveStatus.collectAsStateWithPageLifecycle()
     val mountSlewRate by viewModel.mountSlewRate.collectAsStateWithPageLifecycle()
     val mountTrackingEnabled by viewModel.mountTrackingEnabled.collectAsStateWithPageLifecycle()
+    val mountCapabilities by viewModel.mountPointingCapabilities.collectAsStateWithPageLifecycle()
+    val mountRevision by viewModel.mountModelRevision.collectAsStateWithPageLifecycle()
+    val mountConnected = mountConnectionState is MountConnectionState.Connected
+    var showMountPad by rememberSaveable(mountRevision.connection) { mutableStateOf(true) }
+    val mountPadVisible = mountConnected && showMountPad
+    val mountPadWidth = if (LocalDensity.current.fontScale >= 1.5f) 168.dp else 144.dp
+    val manualMoveEnabled = mountCapabilities.manualMove && !mountBusy &&
+        !mountMotionState.isStopping &&
+        (mountMotionState.type == MountMotionType.IDLE || mountMotionState.type == MountMotionType.MANUAL)
     val detectedBitDepth by viewModel.detectedBitDepth.collectAsStateWithPageLifecycle()
     val readoutMode by viewModel.readoutMode.collectAsStateWithPageLifecycle()
     val supportedReadoutModes by viewModel.supportedReadoutModes.collectAsStateWithPageLifecycle()
@@ -222,11 +235,14 @@ internal fun CaptureWorkspaceScreen(
                 if (rotation == 90 || rotation == 270) roi.height.toFloat() / roi.width else roi.width.toFloat() / roi.height else null,
             modifier = Modifier.weight(1f), preview = {
             // Preview area
-            Box(
+            BoxWithConstraints(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(Color.Black)
             ) {
+                val previewWidth = maxWidth
+                val previewHeight = maxHeight
+                val shortMountPreview = mountPadVisible && previewHeight < 208.dp
                 when (connectionState) {
                     is ConnectionState.Connected -> {
                         MainPreviewImage(
@@ -247,7 +263,7 @@ internal fun CaptureWorkspaceScreen(
                                 sensorWidth = sensorWidth,
                                 sensorHeight = sensorHeight,
                                 modifier = Modifier
-                                    .align(Alignment.BottomStart)
+                                    .align(if (shortMountPreview && !focusAssistEnabled) Alignment.BottomEnd else Alignment.BottomStart)
                                     .padding(8.dp)
                             )
                         }
@@ -261,7 +277,11 @@ internal fun CaptureWorkspaceScreen(
                                 zoomFactor = focusZoomFactor,
                                 modifier = Modifier
                                     .align(Alignment.BottomEnd)
+                                    .then(if (mountPadVisible) Modifier.widthIn(
+                                        max = (previewWidth - mountPadWidth - 24.dp).coerceAtLeast(80.dp)
+                                    ) else Modifier)
                                     .padding(8.dp)
+                                    .testTag("capture-focus-assist")
                             )
                         }
 
@@ -285,6 +305,9 @@ internal fun CaptureWorkspaceScreen(
                             }
 
                             if (isRecording) {
+                                if (mountPadVisible && ((focusAssistEnabled && previewHeight < 320.dp) || shortMountPreview)) {
+                                    Spacer(Modifier.height(48.dp))
+                                }
                                 Surface(
                                     color = Color(0xAAFF0000),
                                     shape = MaterialTheme.shapes.small
@@ -404,6 +427,26 @@ internal fun CaptureWorkspaceScreen(
                     }
                 }
 
+                if (mountPadVisible) {
+                    key(mountRevision.connection) {
+                        CaptureMountPad(
+                            rate = mountSlewRate,
+                            enabled = manualMoveEnabled,
+                            onMoveStart = viewModel::startMountManualMove,
+                            onMoveStop = viewModel::stopMountManualMove,
+                            onRateChange = viewModel::setMountSlewRate,
+                            modifier = Modifier
+                                .align(when {
+                                    focusAssistEnabled -> Alignment.TopStart
+                                    shortMountPreview -> Alignment.BottomStart
+                                    else -> Alignment.BottomEnd
+                                })
+                                .padding(start = 8.dp, end = 8.dp, bottom = 8.dp,
+                                    top = if (focusAssistEnabled && previewHeight >= 320.dp) 60.dp else 8.dp)
+                        )
+                    }
+                }
+
                 CameraPreviewTools(
                     connected = connectionState is ConnectionState.Connected,
                     showPanel = showPanel,
@@ -431,6 +474,9 @@ internal fun CaptureWorkspaceScreen(
                     portrait = portrait,
                     showSequence = SequenceFeature.ENABLED,
                     onOpenSequence = onSequence,
+                    mountConnected = mountConnected,
+                    showMountPad = showMountPad,
+                    onToggleMountPad = { showMountPad = !showMountPad },
                     modifier = Modifier.align(Alignment.TopEnd)
                 )
 

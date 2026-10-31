@@ -1,0 +1,5 @@
+<resources>
+    <string name="capture_mount_pad">Mount direction controls</string>
+    <string name="capture_mount_speed">Move speed</string>
+    <string name="capture_mount_speed_value">Move speed: %1$s</string>
+</resources>
