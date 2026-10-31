@@ -2783,7 +2783,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val info = cameraManager.activeCamera?.cameraInfo ?: return null
         val key = currentStackKey() ?: return null
         return LiveStackAdmission.recommendHardwareBin(key, info.sensorWidth, info.sensorHeight,
-            cam.supportedHardwareBins, stacking.memoryBudgetBytes)
+            cam.supportedHardwareBins, stacking.liveMemoryBudgetBytes)
     }
 
     fun useRecommendedLiveStackBin() { recommendedLiveStackBin()?.let(::setBinning) }
@@ -2808,7 +2808,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             calibration.selectedIds.isNotEmpty() -> "roi_calibration_selected"
             else -> null
         }
-        return StackRoiContext(key, _imagingWidth.value, _imagingHeight.value, stacking.memoryBudgetBytes,
+        return StackRoiContext(key, _imagingWidth.value, _imagingHeight.value, stacking.liveMemoryBudgetBytes,
             stacking.calibration.memoryBytes, calibration.selectedIds.isNotEmpty(), cam.roiMinWidth, cam.roiMinHeight,
             cam.roiWidthStep, cam.roiHeightStep, blocked)
     }
@@ -2870,7 +2870,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun startLiveStack() {
         FileLogger.i(TAG, "Live stack requested camera=${cameraManager.activeCamera?.cameraInfo?.name} " +
             "input=$stackFrameGeometry appBin=${_binning.value} target=${stacking.liveTarget.value} " +
-            "demosaic=${stacking.demosaicAlgorithm.value} budget=${stacking.memoryBudgetBytes}")
+            "demosaic=${stacking.demosaicAlgorithm.value} budget=${stacking.liveMemoryBudgetBytes} " +
+            "ceiling=${stacking.memoryBudgetBytes}")
         liveStackStartIssue()?.let { stacking.report(it); return }
         val key = currentStackKey() ?: run { stacking.report("wait_frame"); return }
         if (stacking.live.state.value.phase == LiveStackPhase.PAUSED) stacking.live.resume(key)

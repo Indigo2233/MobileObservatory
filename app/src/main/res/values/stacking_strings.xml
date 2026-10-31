@@ -63,7 +63,7 @@
     <string name="stack_reset_recipe">Reset this processing state</string>
     <string name="stack_bg_warning">The background model was rejected. The original background is retained: %1$s</string>
     <string name="stack_precision">Uncalibrated linear data. Display controls do not change the original. Persistent hot pixels need dark calibration/dithering; temporal rejection warms up over 5 valid samples per pixel.</string>
-    <string name="stack_limits">Dimensions depend on channels, algorithm, Bin and calibration. Current science budget: %1$d MiB. Open Stacking range to see the suggested maximum ROI.</string>
+    <string name="stack_limits">Dimensions depend on channels, algorithm, Bin and calibration. Science budget ceiling: %1$d MiB. Open Stacking range to see the current available budget and suggested maximum ROI.</string>
     <string name="stack_foreground">Processing stays active while navigating inside the app. Backgrounding pauses live stacking and cancels offline work. Rotation retains the session.</string>
     <string name="stack_live_stats">Received %1$d · stacked %2$d · rejected %3$d · queue drops %4$d\nExposure %5$.2f s · stars %6$d · RMS %7$.3f px · rotation %8$.2f°</string>
     <string name="stack_perf">Frame %1$.1f ms · Java peak %2$d MiB · native peak %3$d MiB</string>

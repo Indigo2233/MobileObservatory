@@ -63,7 +63,7 @@
     <string name="stack_reset_recipe">重置当前处理状态</string>
     <string name="stack_bg_warning">背景模型不可靠，已保留原始背景：%1$s</string>
     <string name="stack_precision">当前使用未校准的线性数据。显示调节不改变原始结果。持续热像素需要暗场或抖动处理；在线异常剔除在每像素至少 5 个有效样本后开始。</string>
-    <string name="stack_limits">可用尺寸取决于通道、算法、Bin 和校准场；当前算法预算：%1$d MiB。在“叠加范围”中可查看建议最大 ROI。</string>
+    <string name="stack_limits">可用尺寸取决于通道、算法、Bin 和校准场；算法预算上限：%1$d MiB。在“叠加范围”中可查看当前可用预算和建议最大 ROI。</string>
     <string name="stack_foreground">应用内切换页面会保留任务。进入后台会暂停实时叠加、取消离线计算；屏幕旋转保留会话。</string>
     <string name="stack_live_stats">接收 %1$d · 叠加 %2$d · 拒收 %3$d · 队列丢帧 %4$d\n有效曝光 %5$.2f 秒 · 星点 %6$d · RMS %7$.3f 像素 · 旋转 %8$.2f°</string>
     <string name="stack_perf">单帧 %1$.1f 毫秒 · Java 峰值 %2$d MiB · native 峰值 %3$d MiB</string>

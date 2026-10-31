@@ -61,6 +61,10 @@ class StackingCoordinator(
     private val scope: CoroutineScope,
     private val captureTemperature: () -> Double? = { null },
     calibrationDirectory: File = File(app.filesDir, "stack-calibration"),
+    private val heapUsageBytes: () -> Long = {
+        val runtime = Runtime.getRuntime()
+        runtime.totalMemory() - runtime.freeMemory()
+    },
     private val isSourceBusy: (File) -> Boolean = { false }
 ) : Closeable {
     // Only short state transitions use this monitor; decoding/processing and joins happen outside.
@@ -286,12 +290,21 @@ class StackingCoordinator(
     fun hasResult(mode: StackMode = activeMode) = product(mode) != null
     private fun product(mode: StackMode) = if (mode == StackMode.LIVE) liveProduct else planetaryProduct
 
-    fun liveInputIssue(key: StackSessionKey): String? =
-        LiveStackAdmission.issue(key, memoryBudgetBytes, calibration.memoryBytes, calibration.memoryBytes > 0)
+    /** New sessions share one heap-aware budget across readiness, planning and start.
+     * A retained session already owns its accumulation; resume must not budget that allocation twice. */
+    val liveMemoryBudgetBytes: Long
+        get() = liveInputBudget(calibration.memoryBytes)
+
+    private fun liveInputBudget(calibrationBytes: Long): Long =
+        if (live.state.value.phase == LiveStackPhase.EMPTY) availableBudget(calibrationBytes) else memoryBudgetBytes
+
+    fun liveInputIssue(key: StackSessionKey): String? {
+        val calibrationBytes = calibration.memoryBytes
+        return LiveStackAdmission.issue(key, liveInputBudget(calibrationBytes), calibrationBytes, calibrationBytes > 0)
+    }
 
     private fun availableBudget(retainedStackBytes: Long): Long {
-        val runtime = Runtime.getRuntime()
-        val nonStackBytes = (runtime.totalMemory() - runtime.freeMemory() - retainedStackBytes).coerceAtLeast(0)
+        val nonStackBytes = (heapUsageBytes() - retainedStackBytes).coerceAtLeast(0)
         return StackMemoryBudget.forHeap(heapLimitBytes, nonStackBytes)
     }
 
@@ -299,7 +312,8 @@ class StackingCoordinator(
         if (closed) return
         FileLogger.i("Stacking", "Live requested input=${key.width}x${key.height} format=${key.format} " +
             "hardwareBin=${key.hardwareBin} softwareBin=${key.softwareBin} target=${key.target} " +
-            "demosaic=${key.demosaicAlgorithm} budget=$memoryBudgetBytes calibrationBytes=${calibration.memoryBytes}")
+            "demosaic=${key.demosaicAlgorithm} budget=$liveMemoryBudgetBytes ceiling=$memoryBudgetBytes " +
+            "calibrationBytes=${calibration.memoryBytes}")
         // Button recomposition can lag a rapid second tap; starting is idempotent here.
         if (live.state.value.phase != LiveStackPhase.EMPTY) return
         if (key.target != _liveTarget.value) { report("stack_target_changed"); return }
@@ -312,7 +326,7 @@ class StackingCoordinator(
         val selectedCalibration = try { calibration.snapshot() } catch (error: Exception) {
             report(error.message ?: "calibration_failed"); return
         }
-        val available = availableBudget(selectedCalibration.memoryBytes)
+        val available = liveInputBudget(selectedCalibration.memoryBytes)
         LiveStackAdmission.issue(key, available, selectedCalibration.memoryBytes, selectedCalibration.enabled)?.let {
             FileLogger.i("Stacking", "Live heap admission available=$available ceiling=$memoryBudgetBytes")
             report(it)

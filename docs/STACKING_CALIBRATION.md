@@ -1,5 +1,33 @@
 # Calibration and background correction acceptance record
 
+## Live start readiness and current heap budget (2026-10-31)
+
+Field feedback exposed two different budgets: readiness, hardware Bin suggestions and
+ROI planning used the configured ceiling; start also deducted other current heap objects
+and GC headroom. A coordinator regression reproduced readiness returning no issue
+while the actual start rejected the identical input as `memory_budget`.
+
+New-session readiness, planning and start now share `liveInputBudget` through
+`liveMemoryBudgetBytes`. The available budget is the smaller of the 80% heap ceiling
+and heap limit minus other heap objects and the existing GC reserve. Selected masters
+are excluded from other heap objects and counted once in the scientific working set.
+Existing paused sessions keep their prior geometry/admission checks and accumulation.
+The details label identifies the configured ceiling; ROI details show the current
+available budget. Start still rechecks current usage because allocations can change
+after the periodically refreshed readiness display.
+
+Heap usage is injectable for deterministic coordinator checks. Regression cases cover
+matching preflight/start rejection under pressure, Bin/ROI suggestions that actually
+start within the available budget, and resume after a real accepted frame without
+counting the retained accumulator as a second new allocation.
+
+Validation: 66 focused JVM checks and three API 34 coordinator regressions pass.
+The original mismatch is reproduced before the fix; the corrected cases use fixed
+heap pressure and an actual accepted frame for pause/resume. No screenshots were
+captured and the crash buffer was empty. Physical-camera headroom remains device-dependent.
+
+## Historical calibration acceptance (2026-10-13)
+
 This records the initial calibration implementation at commit `65d8dea`.
 For the later selectable Bayer algorithms and current build acceptance, see
 [STACKING_DEMOSAICING.md](STACKING_DEMOSAICING.md).
