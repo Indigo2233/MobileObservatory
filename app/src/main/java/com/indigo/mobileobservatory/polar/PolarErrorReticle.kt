@@ -11,11 +11,11 @@ data class PolarErrorReticle(val eastArcMin: Double, val upArcMin: Double, val s
     val radiusArcMin get() = 3 * stepArcMin
 
     companion object {
-        fun from(result: PolarAlignmentResult, latitudeDeg: Double): PolarErrorReticle {
+        fun from(result: PolarAlignmentResult, latitudeDeg: Double, minimumStepArcMin: Double = 0.0): PolarErrorReticle {
             val east = abs(result.azimuthErrorArcMin) * if (polarAdjustWest(result.azimuthErrorDeg, latitudeDeg)) 1 else -1
             val up = abs(result.altitudeErrorArcMin) * if (polarAdjustDown(result.altitudeErrorDeg, latitudeDeg)) 1 else -1
-            // Leave room for the current marker; retain useful sub-arcminute rings at zero error.
-            val minimumStep = max(.5, hypot(east, up) * 1.15 / 3)
+            // Leave room for the marker and retain the session scale as the residual decreases.
+            val minimumStep = maxOf(.5, hypot(east, up) * 1.15 / 3, minimumStepArcMin)
             val decade = 10.0.pow(floor(log10(minimumStep)))
             val step = listOf(1.0, 2.0, 5.0, 10.0).first { it * decade >= minimumStep } * decade
             return PolarErrorReticle(east, up, step)

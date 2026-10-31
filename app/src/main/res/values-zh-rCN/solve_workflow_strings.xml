@@ -14,8 +14,9 @@
     <string name="solve_input_format">ASTAP 输入：%1$s</string>
     <string name="solve_input_raw_hint">保留原始 FITS 像素；预览拉伸与颜色设置仅作用于显示。</string>
     <string name="solve_sum_retry">追加解析输入：无损 2×2 像素求和的黑白 FITS；原图保留。</string>
-    <string name="polar_turn_west">向西调整</string>
-    <string name="polar_turn_east">向东调整</string>
-    <string name="polar_adjust_directions">%1$s %2$.1f′ · %3$s %4$.1f′</string>
+    <string name="polar_turn_west">向西</string>
+    <string name="polar_turn_east">向东</string>
+    <string name="polar_turn_up">向上</string>
+    <string name="polar_turn_down">向下</string>
     <string name="polar_sample_details">采样详情</string>
 </resources>

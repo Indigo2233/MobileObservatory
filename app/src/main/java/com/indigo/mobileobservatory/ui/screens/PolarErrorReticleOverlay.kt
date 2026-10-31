@@ -20,21 +20,21 @@ import androidx.compose.ui.unit.sp
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.polar.PolarAdjustmentSnapshot
 import com.indigo.mobileobservatory.polar.PolarErrorReticle
-import java.util.Locale
+import com.indigo.mobileobservatory.polar.formatPolarAngle
 import kotlin.math.min
-import kotlin.math.round
 
 /** A screen-aligned angular diagram over the photograph; zooming the photograph never changes its units. */
 @Composable
 internal fun PolarErrorReticleOverlay(snapshot: PolarAdjustmentSnapshot, modifier: Modifier = Modifier) {
-    val model = PolarErrorReticle.from(snapshot.current, snapshot.determination.site.latitudeDeg)
+    val model = PolarErrorReticle.from(snapshot.current, snapshot.determination.site.latitudeDeg, snapshot.reticleStepArcMin)
     val colors = polarOverlayColors()
     val title = stringResource(R.string.polar_reticle_title)
     val directions = listOf(R.string.polar_reticle_east, R.string.polar_reticle_west,
         R.string.polar_reticle_up, R.string.polar_reticle_down).map { stringResource(it) }
-    val labels = model.rings.map { String.format(Locale.getDefault(), if (it != round(it)) "%.1f′" else "%.0f′", it) }
+    val labels = model.rings.map { formatPolarAngle(it / 60.0, compact = true) }
     val description = stringResource(R.string.polar_reticle_description, labels.joinToString(" / "),
-        model.eastArcMin, model.upArcMin)
+        formatPolarAngle(model.eastArcMin / 60.0, signed = true),
+        formatPolarAngle(model.upArcMin / 60.0, signed = true))
     BoxWithConstraints(modifier.fillMaxSize()) {
         val side = minOf(180.dp, maxWidth * .52f, maxHeight)
         Canvas(Modifier.align(Alignment.TopEnd).size(side).testTag("polar-error-reticle")
@@ -56,7 +56,12 @@ internal fun PolarErrorReticleOverlay(snapshot: PolarAdjustmentSnapshot, modifie
             model.rings.forEachIndexed { i, _ ->
                 val r = radius * (i + 1) / 3
                 drawCircle(colors.reference.copy(alpha = .65f), r, center, style = Stroke(stroke))
-                label(labels[i], center + Offset(-r * .707f, r * .707f), colors.reference)
+                val labelPosition = when (i) {
+                    0 -> Offset(-r * .707f, -r * .707f)
+                    1 -> Offset(-r * .707f, r * .707f)
+                    else -> Offset(r * .707f, r * .707f)
+                }
+                label(labels[i], center + labelPosition, colors.reference)
             }
             drawLine(colors.azimuth.copy(alpha = .6f), center - Offset(radius, 0f), center + Offset(radius, 0f), stroke)
             drawLine(colors.altitude.copy(alpha = .6f), center - Offset(0f, radius), center + Offset(0f, radius), stroke)

@@ -522,9 +522,14 @@ class PolarWorkflowScreenInstrumentedTest {
         }
         val determination = PolarAlignmentCalculator.determine(points, site, refraction)
         val later = at.plusSeconds(30)
+        val residualAzimuth = .10
+        val residualAltitude = .04
+        val initialErrorText = formatPolarAngle(determination.initial.totalErrorDeg)
+        val residualErrorText = formatPolarAngle(kotlin.math.hypot(residualAzimuth, residualAltitude))
         val current = ContinuousPolarErrorEstimator.coordinatesForResidual(
             EquatorialCoordinates(points.last().raDeg, points.last().decDeg),
-            determination.initial.azimuthErrorDeg, determination.initial.altitudeErrorDeg, .10, .05, site, refraction, later)
+            determination.initial.azimuthErrorDeg, determination.initial.altitudeErrorDeg,
+            residualAzimuth, residualAltitude, site, refraction, later)
         val all = points + PolarSolvePoint(current.raDeg, current.decDeg, later)
         val fixtures = all.mapIndexed { index, point -> fitsFixture(index, point.solvedAt) }
         val captures = AtomicInteger()
@@ -555,7 +560,7 @@ class PolarWorkflowScreenInstrumentedTest {
         compose.waitUntil(20_000) { compose.onAllNodesWithTag("polar-correction-overlay").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithTag("polar-correction-overlay").assertIsDisplayed()
         compose.onNodeWithTag("polar-error-reticle").assertIsDisplayed()
-        compose.onNodeWithTag("polar-error-summary").assertIsDisplayed().assert(hasText("30.00", substring = true))
+        compose.onNodeWithTag("polar-error-summary").assertIsDisplayed().assert(hasText(initialErrorText, substring = true))
         screenshot("-three-point-result")
         compose.onNodeWithTag("polar-preview-expand").performClick()
         compose.onNodeWithTag("polar-correction-inspection").assertIsDisplayed()
@@ -573,7 +578,7 @@ class PolarWorkflowScreenInstrumentedTest {
         // A running automatic exposure completes, then manual mode prevents the next exposure.
         compose.onNodeWithTag("polar-refresh-manual").performScrollTo().performClick()
         compose.runOnIdle { allowAdjustment.complete(Unit) }
-        compose.waitUntil(10_000) { compose.onAllNodes(hasTestTag("polar-error-summary") and hasText("6.71", substring = true)).fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(10_000) { compose.onAllNodes(hasTestTag("polar-error-summary") and hasText(residualErrorText, substring = true)).fetchSemanticsNodes().isNotEmpty() }
         compose.waitUntil(10_000) { compose.onAllNodes(hasTestTag("polar-run") and isEnabled()).fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithTag("polar-run").performScrollTo().assertIsEnabled()
         assertEquals(4, captures.get())
@@ -592,7 +597,7 @@ class PolarWorkflowScreenInstrumentedTest {
         compose.waitUntil(10_000) { compose.onAllNodes(hasTestTag("polar-run") and isEnabled()).fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithTag("polar-run").performScrollTo().assertIsEnabled()
         assertEquals(6, captures.get())
-        compose.onNodeWithTag("polar-error-summary").assert(hasText("6.71", substring = true))
+        compose.onNodeWithTag("polar-error-summary").assert(hasText(residualErrorText, substring = true))
     }
 
     private fun fitsFixture(index: Int, at: Instant): File {

@@ -649,7 +649,7 @@
     <string name="polar_move_axis_blind">请将赤经轴转动约 %.0f 度，然后继续。</string>
     <string name="polar_next_point">下一测量点</string>
     <string name="polar_settling">等待赤道仪稳定</string>
-    <string name="polar_tolerance_reached">总误差 %.2f 角分，已达到容差要求。</string>
+    <string name="polar_tolerance_reached">总误差 %1$s，已达到容差要求。</string>
     <string name="polar_estimate_unstable">本次实时估算不稳定，已跳过。</string>
     <string name="polar_finish">完成</string>
     <string name="polar_short_move">赤道仪只移动了 %1$.1f 度，目标为 %2$.1f 度。</string>
@@ -662,8 +662,8 @@
     <string name="location_provider_disabled">未启用位置服务。</string>
     <string name="phone_location_timeout">获取手机位置超时。</string>
     <string name="axis_value_degrees">%.4f 度</string>
-    <string name="polar_error_value">%1$.2f 角分  %2$s</string>
-    <string name="polar_total_value">%.2f 角分</string>
+    <string name="polar_error_value">%2$s %1$s</string>
+    <string name="polar_total_value">%1$s</string>
     <string name="usb_serial">USB 串口</string>
     <string name="no_guide_stars_detected">未检测到导星星点</string>
     <string name="no_guide_stars_after_ra_pulse">赤经脉冲后未检测到导星星点</string>

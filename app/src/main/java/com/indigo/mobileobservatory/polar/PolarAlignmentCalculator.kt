@@ -197,11 +197,9 @@ class PolarErrorDetermination(
         )
         val referenceVector = PolarVector3.fromTopocentric(referenceTopocentric)
 
-        val azimuthDestination =
-            PolarVector3.rotateByRodrigues(referenceVector, ZENITH_AXIS, azimuthAngleDeg)
-        val altitudeAxis = PolarVector3.rotateByRodrigues(WEST_AXIS, ZENITH_AXIS, azimuthAngleDeg)
-        return PolarVector3.rotateByRodrigues(azimuthDestination, altitudeAxis, altitudeAngleDeg)
-            .toTopocentric()
+        return PolarMountRotation.forResidual(referenceVector,
+            initial.azimuthErrorDeg, initial.altitudeErrorDeg,
+            initial.azimuthErrorDeg - azimuthAngleDeg, initial.altitudeErrorDeg - altitudeAngleDeg).toTopocentric()
     }
 
     companion object {

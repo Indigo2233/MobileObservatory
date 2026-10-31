@@ -1,11 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="polar_latest_error">最近有效解算的极轴误差</string>
-    <string name="polar_summary_total">总误差：%1$.2f′</string>
-    <string name="polar_summary_components">方位：%1$+.2f′ · 高度：%2$+.2f′</string>
-    <string name="polar_correction_legend">黄：方位 · 蓝：高度 · 按方向提示调整旋钮，使绿圈靠近中心白十字</string>
+    <string name="polar_summary_total">总误差：%1$s</string>
     <string name="polar_correction_no_projection">本次校正无法投影到图像上，请检查采样几何并重新解算。</string>
-    <string name="polar_correction_overlay_description">极轴调整平行四边形，包含方位与高度箭头、参考十字和目标圆环</string>
+    <string name="polar_correction_overlay_description">极轴调整辅助线，包含方位与高度箭头、参考十字和目标圆环</string>
     <string name="polar_correction_no_wcs">本次解算缺少完整图像 WCS，请重新解算以显示调整辅助线。</string>
     <string name="polar_correction_outside">校正目标位于当前画面外；按方向提示调整，图像比例保持不变。</string>
     <string name="polar_start_adjustment">开始连续调整</string>
@@ -15,12 +13,10 @@
     <string name="polar_refresh_auto_hint">三点完成后自动拍摄、解析并更新误差。</string>
     <string name="polar_refresh_manual_hint">调整阶段点击刷新一次拍摄并更新；切换时会完成当前拍摄解析。</string>
     <string name="polar_manual_refresh_ready">等待手动刷新；调整旋钮后点击刷新一次。</string>
-    <string name="polar_adjustment_knobs_hint">按向东／向西、向上／向下提示调整极轴旋钮。</string>
     <string name="polar_reticle_title">方位／高度误差</string>
     <string name="polar_reticle_east">东</string>
     <string name="polar_reticle_west">西</string>
     <string name="polar_reticle_up">上</string>
     <string name="polar_reticle_down">下</string>
-    <string name="polar_reticle_description">方位与高度误差靶标，圆环刻度 %1$s，东向偏差 %2$+.2f 角分，上向偏差 %3$+.2f 角分</string>
-    <string name="polar_reticle_hint">同心圆：方位／高度误差，刻度自动调整；白点靠近中心绿圈即趋于对准。</string>
+    <string name="polar_reticle_description">方位与高度误差靶标，圆环刻度 %1$s，东向偏差 %2$s，上向偏差 %3$s</string>
 </resources>

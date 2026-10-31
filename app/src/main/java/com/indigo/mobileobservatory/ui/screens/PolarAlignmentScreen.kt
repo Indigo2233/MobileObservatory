@@ -82,6 +82,7 @@ import com.indigo.mobileobservatory.polar.PolarSampleAdvice
 import com.indigo.mobileobservatory.polar.PolarExposure
 import com.indigo.mobileobservatory.polar.PolarSampleSession
 import com.indigo.mobileobservatory.polar.PolarAdjustmentSnapshot
+import com.indigo.mobileobservatory.polar.formatPolarAngle
 import com.indigo.mobileobservatory.polar.runPolarAlignmentWorkflow
 import com.indigo.mobileobservatory.polar.runPolarCorrectionPhase
 import com.indigo.mobileobservatory.polar.advice
@@ -310,7 +311,7 @@ fun PolarAlignmentScreen(
     fun publishAdjustment(solved: PolarErrorDetermination, result: PolarAlignmentResult, sample: PolarSample) {
         determination = solved
         currentResult = result
-        sampleModel.adjustment = PolarAdjustmentSnapshot.create(solved, result, sample)
+        sampleModel.adjustment = PolarAdjustmentSnapshot.create(solved, result, sample, sampleModel.adjustment)
         val plate = sample.result
         if (plate?.raDeg != null && plate.decDeg != null && sample.capturedAt != null)
             correctionField = solved.correctionFieldInfo(PolarSolvePoint(plate.raDeg, plate.decDeg, sample.capturedAt))
@@ -337,7 +338,7 @@ fun PolarAlignmentScreen(
             },
             onEstimate = { result, _ -> publishAdjustment(solved, result, sampleSession.samples.value[3]) },
             onUnstable = { workflowStatus = context.getString(R.string.polar_estimate_unstable) },
-            onWithinTolerance = { workflowStatus = context.getString(R.string.polar_tolerance_reached, it) },
+            onWithinTolerance = { workflowStatus = context.getString(R.string.polar_tolerance_reached, formatPolarAngle(it / 60.0)) },
             seed = sampleModel.adjustment?.current ?: solved.initial,
             shouldCapture = { automaticRefresh })
         if (!automaticRefresh) workflowStatus = context.getString(R.string.polar_manual_refresh_ready)
@@ -1338,18 +1339,18 @@ private fun PolarAlignmentResultCard(
     Surface(shape = MaterialTheme.shapes.medium, tonalElevation = 1.dp) {
         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(stringResource(R.string.result), style = MaterialTheme.typography.titleSmall)
-            val moveDown = stringResource(R.string.move_down)
-            val moveUp = stringResource(R.string.move_up)
-            val moveLeft = stringResource(R.string.move_left_west)
-            val moveRight = stringResource(R.string.move_right_east)
+            val moveDown = stringResource(R.string.polar_turn_down)
+            val moveUp = stringResource(R.string.polar_turn_up)
+            val moveLeft = stringResource(R.string.polar_turn_west)
+            val moveRight = stringResource(R.string.polar_turn_east)
 
-            ResultRow(stringResource(R.string.axis_azimuth), stringResource(R.string.axis_value_degrees, current.axisAzimuthDeg))
-            ResultRow(stringResource(R.string.axis_altitude), stringResource(R.string.axis_value_degrees, current.axisAltitudeDeg))
+            ResultRow(stringResource(R.string.axis_azimuth), formatPolarAngle(current.axisAzimuthDeg))
+            ResultRow(stringResource(R.string.axis_altitude), formatPolarAngle(current.axisAltitudeDeg))
             ResultRow(
                 stringResource(R.string.altitude),
                 stringResource(
                     R.string.polar_error_value,
-                    current.altitudeErrorArcMin,
+                    formatPolarAngle(abs(current.altitudeErrorDeg)),
                     altitudeDirection(current.altitudeErrorDeg, latitudeDeg, moveDown, moveUp)
                 )
             )
@@ -1357,16 +1358,16 @@ private fun PolarAlignmentResultCard(
                 stringResource(R.string.azimuth),
                 stringResource(
                     R.string.polar_error_value,
-                    current.azimuthErrorArcMin,
+                    formatPolarAngle(abs(current.azimuthErrorDeg)),
                     azimuthDirection(current.azimuthErrorDeg, latitudeDeg, moveLeft, moveRight)
                 )
             )
-            ResultRow(stringResource(R.string.total), stringResource(R.string.polar_total_value, current.totalErrorArcMin))
+            ResultRow(stringResource(R.string.total), stringResource(R.string.polar_total_value, formatPolarAngle(current.totalErrorDeg)))
 
             if (current !== determination.initial) {
                 ResultRow(
                     stringResource(R.string.polar_initial_error),
-                    stringResource(R.string.polar_total_value, determination.initial.totalErrorArcMin)
+                    stringResource(R.string.polar_total_value, formatPolarAngle(determination.initial.totalErrorDeg))
                 )
             }
 
@@ -1399,13 +1400,13 @@ private fun ResultRow(label: String, value: String) {
 }
 
 private fun altitudeDirection(errorDeg: Double, latitudeDeg: Double, moveDown: String, moveUp: String): String {
-    if (errorDeg == 0.0) return ""
+    if (abs(errorDeg) < .5 / 3600.0) return ""
     val north = latitudeDeg >= 0.0
     return if ((errorDeg > 0.0 && north) || (errorDeg < 0.0 && !north)) moveDown else moveUp
 }
 
 private fun azimuthDirection(errorDeg: Double, latitudeDeg: Double, moveLeft: String, moveRight: String): String {
-    if (errorDeg == 0.0) return ""
+    if (abs(errorDeg) < .5 / 3600.0) return ""
     val north = latitudeDeg >= 0.0
     return if ((errorDeg > 0.0 && north) || (errorDeg < 0.0 && !north)) moveLeft else moveRight
 }

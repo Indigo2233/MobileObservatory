@@ -25,6 +25,12 @@ class PolarErrorReticleTest {
         }
     }
 
+    @Test fun retainedScaleDoesNotZoomInAsTheResidualShrinks() {
+        val initial = PolarErrorReticle.from(result(12.0, 8.0), 30.0)
+        val updated = PolarErrorReticle.from(result(1.0, .5), 30.0, initial.stepArcMin)
+        assertEquals(initial.rings, updated.rings)
+    }
+
     @Test fun scaleRemainsFiniteAtZeroAndContainsLargeErrors() {
         val zero = PolarErrorReticle.from(result(0.0, 0.0), 30.0)
         assertEquals(listOf(.5, 1.0, 1.5), zero.rings)

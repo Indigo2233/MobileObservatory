@@ -649,7 +649,7 @@
     <string name="polar_move_axis_blind">Move the RA axis by about %.0f deg, then continue.</string>
     <string name="polar_next_point">Next point</string>
     <string name="polar_settling">Waiting for the mount to settle</string>
-    <string name="polar_tolerance_reached">Total error %.2f arcmin is within tolerance.</string>
+    <string name="polar_tolerance_reached">Total error %1$s is within tolerance.</string>
     <string name="polar_estimate_unstable">Live estimate was unstable, skipping this solve.</string>
     <string name="polar_finish">Finish</string>
     <string name="polar_short_move">The mount only travelled %1$.1f of the requested %2$.1f deg.</string>
@@ -662,8 +662,8 @@
     <string name="location_provider_disabled">No location provider is enabled.</string>
     <string name="phone_location_timeout">Phone location timed out.</string>
     <string name="axis_value_degrees">%.4f deg</string>
-    <string name="polar_error_value">%1$.2f arcmin  %2$s</string>
-    <string name="polar_total_value">%.2f arcmin</string>
+    <string name="polar_error_value">%2$s %1$s</string>
+    <string name="polar_total_value">%1$s</string>
     <string name="usb_serial">USB serial</string>
     <string name="no_guide_stars_detected">No guide stars detected</string>
     <string name="no_guide_stars_after_ra_pulse">No guide stars after RA pulse</string>

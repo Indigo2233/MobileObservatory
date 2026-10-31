@@ -18,7 +18,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -83,21 +82,29 @@ internal fun DrawScope.drawPolarCorrection(geometry: PolarCorrectionGeometry, im
     drawCircle(colors.azimuth, 3.dp.toPx(), a)
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun PolarCorrectionSummary(snapshot: PolarAdjustmentSnapshot, modifier: Modifier = Modifier) {
     val result = snapshot.current
+    val azimuthLabel = stringResource(
+        if (abs(result.azimuthErrorDeg) < .5 / 3600.0) R.string.azimuth
+        else if (polarAdjustWest(result.azimuthErrorDeg, snapshot.determination.site.latitudeDeg))
+            R.string.polar_turn_west else R.string.polar_turn_east)
+    val altitudeLabel = stringResource(
+        if (abs(result.altitudeErrorDeg) < .5 / 3600.0) R.string.altitude
+        else if (polarAdjustDown(result.altitudeErrorDeg, snapshot.determination.site.latitudeDeg))
+            R.string.polar_turn_down else R.string.polar_turn_up)
     Surface(modifier.testTag("polar-error-summary").semantics(mergeDescendants = true) {},
         color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.small) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 5.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(stringResource(R.string.polar_summary_total, result.totalErrorArcMin), style = MaterialTheme.typography.titleSmall,
+            Text(stringResource(R.string.polar_summary_total, formatPolarAngle(result.totalErrorDeg)), style = MaterialTheme.typography.titleSmall,
                 modifier = Modifier.testTag("polar-total-error"))
-            Text(stringResource(R.string.polar_adjust_directions,
-                stringResource(if (polarAdjustWest(result.azimuthErrorDeg, snapshot.determination.site.latitudeDeg)) R.string.polar_turn_west else R.string.polar_turn_east),
-                abs(result.azimuthErrorArcMin),
-                stringResource(if (polarAdjustDown(result.altitudeErrorDeg, snapshot.determination.site.latitudeDeg)) R.string.move_down else R.string.move_up),
-                abs(result.altitudeErrorArcMin)), style = MaterialTheme.typography.titleSmall)
-            Text(stringResource(R.string.polar_correction_legend), style = MaterialTheme.typography.bodySmall)
-            Text(stringResource(R.string.polar_reticle_hint), style = MaterialTheme.typography.bodySmall)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(stringResource(R.string.polar_error_value, formatPolarAngle(abs(result.azimuthErrorDeg)),
+                    azimuthLabel), style = MaterialTheme.typography.titleSmall)
+                Text(stringResource(R.string.polar_error_value, formatPolarAngle(abs(result.altitudeErrorDeg)),
+                    altitudeLabel), style = MaterialTheme.typography.titleSmall)
+            }
             if (snapshot.geometry == null) Text(stringResource(if (snapshot.projectionUnavailable)
                 R.string.polar_correction_no_projection else R.string.polar_correction_no_wcs),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)

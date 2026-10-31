@@ -41,24 +41,47 @@ class PolarCorrectionGeometryTest {
             val destination = requireNotNull(wcs.pixel(forward)) - shape.reference
             val starMove = shape.target - shape.reference
             assertTrue(destination.x * starMove.x + destination.y * starMove.y < 0.0)
-            assertEquals(shape.reference.x + shape.target.x, shape.azimuth.x + shape.altitude.x, 1e-8)
-            assertEquals(shape.reference.y + shape.target.y, shape.azimuth.y + shape.altitude.y, 1e-8)
+            val altitudeOnlyWcs = movedWcs(wcs, d, d.resultForResidual(d.initial.azimuthErrorDeg, 0.0))
+            val altitudeOnly = requireNotNull(altitudeOnlyWcs.pixel(
+                EquatorialCoordinates(d.initialReferenceFrame.raDeg, d.initialReferenceFrame.decDeg)))
+            assertEquals(altitudeOnly.x, shape.altitude.x, .01)
+            assertEquals(altitudeOnly.y, shape.altitude.y, .01)
         }
     }
 
-    @Test fun guideStaysAtTheCurrentImageCentreAndZeroErrorCollapsesIt() {
+    @Test fun referenceFollowsTheSameSkyPointTowardAStableTargetAndZeroErrorCollapsesIt() {
         val d = determination(30.0); val original = initialWcs(d)
+        val skyReference = EquatorialCoordinates(d.initialReferenceFrame.raDeg, d.initialReferenceFrame.decDeg)
         val initial = requireNotNull(correctionGeometry(d, d.initial, sample(original)))
         var previousDistance = hypot(initial.target.x - initial.reference.x, initial.target.y - initial.reference.y)
         for (factor in listOf(.5, .1, 0.0)) {
             val residual = d.resultForResidual(d.initial.azimuthErrorDeg * factor, d.initial.altitudeErrorDeg * factor)
             val currentWcs = movedWcs(original, d, residual)
             val shape = requireNotNull(correctionGeometry(d, residual, sample(currentWcs)))
-            assertEquals(199.5, shape.reference.x, .001); assertEquals(149.5, shape.reference.y, .001)
+            val reference = requireNotNull(currentWcs.pixel(skyReference))
+            assertEquals(reference.x, shape.reference.x, .001); assertEquals(reference.y, shape.reference.y, .001)
+            assertEquals(initial.target.x, shape.target.x, .01)
+            assertEquals(initial.target.y, shape.target.y, .01)
             val distance = hypot(shape.target.x - shape.reference.x, shape.target.y - shape.reference.y)
             assertTrue(distance < previousDistance); previousDistance = distance
             if (factor == 0.0) assertTrue(distance < .001)
         }
+    }
+
+    @Test fun snapshotKeepsItsScaleAsErrorFallsAndCanExpandAfterAnIncorrectAdjustment() {
+        val d = determination(30.0)
+        val original = initialWcs(d)
+        val initial = PolarAdjustmentSnapshot.create(d, d.initial, sample(original))
+        val reduced = d.resultForResidual(d.initial.azimuthErrorDeg / 2, d.initial.altitudeErrorDeg / 2)
+        val smaller = PolarAdjustmentSnapshot.create(d, reduced, sample(movedWcs(original, d, reduced)), initial)
+        assertEquals(initial.referenceDirection, smaller.referenceDirection)
+        assertEquals(initial.reticleStepArcMin, smaller.reticleStepArcMin, 0.0)
+        val increased = d.resultForResidual(d.initial.azimuthErrorDeg * 4, d.initial.altitudeErrorDeg * 4)
+        val larger = PolarAdjustmentSnapshot.create(d, increased, sample(movedWcs(original, d, increased)), smaller)
+        assertTrue(larger.reticleStepArcMin > initial.reticleStepArcMin)
+        val zero = d.resultForResidual(0.0, 0.0)
+        val finished = PolarAdjustmentSnapshot.create(d, zero, sample(movedWcs(original, d, zero)), larger)
+        assertEquals(larger.reticleStepArcMin, finished.reticleStepArcMin, 0.0)
     }
 
     @Test fun missingWcsKeepsTheNumericResultWithoutInventingAnImageGuide() {

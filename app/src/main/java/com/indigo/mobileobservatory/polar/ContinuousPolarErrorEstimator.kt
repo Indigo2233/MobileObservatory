@@ -23,6 +23,7 @@ import kotlin.math.sqrt
  * rotation about the local vertical followed by a rotation about the matching horizontal axis.
  *
  * Ported from `ContinuousPolarErrorEstimator` in NINA's Three Point Polar Alignment plugin.
+ * The knob kinematics are shared with the image guide through [PolarMountRotation].
  */
 object ContinuousPolarErrorEstimator {
     // Five arcseconds. Small enough for a clean derivative, large enough to avoid cancellation.
@@ -159,20 +160,8 @@ object ContinuousPolarErrorEstimator {
             CoordinateTransform.j2000ToTopocentric(coordinates, observationTime, site, refraction)
         val referenceVector = PolarVector3.fromTopocentric(reference)
 
-        val azimuthRotation = initialAzimuthErrorDeg - residualAzimuthErrorDeg
-        val altitudeRotation = initialAltitudeErrorDeg - residualAltitudeErrorDeg
-
-        val azimuthAdjusted = PolarVector3.rotateByRodrigues(
-            referenceVector,
-            PolarErrorDetermination.ZENITH_AXIS,
-            azimuthRotation
-        )
-        val altitudeAxis = PolarVector3.rotateByRodrigues(
-            PolarErrorDetermination.WEST_AXIS,
-            PolarErrorDetermination.ZENITH_AXIS,
-            azimuthRotation
-        )
-        return PolarVector3.rotateByRodrigues(azimuthAdjusted, altitudeAxis, altitudeRotation)
+        return PolarMountRotation.forResidual(referenceVector,
+            initialAzimuthErrorDeg, initialAltitudeErrorDeg, residualAzimuthErrorDeg, residualAltitudeErrorDeg)
             .toTopocentric()
     }
 
