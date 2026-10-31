@@ -4,7 +4,7 @@
     <string name="gw_calibration_nudge">Calibration: nudge south</string>
     <string name="gw_calibration_return">Return offset: RA %1$.2f px · DEC %2$.2f px</string>
     <string name="gw_calibration_advisory_status"> · Review calibration advisories in settings</string>
-    <string name="gw_advisory_steps">Few calibration samples. Reduce the calibration pulse and repeat.</string>
+    <string name="gw_advisory_steps">Calibration used fewer than 4 steps. Check focal length, effective pixel size and the mount guide rate, then recalibrate.</string>
     <string name="gw_advisory_fit">Motion varied during calibration. Check the guide star and mount response.</string>
     <string name="gw_advisory_ra_return">RA returned with a position offset. Check drift and tracking.</string>
     <string name="gw_advisory_dec_return">DEC returned with a position offset. Check drift and backlash.</string>

@@ -2,7 +2,10 @@
 <resources>
     <string name="gw_guide_rate">计算用导星速率（恒星时倍率）</string>
     <string name="gw_guide_rate_help">初值为 0.5×，请与架台设置核对。该数值用于估算固定校准脉冲；校准结果使用实测响应。</string>
-    <string name="gw_auto_pulse">固定校准脉冲：RA %1$d ms · DEC %2$d ms</string>
+    <string name="gw_auto_pulse">按光学参数计算：RA %1$d ms · DEC %2$d ms</string>
+    <string name="gw_calibration_scale">导星尺度：%1$.3f″/px</string>
+    <string name="gw_calibration_missing_optics">焦距或有效像元未知，当前使用备用脉冲。补全参数后自动计算。</string>
+    <string name="gw_calibration_used_pulse">本次校准测量脉冲：%1$d ms</string>
     <string name="gw_star_saturated">检测到饱和采样</string>
     <string name="gw_star_not_saturated">未检测到饱和采样</string>
 </resources>

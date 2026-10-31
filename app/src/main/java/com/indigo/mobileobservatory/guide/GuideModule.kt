@@ -101,7 +101,7 @@ class GuideModule {
     @Synchronized fun measureTrackedShift(reference: List<GuideStar>, current: List<GuideStar>, primary: GuideStar?,
         exposureMs: Int, nowMs: Long): GuideVector? {
         lastFrameIssue = null
-        if (primary == null || primary !in current || !isUsableStar(primary)) {
+        if (primary == null || primary !in current || !isUsableStar(primary, allowSaturated = true)) {
             lastFrameIssue = GuideFrameIssue.PRIMARY_LOST
             return null
         }
@@ -113,7 +113,7 @@ class GuideModule {
             lastFrameIssue = GuideFrameIssue.MASS_CHANGE
             return null
         }
-        return matchShift(reference, current).also {
+        return matchShift(reference, current, primary).also {
             if (it == null) lastFrameIssue = GuideFrameIssue.MATCH_LOST else acceptedPrimary = primary
         }
     }
@@ -143,6 +143,7 @@ class GuideModule {
         val threshold = mean + 4 * sqrt((square / count - mean * mean).coerceAtLeast(0.0))
         val signal = if (image.bayer) GuideCandidateMask(frame, DoubleArray(4) { phaseSums[it] / phaseCount }, threshold) else null
         val candidates = ArrayList<Candidate>()
+        val neighborhood = IntArray(9)
         for (y in 2 until height - 2) {
             signal?.prepareRow(y)
             for (x in 2 until width - 2) {
@@ -151,7 +152,15 @@ class GuideModule {
                 if (value <= threshold) continue
                 if (value >= image.value(x - 1, y) && value >= image.value(x + 1, y) &&
                     value >= image.value(x, y - 1) && value >= image.value(x, y + 1)) {
-                    candidates += Candidate(x, y, value)
+                    // Corroborate a discovery peak with surrounding signal. A raw hot pixel
+                    // becomes a 2x2 plateau after QLR; a 3x3 median suppresses that plateau.
+                    // This is discovery only: selected-target photometry keeps original samples.
+                    var index = 0
+                    for (dy in -1..1) for (dx in -1..1) neighborhood[index++] = image.value(x + dx, y + dy)
+                    java.util.Arrays.sort(neighborhood)
+                    val medianPeak = neighborhood[4].toDouble()
+                    if (medianPeak > mean + (threshold - mean) * .5)
+                        candidates += Candidate(x, y, medianPeak)
                 }
             }
         }
@@ -175,13 +184,11 @@ class GuideModule {
             if (stars.size >= maxStars) break
             if (candidate.x < 12 || candidate.y < 12 || candidate.x >= width - 12 || candidate.y >= height - 12) continue
             if (stars.any { hypot(it.x - candidate.x, it.y - candidate.y) < 24f }) continue
-            var aperturePeak = 0
-            for (y in (candidate.y - 10).coerceAtLeast(0)..(candidate.y + 10).coerceAtMost(height - 1)) {
-                for (x in (candidate.x - 10).coerceAtLeast(0)..(candidate.x + 10).coerceAtMost(width - 1)) {
-                    aperturePeak = maxOf(aperturePeak, peakValue(frame, x, y))
-                }
-            }
             val nominal = (1 shl frame.pixelFormat.nativeBits) - 1
+            // Saturation belongs to the star core; a hot pixel in the sky annulus is unrelated.
+            var aperturePeak = 0
+            for (y in candidate.y - 2..candidate.y + 2) for (x in candidate.x - 2..candidate.x + 2)
+                aperturePeak = maxOf(aperturePeak, peakValue(frame, x, y))
             val maximum = saturationLevel ?: if (aperturePeak > nominal) 65535 else nominal
             val measured = Phd2StarMeasurement.find(image, candidate.x, candidate.y, maxADU = maximum)
             if (measured.mass <= 0 || !measured.x.isFinite() || !measured.y.isFinite()) continue
@@ -190,6 +197,10 @@ class GuideModule {
             if (centerX.roundToInt() !in 12..width - 13 || centerY.roundToInt() !in 12..height - 13) continue
             if (stars.any { hypot(it.x - centerX, it.y - centerY) < 24f } ||
                 rejected.any { hypot(it.x - centerX, it.y - centerY) < 1f }) continue
+            aperturePeak = 0
+            for (y in centerY.roundToInt() - 2..centerY.roundToInt() + 2)
+                for (x in centerX.roundToInt() - 2..centerX.roundToInt() + 2)
+                    aperturePeak = maxOf(aperturePeak, peakValue(frame, x, y))
             val star = GuideStar(centerX, centerY, measured.snr.toFloat(), measured.mass.toFloat(), measured.radius.toFloat(),
                 measured.result == Phd2StarMeasurement.Result.SATURATED || aperturePeak >= maximum - maxOf(1, maximum / 1000),
                 measured.hfd.toFloat(), aperturePeak.toFloat() / maximum)
@@ -199,34 +210,43 @@ class GuideModule {
     }
 
     /** Track an explicitly selected star without replacing it with a brighter neighbour. */
-    fun matchStar(reference: GuideStar, current: List<GuideStar>): GuideStar? {
-        if (!reference.flux.isFinite() || reference.flux <= 0f) return null
+    fun matchStar(reference: GuideStar, current: List<GuideStar>, searchRadiusPx: Float = 60f): GuideStar? {
+        if (!reference.flux.isFinite() || reference.flux <= 0f || !searchRadiusPx.isFinite() || searchRadiusPx <= 0f) return null
         return current.filter { it.flux / reference.flux in .2f..5f &&
-            hypot(it.x - reference.x, it.y - reference.y) <= 60f }
+            hypot(it.x - reference.x, it.y - reference.y) <= searchRadiusPx }
             .minByOrNull { hypot(it.x - reference.x, it.y - reference.y) }
     }
 
     fun referenceStars(primary: GuideStar, stars: List<GuideStar>, multiStar: Boolean): List<GuideStar> =
-        if (multiStar) (listOf(primary) + stars.filter { it != primary }).take(12) else listOf(primary)
+        if (multiStar) (listOf(primary) + usableStars(stars).filter { it != primary }).take(12) else listOf(primary)
 
-    fun matchShift(reference: List<GuideStar>, current: List<GuideStar>): GuideVector? {
+    fun matchShift(reference: List<GuideStar>, current: List<GuideStar>, primary: GuideStar? = null): GuideVector? {
         if (reference.isEmpty() || current.isEmpty()) return null
+        if (primary != null && primary !in current) return null
         data class Shift(val dx: Float, val dy: Float, val weight: Double)
         val shifts = ArrayList<Shift>()
         val used = HashSet<Int>()
-        reference.forEach { ref ->
+        // Once the primary is identified and its mass history accepted, fixed lock-frame flux
+        // must not veto recovery after a sustained transparency change. Secondary searches
+        // follow the primary displacement, keeping the lock coordinates unchanged.
+        val primaryShift = primary?.let { GuideVector(it.x - reference.first().x, it.y - reference.first().y) }
+        reference.forEachIndexed { refIndex, ref ->
             var bestIndex = -1
             var bestDistance = Float.MAX_VALUE
+            val expectedX = ref.x + (primaryShift?.x ?: 0f)
+            val expectedY = ref.y + (primaryShift?.y ?: 0f)
             current.forEachIndexed { index, star ->
-                if (index !in used && star.flux.isFinite() && ref.flux > 0 && star.flux / ref.flux in .2f..5f) {
-                    val distance = hypot(star.x - ref.x, star.y - ref.y)
+                if (index !in used && star.flux.isFinite() && ref.flux > 0 &&
+                    (primaryShift != null || star.flux / ref.flux in .2f..5f) &&
+                    (primary == null || if (refIndex == 0) star == primary else !star.saturated)) {
+                    val distance = hypot(star.x - expectedX, star.y - expectedY)
                     if (distance < bestDistance) {
                         bestDistance = distance
                         bestIndex = index
                     }
                 }
             }
-            if (bestIndex >= 0 && bestDistance <= 60f) {
+            if (bestIndex >= 0 && bestDistance <= (if (primaryShift == null) 60f else 5f)) {
                 used += bestIndex
                 val star = current[bestIndex]
                 val weight = ref.flux.coerceAtLeast(1f).toDouble()
@@ -311,20 +331,24 @@ class GuideModule {
 
     // Centroid precision improves with SNR and decreases with the spread of the star.
     // The detector's total-flux order can favour broad, low-contrast peaks.
-    fun usableStars(stars: List<GuideStar>): List<GuideStar> = stars.filter(::isUsableStar)
-        .sortedByDescending { star ->
-            val radius = star.radiusPx.takeIf { it.isFinite() }?.coerceAtLeast(1f) ?: 1f
-            star.snr / radius
-        }
+    fun usableStars(stars: List<GuideStar>, allowSaturated: Boolean = false): List<GuideStar> =
+        stars.filter { isUsableStar(it, allowSaturated) }.sortedByDescending(::centroidScore)
+
+    private fun centroidScore(star: GuideStar): Float =
+        star.snr / (star.radiusPx.takeIf { it.isFinite() }?.coerceAtLeast(1f) ?: 1f)
 
     fun autoSelectStar(stars: List<GuideStar>): GuideStar? {
         val eligible = usableStars(stars).filter { it.snr >= 6f }
-        return eligible.firstOrNull { it.peakFraction.isNaN() || it.peakFraction < .9f } ?: eligible.firstOrNull()
+        val best = eligible.firstOrNull() ?: return null
+        // Prefer extra headroom among similarly precise stars. A weak noise peak must not
+        // displace a much stronger, still unclipped star solely because its ADU is lower.
+        return eligible.firstOrNull { (it.peakFraction.isNaN() || it.peakFraction < .9f) &&
+            centroidScore(it) >= centroidScore(best) * .8f } ?: best
     }
 
-    private fun isUsableStar(star: GuideStar): Boolean =
+    private fun isUsableStar(star: GuideStar, allowSaturated: Boolean = false): Boolean =
         star.x.isFinite() && star.y.isFinite() && star.snr.isFinite() && star.snr >= 3f &&
-            star.flux.isFinite() && star.flux > 0 && !star.saturated && (star.radiusPx.isNaN() || star.radiusPx in .6f..8f) &&
+            star.flux.isFinite() && star.flux > 0 && (allowSaturated || !star.saturated) && (star.radiusPx.isNaN() || star.radiusPx in .6f..8f) &&
             (star.hfdPx.isNaN() || star.hfdPx in 1.5f..20f)
 
     internal fun rawValue(frame: FrameData, x: Int, y: Int): Int = GuidePixelAccess.raw(frame, x, y)

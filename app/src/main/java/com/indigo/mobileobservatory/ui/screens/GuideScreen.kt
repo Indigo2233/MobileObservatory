@@ -306,15 +306,11 @@ internal fun GuideImage(frame: GuideDisplayFrame?, references: List<GuideStar>, 
                 drawImage(source.bitmap.asImageBitmap(), dstSize = IntSize(source.width, source.height))
                 val stroke = 1.5.dp.toPx() / viewport.scale
                 val radius = 8.dp.toPx() / viewport.scale
-                val selected = if (references.isEmpty()) source.stars else references.mapNotNull { reference ->
-                    source.stars.filter { it.flux / reference.flux in .2f..5f }
-                        .minByOrNull { hypot(it.x - reference.x, it.y - reference.y) }
-                        ?.takeIf { hypot(it.x - reference.x, it.y - reference.y) <= 60f }
-                }.distinct()
+                val selected = references.ifEmpty { source.stars }
                 selected.filter { viewport.contains(it.x, it.y) }.forEach { star ->
                     drawCircle(Color(0xFF70DDA0), radius, Offset(star.x, star.y), style = Stroke(stroke))
                 }
-                source.primary?.takeIf { viewport.contains(it.x, it.y) }?.let { star ->
+                (references.firstOrNull() ?: source.primary)?.takeIf { viewport.contains(it.x, it.y) }?.let { star ->
                     val center = Offset(star.x, star.y); val color = Color(0xFFFFD54F)
                     drawLine(color.copy(alpha = .65f), Offset(0f, star.y), Offset(source.width.toFloat(), star.y), stroke)
                     drawLine(color.copy(alpha = .65f), Offset(star.x, 0f), Offset(star.x, source.height.toFloat()), stroke)

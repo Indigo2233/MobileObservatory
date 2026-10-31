@@ -54,7 +54,7 @@ internal object Phd2StarMeasurement {
             sigma = sqrt(variance)
             if (iteration > 0 && abs(background - previous) < .5) break
         }
-        val threshold = (background + 3 * sigma + .5).toInt() and 65535
+        val threshold = (background + 3 * sigma + .5).toInt().coerceIn(0, 65535)
         var cx = 0.0; var cy = 0.0; var mass = 0.0
         val flux = ArrayList<Flux>(149)
         for (y in maxOf(peakY - 7, 0)..minOf(peakY + 7, image.height - 1)) {

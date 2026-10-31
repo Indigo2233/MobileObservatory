@@ -4,7 +4,7 @@
     <string name="gw_calibration_nudge">校准：赤纬向南微调</string>
     <string name="gw_calibration_return">返回偏移：RA %1$.2f px · DEC %2$.2f px</string>
     <string name="gw_calibration_advisory_status"> · 请在设置中查看校准提示</string>
-    <string name="gw_advisory_steps">校准采样步数较少，建议减小校准脉冲后重测。</string>
+    <string name="gw_advisory_steps">校准采样少于 4 步，请核对焦距、有效像元和架台实际导星倍率后重测。</string>
     <string name="gw_advisory_fit">校准运动存在波动，请检查星点质量和架台响应。</string>
     <string name="gw_advisory_ra_return">RA 返回后存在位置偏移，请检查自然漂移和跟踪。</string>
     <string name="gw_advisory_dec_return">DEC 返回后存在位置偏移，请检查自然漂移和回差。</string>

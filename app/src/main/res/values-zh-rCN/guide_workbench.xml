@@ -40,7 +40,7 @@
     <string name="gw_backlash">DEC 换向回差补偿</string>
     <string name="gw_calibration_result">RA / DEC：%1$d / %2$d 步\n回差 RA %3$d ms · DEC %4$d ms\n拟合残差 %5$.2f px</string>
     <string name="gw_clear_north">消除 DEC 空程</string>
-    <string name="gw_calibration_progress">%1$s · 第 %2$d 步 · %3$.2f px</string>
+    <string name="gw_calibration_progress">%1$s · 第 %2$d 步 · %3$.2f px · %4$d ms</string>
     <string name="gw_multistar">多星导星</string>
     <string name="gw_ra_aggression">RA 修正强度</string>
     <string name="gw_dec_aggression">DEC 修正强度</string>

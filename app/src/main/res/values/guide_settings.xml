@@ -5,7 +5,7 @@
     <string name="gw_pulse_label">Fallback pulse (focal length or pixel size unknown)</string>
     <string name="gw_min_move_label">Minimum move</string>
     <string name="gw_focal_label">Guide focal length</string>
-    <string name="gw_focal_optional">Set to 0 or leave blank to use pixels.</string>
+    <string name="gw_focal_optional">Set to 0 or leave blank for plots in pixels and the fallback calibration pulse.</string>
     <string name="gw_number_range">%1$s–%2$s · step %3$s</string>
     <string name="gw_integer_invalid">Enter a whole number from %1$s to %2$s.</string>
     <string name="gw_decimal_invalid">Enter %1$s–%2$s, with up to %3$d decimal places.</string>

@@ -40,7 +40,7 @@
     <string name="gw_backlash">DEC reversal backlash compensation</string>
     <string name="gw_calibration_result">RA / DEC: %1$d / %2$d steps\nBacklash RA %3$d ms · DEC %4$d ms\nFit residual %5$.2f px</string>
     <string name="gw_clear_north">Clearing DEC backlash</string>
-    <string name="gw_calibration_progress">%1$s · step %2$d · %3$.2f px</string>
+    <string name="gw_calibration_progress">%1$s · step %2$d · %3$.2f px · %4$d ms</string>
     <string name="gw_multistar">Multi-star guiding</string>
     <string name="gw_ra_aggression">RA aggressiveness</string>
     <string name="gw_dec_aggression">DEC aggressiveness</string>

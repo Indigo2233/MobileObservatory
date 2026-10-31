@@ -168,7 +168,12 @@ private fun GuideCalibrationSettings(vm: CameraViewModel) {
     val coordinates by vm.mountCoordinates.collectAsStateWithPageLifecycle()
     val scale = GuideStarAnalysis.arcsecPerPixel(geometry?.let { it.pixelSizeUm * it.binning }, focal)
     val estimate = GuideCalibrationConfig(steps, distance, pulse, scale, guideRate,
-        coordinates?.decDeg?.toFloat()?.coerceIn(-90f, 90f) ?: 0f)
+        coordinates?.decDeg?.takeIf { it.isFinite() }?.toFloat()?.coerceIn(-90f, 90f) ?: 0f)
+    GuideNumberSetting(stringResource(R.string.gw_focal_label), focal, focalSpec, "mm", "calibration-focal",
+        vm::setGuideFocalLength, !calibrating && !running)
+    geometry?.let {
+        Text(stringResource(R.string.gw_pixel_um, it.pixelSizeUm * it.binning), style = MaterialTheme.typography.bodyMedium)
+    }
     GuideNumberSetting(stringResource(R.string.gw_steps), steps.toFloat(), stepsSpec, "", "steps",
         { vm.setGuideCalibrationSteps(it.toInt()) }, !calibrating)
     GuideNumberSetting(stringResource(R.string.gw_travel_label), distance, distanceSpec, "px", "distance",
@@ -176,14 +181,20 @@ private fun GuideCalibrationSettings(vm: CameraViewModel) {
     GuideNumberSetting(stringResource(R.string.gw_guide_rate), guideRate, guideRateSpec, "×", "guide-rate",
         vm::setGuideRateSidereal, !calibrating)
     GuideSettingsHelp(stringResource(R.string.gw_guide_rate_help))
-    if (scale != null) Text(stringResource(R.string.gw_auto_pulse, estimate.pulseMs(true), estimate.pulseMs(false)),
-        style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("guide-auto-pulse"))
-    else GuideNumberSetting(stringResource(R.string.gw_pulse_label), pulse.toFloat(), pulseSpec, "ms", "pulse",
-        { vm.setGuideCalibrationPulseMs(it.toInt()) }, !calibrating)
+    if (scale != null) {
+        Text(stringResource(R.string.gw_calibration_scale, scale), style = MaterialTheme.typography.bodySmall)
+        Text(stringResource(R.string.gw_auto_pulse, estimate.pulseMs(true), estimate.pulseMs(false)),
+            style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("guide-auto-pulse"))
+    } else {
+        GuideSettingsHelp(stringResource(R.string.gw_calibration_missing_optics))
+        GuideNumberSetting(stringResource(R.string.gw_pulse_label), pulse.toFloat(), pulseSpec, "ms", "pulse",
+            { vm.setGuideCalibrationPulseMs(it.toInt()) }, !calibrating)
+    }
     Divider()
     GuideToggle(stringResource(R.string.gw_backlash), backlash, vm::setGuideBacklashEnabled)
     GuideSettingsHelp(stringResource(R.string.gw_calibration_help))
     calibration?.let {
+        Text(stringResource(R.string.gw_calibration_used_pulse, it.pulseMs), style = MaterialTheme.typography.bodySmall)
         Text(stringResource(R.string.guide_rates, it.eastRatePxPerSec, it.northRatePxPerSec), style = MaterialTheme.typography.bodySmall)
         Text(stringResource(R.string.gw_calibration_result, it.eastSteps, it.northSteps, it.raBacklashMs, it.decBacklashMs, it.fitResidualPx),
             style = MaterialTheme.typography.bodySmall)
@@ -274,7 +285,10 @@ private fun GuideFilterTuning(algorithm: GuideAlgorithm, parameters: GuideFilter
 private fun GuideOpticsSettings(vm: CameraViewModel) {
     val focal by vm.guideFocalLength.collectAsStateWithPageLifecycle()
     val geometry by vm.guideCameraGeometry.collectAsStateWithPageLifecycle()
-    GuideNumberSetting(stringResource(R.string.gw_focal_label), focal, focalSpec, "mm", "focal", vm::setGuideFocalLength)
+    val calibrating by vm.guideCalibrating.collectAsStateWithPageLifecycle()
+    val running by vm.guideRunning.collectAsStateWithPageLifecycle()
+    GuideNumberSetting(stringResource(R.string.gw_focal_label), focal, focalSpec, "mm", "focal",
+        vm::setGuideFocalLength, !calibrating && !running)
     GuideSettingsHelp(stringResource(R.string.gw_focal_optional))
     GuideSettingsHelp(stringResource(R.string.gw_scale_help))
     geometry?.let { Text(stringResource(R.string.gw_pixel_um, it.pixelSizeUm * it.binning), style = MaterialTheme.typography.bodyMedium) }

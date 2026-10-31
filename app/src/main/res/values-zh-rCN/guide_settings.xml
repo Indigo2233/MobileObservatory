@@ -5,7 +5,7 @@
     <string name="gw_pulse_label">备用脉冲（焦距或像元未知时）</string>
     <string name="gw_min_move_label">最小修正量</string>
     <string name="gw_focal_label">导星镜焦距</string>
-    <string name="gw_focal_optional">设为 0 或留空时使用像素单位。</string>
+    <string name="gw_focal_optional">设为 0 或留空时，曲线使用像素单位，校准使用备用脉冲。</string>
     <string name="gw_number_range">%1$s–%2$s · 步长 %3$s</string>
     <string name="gw_integer_invalid">请输入 %1$s–%2$s 之间的整数。</string>
     <string name="gw_decimal_invalid">请输入 %1$s–%2$s 之间的数值，最多 %3$d 位小数。</string>

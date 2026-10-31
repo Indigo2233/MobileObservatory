@@ -2,7 +2,10 @@
 <resources>
     <string name="gw_guide_rate">Guide rate for pulse estimates (sidereal multiplier)</string>
     <string name="gw_guide_rate_help">Starts at 0.5×; confirm the mount setting. It estimates the fixed calibration pulse. Calibration measures the actual response.</string>
-    <string name="gw_auto_pulse">Fixed calibration pulse: RA %1$d ms · DEC %2$d ms</string>
+    <string name="gw_auto_pulse">Calculated from optics: RA %1$d ms · DEC %2$d ms</string>
+    <string name="gw_calibration_scale">Guide scale: %1$.3f″/px</string>
+    <string name="gw_calibration_missing_optics">Focal length or effective pixel size is unknown; using the fallback pulse. Complete the optics to calculate it automatically.</string>
+    <string name="gw_calibration_used_pulse">Pulse used for this calibration: %1$d ms</string>
     <string name="gw_star_saturated">Saturated samples detected</string>
     <string name="gw_star_not_saturated">No saturated samples detected</string>
 </resources>

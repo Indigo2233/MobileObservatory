@@ -1,8 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="guide_mass_changed">Primary star mass changed too much; corrections held for this frame.</string>
+    <string name="guide_reference_match_lost">Reference star matching failed; corrections held for this frame.</string>
+    <string name="guide_primary_quality">Primary star quality check failed; corrections held for this frame.</string>
     <string name="guide_mount_read_only">Enable mount control in the mount connection settings before calibration or guiding.</string>
     <string name="guide_operation_busy">Stop guiding or wait for the current pulse to finish before starting another operation.</string>
-    <string name="guide_bad_frame">Star quality is insufficient; corrections are paused. Check focus, exposure and obstructions.</string>
+    <string name="guide_bad_frame">No stars passed the quality checks in this frame; corrections are held.</string>
     <string name="no_guide_stars_after_dec_return">No usable guide stars after the DEC return pulse.</string>
     <string name="guide_cancel_calibration">Stop calibration</string>
     <string name="stack_edit_linear">Open linear FITS for editing</string>

@@ -631,6 +631,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
     val guideExposureRequested get() = guideAcquisition.requestedState
     private var pendingGuideSettings = 0
+    private var lastGuideQualityLogMs = 0L
     private val _auxiliaryCaptureBusy = MutableStateFlow(false)
     val auxiliaryCaptureBusy = _auxiliaryCaptureBusy.asStateFlow()
     private val _guideCameraGeometry = MutableStateFlow<com.indigo.mobileobservatory.astro.ConnectedOpticsGeometry?>(null)
@@ -1723,10 +1724,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 _guideAutoStarting.value || pendingGuideSettings > 0 || guideTasks.busy) {
                 _guideStatus.value = app.getString(R.string.guide_operation_busy); return
             }
-            val star = guideModule.autoSelectStar(_guideStars.value) ?: run {
+            val candidates = _guideStars.value
+            val star = guideModule.autoSelectStar(candidates)
+            FileLogger.i("GuideSelect", "Auto selected=$star candidates=${candidates.size} " +
+                "top=${candidates.take(6)} gain=${_guideGain.value} exposureUs=${_guideExposureUs.value} " +
+                "format=${_guidePixelFormat.value} frame=${_guideDisplayFrame.value?.sequence}")
+            if (star == null) {
                 _guideStatus.value = app.getString(R.string.no_guide_stars_detected); return
             }
-            applyGuideStarSelection(star, _guideStars.value)
+            applyGuideStarSelection(star, candidates)
         }
     }
 
@@ -2128,6 +2134,19 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 _guideStatus.value = app.getString(R.string.gw_select_star_first); return
             }
             val multiStar = _guideMultiStarEnabled.value
+            val focalLength = _guideFocalLength.value
+            val geometry = _guideCameraGeometry.value
+            val config = try {
+                com.indigo.mobileobservatory.guide.GuideCalibrationConfig(_guideCalibrationSteps.value,
+                    _guideCalibrationDistance.value, _guideCalibrationPulseMs.value,
+                    com.indigo.mobileobservatory.guide.GuideStarAnalysis.arcsecPerPixel(
+                        geometry?.let { it.pixelSizeUm * it.binning }, focalLength),
+                    _guideRateSidereal.value, mountCoordinates.value?.decDeg?.takeIf { it.isFinite() }
+                        ?.toFloat()?.coerceIn(-90f, 90f) ?: 0f)
+            } catch (failure: IllegalArgumentException) {
+                _guideStatus.value = app.getString(R.string.calibration_failed_detail, failure.message.orEmpty())
+                return
+            }
             _guideCalibrating.value = true
             val started = guideTasks.launch {
                 _guideRunning.value = false
@@ -2136,12 +2155,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 _guideCalibration.value = null
                 resetGuideAlgorithmState()
                 try {
+                    FileLogger.i("GuideCalibration", "Start focalLengthMm=$focalLength " +
+                        "pixelSizeUm=${geometry?.pixelSizeUm} bin=${geometry?.binning} " +
+                        "arcsecPerPixel=${config.arcsecPerPixel} guideRateSidereal=${config.guideRateSidereal} " +
+                        "declinationDeg=${config.declinationDeg} expectedSteps=${config.steps} " +
+                        "distancePx=${config.distancePx} source=${if (config.arcsecPerPixel == null) "fallback" else "optics"} " +
+                        "pulseMs=${config.pulseMs(true)}")
                     val result = com.indigo.mobileobservatory.guide.GuideCalibrator(
-                        com.indigo.mobileobservatory.guide.GuideCalibrationConfig(_guideCalibrationSteps.value,
-                            _guideCalibrationDistance.value, _guideCalibrationPulseMs.value,
-                            com.indigo.mobileobservatory.guide.GuideStarAnalysis.arcsecPerPixel(
-                                _guideCameraGeometry.value?.let { it.pixelSizeUm * it.binning }, _guideFocalLength.value),
-                            _guideRateSidereal.value, mountCoordinates.value?.decDeg?.toFloat()?.coerceIn(-90f, 90f) ?: 0f),
+                        config,
                         pulse = { direction, duration -> pulseMount(direction, duration) },
                         measure = {
                             val stars = awaitGuideStarsAfterMotion(primary)
@@ -2157,7 +2178,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                                 com.indigo.mobileobservatory.guide.GuideCalibrationPhase.SOUTH -> R.string.calibration_dec_return
                                 com.indigo.mobileobservatory.guide.GuideCalibrationPhase.NUDGE_SOUTH -> R.string.gw_calibration_nudge
                             }
-                            _guideStatus.value = app.getString(R.string.gw_calibration_progress, app.getString(phase), value.step, value.distancePx)
+                            _guideStatus.value = app.getString(R.string.gw_calibration_progress,
+                                app.getString(phase), value.step, value.distancePx, value.pulseMs)
                             FileLogger.i("GuideCalibration", "phase=${value.phase} step=${value.step} originDx=${value.xPx} " +
                                 "originDy=${value.yPx} distancePx=${value.distancePx} pulseMs=${value.pulseMs} " +
                                 "starX=${primary.x} starY=${primary.y} flux=${primary.flux}")
@@ -2231,12 +2253,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 val saturationLevel = guideSaturationLevel(frame)
                 val stars = guideModule.detectStars(analysisFrame, saturationLevel = saturationLevel, preferred = trackingAnchor, includeRejected = true)
                 val detectionFinished = android.os.SystemClock.elapsedRealtime()
-                val usable = guideModule.usableStars(stars)
+                val usable = guideModule.usableStars(stars, allowSaturated = locked != null)
                 observeAuxiliaryMotionFrame(cam, frame, usable.ifEmpty { stars })
                 val measurement = guideMeasurements.processed(frame.captureGeneration, frame.frameId, usable, measurementRun) ?: return@processed
                 _guideStars.value = usable
-                _guideStar.value = if (trackingAnchor == null) usable.firstOrNull() else guideModule.matchStar(trackingAnchor, usable)
-                val displayedPrimary = if (trackingAnchor == null) _guideStar.value else guideModule.matchStar(trackingAnchor, stars)
+                val searchRadius = if (_guideRunning.value) 15f else 60f
+                _guideStar.value = if (trackingAnchor == null) usable.firstOrNull()
+                    else guideModule.matchStar(trackingAnchor, usable, searchRadius)
+                val displayedPrimary = if (trackingAnchor == null) _guideStar.value
+                    else guideModule.matchStar(trackingAnchor, stars, searchRadius)
                 if ((_guideCalibrating.value || _guideAutoStarting.value) && locked != null && _guideStar.value == null) {
                     val rejected = stars.filterNot { it in usable }
                     FileLogger.w("GuideTrack", "Selected target not detected: frame=${frame.frameId} format=${frame.pixelFormat} " +
@@ -2252,7 +2277,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     _guideDisplayFrame.value = com.indigo.mobileobservatory.guide.GuideDisplayFrame(bitmap, frame.width, frame.height,
                         displayStars, displayedPrimary, _guideProfile.value, guidePreviewPipeline.frame.value?.sequence ?: 0, profiles)
                 }
-                processGuideCorrection(usable, badQuality = stars.isNotEmpty() && usable.isEmpty())
+                processGuideCorrection(usable, badQuality = stars.isNotEmpty() && usable.isEmpty(), displayedPrimary = displayedPrimary)
                 val analysisFinished = android.os.SystemClock.elapsedRealtime()
                 if (analysisFinished - lastTimingLogMs >= 10_000) {
                     val preview = guidePreviewPipeline.performance.value
@@ -2403,7 +2428,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    private fun processGuideCorrection(stars: List<GuideStar>, badQuality: Boolean = false) {
+    private fun processGuideCorrection(stars: List<GuideStar>, badQuality: Boolean = false, displayedPrimary: GuideStar? = null) {
         synchronized(guideOperationLock) {
             if (!_guideRunning.value) return
             val calibration = _guideCalibration.value ?: return
@@ -2411,6 +2436,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 guideStarLost = true
                 _guideStatus.value = app.getString(if (badQuality) R.string.guide_bad_frame else R.string.guide_star_lost)
                 guideTasks.cancel()
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (now - lastGuideQualityLogMs >= 5000) {
+                    lastGuideQualityLogMs = now
+                    FileLogger.w("GuideTrack", "Correction held issue=NO_USABLE_STARS badQuality=$badQuality " +
+                        "displayed=$displayedPrimary accepted=${guideModule.acceptedPrimary} lock=${_guideReferenceStar.value}")
+                }
                 return
             }
             if (!mountModule.isConnected || guideTasks.busy || !guideMeasurementIsFresh()) return
@@ -2420,8 +2451,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val error = measureGuideError(stars, now) ?: run {
                 guideStarLost = true
                 guideTasks.cancel()
-                _guideStatus.value = app.getString(if (guideModule.lastFrameIssue == com.indigo.mobileobservatory.guide.GuideFrameIssue.MASS_CHANGE)
-                    R.string.guide_bad_frame else R.string.guide_stars_lost)
+                val issue = guideModule.lastFrameIssue
+                _guideStatus.value = app.getString(when (issue) {
+                    com.indigo.mobileobservatory.guide.GuideFrameIssue.MASS_CHANGE -> R.string.guide_mass_changed
+                    com.indigo.mobileobservatory.guide.GuideFrameIssue.MATCH_LOST -> R.string.guide_reference_match_lost
+                    else -> if (displayedPrimary != null) R.string.guide_primary_quality else R.string.guide_star_lost
+                })
+                if (now - lastGuideQualityLogMs >= 5000) {
+                    lastGuideQualityLogMs = now
+                    FileLogger.w("GuideTrack", "Correction held issue=$issue current=${_guideStar.value} " +
+                        "displayed=$displayedPrimary accepted=${guideModule.acceptedPrimary} " +
+                        "lock=${_guideReferenceStar.value} usable=${stars.size}")
+                }
                 return
             }
             guideStarLost = false
