@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="polar_abandon_solve_retry">放弃解析并重试</string>
+    <string name="polar_solve_abandoned">已放弃解析，可重试当前点</string>
+    <string name="polar_retry_solve">重试解析</string>
+    <string name="polar_choose_image">选择图像</string>
     <string name="polar_exposure_seconds">曝光时间（秒）</string>
     <string name="polar_exposure_out_of_range">请输入 %1$.6f 至 %2$.3f 秒之间的曝光时间。</string>
     <string name="polar_exposure_capture_busy">请先停止录制或实时叠加，再进行极轴拍摄。</string>

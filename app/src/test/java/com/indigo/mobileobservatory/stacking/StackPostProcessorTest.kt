@@ -75,7 +75,7 @@ class StackPostProcessorTest {
         for(x in 1 until 128) assertTrue(first.image.pixels[x]>first.image.pixels[x-1])
         assertTrue(first.image.pixels[1]>input.pixels[1]*5)
         assertTrue(first.image.pixels[120]<first.image.pixels[125])
-        assertEquals(1f,first.image.pixels[127],0f)
+        assertTrue(first.image.pixels[127]<.99f)
         assertSame(input,StackPostProcessor.process(input,StackProcessingParameters.preset(ProcessingPreset.RAW)).image)
     }
 

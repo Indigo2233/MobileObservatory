@@ -131,10 +131,8 @@ class StackingCoordinator(
     private val engine = PlanetaryStacker()
     @Volatile private var liveCalibration = CalibrationSelection()
     @Volatile private var liveCalibrationWarnings: List<String> = emptyList()
-    @Volatile private var liveDemosaicScratchBytes = 0L
-    private val liveSensorWorkspace = LinearPixelDecoder.SensorWorkspace()
-    private val liveCalibrationWorkspace = CalibrationSelection.Workspace()
-    private val liveDemosaicWorkspace = DdfapdDemosaicer.Workspace()
+    @Volatile private var liveDecoderBytes = 0L
+    private val liveDecoder = LiveFrameDecoder()
     private val backgroundModelCache = BackgroundModelCache()
     val live: LiveStackSession = LiveStackSession(
         scope = scienceScope,
@@ -145,20 +143,7 @@ class StackingCoordinator(
             val cancelCheck = {
                 if (closed || liveGeneration() != generation) throw CancellationException("stack_cancelled")
             }
-            val traits = key.pixelTraits.copy(
-                roiX = key.roi.x, roiY = key.roi.y, binning = key.hardwareBin
-            )
-            val sensor = LinearPixelDecoder.decodeSensorBorrowed(frame, traits,
-                maxPixels = LinearImage.MAX_PIXELS, workspace = liveSensorWorkspace, cancelCheck = cancelCheck)
-            val geometry = CalibrationGeometry.from(frame.width, frame.height, frame.pixelFormat, traits)
-            val calibrated = fixedCalibration.applyBorrowed(sensor, geometry, liveCapture(key),
-                liveCalibrationWorkspace, cancelCheck)
-            val decoded = if (key.demosaicAlgorithm == DemosaicAlgorithm.DDFAPD)
-                LinearPixelDecoder.demosaicSensorBorrowed(calibrated, frame.pixelFormat, traits,
-                    liveDemosaicWorkspace, cancelCheck)
-            else LinearPixelDecoder.demosaicSensor(calibrated, frame.pixelFormat, traits,
-                key.demosaicAlgorithm, liveDemosaicWorkspace, cancelCheck)
-            LinearPixelDecoder.bin(decoded, key.softwareBin)
+            liveDecoder.decode(frame, key, fixedCalibration, liveCapture(key), cancelCheck)
         },
         onSnapshot = { snapshot -> synchronized(stateLock) {
             // Validate and publish under the SAME monitor as resetLive. A delayed callback
@@ -174,11 +159,10 @@ class StackingCoordinator(
             }
         } },
         nativeHeapBytes = { Debug.getNativeHeapAllocatedSize() },
-        onWorkerReset = {
-            liveSensorWorkspace.release()
-            liveCalibrationWorkspace.release()
-            liveDemosaicWorkspace.release()
-        }
+        onWorkerReset = liveDecoder::release,
+        queueCapacity = 1,
+        previewMaxSide = LiveStackMemory.PREVIEW_MAX_SIDE,
+        maxInFlightFrames = LiveStackMemory.MAX_IN_FLIGHT_FRAMES
     )
 
     val calibration = CalibrationCoordinator(app, scienceScope, stateLock, memoryBudgetBytes,
@@ -196,9 +180,10 @@ class StackingCoordinator(
     private fun liveGeneration(): Long = live.state.value.generation
 
     private fun createLiveEngine(): LiveStackEngine {
-        val budget = memoryBudgetBytes - liveCalibration.memoryBytes - liveDemosaicScratchBytes
-        return if (live.state.value.key?.target == StackTarget.PLANETARY) LivePlanetaryEngine(budget)
-        else LiveDeepSkyEngine(budget)
+        val budget = memoryBudgetBytes - liveDecoderBytes
+        return if (live.state.value.key?.target == StackTarget.PLANETARY)
+            LivePlanetaryEngine(budget, previewMaxSide = LiveStackMemory.PREVIEW_MAX_SIDE)
+        else LiveDeepSkyEngine(budget, LiveStackMemory.PREVIEW_MAX_SIDE)
     }
 
     fun open(mode: StackMode, file: File? = null) {
@@ -304,6 +289,12 @@ class StackingCoordinator(
     fun liveInputIssue(key: StackSessionKey): String? =
         LiveStackAdmission.issue(key, memoryBudgetBytes, calibration.memoryBytes, calibration.memoryBytes > 0)
 
+    private fun availableBudget(retainedStackBytes: Long): Long {
+        val runtime = Runtime.getRuntime()
+        val nonStackBytes = (runtime.totalMemory() - runtime.freeMemory() - retainedStackBytes).coerceAtLeast(0)
+        return StackMemoryBudget.forHeap(heapLimitBytes, nonStackBytes)
+    }
+
     fun startLive(key: StackSessionKey) = synchronized(stateLock) {
         if (closed) return
         FileLogger.i("Stacking", "Live requested input=${key.width}x${key.height} format=${key.format} " +
@@ -321,23 +312,34 @@ class StackingCoordinator(
         val selectedCalibration = try { calibration.snapshot() } catch (error: Exception) {
             report(error.message ?: "calibration_failed"); return
         }
+        val available = availableBudget(selectedCalibration.memoryBytes)
+        LiveStackAdmission.issue(key, available, selectedCalibration.memoryBytes, selectedCalibration.enabled)?.let {
+            FileLogger.i("Stacking", "Live heap admission available=$available ceiling=$memoryBudgetBytes")
+            report(it)
+            return
+        }
         val traits = key.pixelTraits.copy(roiX = key.roi.x, roiY = key.roi.y, binning = key.hardwareBin)
         val geometry = try { CalibrationGeometry.from(key.width, key.height, key.format, traits) }
             catch (error: Exception) { report(error.message ?: "calibration_geometry_mismatch"); return }
         val capture = liveCapture(key)
         try { selectedCalibration.validate(geometry, capture) }
         catch (error: Exception) { report(error.message ?: "calibration_settings_mismatch"); return }
-        val demosaicScratch = LinearPixelDecoder.demosaicExtraBytes(key.width, key.height, key.format, key.demosaicAlgorithm)
+        val decoderBytes = LiveFrameDecoder.plan(key, selectedCalibration.memoryBytes, selectedCalibration.enabled).overheadBytes +
+            key.width.toLong() * key.height * key.format.bytesPerPixel * LiveStackMemory.MAX_IN_FLIGHT_FRAMES
         activateModeLocked(StackMode.LIVE)
         liveCalibration = selectedCalibration
         liveCalibrationWarnings = selectedCalibration.unknownWarnings(geometry, capture)
-        liveDemosaicScratchBytes = demosaicScratch
+        liveDecoderBytes = decoderBytes
         live.start(key)
         _task.value = _task.value.copy(message = "", exportedFiles = emptyList())
     }
 
     fun acceptFrame(frame: FrameData, key: StackSessionKey) { live.offer(frame, key) }
     fun resetLive() = synchronized(stateLock) {
+        if (taskRunning && _task.value.phase == StackTaskPhase.EXPORTING) {
+            report("stack_export_busy")
+            return@synchronized
+        }
         cancelRenderingLocked()
         backgroundModelCache.clear()
         if (pendingAutoStretchMode == StackMode.LIVE) pendingAutoStretchMode = null
@@ -345,7 +347,7 @@ class StackingCoordinator(
         live.reset()
         liveCalibration = CalibrationSelection()
         liveCalibrationWarnings = emptyList()
-        liveDemosaicScratchBytes = 0L
+        liveDecoderBytes = 0L
     }
 
     /** One-shot display adaptation on the existing renderer; raw accumulation is unchanged. */
@@ -691,7 +693,7 @@ class StackingCoordinator(
 
     fun export(): Unit = synchronized(stateLock) {
         val mode = activeMode
-        val snapshot = product(mode) ?: run { report("no_result"); return }
+        val displayed = product(mode) ?: run { report("no_result"); return }
         val parameters = _processing.value
         val capturedTarget = target(mode)
         val capturedLiveGeneration = if (mode == StackMode.LIVE) liveGeneration() else -1L
@@ -700,60 +702,65 @@ class StackingCoordinator(
             StackResultMetadata.parameters(if (preset == parameters.preset) parameters else
                 recipes[Triple(mode, target(mode), preset)] ?: StackProcessingParameters.preset(preset)) }
         runTask(StackTaskPhase.EXPORTING) {
-            // The immutable snapshot and recipe are captured together before the export starts.
-            // Live accumulation may continue; these arrays belong to this completed snapshot.
-            // Reserve EXPORTING immediately, including automatic display adaptation. Navigation
-            // can no longer cancel a Save request by cancelling its former preview renderer.
-            val effective = if (adapt) StackAutoStretch.estimate(snapshot.image, parameters, snapshot.weights) { !isActive }
-                ?: parameters else parameters
-            ensureActive()
-            synchronized(stateLock) {
+            fun save(snapshot: StackProduct) {
+                // The live worker holds accumulation for the full export. The scientific image
+                // retains native dimensions even though the displayed product is a small preview.
+                // Reserve EXPORTING immediately, including automatic display adaptation. Navigation
+                // can no longer cancel a Save request by cancelling its former preview renderer.
+                val effective = if (adapt) StackAutoStretch.estimate(snapshot.image, parameters, snapshot.weights, backgroundModelCache) { !isActive }
+                    ?: parameters else parameters
                 ensureActive()
-                if (adapt && (mode != StackMode.LIVE || capturedLiveGeneration == liveGeneration())) {
-                    if (mode == StackMode.LIVE) liveAutoStretchEligible = false
-                    if (pendingAutoStretchMode == mode) pendingAutoStretchMode = null
-                    // Preserve edits made after Save. The output still uses the captured recipe;
-                    // an unchanged workspace adopts it so its preview agrees with the PNG.
-                    if (activeMode == mode && target(mode) == capturedTarget && _processing.value == parameters) {
-                        _processing.value = effective
-                        rememberRecipeLocked(effective)
-                    } else if (recipes[Triple(mode, capturedTarget, parameters.preset)] == parameters) {
-                        recipes[Triple(mode, capturedTarget, parameters.preset)] = effective
+                synchronized(stateLock) {
+                    ensureActive()
+                    if (adapt && (mode != StackMode.LIVE || capturedLiveGeneration == liveGeneration())) {
+                        if (mode == StackMode.LIVE) liveAutoStretchEligible = false
+                        if (pendingAutoStretchMode == mode) pendingAutoStretchMode = null
+                        // Preserve edits made after Save. The output still uses the captured recipe;
+                        // an unchanged workspace adopts it so its preview agrees with the PNG.
+                        if (activeMode == mode && target(mode) == capturedTarget && _processing.value == parameters) {
+                            _processing.value = effective
+                            rememberRecipeLocked(effective)
+                        } else if (recipes[Triple(mode, capturedTarget, parameters.preset)] == parameters) {
+                            recipes[Triple(mode, capturedTarget, parameters.preset)] = effective
+                        }
                     }
                 }
-            }
-            val processed = StackPostProcessor.prepare(snapshot.image, effective, backgroundModelCache) { !isActive }
-            val root = app.getExternalFilesDir("captures") ?: error("storage_unavailable")
-            val fitsDir = File(root, "FITS").also { check(it.isDirectory || it.mkdirs()) }
-            val pngDir = File(root, "JPG").also { check(it.isDirectory || it.mkdirs()) }
-            val expectedBytes = snapshot.image.pixels.size.toLong() * 6L + 16L * 1024 * 1024
-            check(root.usableSpace >= expectedBytes) { "storage_full" }
-            val stem = "stack-${snapshot.metadata["workflow"] ?: mode.name.lowercase()}-${snapshot.metadata["target"] ?: "planetary"}-${System.currentTimeMillis()}-${UUID.randomUUID().toString().take(8)}-${effective.preset.name.lowercase()}"
-            val fits = File(fitsDir, "$stem-linear.fits")
-            val png = File(pngDir, "$stem.png")
-            val recipe = File(pngDir, "$stem.json")
-            val metadata = snapshot.metadata + mapOf(
-                "schema" to "indigo-stack-1", "linearFits" to fits.name, "processedPng" to png.name, "processedPngBits" to "16",
-                "processing" to StackResultMetadata.processing(processed).toString(),
-                "comparisonRecipes" to JSONObject(allRecipes + (effective.preset.name to StackResultMetadata.parameters(effective))).toString(),
-                "width" to snapshot.image.width.toString(), "height" to snapshot.image.height.toString(),
-                "channels" to snapshot.image.channels.toString(), "pixelScale" to "normalized_linear_0_to_1",
-                "weightMin" to (snapshot.weights.minOrNull() ?: 0f).toString(),
-                "weightMax" to (snapshot.weights.maxOrNull() ?: 0f).toString()
-            )
-            // Publish the linear source last, after the display image and recipe are complete.
-            StackExportTransaction(listOf(recipe, png, fits)).use { output ->
-                StackFitsWriter.write(output.temporary(fits), snapshot.image, metadata) { ensureActive() }
-                _task.update { it.copy(completed = 1, total = 3) }
-                StackPngExport.write(output.temporary(png), processed) { ensureActive() }
-                _task.update { it.copy(completed = 2, total = 3) }
-                java.io.FileOutputStream(output.temporary(recipe)).use { stream ->
-                    stream.write(JSONObject(metadata).toString(2).toByteArray(Charsets.UTF_8)); stream.fd.sync()
+                val processed = StackPostProcessor.prepare(snapshot.image, effective, backgroundModelCache) { !isActive }
+                val root = app.getExternalFilesDir("captures") ?: error("storage_unavailable")
+                val fitsDir = File(root, "FITS").also { check(it.isDirectory || it.mkdirs()) }
+                val pngDir = File(root, "JPG").also { check(it.isDirectory || it.mkdirs()) }
+                val expectedBytes = snapshot.image.pixels.size.toLong() * 6L + 16L * 1024 * 1024
+                check(root.usableSpace >= expectedBytes) { "storage_full" }
+                val stem = "stack-${snapshot.metadata["workflow"] ?: mode.name.lowercase()}-${snapshot.metadata["target"] ?: "planetary"}-${System.currentTimeMillis()}-${UUID.randomUUID().toString().take(8)}-${effective.preset.name.lowercase()}"
+                val fits = File(fitsDir, "$stem-linear.fits")
+                val png = File(pngDir, "$stem.png")
+                val recipe = File(pngDir, "$stem.json")
+                val metadata = snapshot.metadata + mapOf(
+                    "schema" to "indigo-stack-1", "linearFits" to fits.name, "processedPng" to png.name, "processedPngBits" to "16",
+                    "processing" to StackResultMetadata.processing(processed).toString(),
+                    "comparisonRecipes" to JSONObject(allRecipes + (effective.preset.name to StackResultMetadata.parameters(effective))).toString(),
+                    "width" to snapshot.image.width.toString(), "height" to snapshot.image.height.toString(),
+                    "channels" to snapshot.image.channels.toString(), "pixelScale" to "normalized_linear_0_to_1",
+                    "weightMin" to (snapshot.weights.minOrNull() ?: 0f).toString(),
+                    "weightMax" to (snapshot.weights.maxOrNull() ?: 0f).toString()
+                )
+                // Publish the linear source last, after the display image and recipe are complete.
+                StackExportTransaction(listOf(recipe, png, fits)).use { output ->
+                    StackFitsWriter.write(output.temporary(fits), snapshot.image, metadata) { ensureActive() }
+                    _task.update { it.copy(completed = 1, total = 3) }
+                    StackPngExport.write(output.temporary(png), processed) { ensureActive() }
+                    _task.update { it.copy(completed = 2, total = 3) }
+                    java.io.FileOutputStream(output.temporary(recipe)).use { stream ->
+                        stream.write(JSONObject(metadata).toString(2).toByteArray(Charsets.UTF_8)); stream.fd.sync()
+                    }
+                    output.commit { ensureActive() }
+                    _task.update { it.copy(phase = StackTaskPhase.COMPLETE, completed = 3, total = 3,
+                        exportedFiles = listOf(fits, png, recipe).map(File::getAbsolutePath), message = "export_success") }
                 }
-                output.commit { ensureActive() }
-                _task.update { it.copy(phase = StackTaskPhase.COMPLETE, completed = 3, total = 3,
-                    exportedFiles = listOf(fits, png, recipe).map(File::getAbsolutePath), message = "export_success") }
             }
+            if (mode == StackMode.LIVE) live.withExportSnapshot(capturedLiveGeneration) {
+                save(StackProduct(it.image, it.weights, liveMetadata(it)))
+            } else save(displayed)
         }
     }
 
@@ -830,7 +837,7 @@ class StackingCoordinator(
         val job = scope.launch(renderer, start = CoroutineStart.LAZY) {
             try {
                 delay(120)
-                val estimated = if (adapt) StackAutoStretch.estimate(snapshot.image, p, snapshot.weights) {
+                val estimated = if (adapt) StackAutoStretch.estimate(snapshot.image, p, snapshot.weights, backgroundModelCache) {
                     !isActive || serial != renderSerial
                 } else null
                 ensureActive()
@@ -939,7 +946,9 @@ class StackingCoordinator(
         FileLogger.i("Stacking", "Offline input=${source.info.width}x${source.info.height} region=${source.plan.region} " +
             "bin=${source.plan.softwareBin} output=${source.width}x${source.height} estimate=${source.plan.workingBytes} " +
             "budget=$memoryBudgetBytes heapLimit=$heapLimitBytes target=${source.plan.target}")
-        source.plan.issue(memoryBudgetBytes)?.let { error(it) }
+        val available = availableBudget(source.calibration.memoryBytes)
+        FileLogger.i("Stacking", "Offline heap admission available=$available ceiling=$memoryBudgetBytes")
+        source.plan.issue(available)?.let { error(it) }
     }
 
     fun offlinePlan(region: PixelRoi? = null, softwareBin: Int = 1): OfflineRegionPlan? {
@@ -1049,7 +1058,17 @@ class StackingCoordinator(
             "calibrationMemoryBytes" to liveCalibration.memoryBytes.toString(),
             "calibrationUnknownSettings" to JSONArray(liveCalibrationWarnings).toString(),
             "demosaicAlgorithm" to (s.key?.takeIf { it.format.isBayer }?.demosaicAlgorithm?.name ?: "NONE"),
-            "demosaicScratchBytes" to liveDemosaicScratchBytes.toString(),
+            "demosaicScratchBytes" to (s.key?.let { LiveFrameDecoder.plan(it).demosaicScratchBytes } ?: 0).toString(),
+            "decoderWorkingBytes" to liveDecoderBytes.toString(),
+            "estimatedWorkingBytes" to (s.key?.let {
+                LiveStackAdmission.workingBytes(it, liveCalibration.memoryBytes, liveCalibration.enabled)
+            } ?: 0).toString(),
+            "processingDomain" to "native_tiles_calibrate_demosaic_then_bin",
+            "previewMaxSide" to LiveStackMemory.PREVIEW_MAX_SIDE.toString(),
+            "sourceWidth" to (s.key?.width ?: 0).toString(),
+            "sourceHeight" to (s.key?.height ?: 0).toString(),
+            "hardwareBin" to (s.key?.hardwareBin ?: 1).toString(),
+            "softwareBin" to (s.key?.softwareBin ?: 1).toString(),
             "kind" to if (s.key?.target == StackTarget.PLANETARY) "live_planetary" else "live_deep_sky",
             "workflow" to "live", "target" to if (s.key?.target == StackTarget.PLANETARY) "planetary" else "deep_sky",
             "source" to s.key?.camera.orEmpty(), "captureSettings" to s.key.toString(),

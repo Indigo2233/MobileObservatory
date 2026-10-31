@@ -9,6 +9,8 @@ import com.indigo.mobileobservatory.camera.FrameData
 import com.indigo.mobileobservatory.camera.PixelFormat
 import com.indigo.mobileobservatory.camera.Roi
 import com.indigo.mobileobservatory.recording.SERWriter
+import com.indigo.mobileobservatory.media.MediaImageRegion
+import com.indigo.mobileobservatory.media.MediaPng16Codec
 import kotlinx.coroutines.*
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -51,10 +53,26 @@ class StackEaaCoordinatorTest {
             val recipe=StackResultMetadata.parseParameters(JSONObject(metadata.getString("processing")).getJSONObject("parameters"))
             assertEquals(c.processing.value,recipe)
             val raw=StackFitsReader.read(exports.single { it.extension=="fits" })
+            assertArrayEquals(original,raw.pixels,0f)
             val restored=StackFitsPreview.read(exports.single { it.extension=="fits" })
-            assertArrayEquals(StackPostProcessor.process(raw,recipe).image.pixels,restored.image.pixels,0f)
-            val png=BitmapFactory.decodeFile(exports.single { it.extension=="png" }.absolutePath)
-            try { assertArrayEquals(pixels(c.livePreview.value!!),pixels(png)) } finally { png.recycle() }
+            val processed=StackPostProcessor.process(raw,recipe).image
+            assertArrayEquals(processed.pixels,restored.image.pixels,0f)
+            val pngFile=exports.single { it.extension=="png" }
+            MediaPng16Codec.open(pngFile).use { reader ->
+                val values=reader.read(MediaImageRegion(0,0,processed.width,processed.height))
+                for(i in processed.pixels.indices)
+                    assertEquals((processed.pixels[i].coerceIn(0f,1f).toDouble()*65535).roundToInt(),values.unsigned(i))
+            }
+            val png=BitmapFactory.decodeFile(pngFile.absolutePath)
+            try {
+                val previewPixels=pixels(c.livePreview.value!!)
+                val pngPixels=pixels(png)
+                assertEquals(previewPixels.size,pngPixels.size)
+                // Preview uses a display tone LUT; Android also reduces the saved
+                // 16-bit PNG to 8-bit Bitmap channels. Keep exact export checks above.
+                for(i in pngPixels.indices) for(shift in listOf(0,8,16))
+                    assertTrue(abs((previewPixels[i] ushr shift and 255)-(pngPixels[i] ushr shift and 255))<=1)
+            } finally { png.recycle() }
         } finally { main { c.close() };scope.cancel();exports.forEach { it.delete() } }
     }
 

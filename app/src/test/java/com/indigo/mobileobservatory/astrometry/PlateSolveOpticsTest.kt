@@ -2,6 +2,8 @@ package com.indigo.mobileobservatory.astrometry
 
 import com.indigo.mobileobservatory.astro.OpticsEquipment
 import com.indigo.mobileobservatory.astro.SensorSpec
+import com.indigo.mobileobservatory.camera.CameraInfo
+import com.indigo.mobileobservatory.camera.Roi
 import com.indigo.mobileobservatory.ui.screens.pixelSizeForSensor
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -96,6 +98,55 @@ class PlateSolveOpticsTest {
         assertEquals(4.78, pixelSizeForSensor(custom, 4.78))
         assertNull(pixelSizeForSensor(custom, null))
         assertEquals(3.76, pixelSizeForSensor(imx571, 4.78))
+        assertNull(pixelSizeForSensor(custom, Double.NaN))
+        assertNull(pixelSizeForSensor(custom, Double.POSITIVE_INFINITY))
+    }
+
+    @Test
+    fun connectedCameraHintsPreserveTheFieldAcrossHardwareAndSoftwareBinning() {
+        val camera = CameraInfo("Camera", "test", 3840, 2160, 16, pixelSizeUm = 2.9f)
+        val full = PlateSolveOptics.cameraHints(camera)
+        val software = PlateSolveOptics.cameraHints(camera, Roi(0, 0, 3840, 2160), binning = 2)
+        val hardware = PlateSolveOptics.cameraHints(camera, Roi(0, 0, 1920, 1080), roiSensorScale = 2, binning = 2)
+        assertEquals(software, hardware)
+        assertEquals(1080, hardware.height)
+        assertEquals(2, hardware.binning)
+        assertEquals(2.9, hardware.pixelSizeUm!!, .00001)
+        assertEquals(PlateSolveOptics.scaleHint(full, 400.0, null).fovHeightDeg,
+            PlateSolveOptics.scaleHint(hardware, 400.0, null).fovHeightDeg)
+    }
+
+    @Test
+    fun connectedCameraHintsUseTheCroppedFrameHeight() {
+        val camera = CameraInfo("Camera", "test", 3840, 2160, 16, pixelSizeUm = 2.9f)
+        val cropped = PlateSolveOptics.cameraHints(camera, Roi(100, 200, 640, 480), roiSensorScale = 2, binning = 4)
+        assertEquals(320, cropped.width)
+        assertEquals(240, cropped.height)
+        assertEquals(206.265 * 2.9 * 960 / 400 / 3600,
+            PlateSolveOptics.scaleHint(cropped, 400.0, null).fovHeightDeg!!, .00001)
+    }
+
+    @Test
+    fun imageMetadataKeepsItsPixelSizeAndBinningWithAUserSuppliedFocalLength() {
+        val image = FitsSolveHints(960, 540, 2.9, 200.0, binning = 2)
+        val pixel = PlateSolveOptics.pixelSizeForImage(image, 3.76)
+        val scale = PlateSolveOptics.scaleHint(image, 400.0, pixel)
+        assertEquals(2.9, pixel!!, .00001)
+        assertEquals(400.0, scale.focalLengthMm!!, .0)
+        assertEquals(2, scale.binning)
+        assertEquals(206.265 * 2.9 * 2 * 540 / 400 / 3600, scale.fovHeightDeg!!, .00001)
+    }
+
+    @Test
+    fun missingAndInvalidSensorMetadataRetainsTheManualFallback() {
+        for (pixel in listOf(null, 0.0, -1.0, Double.NaN, Double.POSITIVE_INFINITY)) {
+            val hints = FitsSolveHints(pixelSizeUm = pixel)
+            assertNull(PlateSolveOptics.imageSensor(hints, "Image"))
+            assertEquals(3.76, PlateSolveOptics.pixelSizeForImage(hints, 3.76)!!, .0)
+        }
+        assertEquals(FitsSolveHints(), PlateSolveOptics.cameraHints(null))
+        assertNull(PlateSolveOptics.cameraHints(
+            CameraInfo("Unknown", "test", 1920, 1080, 8, pixelSizeUm = Float.NaN)).pixelSizeUm)
     }
 }
 

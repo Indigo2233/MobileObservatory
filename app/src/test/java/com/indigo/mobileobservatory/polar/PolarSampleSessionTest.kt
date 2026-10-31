@@ -50,6 +50,23 @@ class PolarSampleSessionTest {
             result = PlateSolveResult(false, "ASTAP exit code 1", log = "Not enough stars. Found 7 stars."))
         assertEquals(PolarSampleAdvice.STARS, failure.advice())
     }
+    @Test fun capturedSensorMetadataOverridesAPreviouslySelectedSensor() {
+        val configuration = PolarSolveConfiguration(400.0, 3.76, 4168, false, 180.0)
+        val captured = FitsSolveHints(width = 960, height = 540, pixelSizeUm = 2.9,
+            focalLengthMm = 200.0, binning = 2)
+        assertEquals(206.265 * 2.9 * 2 * 540 / 400 / 3600, configuration.fieldOfView(captured)!!, .00001)
+    }
+    @Test fun importedOpticsRemainAssociatedWithRetriesAndResetOnRecapture(): Unit = runTest {
+        val session = PolarSampleSession()
+        val imported = File("imported.fits")
+        session.import(0, imported)
+        repeat(2) {
+            session.execute(0, { imported }, { 1.0 }, { _, _ -> PlateSolveResult(false, "No solution") })
+            assertTrue(session.samples.value[0].imported)
+        }
+        session.execute(0, { File("recaptured.fits") }, { 1.0 }, { _, _ -> PlateSolveResult(false, "No solution") })
+        assertFalse(session.samples.value[0].imported)
+    }
     @Test fun connectedCameraResolvesFieldOfViewFromTheActualCapturedImage(): Unit = runTest {
         val session = PolarSampleSession()
         val image = File("point-1.fits")

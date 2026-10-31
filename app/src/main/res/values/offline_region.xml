@@ -7,5 +7,5 @@
     <string name="stack_offline_memory">This region exceeds the processing budget. Increase processing Bin or select a smaller region.</string>
     <string name="stack_offline_drag_hint">Drag to select the stacking region. Pixels outside it are excluded.</string>
     <string name="stack_offline_stale_result">The displayed result belongs to the previous region or Bin. Analyze again to stack the current settings; the saved result is still exportable.</string>
-    <string name="stack_heap_budget">App heap limit %1$d MiB · stacking budget %2$.1f MiB. The budget is 60%% of the heap limit, which differs from total phone RAM.</string>
+    <string name="stack_heap_budget">App heap limit %1$d MiB · stacking ceiling %2$.1f MiB. Admission also accounts for current heap use and garbage-collection headroom.</string>
 </resources>

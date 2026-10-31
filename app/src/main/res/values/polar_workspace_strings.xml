@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="polar_abandon_solve_retry">Abandon solve and retry</string>
+    <string name="polar_solve_abandoned">Solve abandoned · retry this point</string>
+    <string name="polar_retry_solve">Retry solve</string>
+    <string name="polar_choose_image">Choose image</string>
     <string name="polar_exposure_seconds">Exposure (s)</string>
     <string name="polar_exposure_out_of_range">Enter an exposure between %1$.6f and %2$.3f s.</string>
     <string name="polar_exposure_capture_busy">Stop recording or live stacking before taking a polar alignment exposure.</string>

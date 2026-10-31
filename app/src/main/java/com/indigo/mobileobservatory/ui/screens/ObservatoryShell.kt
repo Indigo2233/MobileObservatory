@@ -24,6 +24,7 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.indigo.mobileobservatory.BuildConfig
 import com.indigo.mobileobservatory.R
+import com.indigo.mobileobservatory.astrometry.PlateSolveOptics
 import com.indigo.mobileobservatory.astro.EquatorialEpoch
 import com.indigo.mobileobservatory.astro.EquatorialCoordinates
 import com.indigo.mobileobservatory.camera.ConnectionState
@@ -313,7 +314,10 @@ private fun ObservatoryContent(
             vm.pointingRepository.observeConnectedCamera("secondary", id)
         } else vm.pointingRepository.clearOpticalPathDirection("secondary")
     }
-    val cameraPixelSize = (connection as? ConnectionState.Connected)?.info?.pixelSizeUm
+    val cameraInfo = (connection as? ConnectionState.Connected)?.info
+    val cameraFrameHints = remember(connection, roi, binning) {
+        PlateSolveOptics.cameraHints(cameraInfo, roi, vm.cameraManager.activeCamera?.roiSensorScale ?: 1, binning)
+    }
     val pointingEstimate by vm.pointingRepository.estimate.collectAsStateWithPageLifecycle()
     val directObservations by vm.pointingRepository.directObservations.collectAsStateWithPageLifecycle()
     val pointingSources = remember(pointingEstimate, directObservations) { listOfNotNull(pointingEstimate?.let { value ->
@@ -348,7 +352,8 @@ private fun ObservatoryContent(
             initialFile = navigation.pages.lastOrNull()?.argument?.let(::File),
             autoSolve = navigation.pages.lastOrNull()?.category == "current-frame",
             mountCoordinates = coordinates,
-            cameraPixelSizeUm = cameraPixelSize,
+            cameraInfo = cameraInfo,
+            cameraFrameHints = cameraFrameHints,
             onSolved = vm::recordPlateSolveResult,
             recordingsDir = vm.getRecordingsDir(),
             capturesDir = vm.getCapturesDir(),
@@ -365,7 +370,8 @@ private fun ObservatoryContent(
             val exposure by vm.exposureUs.collectAsStateWithPageLifecycle()
             val camera = vm.cameraManager.activeCamera
             key(virtual) { PolarAlignmentScreen(mountCoordinates = coordinates, mountSite = site, mountBusy = busy,
-                mountMoveStatus = moveStatus, mountStopSignal = stopSignal, cameraPixelSizeUm = cameraPixelSize,
+                mountMoveStatus = moveStatus, mountStopSignal = stopSignal, cameraInfo = cameraInfo,
+                cameraFrameHints = cameraFrameHints,
                 cameraConnected = connection is ConnectionState.Connected, cameraPreviewBitmap = preview,
                 cameraExposureUs = exposure, cameraExposureMinUs = camera?.exposureRange?.min ?: 1000f,
                 cameraExposureMaxUs = camera?.hwExposureMaxUs ?: 30_000_000f,

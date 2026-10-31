@@ -9,6 +9,11 @@ and [STACKING_USABILITY.md](STACKING_USABILITY.md). It describes the current loc
 implementation and synthetic evidence. Physical-camera, sustained low-end Android
 memory/thermal, and real-sky acceptance remain outstanding.
 
+The current budget and live-buffer policy is recorded in
+[Colour binning and live buffer ownership](#colour-binning-and-live-buffer-ownership-2026-10-31).
+It supersedes the earlier 60% budget and full-size live decoder/snapshot descriptions
+in the dated acceptance sections below.
+
 ## Calibration workflow
 
 Calibration is optional and starts with **no masters selected**. The calibration
@@ -678,3 +683,421 @@ screen's end-to-end workflow. The new case processes three 3856×2180 RAW16 star
 frames at full-field Bin 2, compares admission with final statistics, renders with
 both local contrast and sharpening, exports FITS/PNG, and checks output dimensions
 and phase-budget metadata. Actual phone/recording acceptance remains outstanding.
+
+## Colour binning and live buffer ownership (2026-10-31)
+
+Two independent restrictions caused the reported 3856×2180 IMX585 colour failures.
+Even hardware Bayer binning was rejected when an adapter only described the sensor
+CFA. The live decoder also retained full-size sensor/RGB and DDFAPD scratch before
+software binning, while several full-size image/weight snapshots could coexist.
+Offline full-resolution deep-sky already used bounded decode, but its 330.5 MiB
+estimate exceeded the previous 307.2 MiB admission ceiling on a 512 MiB VM heap.
+
+### Colour and capture ownership
+
+`AppBinning` now requires both SDK factor readback and an accepted output layout.
+If an even-bin colour layout is unknown, the camera is restored to verified Bin 1
+and the requested total Bin uses software processing. Reconnection and reselecting
+an already displayed unsafe Bin also apply this check. A failed native restore
+cannot be reported as successful software binning. Verified output CFA continues
+to permit native colour Bin 2. Vendor libraries are unchanged.
+
+Live science applies calibration in native sensor coordinates, reconstructs linear
+RGB, then averages the requested software-bin pixels. Camera preview CFA binning
+and raw recording keep their existing ownership and semantics. SER/PSER recordings
+retain the raw acquisition dimensions, including native Bin 1 when the fallback is
+active; select the desired processing Bin for an offline result. This change does
+not reconstruct colour already lost by a camera's mixed-colour hardware binning.
+
+### Reusable live storage and export
+
+`LiveFrameDecoder` uses fixed-extent tiles and demosaic halos, writes one reusable
+Float32 output, and validates calibration against the original sensor geometry.
+No full-size sensor or DDFAPD scratch plane is retained. The input queue admits
+one owned raw packet in total across waiting/processing. Overflow increments the
+drop count. Deep-sky channel mean/M2 arithmetic and planetary Double sums are
+unchanged.
+
+Published live image/weight snapshots are immutable and have a maximum side of
+768 pixels. Their render, latest-product and replacement overlap is included in
+admission. Full-resolution data stays in the accumulator. Export executes on the
+same science worker, holds new input, clears/counts queued packets and releases
+decoder storage before filter preparation. Deep-sky export borrows its mean and
+coverage while accumulation is held; planetary export allocates one normalized
+Float32 result and borrows coverage. Cancellation/failure releases the ingestion
+hold. A live reset is refused while export owns the result.
+
+FITS and 16-bit PNG dimensions follow the science output, including the selected
+software Bin. Export metadata records source dimensions, hardware/software Bin,
+the tiled processing domain and the complete working estimate. Live preview
+filters/background fitting operate on the bounded image; export operates at
+science resolution, so spatial-filter pixels need not match the preview exactly.
+
+### Heap admission
+
+The ceiling is 80% of `Runtime.maxMemory()`. Start checks also deduct current
+non-stack Java objects and reserve `max(16 MiB, heap / 8)` for collection. Selected
+calibration storage is counted in the science estimate and removed from the
+non-stack term to avoid double-counting. The UI distinguishes the ceiling from
+the start-time available budget. No physical-RAM percentage or heap-limit override
+is introduced.
+
+For 3856×2180 RAW16, DDFAPD, three colour channels, no calibration masters:
+
+| Workflow | Previous estimate | Current estimate | Science output |
+|---|---:|---:|---|
+| Live deep sky, full resolution | 1491.1 MiB | 376.8 MiB | 3856×2180 |
+| Live deep sky, full input / software Bin 2 | 709.5 MiB | 124.2 MiB | 1928×1090 |
+| Live deep sky, verified native Bin 2 | 378.8 MiB | 112.3 MiB | 1928×1090 |
+| Offline deep sky, full resolution | 330.5 MiB | 330.5 MiB | 3856×2180 |
+
+The 512 MiB ceiling is now 409.6 MiB before current-use checks. Full-resolution
+live planetary, selected large masters, or other retained app objects can still
+exceed the available budget. Those cases continue to require an explicit smaller
+output through a larger Bin or smaller ROI, with matching calibration geometry.
+
+### Reproducible validation
+
+The four 585 admission regressions failed against the original implementation
+before the fix. Tiled live numerical tests compare all four CFA patterns, sensor
+and output CFA declarations, three demosaic algorithms, Bin 1/2/4, odd offsets and
+tile edges, calibration, mono/RGB endian/layout handling, cancellation and buffer
+reuse. Compared output agrees within `1e-6`; input bytes and published snapshots
+stay unchanged. A full native 585 software-Bin2 decode retains 26,472,640 bytes
+across eight arrays and reuses those arrays on its next frame.
+
+A separate desktop production-engine probe completed three RAW16/DDFAPD frames,
+FITS plus 16-bit PNG export with sharpening and local contrast, and accumulation
+after export under `-Xmx512m`. Sampled Java heap peaks were 447,597,264 bytes for
+full resolution and 227,540,992 bytes for software Bin 2. These are sampled used
+heap, including temporary objects awaiting collection. Physical-camera measurement
+remains a separate acceptance step.
+
+Validation completed with 511 JVM tests, 33 distinct API 34 Android tests and no
+Lint errors. The Android process reported a 576 MiB heap. It completed full-size
+and software-Bin2 live colour workflows, pause/export/resume, full-size offline
+deep-sky processing, native CFA fallback on connection and reselect, and existing
+camera/recording and export lifecycle regressions. Live FITS samples agree with
+the immutable preview's corresponding science samples; PNG dimensions and exact
+16-bit processing values are checked separately from its 8-bit display.
+
+| Android case | Sampled Java heap peak | Sampled native heap peak |
+|---|---:|---:|
+| Full-resolution live, three accepted frames and filtered export | 421,939,888 bytes | 7,062,448 bytes |
+| Software Bin 2, isolated fresh process, same workflow | 149,079,576 bytes | 9,014,928 bytes |
+| Full-resolution offline, two frames and filtered export | 391,016,832 bytes | 10,450,752 bytes |
+
+These sample the whole test process every 10 ms, including test fixture storage.
+The Bin2 run in the shared multi-test process also recorded 427,147,520 bytes,
+including carryover from the preceding full-size test before cleanup/collection.
+The isolated run above measures Bin2 without that preceding workload.
+
+Local logs, the capped-heap probe and Android workflow measurements are kept in
+`build/diagnostics/stack-bin2-memory`. Physical IMX585 acquisition, vendor SDK
+buffers, sustained capture and phone-specific memory/thermal acceptance remain
+outstanding.
+
+## FP16 live deep-sky precision assessment (2026-10-31)
+
+This assessment keeps the application accumulation algorithm unchanged. Both live
+and offline deep-sky processing use `DeepSkyStacker`: per-channel Float32 running
+mean and M2, plus a Float32 effective count per pixel. The integer-valued counts
+are exact throughout these experiments. Each accepted sample updates
+`mean += (sample - mean) / nextCount`, followed by the Welford M2 update.
+Registration support and rejected samples make counts vary between pixels.
+Live planetary processing instead retains Float64 sums and divides by each
+pixel's effective count for preview/export.
+
+### Experimental controls and scope
+
+`scripts/Measure-StackFp16.ps1` compiles the current production detector,
+registration and deep-sky engine with a generated diagnostic engine. The
+diagnostic changes only its constructor/class name and the mean/M2 storage
+updates; input quantization happens in the harness. A 24-frame control verifies
+bit-identical FP32 image/weight results and matching rejection/registration
+statistics. Every run archives the harness and generated engine, records source
+SHA-256 hashes and verifies that sources stayed unchanged.
+
+Binary16 conversion uses JDK 21 `Float.floatToFloat16` / `float16ToFloat`, with
+round-to-nearest-even. Boundary controls cover ties, subnormals, the maximum
+finite value and counter stagnation at 2048. FloatArray shadow storage retains
+the exact binary16 round-trip values; arithmetic remains FP32. This isolates
+storage precision. It does not measure packed-half allocations or hardware
+half-arithmetic performance.
+
+Eight synthetic 128×128 RGB post-decode scenes cover dark/bright backgrounds,
+low noise, fractional negative calibrated values, midtones, 12-bit-like ADC
+quantization, a planar background gradient and rising sky brightness. Scenes
+include bright registration stars, five faint stars, subpixel motion where
+configured, and late transient pixels. The dark scene runs for 4096 frames;
+the other seven run for 1024. Eight storage configurations produce 264
+scene/checkpoint/configuration records. All selected runs completed with source
+checks and the FP32 parity control passing.
+
+Noise below means the standard deviation of background residuals after
+subtracting the known scene background. It is measured in normalized 16-bit
+code units (`1 unit = 1/65535` in the linear image). The CSV also records
+background bias, per-pixel differences, faint-star amplitudes, rejection/count
+differences and M2 errors, so a low noise number alone cannot establish accuracy.
+These are synthetic numerical results; physical camera noise, Bayer decoding,
+4K runtime and device heap consumption require separate validation.
+
+### Direct half storage stops long-stack convergence
+
+For the dark scene (background 1000.25, single-frame noise sigma 8), changing
+input, mean and M2 storage to binary16 gives:
+
+| Frames | FP32 background noise | FP16 background noise | FP16 / FP32 |
+|---:|---:|---:|---:|
+| 16 | 1.49105 | 1.53632 | 1.03 |
+| 64 | 0.74289 | 1.02005 | 1.37 |
+| 256 | 0.36497 | 1.01571 | 2.78 |
+| 1024 | 0.18765 | 1.01571 | 5.41 |
+| 4096 | 0.09293 | 1.01571 | 10.93 |
+
+The mean-only half-storage arm gives a 10.92 noise ratio at 4096 frames,
+identifying repeated mean rounding as the main failure in this scene.
+Input-only half storage gives a 0.99997 noise ratio and a 0.00156% median
+relative faint-star amplitude difference. Its background bias changes by
+approximately -0.0153 code units, so noise equivalence does not imply identical
+pixel values.
+
+At 1024 frames, direct input/mean/M2 half storage gives noise ratios of 11.66
+for the bright scene, 4.36 for low noise, 1.02 for the near-zero calibrated
+background, 19.54 for midtones, 11.79 for the 12-bit-like input, 6.42 for the
+gradient and 5.39 for the rising sky. The midtone scene's faint-star amplitude
+difference is 22.13%. Input-only half storage also increases midtone noise by
+20.40%, so a general input conversion still needs range/noise validation.
+
+M2 has an independent precision problem. Keeping mean/input in FP32 while
+storing unscaled M2 in half precision reduces the dark scene's median background
+M2 to 43.12% of its FP32 value. In the low-noise and calibrated scenes the median
+M2 becomes zero. The current rejection threshold also uses the detected frame
+noise, which can mask this damage in output pixels. Matching final noise or
+rejection counts therefore cannot validate the variance state.
+
+### Sum first, divide for display
+
+`scripts/stacking/fp16_accumulation_probe.py` isolates this question from
+registration and sigma rejection. For each of four scenes it sends identical
+FP32 samples to FP32/FP16 running means and sums, using an FP64 mean of those
+same samples as reference. There are 1024 independent pixels and 4096 frames,
+with seed 585. Arithmetic remains FP32 and the candidate accumulator is rounded
+to its storage type after every update; the final division is FP32.
+
+For background 1000.25 and noise sigma 8, mean absolute error against the
+reference, in the same 16-bit code units, is:
+
+| Frames | FP32 mean | FP32 sum / count | FP16 mean | FP16 sum / count |
+|---:|---:|---:|---:|---:|
+| 16 | 0.000033 | 0.000094 | 0.2975 | 0.4959 |
+| 64 | 0.000067 | 0.000273 | 0.5380 | 1.0988 |
+| 256 | 0.000126 | 0.000294 | 0.8442 | 15.0511 |
+| 1024 | 0.000256 | 0.011257 | 0.9226 | 21.3521 |
+| 4096 | 0.000705 | 0.014232 | 0.9448 | 486.8310 |
+
+The last FP16 sum error is predominantly a negative bias (-486.8310). Bright
+and midtone scenes also develop substantial negative sum bias at 4096 frames;
+the near-zero calibrated scene instead has smaller FP16 sum error than FP16
+mean error (0.01459 versus 0.03430). Sum and online mean thus have
+data-dependent numerical behavior. These results provide no basis for a
+general precision improvement from changing to an FP16 sum.
+
+For a deterministic control, adding the exactly representable input 0.25 into
+an FP16 sum 4096 times produces 512, then a mean of 0.125. The exact sum/mean
+are 1024 and 0.25. At sum 512, the next 0.25 addition lands on a rounding tie
+and rounds back to 512. No overflow or input quantization is needed for this
+failure. Deferring division preserves the rounding errors accumulated during
+each addition.
+
+Binary16 has 11 significant binary digits for normal values. As a sum grows,
+its absolute representable spacing grows with its exponent. A final division
+by the count scales both the sum and its accumulated error. Keeping the sum
+in FP32/FP64, or designing compensated/blocked accumulation, changes that
+tradeoff and needs its own memory and numerical assessment. Each pixel still
+requires its own effective count.
+
+### Centering helps, with scene-dependent limits
+
+Two additional diagnostic arms freeze each channel's first-frame median as an
+origin, store `(value - origin) × 256` in half precision, and reconstruct in
+FP32. One keeps M2 in FP32; the other stores `M2 × 65536` in half precision.
+Both compute the M2 increment using the unrounded updated mean. All values
+remain finite in the tested cases.
+
+The centered mean/input with FP32 M2 preserves dark-scene background noise
+within 0.063% at 4096 frames; the selected faint-star amplitude difference is
+0.198%. Scaled half M2 still ends 7.48% below the FP32 reference in that run.
+Most uniform-background cases show small background-noise changes, while
+bright-star pixels retain larger errors: full covered-region RMS differences
+are approximately 1.1 code units for the dark and bright cases, with maximum
+differences around 31–33.
+
+A 600-code-unit peak-to-peak spatial gradient raises centered half noise to
+1.9102 times FP32 at 1024 frames. A sky increase of 0.02 code units per frame
+raises it to 1.0113 times FP32. A fixed channel origin therefore does not
+establish acceptable precision across the image or across changing conditions.
+The separate centered-sum probe likewise demonstrates only its four scalar
+background cases, without registration, stellar range or rejection validation.
+
+The current evidence supports retaining FP32 mean/M2 in the science engine.
+Further storage reductions should evaluate input encoding and spatial/block
+residual schemes with explicit error/range controls, including gradients,
+bright-star cores, changing backgrounds and long-sequence variance accuracy.
+The centered candidates remain diagnostic prototypes.
+
+### Memory implications and reproduction
+
+For 3856×2180 RGB, one FP32 pixel array occupies 96.20 MiB; packed binary16 would
+occupy 48.10 MiB. Input + mean + M2 payloads would fall from 288.60 to 144.30 MiB.
+The effective-count array remains 32.07 MiB. Unchanged decoder, raw packet,
+preview, rendering and other application storage prevent a whole-process 50%
+reduction.
+
+With the existing RAW16/DDFAPD phase model and no calibration masters, converting
+all three RGB buffers gives an analytical stacking-phase estimate of
+218.34 MiB versus 362.64 MiB. Export could reach 280.61 MiB versus 376.81 MiB
+only if mean/M2 stay packed and export reads the mean by row or tile without
+creating a full FP32 image. The existing FP32 export-filter workspaces remain
+budgeted. These are conditional payload calculations; the numerical harness
+retains FloatArray shadow storage.
+
+Run with JDK 21 or newer and an existing Gradle Kotlin compiler cache:
+
+```powershell
+.\scripts\Measure-StackFp16.ps1 -JavaHome 'C:/Program Files/Java/jdk-21' -Frames 4096 -Scenarios dark -OutputDirectory build/diagnostics/fp16-precision/long-run
+.\scripts\Measure-StackFp16.ps1 -JavaHome 'C:/Program Files/Java/jdk-21' -Frames 1024 -Scenarios 'bright,low_noise,calibrated,midtones,raw12' -OutputDirectory build/diagnostics/fp16-precision/contexts
+.\scripts\Measure-StackFp16.ps1 -JavaHome 'C:/Program Files/Java/jdk-21' -Frames 1024 -Scenarios 'gradient,drifting_sky' -OutputDirectory build/diagnostics/fp16-precision/gradient
+python scripts/stacking/summarize_fp16.py build/diagnostics/fp16-precision
+python scripts/stacking/fp16_accumulation_probe.py build/diagnostics/fp16-precision
+```
+
+NumPy is required for the independent accumulation probe; matplotlib optionally
+produces the comparison figure. Local artifacts are beneath
+`build/diagnostics/fp16-precision`: `summary.json`, `combined.csv`,
+`mean-versus-sum.json`/`.csv`, `precision-comparison.svg`/`.png`, and each run's
+`control.json`, source snapshot, precision CSV and faint-star CSV. The independent
+probe archives its script, runtime versions, source hash and exact-value controls.
+No APK or Android version change accompanies this assessment.
+
+## Display highlights, white balance and polar colour preview (2026-10-31)
+
+The reported M31 display failure has a deterministic synthetic reproduction:
+a linear 256×128 RGB galaxy has a central peak near 0.56, a faint elongated disk
+and a 0.003 background. The original automatic 99.5th-percentile range selected
+a white point of 0.01290. The renderer clipped every brighter sample to 1 before
+the nonlinear curve, making the core and its immediate surroundings identical
+white. The former highlight-compression expression increased bright values,
+and new Natural/Intense presets left automatic white balance disabled.
+Three focused regressions reproduced these failures before the fix.
+
+New processing parameters use `displayVersion: 2`. The white point defines the
+normalization range while positive signal above it is retained through the
+asinh curve. Highlight strength `s > 0` places a unit-slope knee at `k = 1-s`;
+for curved signal `x > k`, the shoulder is
+`k + s * (x-k) / (x-k+s)`. This is continuous, strictly increasing for finite
+signals above the knee, and approaches 1 without a hard cutoff. The midtone
+and brightness controls follow it. Setting compression to zero retains a hard
+display white. Display LUTs cover the ordinary range; brighter samples use
+the same exact scalar shoulder as the 16-bit PNG export.
+
+The same reproduction now retains a Natural core near 0.965 with distinct
+neighbouring display levels. Tests also check a visible disk, moderate sky,
+monotonic highlights, compression direction, finite/gamut-bounded output and
+unchanged source samples for Natural and Intense. These are synthetic scene
+checks. A physical-camera M31 frame has not been provided for this revision.
+
+New Natural/Intense presets enable automatic white balance, with its existing
+switch moved into the common processing controls. Version 2 uses the median
+green/red and green/blue ratios of the 30th–70th percentile positive background
+samples, excluding invalid and near-saturated RGB samples. Manual channel gains
+remain multiplicative and the independent bypasses retain their behavior.
+Automatic display-range estimation samples the same background-corrected,
+balanced linear luminance as rendering and shares its small background-model
+cache. No full-resolution scratch plane is introduced. This background balance
+does not establish photometric or instrument colour calibration.
+
+Recipe metadata records `displayVersion`. Missing values select version 1,
+which retains the original tone curve and white-balance statistics. Unknown
+versions are rejected. The archived pre-optimization pixel/background hashes
+continue to exercise version 1; new recipes round-trip all display controls.
+Linear accumulation, effective counts, calibration, and raw FITS samples are
+unchanged.
+
+For polar previews, integer single-plane camera FITS reductions previously
+became RGB48 after area averaging. Live Bayer frames instead used a CFA
+histogram and applied gains/clipping before demosaicing. That changed both the
+histogram and clipping order at the size threshold. Reduced camera transport
+now averages each CFA parity separately into a Bayer image, retaining native
+valid depth and crop phase. It uses one source row and bounded row sums/counts.
+The existing live renderer then applies the same recipe and processing order.
+Mono reductions retain their native depth too. Album processing keeps its
+existing RGB area-sampling path. Native polar crops retain the overview window.
+
+The final night-build UI regression also exposed a blank preview while loading
+state and decoded-image state were published separately. Diagnostic tracing
+observed publication on an IO thread in that test environment. Polar preview
+loading now returns one immutable image/format state from IO and publishes it
+on `Dispatchers.Main.immediate`; the Bitmap is derived from that same prepared
+image. Cancellation only recycles unpublished images. A rapid source/recipe
+switching regression verifies that the final selected image becomes visible.
+
+Raw transport tests cover all declared depths already exercised, CFA phase,
+odd crop origins, reduction factors 2–4, incomplete edge cells, small stars,
+source integrity and cancellation. Android regressions compare a reduced
+2048×1536 colour FITS with the live camera preview, and exercise existing
+native crop, thumbnail, LP700 and monochrome paths. Stacking checks include
+prepared/exact rows, display LUT error, 16-bit PNG values, recipe replay,
+automatic adaptation and export lifecycle. Local diagnostics are under
+`build/diagnostics/display-highlights`; this change does not increment build 60.
+
+Initial display-change validation: 275 related JVM tests passed with no failures/errors/skips;
+17 API 34 emulator tests passed. Lint completed with zero errors and 336
+warnings. The emulator crash buffer was empty. `acceptance.json` and the test/
+Lint logs record these results. At that checkpoint the phone APK in `bin/Installer`
+had not been replaced. The temporary emulator was stopped; automatic approval policy denied
+temporary-image deletion, so those files remain in the diagnostics directory.
+
+## RGB48 packet admission for the night test build (2026-10-31)
+
+Final package review found a separate 32 MiB input-packet ceiling inherited from
+mono/RAW16. A 3856×2180 RGB48 frame needs 50,436,480 bytes (48.10 MiB), so both
+admission and the owned input queue rejected it even with sufficient working
+memory. Four new regressions reproduce the packet and pixel-boundary behavior;
+three failed before the fix.
+
+The absolute packet ceiling now covers one RGB48 frame at the existing
+16,777,216-pixel maximum (96 MiB). The queue also checks that pixel maximum
+before copying, preserving it for mono and lower-byte formats. Explicit smaller
+caller limits and truncated-buffer checks remain effective. Production still
+owns at most one queued/processing packet. Per-format working estimates,
+calibration storage, the 80% heap ceiling and start-time non-stack/GC reserves
+remain unchanged.
+
+For 3856×2180 RGB48 deep sky at full resolution, the current science estimate
+is 413,918,928 bytes (394.74 MiB), before start-time non-stack deductions.
+This is an allocation model, without a physical camera SDK measurement.
+Regression checks cover admission at the calculated budget and rejection one
+byte below it, calibrated budgets, an immutable full-size queued copy, overflow
+drops, an explicit smaller packet budget and pre-copy rejection above the pixel
+ceiling. A new Android fixture exercises full RGB48 input with software Bin 2,
+filtered FITS/16-bit PNG export and resumed acquisition.
+
+Night-build source snapshots, build/validation logs and artifact verification
+are kept beneath `build/diagnostics/night-test-20261031`. The local test build
+keeps v1.0.9 / build 60 and uses the existing maintainer/legacy signing lineage.
+
+The final local signed APK was built on 2026-10-31 at 20:14 Asia/Shanghai and
+replaced both installer APK names. Final validation passed all 1,393 Release JVM
+tests (zero failures/errors/skips), 24 focused Android tests and Release Lint
+with zero errors. Android coverage includes 20 native solve-cancellation
+iterations, full-resolution RAW16 accumulation/export/resume, RGB48 input with
+software Bin 2, and the final polar preview state/rapid recipe-change cases.
+The crash buffer was empty. Initial fixture errors, the emulator System UI
+overlay and preview-state failures remain archived separately.
+
+APK SHA-256:
+`40e223432367c0c5e067ccb177511b450d599f84468297d44cf9005c0ec037cd`.
+`apk-verification.json` records both signing identities, the source snapshot,
+ARM64-only packaging, disabled sequence entries and unchanged frozen ZWO
+libraries. Physical-camera and real M31 validation remain for the night test.

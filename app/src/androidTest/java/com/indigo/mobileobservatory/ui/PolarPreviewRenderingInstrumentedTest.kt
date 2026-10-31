@@ -107,6 +107,39 @@ class PolarPreviewRenderingInstrumentedTest {
         }
     }
 
+    @Test fun rapidSourceAndRecipeChangesPublishTheFinalPreviewTogether() {
+        val first = sampleFile(); val second = sampleFile()
+        fun write(file: File, code: Int) {
+            val data = ByteBuffer.allocate(192 * 128 * 2).order(ByteOrder.LITTLE_ENDIAN)
+            repeat(192 * 128) { data.putShort(code.toShort()) }
+            FITSWriter().write(file, FrameData(data.array(), 192, 128, PixelFormat.MONO16, 1, 0), 1f, 0f)
+        }
+        try {
+            write(first, 8192); write(second, 16384)
+            val selected = mutableStateOf(first)
+            val settings = mutableStateOf(CameraPreviewSettings(autoStretch = false))
+            compose.setContent { MobileObservatoryTheme {
+                PolarWorkflowPreview(selected.value, "Latest image", null, null, "", null, false,
+                    {}, null, {}, previewSettings = settings.value)
+            } }
+            repeat(6) { pass -> compose.runOnIdle {
+                selected.value = if (pass % 2 == 0) second else first
+                settings.value = settings.value.copy(autoStretch = pass % 3 == 0)
+            } }
+            compose.runOnIdle {
+                selected.value = second
+                settings.value = CameraPreviewSettings(autoStretch = false)
+            }
+            compose.waitUntil(15_000) {
+                compose.onAllNodesWithTag("polar-main-preview").fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.waitUntil(15_000) {
+                val image = compose.onNodeWithTag("polar-main-preview").captureToImage().toPixelMap()
+                image[image.width / 2, image.height / 2].red in .20f.. .30f
+            }
+        } finally { first.delete(); second.delete() }
+    }
+
     @Test fun nativeBayerRegionsKeepTheOverviewStretchAndNeighbouringCfaSamples() {
         val frame = scene(128, 96, PixelFormat.BAYER_RG16)
         val file = sampleFile()
@@ -121,6 +154,43 @@ class PolarPreviewRenderingInstrumentedTest {
                 }
             } finally { native.recycle(); prepared.bitmap.recycle() }
         } finally { file.delete() }
+    }
+
+    @Test fun reducedColourFitsRetainsTheLiveBayerHistogramAndWhiteBalance() {
+        val width = 2048; val height = 1536
+        val data = ByteBuffer.allocate(width * height * 2).order(ByteOrder.LITTLE_ENDIAN)
+        for (y in 0 until height) for (x in 0 until width) {
+            val level = 1800 + 100 * (x / 64) + 40 * (y / 64)
+            val gain = if (x % 2 == 0 && y % 2 == 0) .6 else if (x % 2 == 1 && y % 2 == 1) .4 else 1.0
+            data.putShort((level * gain).toInt().toShort())
+        }
+        val frame = FrameData(data.array(), width, height, PixelFormat.BAYER_RG16, 1, 0)
+        val settings = CameraPreviewSettings(redGain = 1.2f, blueGain = 1.5f)
+        val processor = FrameProcessor().apply { applyPreviewSettings(settings) }
+        val live = processor.frameToBitmap(frame, PixelTraits(validBits = 16, alignment = SampleAlignment.RIGHT))
+        val file = sampleFile()
+        try {
+            FITSWriter().write(file, frame, 1f, 0f)
+            val original = file.readBytes()
+            val saved = CameraImagePreview.prepare(file, settings)
+            val decoded = com.indigo.mobileobservatory.media.MediaImageFitsCodec.readCameraImage(file)
+            try {
+                assertTrue("Reduced raw camera frames must keep the Bayer rendering path", decoded.snapshot.frame.pixelFormat.isBayer)
+                assertEquals(processor.renderedWindow.black, saved.window.black, 1f / 1023)
+                assertEquals(processor.renderedWindow.white, saved.window.white, 1f / 1023)
+                val expected = Bitmap.createScaledBitmap(live, saved.bitmap.width, saved.bitmap.height, true)
+                try {
+                    val a = pixels(expected); val b = pixels(saved.bitmap)
+                    val error = a.indices.sumOf { i ->
+                        (0..2).sumOf { channel ->
+                            kotlin.math.abs((a[i] ushr (channel * 8) and 255) - (b[i] ushr (channel * 8) and 255)).toLong()
+                        }
+                    }.toDouble() / (a.size * 3)
+                    assertTrue("Colour preview mean display difference $error", error < 3)
+                } finally { expected.recycle() }
+                assertArrayEquals(original, file.readBytes())
+            } finally { saved.bitmap.recycle() }
+        } finally { file.delete(); live.recycle() }
     }
 
     @Test fun thumbnailsScaleTheSameProcessedOverview() {

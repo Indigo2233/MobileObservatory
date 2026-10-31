@@ -47,6 +47,33 @@ class AppBinningTest {
         catch (expected: IllegalStateException) { assertTrue(expected.message!!.contains("restore")) }
     }
 
+    @Test fun unverifiedColourOutputFallsBackToNativeBin1AndSoftwareBin2() {
+        val camera = Camera()
+        assertEquals(AppBinPlan(2, 1, 2), AppBinning.apply(2, camera) { it == 1 })
+        assertEquals(listOf(2, 1), camera.calls)
+        assertEquals(1, camera.currentHardwareBin)
+    }
+
+    @Test fun verifiedColourOutputRetainsNativeBin2() {
+        val camera = Camera()
+        assertEquals(AppBinPlan(2, 2, 1), AppBinning.apply(2, camera) { true })
+        assertEquals(listOf(2), camera.calls)
+    }
+
+    @Test fun ambiguousColourFallbackMustConfirmNativeBin1BeforePublishing() {
+        val camera = Camera().apply { rejectReset = true }
+        org.junit.Assert.assertThrows(IllegalStateException::class.java) {
+            AppBinning.apply(2, camera) { it == 1 }
+        }
+    }
+
+    @Test fun restoringBin1MustAlsoRestoreAnAcceptedPixelLayout() {
+        val camera = Camera()
+        org.junit.Assert.assertThrows(IllegalStateException::class.java) {
+            AppBinning.apply(2, camera) { false }
+        }
+    }
+
     @Test
     fun usesHardwareWhenCameraListsTheFactor() {
         val plan = AppBinning.plan(2, listOf(1, 2, 4))

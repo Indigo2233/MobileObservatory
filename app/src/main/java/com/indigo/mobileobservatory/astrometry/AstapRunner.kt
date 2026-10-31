@@ -16,7 +16,12 @@ import java.util.Locale
 import java.util.concurrent.TimeUnit
 import kotlin.math.absoluteValue
 
-class AstapRunner(private val context: Context) : ImagePlateSolver {
+class AstapRunner internal constructor(
+    private val context: Context,
+    private val startProcess: (ProcessBuilder) -> Process
+) : ImagePlateSolver {
+    constructor(context: Context) : this(context, ProcessBuilder::start)
+
     companion object {
         // ASTAP instances share catalog/configuration state. Serialize all callers,
         // including image tasks that are temporarily covered by another screen.
@@ -135,40 +140,46 @@ class AstapRunner(private val context: Context) : ImagePlateSolver {
             appendLine("command=${command.joinToString(" ")}")
         }
 
-        val process = try {
-            ProcessBuilder(command)
+        // Output is consumed only after the attempt. A private file avoids a pipe reader
+        // thread receiving an uncaught InterruptedIOException when cancellation kills ASTAP.
+        val processLog = File(outputBase.parentFile, "process.log")
+        val output = StringBuilder(diagHeader)
+        var process: Process? = null
+        val finished: Boolean
+        val exitCode: Int
+        try {
+            process = startProcess(ProcessBuilder(command)
                 .directory(workDir)
                 .redirectErrorStream(true)
-                .start()
-        } catch (e: Throwable) {
+                .redirectOutput(processLog))
+            finished = awaitSolverProcess(process, TimeUnit.MINUTES.toMillis(6))
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
+            exitCode = if (finished) process.exitValue() else -1
+            processLog.bufferedReader().use { output.append(it.readText()) }
+        } catch (cancel: kotlinx.coroutines.CancellationException) {
+            throw cancel
+        } catch (e: Exception) {
             return@withContext PlateSolveResult(
                 success = false,
-                message = "ASTAP could not start: ${e.message}",
+                message = if (process == null) "ASTAP could not start: ${e.message}"
+                    else "ASTAP execution failed: ${e.message}",
                 elapsedMs = elapsed(start),
                 log = diagHeader + e.stackTraceToString()
             )
+        } finally {
+            process?.let {
+                runCatching { it.outputStream.close() }
+                runCatching { it.inputStream.close() }
+                runCatching { it.errorStream.close() }
+            }
+            processLog.delete()
         }
 
-        val output = StringBuilder(diagHeader)
-        val readerThread = Thread {
-            process.inputStream.bufferedReader().useLines { lines ->
-                lines.forEach { output.appendLine(it) }
-            }
-        }.apply { start() }
-
-        val finished = try { awaitSolverProcess(process, TimeUnit.MINUTES.toMillis(6)) }
-            catch (cancel: kotlinx.coroutines.CancellationException) {
-                readerThread.join(1_000)
-                throw cancel
-            }
         if (!finished) {
-            process.destroyForcibly()
             return@withContext PlateSolveResult(false, "ASTAP solve timed out.", elapsedMs = elapsed(start), log = output.toString())
         }
-        readerThread.join(1000)
 
         val dims = imageDimensions(inputFile)
-        val exitCode = process.exitValue()
         val candidates = astapOutputFiles(outputBase)
         output.appendLine("exitCode=$exitCode")
         output.appendLine("imageDims=${dims.first}x${dims.second}")

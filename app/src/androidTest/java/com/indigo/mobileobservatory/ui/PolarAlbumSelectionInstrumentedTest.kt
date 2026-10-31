@@ -2,6 +2,7 @@ package com.indigo.mobileobservatory.ui
 
 import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
@@ -23,6 +24,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.astrometry.ImagePlateSolver
 import com.indigo.mobileobservatory.astrometry.PlateSolveResult
+import com.indigo.mobileobservatory.astrometry.AstapRunner
 import com.indigo.mobileobservatory.astro.ObserverSite
 import com.indigo.mobileobservatory.mount.MountCoordinates
 import com.indigo.mobileobservatory.polar.PolarSamplePhase
@@ -32,6 +34,7 @@ import com.indigo.mobileobservatory.polar.PolarSolvePoint
 import com.indigo.mobileobservatory.ui.screens.PolarAlignmentScreen
 import com.indigo.mobileobservatory.ui.theme.MobileObservatoryTheme
 import com.indigo.mobileobservatory.ui.viewmodel.PolarSamplesViewModel
+import kotlinx.coroutines.runBlocking
 import org.junit.*
 import org.junit.Assert.*
 import org.junit.rules.TestName
@@ -41,6 +44,7 @@ import java.nio.ByteOrder
 import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 /** Real sample screen and app-owned library; only the external document chooser and solver are supplied. */
@@ -99,8 +103,10 @@ class PolarAlbumSelectionInstrumentedTest {
     @After fun cleanup() {
         fun shell(command: String) = ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand(command))
             .bufferedReader().use { it.readText() }
-        shell("mkdir -p /sdcard/Download/polar-ui-screenshots")
-        shell("screencap -p /sdcard/Download/polar-ui-screenshots/polar-album-${name.methodName}.png")
+        if (InstrumentationRegistry.getArguments().getString("captureScreenshots") == "true") {
+            shell("mkdir -p /sdcard/Download/polar-ui-screenshots")
+            shell("screencap -p /sdcard/Download/polar-ui-screenshots/polar-album-${name.methodName}.png")
+        }
         val edit = prefs.edit()
         saved.forEach { (key, value) -> when (value) {
             is Float -> edit.putFloat(key, value)
@@ -114,8 +120,8 @@ class PolarAlbumSelectionInstrumentedTest {
         if (::nestedFits.isInitialized) nestedFits.parentFile?.delete()
     }
 
-    private fun start() {
-        val engine = object : ImagePlateSolver {
+    private fun start(solver: ImagePlateSolver? = null, onMotionStop: () -> Unit = {}) {
+        val engine = solver ?: object : ImagePlateSolver {
             override val ready = true
             override suspend fun solve(inputFile: File, fovDeg: Double, mountCoordinates: MountCoordinates?, searchRadiusDeg: Double?): PlateSolveResult {
                 solves.set(inputFile)
@@ -124,7 +130,8 @@ class PolarAlbumSelectionInstrumentedTest {
         }
         compose.setContent { CompositionLocalProvider(LocalActivityResultRegistryOwner provides owner) {
             MobileObservatoryTheme { PolarAlignmentScreen(solver = engine,
-                onCaptureFits = { captures.incrementAndGet(); null }, onBack = { back.incrementAndGet() }) }
+                onCaptureFits = { captures.incrementAndGet(); null }, onStopMountRaMove = onMotionStop,
+                onBack = { back.incrementAndGet() }) }
         } }
         compose.onNodeWithText(context.getString(R.string.polar_parameters)).performScrollTo().performClick()
         compose.onNodeWithTag("polar-sample-details").performScrollTo().performClick()
@@ -173,6 +180,88 @@ class PolarAlbumSelectionInstrumentedTest {
         assertArrayEquals(bytes, nestedFits.readBytes())
         compose.waitUntil(15_000) { compose.onAllNodesWithTag("polar-main-preview").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithTag("polar-main-preview").assertIsDisplayed()
+    }
+
+    @Test fun cancellingAnAlbumSolveOffersRetryAndPreservesTheCompletedPointWithoutMoving() {
+        val root = java.nio.file.Files.createTempDirectory(context.cacheDir.toPath(), "polar-album-cancel-").toFile()
+        val solverContext = object : ContextWrapper(context) {
+            override fun getFilesDir() = File(root, "files").apply { mkdirs() }
+            override fun getCacheDir() = File(root, "cache").apply { mkdirs() }
+            override fun getExternalFilesDir(type: String?) = File(root, "external").apply { mkdirs() }
+        }
+        File(solverContext.filesDir, "astap/d20_0101.1476").apply { parentFile!!.mkdirs(); writeBytes(ByteArray(0)) }
+        val process = AtomicReference<Process>()
+        val launches = AtomicInteger()
+        val stops = AtomicInteger()
+        val finish = AtomicBoolean()
+        val runner = AstapRunner(solverContext) { builder ->
+            val command = if (finish.get()) "echo No-solution-fixture; exit 2"
+                else "echo ASTAP-cancellation-fixture; exec /system/bin/sleep 60"
+            builder.command("/system/bin/sh", "-c", command).start().also {
+                process.set(it); launches.incrementAndGet()
+            }
+        }
+        try {
+            instrumentation.runOnMainSync {
+                runBlocking {
+                    model.session.execute(0, { photo }, { 1.8 }, { _, _ ->
+                        PlateSolveResult(true, "Solved", raDeg = 15.0, decDeg = 60.0)
+                    })
+                }
+                model.positionedPoint = 1
+            }
+            val completed = model.session.samples.value[0]
+            val original = nestedFits.readBytes()
+            start(runner) { stops.incrementAndGet() }
+            choosePoint(1); selectAlbumImage(nestedFits)
+            compose.waitUntil(10_000) { model.session.samples.value[1].file != null }
+            val selected = requireNotNull(model.session.samples.value[1].file)
+            listOf("preview", "diagnostics", "fullscreen").forEachIndexed { pass, surface ->
+                if (pass == 0) compose.onNodeWithTag("polar-retry-1").performScrollTo().performClick()
+                else compose.onNodeWithTag("polar-retry-current").performScrollTo().performClick()
+                compose.waitUntil(10_000) {
+                    launches.get() == pass + 1 && model.session.samples.value[1].phase == PolarSamplePhase.SOLVING
+                }
+                val stopTag = when (surface) {
+                    "diagnostics" -> {
+                        compose.onNodeWithTag("polar-diagnostics-expand").performClick()
+                        "polar-diagnostics-stop"
+                    }
+                    "fullscreen" -> {
+                        compose.onNodeWithTag("polar-preview-expand").performClick()
+                        "polar-inspection-stop"
+                    }
+                    else -> "polar-preview-stop"
+                }
+                compose.onNodeWithTag(stopTag)
+                    .assertTextEquals(context.getString(R.string.polar_abandon_solve_retry)).performClick()
+                compose.waitUntil(5_000) {
+                    model.session.samples.value[1].phase == PolarSamplePhase.CANCELLED && !process.get().isAlive
+                }
+                if (surface == "fullscreen") compose.onNodeWithTag("polar-preview-close").performClick()
+                compose.onNodeWithTag("polar-retry-current").assertIsDisplayed().assertIsEnabled()
+                compose.onNodeWithTag("polar-select-current").assertIsEnabled()
+                compose.onNodeWithTag("polar-recapture-current").assertDoesNotExist()
+                assertEquals(completed, model.session.samples.value[0])
+                assertEquals(selected, model.session.samples.value[1].file)
+                assertTrue(model.session.samples.value[1].imported)
+                assertArrayEquals(original, selected.readBytes())
+                assertEquals(0, captures.get()); assertEquals(0, stops.get())
+            }
+            // The same selected image can complete a new attempt after all three cancellation paths.
+            finish.set(true)
+            compose.onNodeWithTag("polar-retry-current").performClick()
+            compose.waitUntil(10_000) { model.session.samples.value[1].phase == PolarSamplePhase.FAILED }
+            assertEquals(4, launches.get())
+            assertEquals(completed, model.session.samples.value[0])
+            assertTrue(model.session.samples.value[1].result!!.log.contains("No-solution-fixture"))
+            assertArrayEquals(original, nestedFits.readBytes())
+            assertArrayEquals(original, selected.readBytes())
+            assertEquals(0, captures.get()); assertEquals(0, stops.get())
+        } finally {
+            process.get()?.let { it.destroyForcibly(); it.waitFor(2, java.util.concurrent.TimeUnit.SECONDS) }
+            root.deleteRecursively()
+        }
     }
 
     @Test fun cancellingTheDocumentChooserKeepsTheAlbumAndBackPreservesTheOldSample() {

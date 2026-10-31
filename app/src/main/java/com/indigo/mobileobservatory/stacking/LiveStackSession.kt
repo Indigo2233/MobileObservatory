@@ -58,7 +58,8 @@ data class LiveStackState(
     val imageVersion: Long = 0
 )
 
-/** Immutable owned snapshot: consumers must never mutate image/weight arrays. */
+/** Read-only pixels. Published previews are owned; export views are borrowed only for the
+ * serialized export callback and must never escape it. */
 data class LiveStackSnapshot(
     val image: LinearImage,
     val weights: FloatArray,
@@ -79,13 +80,16 @@ data class LiveFrameOutcome(
 interface LiveStackEngine {
     fun add(image: LinearImage, exposureSeconds: Double, cancelled: () -> Boolean): LiveFrameOutcome
     fun snapshot(state: LiveStackState): LiveStackSnapshot?
+    fun previewSnapshot(state: LiveStackState, maxSide: Int): LiveStackSnapshot? = snapshot(state)
+    /** Read only on the science worker, with ingestion/accumulation held until export returns. */
+    fun exportSnapshot(state: LiveStackState): LiveStackSnapshot? = snapshot(state)
     /** Small current statistics only; rejection updates must not copy accumulated image arrays. */
     fun snapshotDetails(): Map<String, Any>? = null
 }
 
 /**
  * Takes a private byte copy BEFORE the camera gives its buffer to PreviewPipeline.
- * Two waiting inputs + one processing input; overflow drops the incoming input.
+ * Configurable bounded ownership; production admits one queued/processing input in total.
  * No bitmap, white balance, LP750 or preview stretch enters the science pipeline.
  * Reset changes an epoch, so an old in-flight result cannot repopulate a new stack.
  */
@@ -98,9 +102,12 @@ class LiveStackSession(
     private val nowNanos: () -> Long = System::nanoTime,
     private val queueCapacity: Int = 2,
     private val maxInputBytes: Long = MAX_INPUT_BYTES,
-    private val onWorkerReset: () -> Unit = {}
+    private val onWorkerReset: () -> Unit = {},
+    private val previewMaxSide: Int? = null,
+    private val maxInFlightFrames: Int = queueCapacity + 1
 ) : Closeable {
-    companion object { const val MAX_INPUT_BYTES = 32L * 1024 * 1024 }
+    // One RGB48 packet at the supported pixel ceiling. Admission budgets its actual layout.
+    companion object { const val MAX_INPUT_BYTES = LinearImage.MAX_PIXELS * 6 }
     private data class Packet(val frame: FrameData, val key: StackSessionKey, val generation: Long)
     private val lock = Any()
     private val queue = ArrayDeque<Packet>()
@@ -115,10 +122,14 @@ class LiveStackSession(
     private var workerEpoch = -1L
     private var engine: LiveStackEngine? = null
     private var lastPublish = 0L
+    private var processingPacket = false
+    private var exporting = false
     private val job: Job
 
     init {
         require(queueCapacity in 1..4)
+        require(maxInFlightFrames in 1..queueCapacity + 1)
+        require(previewMaxSide == null || previewMaxSide > 0)
         job = scope.launch {
             try { for (signal in wake) {
                 while (!closed) {
@@ -128,13 +139,13 @@ class LiveStackSession(
                             onWorkerReset()
                             workerEpoch = epoch
                         }
-                        queue.pollFirst()
+                        queue.pollFirst()?.also { processingPacket = true }
                     }
                     if (packet == null) {
                         finishPause()
                         break
                     }
-                    process(packet)
+                    try { process(packet) } finally { synchronized(lock) { processingPacket = false } }
                     // Free the invalidated engine before yielding to an offline job on the
                     // same dispatcher. Otherwise that job could retain both accumulators.
                     synchronized(lock) {
@@ -172,13 +183,15 @@ class LiveStackSession(
                 return
             }
             lastFrameId = frame.frameId
-            val length = frame.width.toLong() * frame.height * frame.bytesPerPixel
-            if (length !in 1..maxInputBytes || length > frame.data.size) {
+            val pixels = frame.width.toLong() * frame.height
+            val length = pixels * frame.bytesPerPixel
+            if (pixels > LinearImage.MAX_PIXELS || length !in 1..maxInputBytes || length > frame.data.size) {
                 _state.value = next.copy(phase = LiveStackPhase.FAILED, reason = "input_budget")
                 queue.clear()
                 return
             }
-            if (queue.size >= queueCapacity) {
+            if (exporting || queue.size >= queueCapacity ||
+                queue.size + (if (processingPacket) 1 else 0) >= maxInFlightFrames) {
                 _state.value = next.copy(dropped = next.dropped + 1)
                 return
             }
@@ -307,13 +320,38 @@ class LiveStackSession(
         val snapshot = if (previous != null && previous.state.generation == generation &&
             previous.state.imageVersion == snapshotState.imageVersion) previous.copy(state = snapshotState,
                 details = engine?.snapshotDetails() ?: previous.details)
-        else engine?.snapshot(snapshotState) ?: return
+        else (previewMaxSide?.let { engine?.previewSnapshot(snapshotState, it) }
+            ?: engine?.snapshot(snapshotState)) ?: return
         synchronized(lock) {
             if (generation != epoch || closed || _state.value.phase == LiveStackPhase.RESET_REQUIRED) return
             latestSnapshot = snapshot
             lastPublish = nowNanos()
         }
         onSnapshot(snapshot)
+    }
+
+    /** The caller must be running on the same serialized science dispatcher as [process].
+     * No native-size snapshot survives this callback. Reset invalidates the generation while
+     * an already borrowed result remains readable until this worker finishes the export. */
+    internal fun <T> withExportSnapshot(generation: Long, action: (LiveStackSnapshot) -> T): T {
+        val exportState = synchronized(lock) {
+            check(!closed && generation == epoch && !exporting) { "settings_changed" }
+            exporting = true
+            val old = _state.value
+            _state.value = old.copy(dropped = old.dropped + queue.size)
+            queue.clear()
+            _state.value
+        }
+        try {
+            // Both preview rendering and this worker's last add have completed before export.
+            // Its decoder RGB/sensor buffers are no longer needed.
+            onWorkerReset()
+            val snapshot = engine?.exportSnapshot(exportState) ?: error("no_result")
+            return action(snapshot)
+        } finally {
+            synchronized(lock) { exporting = false }
+            wake.trySend(Unit)
+        }
     }
 
     private fun finishPause() {

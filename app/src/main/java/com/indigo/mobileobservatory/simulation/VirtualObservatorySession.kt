@@ -62,8 +62,11 @@ class VirtualObservatorySession(context: Context) : ImagePlateSolver {
         }
         file
     }
+    /** A controllable latency keeps cancellation tests inside the simulated solve phase. */
+    @Volatile internal var solveLatencyMs = 200L
+
     override suspend fun solve(inputFile: File, fovDeg: Double, mountCoordinates: MountCoordinates?, searchRadiusDeg: Double?): PlateSolveResult {
-        delay(200)
+        delay(solveLatencyMs)
         check(active) { "Virtual observation ended" }
         if (model.consumeSolveFailure()) return PlateSolveResult(false, "模拟解析失败：星点不足 / Simulated insufficient stars")
         return synchronized(solutions) { solutions[inputFile.absolutePath] }

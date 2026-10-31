@@ -238,7 +238,7 @@ object BackgroundGradient {
 }
 
 /** An immutable-image view applying a validated model on demand, with identical Float rounding. */
-internal class BackgroundPixels(val image: LinearImage, model: BackgroundModel?) {
+internal class BackgroundPixels(val image: LinearImage, val model: BackgroundModel?) {
     private val coefficients = model?.takeIf { it.applied }?.coefficients?.map { it.toDoubleArray() }
     private val anchors = model?.channelAnchors
     private val strength = model?.strength ?: 0.0

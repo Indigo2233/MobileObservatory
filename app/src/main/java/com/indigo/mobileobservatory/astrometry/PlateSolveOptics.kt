@@ -1,6 +1,9 @@
 package com.indigo.mobileobservatory.astrometry
 
 import com.indigo.mobileobservatory.astro.OpticsFov
+import com.indigo.mobileobservatory.astro.SensorSpec
+import com.indigo.mobileobservatory.camera.CameraInfo
+import com.indigo.mobileobservatory.camera.Roi
 
 data class PlateSolveScaleHint(
     val width: Int,
@@ -16,6 +19,32 @@ data class PlateSolveScaleHint(
  * the focal length the user typed, not a leftover FITS FOVH or previous solve.
  */
 object PlateSolveOptics {
+    fun cameraHints(
+        info: CameraInfo?,
+        roi: Roi? = null,
+        roiSensorScale: Int = 1,
+        binning: Int = 1
+    ): FitsSolveHints {
+        if (info == null) return FitsSolveHints()
+        val bin = binning.coerceAtLeast(1)
+        val roiScale = if (roi != null) roiSensorScale.coerceAtLeast(1) else 1
+        return FitsSolveHints(
+            width = (roi?.width ?: info.sensorWidth) * roiScale / bin,
+            height = (roi?.height ?: info.sensorHeight) * roiScale / bin,
+            pixelSizeUm = firstPositive(info.pixelSizeUm?.toDouble()),
+            binning = bin
+        )
+    }
+
+    fun imageSensor(hints: FitsSolveHints, displayName: String): SensorSpec? =
+        firstPositive(hints.pixelSizeUm)?.let { pixel ->
+            SensorSpec("solve_image", displayName, pixel, hints.width, hints.height)
+        }
+
+    /** A saved frame retains its sensor even after a different camera is connected. */
+    fun pixelSizeForImage(hints: FitsSolveHints, fallbackPixelSizeUm: Double?): Double? =
+        firstPositive(hints.pixelSizeUm, fallbackPixelSizeUm)
+
     fun scaleHint(
         hints: FitsSolveHints,
         userFocalLengthMm: Double?,

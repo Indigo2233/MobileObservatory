@@ -43,9 +43,10 @@ fun SolveOpticsFields(
     sensors: List<SensorSpec>,
     computedFovHeightDeg: Double?,
     enabled: Boolean = true,
-    compact: Boolean = false
+    compact: Boolean = false,
+    automaticSensor: SensorSpec? = null
 ) {
-    var menuOpen by remember { mutableStateOf(false) }
+    var menuOpen by remember(automaticSensor?.id) { mutableStateOf(false) }
     val selected = sensors.firstOrNull { it.id == selectedSensorId }
         ?: sensors.firstOrNull { it.id == OpticsEquipment.CUSTOM_SENSOR_ID }
     val showPixelField = selected == null ||
@@ -77,61 +78,78 @@ fun SolveOpticsFields(
         )
     }
     Column(verticalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 8.dp)) {
-        if (compact) SolveParameterPair(focalField, pixelField)
-        else focalField(Modifier.widthIn(max = 320.dp).fillMaxWidth())
-        ExposedDropdownMenuBox(
-            expanded = menuOpen,
-            onExpandedChange = { if (enabled) menuOpen = it }
-        ) {
-            OutlinedTextField(
-                value = selected?.name ?: stringResource(R.string.sensor_custom),
-                onValueChange = {},
-                readOnly = true,
-                enabled = enabled,
-                label = { Text(stringResource(R.string.fov_sensor)) },
-                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(menuOpen) },
-                textStyle = if (compact) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.menuAnchor()
-                    .then(if (compact) Modifier else Modifier.widthIn(max = 320.dp))
-                    .fillMaxWidth().testTag("solve-sensor")
+        if (compact && automaticSensor == null) SolveParameterPair(focalField, pixelField)
+        else focalField(if (compact) Modifier.fillMaxWidth() else Modifier.widthIn(max = 320.dp).fillMaxWidth())
+        if (automaticSensor != null) {
+            Text(
+                stringResource(R.string.solve_automatic_sensor_summary, automaticSensor.name,
+                    automaticSensor.pixelSizeUm, automaticSensor.widthPx, automaticSensor.heightPx),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.testTag("solve-automatic-sensor")
             )
-            ExposedDropdownMenu(
+        } else {
+            ExposedDropdownMenuBox(
                 expanded = menuOpen,
-                onDismissRequest = { menuOpen = false }
+                onExpandedChange = { if (enabled) menuOpen = it }
             ) {
-                sensors.forEach { sensor ->
-                    DropdownMenuItem(
-                        text = { Text(sensor.name) },
-                        onClick = {
-                            onSensorSelected(sensor)
-                            menuOpen = false
-                        }
-                    )
+                OutlinedTextField(
+                    value = selected?.name ?: stringResource(R.string.sensor_custom),
+                    onValueChange = {},
+                    readOnly = true,
+                    enabled = enabled,
+                    label = { Text(stringResource(R.string.fov_sensor)) },
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(menuOpen) },
+                    textStyle = if (compact) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.menuAnchor()
+                        .then(if (compact) Modifier else Modifier.widthIn(max = 320.dp))
+                        .fillMaxWidth().testTag("solve-sensor")
+                )
+                ExposedDropdownMenu(
+                    expanded = menuOpen,
+                    onDismissRequest = { menuOpen = false }
+                ) {
+                    sensors.forEach { sensor ->
+                        DropdownMenuItem(
+                            text = { Text(sensor.name) },
+                            onClick = {
+                                onSensorSelected(sensor)
+                                menuOpen = false
+                            }
+                        )
+                    }
                 }
             }
-        }
-        if (!compact && showPixelField) {
-            pixelField(Modifier.widthIn(max = 320.dp).fillMaxWidth())
-        } else if (!compact && selected != null) {
-            Text(
-                stringResource(
-                    R.string.sensor_pixel_summary,
-                    selected.pixelSizeUm,
-                    selected.widthPx,
-                    selected.heightPx
-                ),
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.outline
-            )
+            if (!compact && showPixelField) {
+                pixelField(Modifier.widthIn(max = 320.dp).fillMaxWidth())
+            } else if (!compact && selected != null) {
+                Text(
+                    stringResource(
+                        R.string.sensor_pixel_summary,
+                        selected.pixelSizeUm,
+                        selected.widthPx,
+                        selected.heightPx
+                    ),
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.outline
+                )
+            }
         }
         if (computedFovHeightDeg != null) {
             Text(
                 stringResource(R.string.computed_field_height_deg, computedFovHeightDeg),
                 fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.testTag("solve-fov")
+            )
+        } else if (focalLengthText.toDoubleOrNull()?.let { it.isFinite() && it > 0 } != true) {
+            Text(
+                stringResource(R.string.solve_need_focal_length),
+                fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.outline
             )
-        } else if (!compact || focalLengthText.toDoubleOrNull()?.let { it > 0 } != true ||
-            (if (showPixelField) pixelSizeText.toDoubleOrNull() else selected?.pixelSizeUm)?.let { it > 0 } != true) {
+        } else if (automaticSensor == null && (!compact ||
+            (if (showPixelField) pixelSizeText.toDoubleOrNull() else selected?.pixelSizeUm)?.let { it.isFinite() && it > 0 } != true)) {
             Text(
                 stringResource(R.string.plate_solve_need_optics),
                 fontSize = 12.sp,
@@ -163,8 +181,8 @@ fun formatPixelSizeUm(value: Double): String = "%.3f".format(Locale.US, value)
 
 fun pixelSizeForSensor(sensor: SensorSpec, typedPixelUm: Double?): Double? {
     return if (sensor.id == OpticsEquipment.CUSTOM_SENSOR_ID) {
-        typedPixelUm?.takeIf { it > 0.0 }
+        typedPixelUm?.takeIf { it.isFinite() && it > 0.0 }
     } else {
-        sensor.pixelSizeUm.takeIf { it > 0.0 }
+        sensor.pixelSizeUm.takeIf { it.isFinite() && it > 0.0 }
     }
 }

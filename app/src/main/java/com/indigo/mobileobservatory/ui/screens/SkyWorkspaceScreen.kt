@@ -7,6 +7,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -226,7 +227,8 @@ internal fun SkyWorkspaceScreen(viewModel: CameraViewModel, selectedTarget: Star
                 Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(stringResource(R.string.precision_goto_label), Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
-                        if (precisionGotoProgress.isActive) TextButton(onClick = viewModel::stopMountMotion) {
+                        if (precisionGotoProgress.isActive) TextButton(onClick = viewModel::stopMountMotion,
+                            modifier = Modifier.testTag("precision-goto-stop")) {
                             Text(stringResource(R.string.stop))
                         }
                         TextButton(onClick = { showPrecision = false; inspectPrecision = null }) { Text(stringResource(R.string.close)) }
@@ -237,7 +239,7 @@ internal fun SkyWorkspaceScreen(viewModel: CameraViewModel, selectedTarget: Star
                         error = precisionGotoProgress.message.takeIf { precisionGotoProgress.phase == com.indigo.mobileobservatory.mount.PrecisionGotoPhase.FAILED },
                         busy = precisionGotoProgress.isActive, onStop = viewModel::stopMountMotion,
                         inspectFile = inspectPrecision, onInspect = { inspectPrecision = it }, modifier = Modifier.weight(1f),
-                        previewSettings = cameraPreviewSettings.copy(monochrome = true))
+                        previewSettings = cameraPreviewSettings.copy(monochrome = true), showInlineStop = false)
                 }
             }
         }

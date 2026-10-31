@@ -26,7 +26,7 @@ class OfflineRegionInstrumentedTest {
             main { c.open(StackMode.PLANETARY); c.loadFile(source) }; phase(c, StackTaskPhase.READY)
             assertNotNull(c.sourcePreview.value)
             assertTrue(c.sourcePreview.value!!.width.toLong() * c.sourcePreview.value!!.height <= 262_144)
-            assertNotNull(c.offlinePlan()!!.issue(c.memoryBudgetBytes))
+            assertNull(c.offlinePlan()!!.issue(StackMemoryBudget.forHeap(512L shl 20)))
             assertNull(c.offlinePlan(softwareBin = 4)!!.issue(c.memoryBudgetBytes))
             main { c.analyze(null, false, 4) }; phase(c, StackTaskPhase.ANALYZED)
             main { c.stack(PlanetarySelection(count = 1)) }; phase(c, StackTaskPhase.COMPLETE)

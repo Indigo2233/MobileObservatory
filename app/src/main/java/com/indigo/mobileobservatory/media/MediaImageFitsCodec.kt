@@ -140,6 +140,7 @@ object MediaImageFitsCodec {
             val rawInteger = !displayNormalized && planes == 1 && scale == 1.0 &&
                 ((bitpix == 8 && zero == 0.0) || (bitpix == 16 && zero == 32768.0))
             val bits = if (bitpix == 8) 8 else h.intValue("VALIDBIT")?.takeIf { it in listOf(10, 12, 14, 16) } ?: 16
+            if (rawInteger && region.step > 1) return reducedCameraFrame(region,bits,check)
             if (rawInteger && region.step == 1) {
                 val bytes = region.width.toLong() * region.height * bytesPerSample
                 MediaImageMemory.check(bytes + region.width.toLong() * bytesPerSample)
@@ -172,6 +173,51 @@ object MediaImageFitsCodec {
             val gain = if (rawInteger && bitpix == 16 && bits < 16) 65535.0 / ((1 shl bits) - 1) else 1.0
             return image.cameraFrame(gain, displayNormalized, check)
         }
+
+        /** Average each CFA parity separately so reduced camera views keep the live raw
+         * histogram, white-balance and clipping order. Only one source row is retained. */
+        private fun reducedCameraFrame(region: MediaImageRegion,bits: Int,check: () -> Unit): CameraCfaLayout.Snapshot {
+            val w=region.outputWidth; val h=region.outputHeight
+            val size=w.toLong()*h*bytesPerSample
+            require(size<=Int.MAX_VALUE) { "memory_budget" }
+            MediaImageMemory.check(size+region.width.toLong()*bytesPerSample+w*12L)
+            val data=ByteArray(size.toInt())
+            val row=ByteBuffer.allocate(region.width*bytesPerSample).order(ByteOrder.BIG_ENDIAN)
+            val sums=LongArray(w); val counts=IntArray(w)
+            val mosaic=pattern!=null
+            val period=if(mosaic) 2 else 1
+            val cell=period.toLong()*region.step
+            for(y in 0 until h) {
+                sums.fill(0); counts.fill(0)
+                val firstY=((y/period)*cell+y%period).toInt()
+                val lastY=minOf((y/period+1)*cell,region.height.toLong()).toInt()
+                for(sy in firstY until lastY step period) {
+                    check(); row.clear()
+                    input.seek(this.h.dataOffset+((region.top+sy).toLong()*width+region.left)*bytesPerSample)
+                    input.readFully(row.array())
+                    for(sx in 0 until region.width) {
+                        val x=((sx/cell)*period+sx%period).toInt()
+                        if(x>=w) continue
+                        val code=if(bitpix==8) row.get(sx).toInt() and 255 else row.getShort(sx*2).toInt()+32768
+                        sums[x]+=code.toLong(); counts[x]++
+                    }
+                }
+                for(x in 0 until w) {
+                    val code=if(counts[x]>0) ((sums[x]+counts[x]/2)/counts[x]).toInt() else 0
+                    val i=(y*w+x)*bytesPerSample
+                    data[i]=code.toByte()
+                    if(bytesPerSample==2) data[i+1]=(code ushr 8).toByte()
+                }
+            }
+            val prefix=when(pattern) { "RGGB"->"BAYER_RG"; "GRBG"->"BAYER_GR";
+                "GBRG"->"BAYER_GB"; "BGGR"->"BAYER_BG"; else->"MONO" }
+            val traits=PixelTraits(validBits=bits,alignment=SampleAlignment.RIGHT,
+                roiX=region.left+(this.h.intValue("XBAYROFF")?:0),roiY=region.top+(this.h.intValue("YBAYROFF")?:0),
+                bayerPatternAtOutput=false)
+            val format=CameraCfaLayout.displayFormat(PixelFormat.valueOf("$prefix$bits"),traits)
+            return CameraCfaLayout.Snapshot(FrameData(data,w,h,format,0,0),traits.copy(bayerPatternAtOutput=true))
+        }
+
         override fun read(region: MediaImageRegion, check: () -> Unit): MediaImagePixels {
             require(region.left.toLong() + region.width <= width && region.top.toLong() + region.height <= height)
             if (region.step > 1) return readReduced(region, check)

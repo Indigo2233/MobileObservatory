@@ -171,7 +171,7 @@ class OfflineDeepSkyBufferTest {
         val full = OfflineRegionPlan(3856, 2180, PixelFormat.BAYER_RG16, PixelRoi(0, 0, 3856, 2180),
             DemosaicAlgorithm.DDFAPD, StackTarget.DEEP_SKY)
         assertTrue(full.workingBytes < 331L shl 20)
-        assertNotNull(full.issue(StackMemoryBudget.forHeap(512L shl 20)))
+        assertNull(full.issue(StackMemoryBudget.forHeap(512L shl 20)))
         assertNull(full.copy(softwareBin = 2).issue(StackMemoryBudget.forHeap(256L shl 20)))
         assertTrue(full.copy(softwareBin = 2).workingBytes < 93L shl 20)
         val crop = full.suggested(StackMemoryBudget.forHeap(256L shl 20))!!

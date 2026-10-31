@@ -16,7 +16,7 @@
     <string name="stack_roi_why">为什么有限制？</string>
     <string name="stack_roi_memory">当前估算 %1$d MiB / 预算 %2$d MiB</string>
     <string name="stack_roi_estimated_max">建议范围估算：%1$d MiB</string>
-    <string name="stack_roi_explanation" formatted="false">预算包含累积、配准、快照、去马赛克与校准。软件 Bin 在校准和去马赛克之后执行，这两步仍按采集尺寸占用内存。预算取系统允许的应用最大堆的 60%，不再固定限制为 256 MiB；另保留单图 1678 万像素、实时原始帧 32 MiB 的处理上限。这里显示的是估算，不是真机峰值测量；ROI 按相机控件的步进对齐。</string>
+    <string name="stack_roi_explanation" formatted="false">预算涵盖累积、配准、分块校准与去马赛克、缩略预览和完整分辨率导出。软件 Bin 在颜色重建后执行并保留视野。预算上限为应用堆的 80%，启动时还会为其他对象和内存回收保留空间。单图上限为 1678 万像素，实时原始帧上限为 32 MiB。裁切范围按相机控件的步进对齐。</string>
     <string name="stack_roi_manual">手动裁切</string>
     <string name="stack_roi_changed">配置已变化，请复核范围后重试。</string>
     <string name="stack_roi_capture_busy">正在拍照或获取参考帧，完成后可应用范围。</string>

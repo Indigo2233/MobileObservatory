@@ -23,7 +23,7 @@ class StackAutoStretchTest {
         val background=after[20*256+20]
         val center=after[64*256+128]
         println("AUTO_STRETCH background=$background target=$center priorTarget=${before[64*256+128]} recipe=$estimated")
-        assertTrue(background in .07f.. .3f)
+        assertTrue(background in .05f.. .25f)
         assertTrue(center>background+.2f)
         assertTrue("Diffuse target peak should retain display headroom",center<.995f)
         assertTrue(center>before[64*256+128]*10)

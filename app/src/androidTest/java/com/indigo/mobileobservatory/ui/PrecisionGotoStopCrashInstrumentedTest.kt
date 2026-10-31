@@ -50,7 +50,7 @@ class PrecisionGotoStopCrashInstrumentedTest {
         }
     }
 
-    private fun stopFromCenteringPanel(previewButton: Boolean = false) {
+    private fun stopFromCenteringPanel() {
         val stopInDialog = hasText(context.getString(R.string.stop)) and hasAnyAncestor(isDialog())
         try {
             compose.waitUntil(5000) { compose.onAllNodes(stopInDialog).fetchSemanticsNodes().isNotEmpty() }
@@ -60,7 +60,9 @@ class PrecisionGotoStopCrashInstrumentedTest {
             throw AssertionError("Panel STOP missing: ${vm.precisionGotoProgress.value}; motion=${vm.mountMotionState.value}\n$tree", failure)
         }
         val buttons = compose.onAllNodes(stopInDialog)
-        if (previewButton) buttons.onLast().performClick() else buttons.onFirst().performClick()
+        buttons.assertCountEquals(1)
+        compose.onNodeWithTag("polar-preview-stop").assertDoesNotExist()
+        compose.onNodeWithTag("precision-goto-stop").assertIsDisplayed().performClick()
         compose.waitUntil(10_000) {
             vm.precisionGotoProgress.value.phase == PrecisionGotoPhase.CANCELLED && !vm.mountMotionState.value.isActive
         }
@@ -86,10 +88,10 @@ class PrecisionGotoStopCrashInstrumentedTest {
     }
 
     @Test fun repeatedStopDuringFiveSecondExposureAndDuplicateStopsDoNotCrash() {
-        repeat(4) { pass ->
+        repeat(4) {
             beginCentering()
             compose.waitUntil(20_000) { vm.precisionSamples.samples.value[0].phase == PolarSamplePhase.CAPTURING }
-            stopFromCenteringPanel(previewButton = pass % 2 == 1)
+            stopFromCenteringPanel()
             compose.runOnIdle { repeat(3) { vm.stopMountMotion() } }
             compose.waitUntil(10_000) { !vm.mountBusy.value && !vm.mountMotionState.value.isActive }
             assertEquals(PolarSamplePhase.CANCELLED, vm.precisionSamples.samples.value[0].phase)
@@ -97,9 +99,26 @@ class PrecisionGotoStopCrashInstrumentedTest {
         }
     }
 
+    @Test fun closingThePanelKeepsGlobalStopAndProgressCanBeReopened() {
+        beginCentering()
+        compose.waitUntil(20_000) { vm.precisionSamples.samples.value[0].phase == PolarSamplePhase.CAPTURING }
+        compose.onNodeWithText(context.getString(R.string.close)).performClick()
+        compose.onNodeWithTag("precision-goto-stop").assertDoesNotExist()
+        compose.onNodeWithText("STOP").assertIsDisplayed()
+        compose.onNodeWithTag("precision-goto-details").assertIsDisplayed().performClick()
+        compose.onNodeWithTag("precision-goto-stop").assertIsDisplayed()
+        compose.onNodeWithTag("polar-preview-stop").assertDoesNotExist()
+        compose.onNodeWithText(context.getString(R.string.close)).performClick()
+        compose.onNodeWithText("STOP").performClick()
+        compose.waitUntil(10_000) {
+            vm.precisionGotoProgress.value.phase == PrecisionGotoPhase.CANCELLED && !vm.mountMotionState.value.isActive
+        }
+        assertFalse(compose.activity.isFinishing || compose.activity.isDestroyed)
+    }
+
     @Test fun stopDuringSolvingRetainsTheImageAndTheNextCenteringCanFinish() {
         val session = requireNotNull(vm.virtualObservation.value)
-        session.model.failedSolvesRemaining = 100
+        session.solveLatencyMs = 60_000
         beginCentering()
         compose.waitUntil(30_000) {
             val progress = vm.precisionGotoProgress.value
@@ -112,7 +131,7 @@ class PrecisionGotoStopCrashInstrumentedTest {
         compose.waitUntil(10_000) { compose.onAllNodesWithTag("polar-main-preview").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithTag("polar-main-preview").assertIsDisplayed()
         closePanelAndCheckNavigation()
-        session.model.failedSolvesRemaining = 0
+        session.solveLatencyMs = 200
         beginCentering()
         compose.waitUntil(30_000) { !vm.precisionGotoProgress.value.isActive }
         assertEquals(vm.precisionGotoProgress.value.message, PrecisionGotoPhase.SUCCEEDED, vm.precisionGotoProgress.value.phase)

@@ -24,6 +24,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.indigo.mobileobservatory.astrometry.*
 import com.indigo.mobileobservatory.astro.*
+import com.indigo.mobileobservatory.camera.CameraInfo
 import com.indigo.mobileobservatory.polar.*
 import com.indigo.mobileobservatory.mount.MountCoordinates
 import com.indigo.mobileobservatory.ui.screens.PolarAlignmentScreen
@@ -78,6 +79,7 @@ class PolarWorkflowScreenInstrumentedTest {
     }
 
     private fun screenshot(suffix: String = "") {
+        if (InstrumentationRegistry.getArguments().getString("captureScreenshots") != "true") return
         compose.waitForIdle()
         fun shell(command: String): String {
             val descriptor = InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command)
@@ -125,7 +127,9 @@ class PolarWorkflowScreenInstrumentedTest {
             CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale),
                 LocalContext provides localized, LocalConfiguration provides configuration) {
             Box(if (compact) Modifier.size(360.dp, 480.dp) else Modifier) {
-            PolarAlignmentScreen(cameraConnected = true, cameraPixelSizeUm = 2.9f, cameraExposureUs = 5_000_000f,
+            PolarAlignmentScreen(cameraConnected = true,
+                cameraInfo = CameraInfo("Test camera", "polar-test", 384, 256, 16, pixelSizeUm = 2.9f),
+                cameraExposureUs = 5_000_000f,
                 cameraExposureMinUs = 1000f, cameraExposureMaxUs = 20_000_000f,
                 mountCoordinates = if (automaticMount) MountCoordinates(10.0, 20.0) else null,
                 onEnsureMountTracking = prepareTracking,
@@ -253,10 +257,11 @@ class PolarWorkflowScreenInstrumentedTest {
         assertEquals(latitude.top, longitude.top, 1f)
         assertTrue(latitude.right <= longitude.left)
         compose.onNodeWithTag("solve-focal").performScrollTo()
-        val focal = compose.onNodeWithTag("solve-focal").fetchSemanticsNode().boundsInRoot
-        val pixel = compose.onNodeWithTag("solve-pixel").fetchSemanticsNode().boundsInRoot
-        assertEquals(focal.top, pixel.top, 1f)
-        assertTrue(focal.right <= pixel.left)
+        val focal = compose.onNodeWithTag("solve-focal").getUnclippedBoundsInRoot()
+        val sensor = compose.onNodeWithTag("solve-automatic-sensor").getUnclippedBoundsInRoot()
+        assertTrue(sensor.top >= focal.bottom)
+        compose.onNodeWithTag("solve-sensor").assertDoesNotExist()
+        compose.onNodeWithTag("solve-pixel").assertDoesNotExist()
         screenshot("-optics")
         compose.onNodeWithTag("solve-focal").performTextClearance()
         compose.onNodeWithTag("solve-focal").performTextInput("528")
@@ -279,7 +284,8 @@ class PolarWorkflowScreenInstrumentedTest {
         val longitude = compose.onNodeWithTag("polar-longitude").fetchSemanticsNode().boundsInRoot
         assertTrue(longitude.top >= latitude.bottom)
         compose.onNodeWithTag("solve-focal").performScrollTo().assertIsDisplayed()
-        compose.onNodeWithTag("solve-pixel").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("solve-automatic-sensor").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("solve-pixel").assertDoesNotExist()
         compose.onNodeWithTag("polar-mount-hint").performScrollTo().assertIsDisplayed().assertHasClickAction()
         screenshot("-advanced")
     }
@@ -293,7 +299,13 @@ class PolarWorkflowScreenInstrumentedTest {
     @Test fun largeFontDiagnosticsKeepsStopAvailableDuringAHangingSolve() =
         cancelHangingSolve("diagnostics", fontScale = 2f, compact = true)
 
-    private fun cancelHangingSolve(surface: String, fontScale: Float = 1f, compact: Boolean = false) {
+    @Test fun largeFontPreviewKeepsTheImageAndRetryActionVisibleDuringSolve() =
+        cancelHangingSolve("preview", fontScale = 2f, compact = true)
+
+    @Test fun largeFontEnglishPreviewKeepsTheImageAndRetryActionVisibleDuringSolve() =
+        cancelHangingSolve("preview", fontScale = 2f, compact = true, chinese = false)
+
+    private fun cancelHangingSolve(surface: String, fontScale: Float = 1f, compact: Boolean = false, chinese: Boolean = true) {
         val started = AtomicBoolean()
         val cancelled = AtomicBoolean()
         val captures = AtomicInteger()
@@ -305,27 +317,33 @@ class PolarWorkflowScreenInstrumentedTest {
                 try { awaitCancellation() } finally { cancelled.set(true) }
             }
         }
-        screen(engine, fontScale = fontScale, compact = compact) { captures.incrementAndGet(); image }
+        screen(engine, fontScale = fontScale, compact = compact, chinese = chinese) { captures.incrementAndGet(); image }
         compose.onNodeWithTag("polar-run").performScrollTo().performClick()
         compose.waitUntil(15_000) { started.get() }
+        compose.waitUntil(15_000) { compose.onAllNodesWithTag("polar-main-preview").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("polar-main-preview").assertIsDisplayed()
+        val stopText = if (chinese) "放弃解析并重试" else context.getString(com.indigo.mobileobservatory.R.string.polar_abandon_solve_retry)
         when (surface) {
             "diagnostics" -> {
                 compose.onNodeWithTag("polar-diagnostics-expand").performClick()
                 screenshot("-before-stop")
-                compose.onNodeWithTag("polar-diagnostics-stop").assertIsDisplayed().performClick()
+                compose.onNodeWithTag("polar-diagnostics-stop").assertTextEquals(stopText).assertIsDisplayed().performClick()
             }
             "fullscreen" -> {
                 compose.onNodeWithTag("polar-preview-expand").performClick()
                 screenshot("-before-stop")
-                compose.onNodeWithTag("polar-inspection-stop").assertIsDisplayed().performClick()
+                compose.onNodeWithTag("polar-inspection-stop").assertTextEquals(stopText).assertIsDisplayed().performClick()
                 compose.onNodeWithTag("polar-preview-close").performClick()
             }
             else -> {
                 screenshot("-before-stop")
-                compose.onNodeWithTag("polar-preview-stop").assertIsDisplayed().performClick()
+                compose.onNodeWithTag("polar-preview-stop").assertTextEquals(stopText).assertIsDisplayed().performClick()
             }
         }
         compose.waitUntil(5000) { cancelled.get() }
+        compose.onNodeWithTag("polar-retry-current").performScrollTo().assertIsEnabled()
+        compose.onNodeWithTag("polar-recapture-current").performScrollTo().assertIsEnabled()
+        compose.onNodeWithTag("polar-select-current").performScrollTo().assertIsEnabled()
         compose.onNodeWithTag("polar-run").performScrollTo().assertIsEnabled()
         assertEquals(1, captures.get())
     }

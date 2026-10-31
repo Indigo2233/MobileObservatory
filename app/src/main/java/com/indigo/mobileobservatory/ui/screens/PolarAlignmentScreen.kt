@@ -61,7 +61,7 @@ import com.indigo.mobileobservatory.astrometry.solveWithFallback
 import com.indigo.mobileobservatory.astro.ObserverSite
 import com.indigo.mobileobservatory.astro.OpticsEquipment
 import com.indigo.mobileobservatory.astro.RefractionParameters
-import com.indigo.mobileobservatory.astro.SensorSpec
+import com.indigo.mobileobservatory.camera.CameraInfo
 import com.indigo.mobileobservatory.mount.MountCoordinates
 import com.indigo.mobileobservatory.mount.MountSite
 import com.indigo.mobileobservatory.permissions.AppSettingsNavigator
@@ -110,7 +110,8 @@ fun PolarAlignmentScreen(
     mountBusy: Boolean = false,
     mountMoveStatus: String = "",
     mountStopSignal: Long = 0L,
-    cameraPixelSizeUm: Float? = null,
+    cameraInfo: CameraInfo? = null,
+    cameraFrameHints: FitsSolveHints = PlateSolveOptics.cameraHints(cameraInfo),
     cameraConnected: Boolean = false,
     cameraPreviewBitmap: Bitmap? = null,
     cameraExposureUs: Float? = null,
@@ -174,12 +175,10 @@ fun PolarAlignmentScreen(
     var pixelSizeText by rememberSaveable {
         mutableStateOf(
             prefs.getFloat("plate_pixel_size_um", 0f).takeIf { it > 0f }?.let { formatPixelSizeUm(it.toDouble()) }
-                ?: cameraPixelSizeUm?.takeIf { it > 0f }?.let { formatPixelSizeUm(it.toDouble()) }
                 ?: ""
         )
     }
     var selectedSensorId by rememberSaveable { mutableStateOf(prefs.getString("plate_sensor_id", "") ?: "") }
-    var computedFovDeg by remember { mutableStateOf<Double?>(null) }
     var manualMode by rememberSaveable { mutableStateOf(prefs.getBoolean("polar_manual_mode", false)) }
     var automaticRefresh by rememberSaveable { mutableStateOf(prefs.getBoolean("polar_automatic_refresh", true)) }
     var eastDirection by rememberSaveable { mutableStateOf(prefs.getBoolean("polar_east_direction", true)) }
@@ -215,17 +214,27 @@ fun PolarAlignmentScreen(
     val solves = samples.take(3).map { it.result }
     val solvedAt = samples.take(3).map { it.capturedAt }
     var showParameters by rememberSaveable { mutableStateOf(!prefs.contains("polar_latitude_deg") ||
-        prefs.getFloat("plate_focal_length_mm", 0f) <= 0f || (pixelSizeText.toDoubleOrNull() ?: 0.0) <= 0.0) }
+        prefs.getFloat("plate_focal_length_mm", 0f) <= 0f ||
+        (cameraInfo?.pixelSizeUm?.takeIf { cameraConnected && it.isFinite() && it > 0f }?.toDouble()
+            ?: pixelSizeText.toDoubleOrNull() ?: 0.0) <= 0.0) }
 
-    val connectedSensorName = stringResource(R.string.connected_camera_sensor)
-    val sensors = remember(cameraPixelSizeUm, connectedSensorName) {
-        buildList {
-            cameraPixelSizeUm?.toDouble()?.takeIf { it > 0.0 }?.let { px ->
-                add(SensorSpec(OpticsEquipment.CONNECTED_SENSOR_ID, connectedSensorName, px, 0, 0))
-            }
-            addAll(OpticsEquipment.defaultSensors)
+    val connectedSensor = remember(cameraInfo, cameraConnected) {
+        cameraInfo?.takeIf { cameraConnected }?.let {
+            OpticsEquipment.connectedSensor(it.pixelSizeUm, it.sensorWidth, it.sensorHeight, it.name)
         }
     }
+    val sensors = remember(connectedSensor) { listOfNotNull(connectedSensor) + OpticsEquipment.defaultSensors }
+    val selectedSample = samples.getOrNull(selectedSlot)
+    val selectedFile = selectedSample?.file
+    val loadedHints by produceState<Pair<File?, FitsSolveHints>?>(null, selectedFile) {
+        value = selectedFile to if (selectedFile != null) {
+            withContext(Dispatchers.IO) { FitsSolveHintReader.read(selectedFile) }
+        } else FitsSolveHints()
+    }
+    val imageHints = loadedHints?.takeIf { it.first == selectedFile }?.second ?: FitsSolveHints()
+    val previewFromCamera = cameraConnected && selectedSample?.imported != true
+    val automaticSensor = if (previewFromCamera) connectedSensor
+        else PlateSolveOptics.imageSensor(imageHints, stringResource(R.string.solve_image_sensor))
 
     fun reportFailure(message: String, exposeSettings: Boolean = false) {
         error = message
@@ -241,19 +250,20 @@ fun PolarAlignmentScreen(
         }.apply()
     }
 
-    fun solveConfiguration(): PolarSolveConfiguration {
-        val sensor = sensors.firstOrNull { it.id == selectedSensorId }
-        val typedPixel = pixelSizeText.toDoubleOrNull()?.takeIf { it > 0.0 }
+    fun solveConfiguration(fromCamera: Boolean = true): PolarSolveConfiguration {
+        val sensor = connectedSensor.takeIf { fromCamera } ?: sensors.firstOrNull { it.id == selectedSensorId }
+        val typedPixel = pixelSizeText.toDoubleOrNull()?.takeIf { it.isFinite() && it > 0.0 }
         val pixel = sensor?.let { pixelSizeForSensor(it, typedPixel) } ?: typedPixel
         val catalogHeight = sensor?.heightPx?.takeIf {
             sensor.id != OpticsEquipment.CUSTOM_SENSOR_ID && it > 0
         } ?: 0
-        val focal = focalLengthText.toDoubleOrNull()?.takeIf { it > 0.0 }
+        val focal = focalLengthText.toDoubleOrNull()?.takeIf { it.isFinite() && it > 0.0 }
         return PolarSolveConfiguration(focal, pixel, catalogHeight, useMountHint,
             searchRadiusText.toDoubleOrNull()?.coerceIn(.1, 180.0) ?: 30.0, blindFallback)
     }
 
-    fun currentAstapFov(hints: FitsSolveHints = FitsSolveHints()): Double? = solveConfiguration().fieldOfView(hints)
+    val computedFovDeg = solveConfiguration(fromCamera = previewFromCamera)
+        .fieldOfView(if (previewFromCamera) cameraFrameHints else imageHints)
 
     suspend fun settledCapture(exposure: Float): File? {
         if (!manualMode) {
@@ -344,6 +354,7 @@ fun PolarAlignmentScreen(
     }
 
     fun runSingleSample(index: Int, recapture: Boolean, blind: Boolean = false) {
+        if (taskBusy || mountBusy) return
         val exposure = requestedExposureUs
         if (recapture && exposure == null) {
             reportFailure(context.getString(R.string.polar_exposure_out_of_range, cameraExposureMinUs / 1_000_000f, cameraExposureMaxUs / 1_000_000f))
@@ -359,7 +370,7 @@ fun PolarAlignmentScreen(
         if (recapture && index != sampleModel.positionedPoint || index < sampleModel.positionedPoint) sampleModel.canResume = false
         if (blind) useMountHint = false
         persistSolveOptics()
-        val configuration = solveConfiguration()
+        val configuration = solveConfiguration(fromCamera = recapture)
         showParameters = false
         workflowTask.start(stopMotionOnFinish = false) {
             solvingSlot = index
@@ -398,28 +409,16 @@ fun PolarAlignmentScreen(
             }
     }
 
-    LaunchedEffect(sensors, selectedSensorId, cameraPixelSizeUm) {
-        if (selectedSensorId.isNotBlank() && sensors.any { it.id == selectedSensorId }) return@LaunchedEffect
-        selectedSensorId = when {
-            cameraPixelSizeUm != null && cameraPixelSizeUm > 0f -> OpticsEquipment.CONNECTED_SENSOR_ID
-            else -> OpticsEquipment.matchCatalogSensor(pixelSizeUm = pixelSizeText.toDoubleOrNull())?.id
+    LaunchedEffect(sensors, selectedSensorId) {
+        if (sensors.none { it.id == selectedSensorId }) {
+            selectedSensorId = OpticsEquipment.matchCatalogSensor(pixelSizeUm = pixelSizeText.toDoubleOrNull())?.id
                 ?: OpticsEquipment.CUSTOM_SENSOR_ID
-        }
-    }
-
-    LaunchedEffect(focalLengthText, pixelSizeText, selectedSensorId, files.toList()) {
-        val file = files.getOrNull(selectedSlot)
-        val hints = if (file != null) {
-            withContext(Dispatchers.IO) { FitsSolveHintReader.read(file) }
-        } else {
-            FitsSolveHints()
         }
         val sensor = sensors.firstOrNull { it.id == selectedSensorId }
         if (sensor != null && sensor.id != OpticsEquipment.CUSTOM_SENSOR_ID) {
             val formatted = formatPixelSizeUm(sensor.pixelSizeUm)
             if (pixelSizeText != formatted) pixelSizeText = formatted
         }
-        computedFovDeg = currentAstapFov(hints)
     }
 
     val manualAdvanceState = rememberUpdatedState(manualAdvanceRequested)
@@ -521,7 +520,17 @@ fun PolarAlignmentScreen(
         }
     }
 
-    val latestSample = samples.maxByOrNull { it.displaySequence }?.takeIf { it.displaySequence > 0 }
+    val latestEntry = samples.withIndex().maxByOrNull { it.value.displaySequence }?.takeIf { it.value.displaySequence > 0 }
+    val latestSample = latestEntry?.value
+    val retryIndex = latestEntry?.takeIf { it.index < PolarSampleSession.PREVIEW_INDEX &&
+        it.value.phase == PolarSamplePhase.CANCELLED && it.value.failedPhase == PolarSamplePhase.SOLVING &&
+        it.value.file != null }?.index
+    val controlsScroll = rememberScrollState()
+    LaunchedEffect(retryIndex, taskBusy, mountBusy) {
+        if (retryIndex != null && !taskBusy && !mountBusy) controlsScroll.scrollTo(0)
+    }
+    val stopLabel = stringResource(if (taskBusy && latestSample?.phase == PolarSamplePhase.SOLVING)
+        R.string.polar_abandon_solve_retry else R.string.stop)
     val adjustment = sampleModel.adjustment
     val previewEntry = (samples.withIndex().filter { it.value.file != null } +
         listOfNotNull(adjustment?.sample?.let { IndexedValue(if (it == samples[2]) 2 else 3, it) }))
@@ -572,7 +581,9 @@ fun PolarAlignmentScreen(
                         stringResource(R.string.polar_previous_image, previewLabel) else previewLabel
                     PolarWorkflowPreview(file = previewFile, label = label, livePreview = cameraPreviewBitmap,
                         previewSettings = alignmentPreviewSettings,
-                        sample = latestSample, status = workflowStatus, error = error, busy = taskBusy || mountBusy,
+                        sample = latestSample,
+                        status = if (retryIndex != null && !taskBusy) stringResource(R.string.polar_solve_abandoned) else workflowStatus,
+                        error = error, busy = taskBusy || mountBusy, stopLabel = stopLabel,
                         onStop = {
                             if (taskBusy) stopTask() else onStopMountRaMove()
                             workflowStatus = context.getString(R.string.stopped)
@@ -580,9 +591,28 @@ fun PolarAlignmentScreen(
                 },
                 controls = { modifier ->
                     Column(
-                        modifier = modifier.verticalScroll(rememberScrollState()).padding(12.dp),
+                        modifier = modifier.verticalScroll(controlsScroll).padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
+                        if (retryIndex != null && !taskBusy && !mountBusy) {
+                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.testTag("polar-retry-actions")) {
+                                Button(onClick = { runSingleSample(retryIndex, recapture = false) },
+                                    modifier = Modifier.testTag("polar-retry-current")) {
+                                    Text(stringResource(R.string.polar_retry_solve))
+                                }
+                                if (cameraConnected && (retryIndex == 3 || retryIndex == sampleModel.positionedPoint)) {
+                                    OutlinedButton(onClick = { runSingleSample(retryIndex, recapture = true) },
+                                        modifier = Modifier.testTag("polar-recapture-current")) {
+                                        Text(stringResource(R.string.polar_recapture_sample))
+                                    }
+                                }
+                                TextButton(onClick = { selectedSlot = retryIndex; imagePickerSlot = retryIndex },
+                                    modifier = Modifier.testTag("polar-select-current")) {
+                                    Text(stringResource(R.string.polar_choose_image))
+                                }
+                            }
+                        }
                         PolarExposureControls(seconds = exposureSeconds, onSecondsChange = {
                             exposureSeconds = it
                             prefs.edit().putString("polar_exposure_seconds", it).apply()
@@ -819,7 +849,7 @@ fun PolarAlignmentScreen(
                                         },
                                         enabled = taskBusy || mountBusy,
                                         modifier = Modifier.testTag("polar-stop")
-                                    ) { Text(stringResource(R.string.stop)) }
+                                    ) { Text(stopLabel) }
                                 }
                                 if (!taskBusy && samples.any { it.file != null || it.failure != null }) {
                                     TextButton(onClick = {
@@ -962,7 +992,8 @@ fun PolarAlignmentScreen(
                                         sensors = sensors,
                                         computedFovHeightDeg = computedFovDeg,
                                         enabled = parametersEnabled,
-                                        compact = true
+                                        compact = true,
+                                        automaticSensor = automaticSensor
                                     )
                                 }
 

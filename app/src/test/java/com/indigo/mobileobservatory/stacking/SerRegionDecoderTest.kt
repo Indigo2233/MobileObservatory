@@ -215,10 +215,10 @@ class SerRegionDecoderTest {
     }
 
     @Test fun budgetsFollowHeapAndTiledOutputInsteadOfFullNativeDdfapdPlanes() {
-        assertEquals(1024L * 1024 * 1024 / 5 * 3, StackMemoryBudget.forHeap(1024L * 1024 * 1024))
-        assertEquals(512L * 1024 * 1024 / 5 * 3, StackMemoryBudget.forHeap(512L * 1024 * 1024))
-        assertEquals(256L * 1024 * 1024 / 5 * 3, StackMemoryBudget.forHeap(256L * 1024 * 1024))
-        assertEquals(128L * 1024 * 1024 / 5 * 3, StackMemoryBudget.forHeap(128L * 1024 * 1024))
+        assertEquals(1024L * 1024 * 1024 / 5 * 4, StackMemoryBudget.forHeap(1024L * 1024 * 1024))
+        assertEquals(512L * 1024 * 1024 / 5 * 4, StackMemoryBudget.forHeap(512L * 1024 * 1024))
+        assertEquals(256L * 1024 * 1024 / 5 * 4, StackMemoryBudget.forHeap(256L * 1024 * 1024))
+        assertEquals(128L * 1024 * 1024 / 5 * 4, StackMemoryBudget.forHeap(128L * 1024 * 1024))
         assertTrue(StackMemoryBudget.forHeap(1024L * 1024 * 1024) > 256L * 1024 * 1024)
         assertEquals(84L * 1000 * 1000 + 8L * 1024 * 1024, PlanetaryStacker.estimatedPeakBytes(1000, 1000, 3, boundedDecode = true))
         val reusable = PlanetaryStacker.estimatedPeakBytes(3856, 2180, 3, boundedDecode = true, reusableInput = true)

@@ -12,13 +12,14 @@ data class StackProcessingParameters(
     val autoWhiteBalance: Boolean = false, val redBalance: Double = 1.0, val blueBalance: Double = 1.0,
     val saturation: Double = 1.0, val background: BackgroundParameters = BackgroundParameters(),
     val stretchEnabled: Boolean = true, val whiteBalanceEnabled: Boolean = true,
-    val saturationEnabled: Boolean = true
+    val saturationEnabled: Boolean = true,
+    val displayVersion: Int = 2
 ) {
     companion object {
         fun preset(preset: ProcessingPreset): StackProcessingParameters = when(preset) {
             ProcessingPreset.RAW -> StackProcessingParameters(preset,curve = 0.0,highlightCompression = 0.0)
-            ProcessingPreset.NATURAL -> StackProcessingParameters(preset)
-            ProcessingPreset.INTENSE -> StackProcessingParameters(preset,midtone = .25,curve = 80.0,localContrast = .15,highlightCompression = .65)
+            ProcessingPreset.NATURAL -> StackProcessingParameters(preset,autoWhiteBalance = true)
+            ProcessingPreset.INTENSE -> StackProcessingParameters(preset,midtone = .25,curve = 80.0,localContrast = .15,highlightCompression = .65,autoWhiteBalance = true)
         }
     }
 }
@@ -125,7 +126,8 @@ class PreparedStack internal constructor(
     private fun mapToneExact(value: Double): Double {
         var mapped = value.coerceIn(0.0,1.0)
         if (parameters.stretchEnabled) {
-            mapped = ((value-parameters.blackPoint)/range).coerceIn(0.0,1.0)
+            mapped = ((value-parameters.blackPoint)/range).coerceAtLeast(0.0)
+            if (parameters.displayVersion == 1) mapped = mapped.coerceAtMost(1.0)
             mapped = mapNormalizedToneExact(mapped)
         }
         return mapped.coerceIn(0.0,1.0)
@@ -133,16 +135,19 @@ class PreparedStack internal constructor(
 
     private fun mapNormalizedToneExact(normalized: Double): Double {
         var mapped = if (parameters.curve > 0) asinh(parameters.curve*normalized)/curveNorm else normalized
+        if (parameters.displayVersion >= 2) mapped = compressHighlights(mapped,parameters.highlightCompression)
         val m = parameters.midtone
         mapped = if (mapped <= 0 || mapped >= 1) mapped else ((m-1)*mapped)/((2*m-1)*mapped-m)
         mapped = 1.0-(1.0-mapped).pow(parameters.brightness)
+        if (parameters.displayVersion >= 2) return mapped
         val shoulder = parameters.highlightCompression
         return (1-shoulder)*mapped+shoulder*(1-exp(-2*mapped))/(1-exp(-2.0))
     }
 
     private fun mapTonePreview(value: Double,toneLut: FloatArray): Double {
-        val normalized = ((value-parameters.blackPoint)/range).coerceIn(0.0,1.0)
+        val normalized = ((value-parameters.blackPoint)/range).coerceAtLeast(0.0)
         if (normalized <= 0.0) return toneLut[0].toDouble()
+        if (normalized > 1.0 && parameters.displayVersion >= 2) return mapNormalizedToneExact(normalized).coerceIn(0.0,1.0)
         if (normalized >= 1.0) return toneLut[PREVIEW_TONE_LUT_INTERVALS].toDouble()
         val position = normalized*PREVIEW_TONE_LUT_INTERVALS
         val index = position.toInt()
@@ -163,6 +168,14 @@ class PreparedStack internal constructor(
     private companion object {
         const val PREVIEW_TONE_LUT_INTERVALS = 8192
     }
+}
+
+/** Unit slope at the knee; finite highlights above the display white retain their ordering. */
+internal fun compressHighlights(value: Double, strength: Double): Double {
+    if (strength <= 0.0) return value.coerceIn(0.0,1.0)
+    val knee = 1.0-strength
+    if (value <= knee) return value.coerceAtLeast(0.0)
+    return knee+strength*(value-knee)/(value-knee+strength)
 }
 interface StackProcessingResult {
     val parameters: StackProcessingParameters
@@ -201,14 +214,14 @@ object StackPostProcessor {
         require(parameters.midtone in .01.. .99 && parameters.curve in 0.0..200.0 && parameters.brightness in .05..8.0)
         require(parameters.sharpening in 0.0..2.0 && parameters.localContrast in 0.0..1.0 && parameters.highlightCompression in 0.0..1.0)
         require(parameters.redBalance in .25..4.0 && parameters.blueBalance in .25..4.0 && parameters.saturation in 0.0..2.0)
+        require(parameters.displayVersion in 1..2) { "Unsupported display processing version" }
         if (cancelled()) throw CancellationException("Processing cancelled")
         if (parameters.preset == ProcessingPreset.RAW) return PreparedStack(BackgroundPixels(linear,null),parameters,
             null,doubleArrayOf(1.0,1.0,1.0),null,null,null,0.0,start)
-        val bg = if (parameters.background.enabled) backgroundCache?.model(linear,parameters.background,cancelled)
-            ?: BackgroundGradient.estimate(linear,parameters.background,cancelled) else null
-        val source = BackgroundPixels(linear,bg)
+        val source = displaySource(linear,parameters,backgroundCache,cancelled)
+        val bg = source.model
         val count = linear.pixelCount
-        val gains = whiteBalance(source,parameters)
+        val gains = whiteBalance(source,parameters,cancelled)
         val filters = parameters.sharpening > 0 || parameters.localContrast > 0
         val luma = if (filters) FloatArray(count) else null
         if (luma != null) for (p in 0 until count) {
@@ -233,18 +246,37 @@ object StackPostProcessor {
         if (source.image.channels == 1) source.sample(p,0).toDouble()
         else source.sample(p,0)*gains[0]*.2126+source.sample(p,1)*gains[1]*.7152+source.sample(p,2)*gains[2]*.0722
 
-    private fun whiteBalance(source:BackgroundPixels,p:StackProcessingParameters):DoubleArray {
+    internal fun displaySource(linear: LinearImage,parameters: StackProcessingParameters,
+                               backgroundCache: BackgroundModelCache? = null,cancelled: () -> Boolean = { false }): BackgroundPixels {
+        val bg = if (parameters.background.enabled) backgroundCache?.model(linear,parameters.background,cancelled)
+            ?: BackgroundGradient.estimate(linear,parameters.background,cancelled) else null
+        return BackgroundPixels(linear,bg)
+    }
+
+    internal fun whiteBalance(source:BackgroundPixels,p:StackProcessingParameters,
+                              cancelled: () -> Boolean = { false }):DoubleArray {
         val image = source.image
         if (!p.whiteBalanceEnabled) return doubleArrayOf(1.0,1.0,1.0)
         val gains=doubleArrayOf(p.redBalance,1.0,p.blueBalance)
         if(!p.autoWhiteBalance || image.channels!=3) return gains
         val ratiosR=ArrayList<Double>(); val ratiosB=ArrayList<Double>()
         val count=image.width*image.height; val stride=max(1,count/20000)
-        val levels=ArrayList<Double>(); for(i in 0 until count step stride) levels+=source.luminance(i)
-        levels.sort(); val low=levels[(levels.size*.30).toInt()]; val high=levels[(levels.size*.95).toInt()]
+        val levels=ArrayList<Double>()
         for(i in 0 until count step stride) {
+            if (i/stride%1024 == 0 && cancelled()) throw CancellationException("White balance cancelled")
+            val level=source.luminance(i)
+            if(p.displayVersion==1 || level.isFinite() && level>0) levels+=level
+        }
+        if(levels.size<16) return gains
+        levels.sort(); val low=levels[(levels.size*.30).toInt()]
+        val high=levels[(levels.size*(if(p.displayVersion==1) .95 else .70)).toInt()]
+        for(i in 0 until count step stride) {
+            if (i/stride%1024 == 0 && cancelled()) throw CancellationException("White balance cancelled")
             val r=source.sample(i,0).toDouble(); val g=source.sample(i,1).toDouble(); val b=source.sample(i,2).toDouble(); val l=source.luminance(i)
-            if(l>max(.0001,low) && l<=high && max(r,max(g,b))<.95 && min(r,min(g,b))>.0001) { ratiosR+=g/r; ratiosB+=g/b }
+            val floor=if(p.displayVersion==1) .0001 else 1e-8
+            val aboveLow=if(p.displayVersion==1) l>max(floor,low) else l>=max(floor,low)
+            if(aboveLow && l<=high && r.isFinite() && g.isFinite() && b.isFinite() &&
+                max(r,max(g,b))<.95 && min(r,min(g,b))>floor) { ratiosR+=g/r; ratiosB+=g/b }
         }
         if(ratiosR.size>=16) { gains[0]*=StarRegistration.median(ratiosR).coerceIn(.5,2.0); gains[2]*=StarRegistration.median(ratiosB).coerceIn(.5,2.0) }
         return gains

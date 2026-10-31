@@ -11,6 +11,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -118,7 +119,15 @@ internal fun PolarExposureControls(
     if (!connected) Text(stringResource(R.string.polar_capture_no_camera), style = MaterialTheme.typography.bodySmall)
 }
 
+private data class PolarPreviewLoadState(
+    val image: PreparedCameraPreview? = null,
+    val format: String? = null,
+    val error: String? = null,
+    val loading: Boolean = false
+)
+
 /** A dialog pins its source, so subsequent captures cannot replace the image being inspected. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun PolarWorkflowPreview(
     file: File?,
@@ -133,39 +142,55 @@ internal fun PolarWorkflowPreview(
     onInspect: (File?) -> Unit,
     adjustment: PolarAdjustmentSnapshot? = null,
     modifier: Modifier = Modifier,
-    previewSettings: CameraPreviewSettings = CameraPreviewSettings()
+    previewSettings: CameraPreviewSettings = CameraPreviewSettings(),
+    stopLabel: String? = null,
+    showInlineStop: Boolean = true
 ) {
+    val stopText = stopLabel ?: stringResource(R.string.stop)
+    val prominentStop = busy && showInlineStop && stopText != stringResource(R.string.stop)
     val source = inspectFile ?: file
     val pinnedAdjustment = remember(inspectFile) { adjustment?.takeIf { it.file == inspectFile } }
     val imageAdjustment = (if (inspectFile != null) pinnedAdjustment else adjustment)?.takeIf { it.file == source }
     val overlayColors = polarOverlayColors()
     val key = source?.let { "${it.absolutePath}:${it.length()}:${it.lastModified()}" }
-    var prepared by remember(key, previewSettings) { mutableStateOf<PreparedCameraPreview?>(null) }
-    var bitmap by remember(key, previewSettings) { mutableStateOf<Bitmap?>(null) }
-    var loading by remember(key, previewSettings) { mutableStateOf(source != null) }
-    var previewError by remember(key, previewSettings) { mutableStateOf<String?>(null) }
-    var inputFormat by remember(key) { mutableStateOf<String?>(null) }
+    var loadState by remember(key, previewSettings) { mutableStateOf(PolarPreviewLoadState(loading = source != null)) }
+    val prepared = loadState.image
+    val bitmap = prepared?.bitmap
+    val loading = loadState.loading
+    val previewError = loadState.error
+    val inputFormat = loadState.format
     LaunchedEffect(key, previewSettings) {
         if (source == null) return@LaunchedEffect
         val task = currentCoroutineContext()
         var owned: Bitmap? = null
         var published = false
+        var detectedFormat: String? = null
+        suspend fun publish(state: PolarPreviewLoadState) = withContext(Dispatchers.Main.immediate) {
+            ensureActive()
+            loadState = state
+        }
         try {
             val image = withContext(Dispatchers.IO) {
-                inputFormat = if (source.extension.lowercase() in setOf("fit", "fits")) {
+                detectedFormat = if (source.extension.lowercase() in setOf("fit", "fits")) {
                     val header = com.indigo.mobileobservatory.util.FitsHeaderParser.read(source)
                     header.solveInputFormat()
                 } else source.extension.uppercase()
                 val decoded = CameraImagePreview.prepare(source, previewSettings, cancelled = { !task.isActive })
                 owned = decoded.bitmap
-                decoded
+                PolarPreviewLoadState(image = decoded, format = detectedFormat)
             }
-            ensureActive()
-            prepared = image; bitmap = owned; published = true
+            withContext(Dispatchers.Main.immediate) {
+                ensureActive()
+                loadState = image
+                published = true
+            }
         } catch (cancel: CancellationException) { throw cancel
-        } catch (_: OutOfMemoryError) { previewError = "memory"
-        } catch (failure: Exception) { previewError = failure.message ?: failure.javaClass.simpleName
-        } finally { loading = false; if (!published) owned?.recycle() }
+        } catch (_: OutOfMemoryError) { publish(PolarPreviewLoadState(format = detectedFormat, error = "memory"))
+        } catch (failure: Exception) {
+            publish(PolarPreviewLoadState(format = detectedFormat, error = failure.message ?: failure.javaClass.simpleName))
+        } finally {
+            if (!published) owned?.recycle()
+        }
     }
     // Published bitmaps can still be referenced by a Compose draw node/render thread
     // after disposal. Let the runtime release them once those references disappear.
@@ -183,13 +208,21 @@ internal fun PolarWorkflowPreview(
         val footerMaxHeight = if (adjustment != null) minOf(220.dp, maxHeight * .43f) else minOf(144.dp, maxHeight * .52f)
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(label, Modifier.weight(1f), style = MaterialTheme.typography.labelLarge, maxLines = 1,
-                    overflow = TextOverflow.Ellipsis)
-                if (busy) OutlinedButton(onClick = onStop, modifier = Modifier.testTag("polar-preview-stop")) {
-                    Text(stringResource(R.string.stop))
+                if (prominentStop) {
+                    OutlinedButton(onClick = onStop,
+                        modifier = Modifier.weight(1f).testTag("polar-preview-stop")) { Text(stopText) }
+                    IconButton(onClick = { source?.let { onInspect(it) } }, enabled = source?.isFile == true,
+                        modifier = Modifier.testTag("polar-preview-expand")) {
+                        Icon(Icons.Default.Fullscreen, stringResource(R.string.polar_view_sample))
+                    }
+                } else {
+                    Text(label, Modifier.weight(1f), style = MaterialTheme.typography.labelLarge, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis)
+                    if (busy && showInlineStop) OutlinedButton(onClick = onStop,
+                        modifier = Modifier.testTag("polar-preview-stop")) { Text(stopText) }
+                    TextButton(onClick = { source?.let { onInspect(it) } }, enabled = source?.isFile == true,
+                        modifier = Modifier.testTag("polar-preview-expand")) { Text(stringResource(R.string.polar_view_sample)) }
                 }
-                TextButton(onClick = { source?.let { onInspect(it) } }, enabled = source?.isFile == true,
-                    modifier = Modifier.testTag("polar-preview-expand")) { Text(stringResource(R.string.polar_view_sample)) }
                 if (source != null || details != null || error != null) IconButton(onClick = {
                     diagnosticSample = sample?.takeIf { it.result != null } ?: lastFailure ?: sample
                     diagnosticError = error
@@ -253,9 +286,9 @@ internal fun PolarWorkflowPreview(
                 style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace) } },
             confirmButton = { TextButton(onClick = { showLog = false }) { Text(stringResource(R.string.close)) } },
             dismissButton = {
-                Row {
+                FlowRow {
                     if (busy) TextButton(onClick = { onStop(); showLog = false },
-                        modifier = Modifier.testTag("polar-diagnostics-stop")) { Text(stringResource(R.string.stop)) }
+                        modifier = Modifier.testTag("polar-diagnostics-stop")) { Text(stopText) }
                     TextButton(onClick = { clipboard.setText(AnnotatedString(diagnostics)) }) {
                         Text(stringResource(R.string.polar_copy_diagnostics))
                     }
@@ -270,11 +303,10 @@ internal fun PolarWorkflowPreview(
                 Column {
                     Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(stringResource(R.string.polar_image_inspection), Modifier.weight(1f))
-                        if (busy) TextButton(onClick = onStop, modifier = Modifier.testTag("polar-inspection-stop")) {
-                            Text(stringResource(R.string.stop))
-                        }
                         TextButton(onClick = { onInspect(null) }, modifier = Modifier.testTag("polar-preview-close")) { Text(stringResource(R.string.close)) }
                     }
+                    if (busy) TextButton(onClick = onStop,
+                        modifier = Modifier.padding(horizontal = 12.dp).testTag("polar-inspection-stop")) { Text(stopText) }
                     pinnedAdjustment?.let {
                         Column(Modifier.heightIn(max = 144.dp).verticalScroll(rememberScrollState())) { PolarCorrectionSummary(it) }
                     }

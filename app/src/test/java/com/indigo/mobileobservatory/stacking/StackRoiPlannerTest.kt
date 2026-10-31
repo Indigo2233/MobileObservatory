@@ -70,7 +70,8 @@ class StackRoiPlannerTest {
     @Test fun imageAndRawQueueCeilingsRemainEvenWhenGivenAnUnrealisticByteBudget() {
         val c = context()
         assertEquals("processing_size", LiveStackAdmission.issue(c.key.copy(width = 5000, height = 5000), Long.MAX_VALUE))
-        assertEquals("input_budget", LiveStackAdmission.issue(c.key.copy(width = 3000, height = 3000, format = PixelFormat.RGB48), Long.MAX_VALUE))
+        assertNull(LiveStackAdmission.issue(c.key.copy(width = 3000, height = 3000, format = PixelFormat.RGB48), Long.MAX_VALUE))
+        assertEquals("processing_size", LiveStackAdmission.issue(c.key.copy(width = 5000, height = 5000, format = PixelFormat.RGB48), Long.MAX_VALUE))
     }
 
     @Test fun masterAboveFourMpUsesExplicitByteBudgetAndStillRejectsBeforeReadingWhenTooLarge() {

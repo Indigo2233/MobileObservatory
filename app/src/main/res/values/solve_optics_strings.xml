@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="solve_automatic_sensor_summary">%1$s · %2$.2f µm · %3$d×%4$d</string>
+    <string name="solve_image_sensor">Image sensor</string>
+    <string name="solve_need_focal_length">Enter focal length</string>
+</resources>

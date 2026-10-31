@@ -537,6 +537,8 @@ private fun ProcessingControls(c: StackingCoordinator, p: StackProcessingParamet
     Text(stringResource(R.string.stack_auto_stretch_hint), style = MaterialTheme.typography.bodySmall)
     if (p.preset != ProcessingPreset.RAW && p.stretchEnabled)
         StackSlider(R.string.stack_brightness, p.brightness, .05..8.0) { c.updateProcessing(p.copy(brightness = it)) }
+    if (p.preset != ProcessingPreset.RAW && p.whiteBalanceEnabled)
+        SwitchLine(R.string.stack_auto_wb, p.autoWhiteBalance) { c.updateProcessing(p.copy(autoWhiteBalance = it)) }
     if (p.preset != ProcessingPreset.RAW) OutlinedButton(onClick = onBackground, modifier = Modifier.fillMaxWidth()) {
         Text(stringResource(R.string.stack_bg_entry, backgroundModeLabel(p.background)))
     }
@@ -557,7 +559,6 @@ private fun ProcessingControls(c: StackingCoordinator, p: StackProcessingParamet
         if (p.sharpening > 0) StackSlider(R.string.stack_sharpen, p.sharpening, 0.0..2.0) { c.updateProcessing(p.copy(sharpening = it)) }
         SwitchLine(R.string.stack_wb_enabled, p.whiteBalanceEnabled) { c.updateProcessing(p.copy(whiteBalanceEnabled = it)) }
         if (p.whiteBalanceEnabled) {
-        SwitchLine(R.string.stack_auto_wb, p.autoWhiteBalance) { c.updateProcessing(p.copy(autoWhiteBalance = it)) }
         StackSlider(R.string.stack_red, p.redBalance, .25..4.0) { c.updateProcessing(p.copy(redBalance = it)) }
         StackSlider(R.string.stack_blue, p.blueBalance, .25..4.0) { c.updateProcessing(p.copy(blueBalance = it)) }
         }

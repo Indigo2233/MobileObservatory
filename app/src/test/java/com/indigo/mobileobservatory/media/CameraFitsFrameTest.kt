@@ -42,10 +42,34 @@ class CameraFitsFrameTest {
         for (y in 100..101) for (x in 100..101) bytes[y * w + x] = 200.toByte()
         fits(FrameData(bytes, w, h, PixelFormat.BAYER_RG8, 1, 0)) { file ->
             val decoded = MediaImageFitsCodec.readCameraImage(file).snapshot.frame
-            assertEquals(PixelFormat.RGB48, decoded.pixelFormat)
-            val codes = (decoded.data.indices step 2).map { (decoded.data[it].toInt() and 255) or ((decoded.data[it + 1].toInt() and 255) shl 8) }
-            assertTrue(codes.max() > 10000)
-            assertEquals(10 * 257, codes.first())
+            assertEquals(PixelFormat.BAYER_RG8, decoded.pixelFormat)
+            val codes = decoded.data.map { it.toInt() and 255 }
+            assertTrue(codes.max() > 25)
+            assertEquals(10, codes.first())
+        }
+    }
+
+    @Test fun reducedBayerTransportKeepsDepthPhaseAndSeparateColourStatistics() {
+        for (format in listOf(PixelFormat.BAYER_RG8,PixelFormat.BAYER_GR12,PixelFormat.BAYER_BG16)) {
+            val width=65; val height=49
+            val data=ByteArray(width*height*format.bytesPerPixel)
+            for(y in 0 until height) for(x in 0 until width) {
+                val code=20+20*(y%2)+5*(x%2)
+                val i=(y*width+x)*format.bytesPerPixel
+                data[i]=code.toByte()
+            }
+            fits(FrameData(data,width,height,format,1,0)) { file ->
+                for(step in 2..4) {
+                    val decoded=MediaImageFitsCodec.readCameraImage(file,region=MediaImageRegion(1,3,63,45,step))
+                    val frame=decoded.snapshot.frame
+                    assertTrue(frame.pixelFormat.isBayer)
+                    assertEquals(format.nativeBits,decoded.snapshot.traits?.validBits)
+                    for(y in 0 until frame.height) for(x in 0 until frame.width) {
+                        val i=(y*frame.width+x)*format.bytesPerPixel
+                        assertEquals("step=$step x=$x y=$y",20+20*((y+3)%2)+5*((x+1)%2),frame.data[i].toInt() and 255)
+                    }
+                }
+            }
         }
     }
 

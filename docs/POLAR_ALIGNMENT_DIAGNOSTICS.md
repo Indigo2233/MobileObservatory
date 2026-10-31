@@ -1,5 +1,15 @@
 # 三点极轴采样与失败诊断
 
+## 2026-10-31：导入图像解析时取消导致崩溃
+
+- 用户日志 `app(1) (1).log` 在 17:14:14 记录 `Thread-82` 上未捕获的 `InterruptedIOException: read interrupted by close() on another thread`，栈指向 `AstapRunner.solveAttempt` 的输出读取线程。Android 34 回归使用实际 `Process` 和生产 `AstapRunner`，只将 CLI 命令替换为保持输出管道打开的系统进程；连续两次测试均在首次取消时复现相同异常。无需预览渲染或重复点击即可触发。
+- ASTAP 的合并标准输出和错误输出改为写入本次专属目录中的 `process.log`，进程结束后由解析协程读取。取消仍交由 `awaitSolverProcess` 终止进程；删除独立读取线程及共享可变输出缓冲。读取错误由当前解析返回失败，取消异常继续向上传递；正常结束、启动失败和取消均关闭进程流并清理临时日志。
+- 极轴解析中的操作改为“放弃解析并重试”。点击后取消本次任务及后续自动步骤，保留当前图像与此前成功采样；清理完成后在主控制区显示“重试解析”“选择图像”，已连接相机且位于可重拍位置时同时提供“重拍”。用户可先修改参数，再启动当前点的新尝试。主图、全屏检查和日志窗口使用相同含义；拍摄、转轴等其他阶段继续提供停止。
+- GOTO 并居中面板仅在标题区保留一个停止按钮，取消整段居中任务。全屏图像与日志窗口各自保留可达的停止操作；关闭面板后星图全局 STOP 与查看进度入口继续可用。
+- 本轮 229 项 JVM 回归（43 个测试集）及 32 项 Android 回归通过，失败和错误均为零。Android 回归覆盖 20 次连续取消及重复点击、进程刚启动时取消、双输出流与启动失败、三个原生 ASTAP 结果用例、真实相册导入后取消并重试、成功点和原图保留、GOTO 唯一停止与关闭恢复。中文与英文 200% 字号验证操作可达且预览仍显示；本轮未截取屏幕图像。
+- 每项 Android 用例以最后一次执行结果汇总，修复前的失败日志保留用于核对复现。汇总见 `build/diagnostics/polar-cancel-crash/jvm-results.json` 和 `android-final-results.json`。当前验证使用 API 34 模拟器；真实相机和赤道仪的现场复测单独记录。
+- `Build.ps1 -Release -NonCommercial` 与 Release Lint 通过，Lint 无错误。本地签名包继续使用 v1.0.9 / build 60，APK SHA-256 为 `d944e9057e815d3a514aab1f5bc0d0b6fc4ea83617c8f545b0c710c8221d16bd`；版本化文件与 `bin/Installer/IndigoObservatory_android.apk` 一致。Android 8 兼容签名、Android 9+ 正式签名、ARM64 架构、序列入口关闭、Stellarium 资源与冻结相机库均已核验。APK 来自当前工作区，生产源码哈希快照及完整核验见同一诊断目录的 `release-source-snapshot.json`、`apk-verification.json`。
+
 ## 2026-10-31：界面精简与 GOTO 解析取消补充
 
 - 关闭居中面板后的恢复入口补充：运行时目标卡被全局 STOP 隐藏，星图底部运行状态条提供查看进度，与 STOP 分开；回调只恢复当前任务面板。不含 Stellarium 资源的星图导航区提供同名入口。任务结束后目标卡保留定位图与解析详情。普通 GOTO 不显示前次居中任务的状态或恢复操作。27 项相关 JVM、4 项 Android 回归通过，覆盖重复关闭/打开、启动次数保持为零、大字体可达及独立停止；日志为 `build/diagnostics/precision-progress-reopen.log`。

@@ -14,6 +14,7 @@ object StackResultMetadata {
         put("saturation", p.saturation)
         put("stretchEnabled", p.stretchEnabled); put("whiteBalanceEnabled", p.whiteBalanceEnabled)
         put("saturationEnabled", p.saturationEnabled)
+        put("displayVersion", p.displayVersion)
         put("background", JSONObject().apply {
             put("enabled", p.background.enabled); put("strength", p.background.strength); put("gridSize", p.background.gridSize)
             put("mode", p.background.mode.name); put("sampleRadius", p.background.sampleRadius)
@@ -41,6 +42,9 @@ object StackResultMetadata {
             stretchEnabled = json.optBoolean("stretchEnabled", true),
             whiteBalanceEnabled = json.optBoolean("whiteBalanceEnabled", true),
             saturationEnabled = json.optBoolean("saturationEnabled", true),
+            displayVersion = json.optInt("displayVersion", 1).also {
+                require(it in 1..2) { "Unsupported display processing version" }
+            },
             background = BackgroundParameters(background.getBoolean("enabled"), background.getDouble("strength"),
                 background.getInt("gridSize"), List(masks.length()) { index -> masks.getJSONArray(index).let {
                     TargetMask(it.getDouble(0), it.getDouble(1), it.getDouble(2), it.getDouble(3))

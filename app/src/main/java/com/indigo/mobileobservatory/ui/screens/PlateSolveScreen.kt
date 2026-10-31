@@ -43,7 +43,7 @@ import com.indigo.mobileobservatory.astrometry.FitsSolveHints
 import com.indigo.mobileobservatory.astrometry.PlateSolveOptics
 import com.indigo.mobileobservatory.astrometry.PlateSolveResult
 import com.indigo.mobileobservatory.astro.OpticsEquipment
-import com.indigo.mobileobservatory.astro.SensorSpec
+import com.indigo.mobileobservatory.camera.CameraInfo
 import com.indigo.mobileobservatory.mount.MountCoordinates
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
@@ -59,7 +59,8 @@ fun PlateSolveScreen(
     initialFile: File? = null,
     autoSolve: Boolean = false,
     mountCoordinates: MountCoordinates? = null,
-    cameraPixelSizeUm: Float? = null,
+    cameraInfo: CameraInfo? = null,
+    cameraFrameHints: FitsSolveHints = PlateSolveOptics.cameraHints(cameraInfo),
     onSolved: (PlateSolveResult) -> Unit = {},
     recordingsDir: File? = null,
     capturesDir: File? = null,
@@ -78,19 +79,17 @@ fun PlateSolveScreen(
     val selectedFile = remember(selectedPath) { selectedPath?.let(::File) }
     var showImageLibrary by rememberSaveable { mutableStateOf(false) }
     var loadingFile by remember { mutableStateOf(false) }
-    var computedFovDeg by remember { mutableStateOf<Double?>(null) }
     var focalLengthText by rememberSaveable { mutableStateOf(prefs.getFloat("plate_focal_length_mm", 0f).takeIf { it > 0f }?.toString() ?: "") }
     var pixelSizeText by rememberSaveable {
         mutableStateOf(
             prefs.getFloat("plate_pixel_size_um", 0f).takeIf { it > 0f }?.let { formatPixelSizeUm(it.toDouble()) }
-                ?: cameraPixelSizeUm?.takeIf { it > 0f }?.let { formatPixelSizeUm(it.toDouble()) }
                 ?: ""
         )
     }
     var selectedSensorId by rememberSaveable {
         mutableStateOf(prefs.getString("plate_sensor_id", "") ?: "")
     }
-    var hintText by remember { mutableStateOf("") }
+    var sensorEdited by rememberSaveable(selectedPath) { mutableStateOf(false) }
     val progressFlow = remember { MutableStateFlow(DownloadProgress()) }
     val progress by progressFlow.collectAsState()
     var downloadJob by remember { mutableStateOf<Job?>(null) }
@@ -110,10 +109,6 @@ fun PlateSolveScreen(
     }
 
     fun selectImage(file: File) {
-        if (selectedPath != file.absolutePath) {
-            computedFovDeg = null
-            hintText = ""
-        }
         selectedPath = file.absolutePath
         result = null
         error = null
@@ -139,81 +134,71 @@ fun PlateSolveScreen(
         onDismiss = { showImageLibrary = false },
         onSelect = { file -> selectImage(file); showImageLibrary = false })
 
-    val connectedSensorName = stringResource(R.string.connected_camera_sensor)
-    val sensors = remember(cameraPixelSizeUm, connectedSensorName) {
-        buildList {
-            cameraPixelSizeUm?.toDouble()?.takeIf { it > 0.0 }?.let { px ->
-                add(SensorSpec(OpticsEquipment.CONNECTED_SENSOR_ID, connectedSensorName, px, 0, 0))
-            }
-            addAll(OpticsEquipment.defaultSensors)
+    val connectedSensor = remember(cameraInfo) {
+        cameraInfo?.let {
+            OpticsEquipment.connectedSensor(it.pixelSizeUm, it.sensorWidth, it.sensorHeight, it.name)
         }
     }
+    val sensors = remember(connectedSensor) { listOfNotNull(connectedSensor) + OpticsEquipment.defaultSensors }
+    val loadedHints by produceState<Pair<File?, FitsSolveHints>?>(null, selectedFile) {
+        value = selectedFile to if (selectedFile != null) {
+            withContext(Dispatchers.IO) { FitsSolveHintReader.read(selectedFile) }
+        } else FitsSolveHints()
+    }
+    val imageHints = loadedHints?.takeIf { it.first == selectedFile }?.second ?: FitsSolveHints()
+    val currentCameraInput = selectedFile == null || autoSolve && selectedFile == initialFile
+    val automaticSensor = PlateSolveOptics.imageSensor(imageHints, stringResource(R.string.solve_image_sensor))
+        ?: connectedSensor.takeIf { currentCameraInput }
 
-    LaunchedEffect(sensors, selectedSensorId, cameraPixelSizeUm) {
-        if (selectedSensorId.isNotBlank() && sensors.any { it.id == selectedSensorId }) return@LaunchedEffect
-        val savedPixel = pixelSizeText.toDoubleOrNull()
-        selectedSensorId = when {
-            cameraPixelSizeUm != null && cameraPixelSizeUm > 0f -> OpticsEquipment.CONNECTED_SENSOR_ID
-            else -> OpticsEquipment.matchCatalogSensor(pixelSizeUm = savedPixel)?.id
+    LaunchedEffect(sensors, selectedSensorId, imageHints, automaticSensor, sensorEdited) {
+        if (sensors.none { it.id == selectedSensorId }) {
+            selectedSensorId = OpticsEquipment.matchCatalogSensor(
+                imageHints.width, imageHints.height, pixelSizeText.toDoubleOrNull())?.id
                 ?: OpticsEquipment.CUSTOM_SENSOR_ID
         }
-    }
-
-    LaunchedEffect(selectedFile, focalLengthText, pixelSizeText, selectedSensorId, cameraPixelSizeUm) {
-        val file = selectedFile
-        val hints = if (file != null) {
-            withContext(Dispatchers.IO) { FitsSolveHintReader.read(file) }
-        } else {
-            FitsSolveHints()
+        if (!sensorEdited && automaticSensor == null && selectedSensorId == OpticsEquipment.CUSTOM_SENSOR_ID &&
+            imageHints.width > 0 && imageHints.height > 0) {
+            OpticsEquipment.matchCatalogSensor(imageHints.width, imageHints.height, pixelSizeText.toDoubleOrNull())
+                ?.let { selectedSensorId = it.id }
         }
         val sensor = sensors.firstOrNull { it.id == selectedSensorId }
-        val userFocal = focalLengthText.toDoubleOrNull()?.takeIf { it > 0.0 }
-        val typedPixel = pixelSizeText.toDoubleOrNull()?.takeIf { it > 0.0 }
-        val pixel = sensor?.let { pixelSizeForSensor(it, typedPixel) } ?: typedPixel
-            ?: hints.pixelSizeUm
-            ?: cameraPixelSizeUm?.toDouble()?.takeIf { it > 0.0 }
         if (sensor != null && sensor.id != OpticsEquipment.CUSTOM_SENSOR_ID) {
             val formatted = formatPixelSizeUm(sensor.pixelSizeUm)
             if (pixelSizeText != formatted) pixelSizeText = formatted
-        } else if (pixelSizeText.isBlank() && pixel != null) {
-            pixelSizeText = formatPixelSizeUm(pixel)
         }
-        if (focalLengthText.isBlank() && hints.focalLengthMm != null && hints.focalLengthMm > 0.0) {
-            focalLengthText = "%.1f".format(Locale.US, hints.focalLengthMm)
-        }
-        val catalogHeight = sensor?.heightPx?.takeIf { sensor.id != OpticsEquipment.CUSTOM_SENSOR_ID && it > 0 } ?: 0
-        val matched = if (file != null && hints.width > 0 &&
-            (selectedSensorId.isBlank() ||
-                selectedSensorId == OpticsEquipment.CUSTOM_SENSOR_ID ||
-                selectedSensorId == OpticsEquipment.CONNECTED_SENSOR_ID)
-        ) {
-            OpticsEquipment.matchCatalogSensor(hints.width, hints.height, pixel)
-        } else {
-            null
-        }
-        if (matched != null && matched.id != selectedSensorId) {
-            selectedSensorId = matched.id
-            return@LaunchedEffect
-        }
-        val scale = PlateSolveOptics.scaleHint(
-            hints = if (hints.height > 0) hints else hints.copy(height = catalogHeight),
-            userFocalLengthMm = userFocal,
-            userPixelSizeUm = pixel
-        )
-        computedFovDeg = scale.fovHeightDeg
-        hintText = buildString {
-            if (scale.width > 0 && scale.height > 0) append("${scale.width}x${scale.height}")
-            if (scale.pixelSizeUm != null) append("  pixel=${formatPixelSizeUm(scale.pixelSizeUm)}um")
-            append("  bin=${scale.binning}")
-            if (scale.focalLengthMm != null) append("  focal=${"%.1f".format(Locale.US, scale.focalLengthMm)}mm")
-            scale.fovHeightDeg?.let { append("  fovH=${"%.4f".format(Locale.US, it)}°") }
-        }.trim()
     }
+
+    LaunchedEffect(imageHints) {
+        if (focalLengthText.isBlank() && imageHints.focalLengthMm?.let { it.isFinite() && it > 0 } == true) {
+            focalLengthText = "%.1f".format(Locale.US, imageHints.focalLengthMm)
+        }
+    }
+    val manualSensor = sensors.firstOrNull { it.id == selectedSensorId }
+    val typedPixel = pixelSizeText.toDoubleOrNull()?.takeIf { it.isFinite() && it > 0 }
+    val inputPixel = automaticSensor?.pixelSizeUm ?: manualSensor?.let { pixelSizeForSensor(it, typedPixel) } ?: typedPixel
+    val catalogHeight = (automaticSensor ?: manualSensor)?.takeIf { it.id != OpticsEquipment.CUSTOM_SENSOR_ID }?.heightPx ?: 0
+    val userFocal = focalLengthText.toDoubleOrNull()?.takeIf { it.isFinite() && it > 0 }
+    val previewHints = if (selectedFile == null) cameraFrameHints else imageHints
+    val scale = PlateSolveOptics.scaleHint(
+        hints = if (previewHints.height > 0) previewHints else previewHints.copy(height = catalogHeight),
+        userFocalLengthMm = userFocal,
+        userPixelSizeUm = inputPixel
+    )
+    val computedFovDeg = scale.fovHeightDeg
+    val hintText = buildString {
+        if (scale.width > 0 && scale.height > 0) append("${scale.width}x${scale.height}")
+        if (scale.pixelSizeUm != null) append("  pixel=${formatPixelSizeUm(scale.pixelSizeUm)}um")
+        append("  bin=${scale.binning}")
+        if (scale.focalLengthMm != null) append("  focal=${"%.1f".format(Locale.US, scale.focalLengthMm)}mm")
+        scale.fovHeightDeg?.let { append("  fovH=${"%.4f".format(Locale.US, it)}°") }
+    }.trim()
 
     fun solveSelectedFile() {
         val file = selectedFile ?: return
         val focal = focalLengthText.toFloatOrNull()?.takeIf { it > 0f }
         val pixel = pixelSizeText.toFloatOrNull()?.takeIf { it > 0f }
+        val fallbackPixel = inputPixel
+        val fallbackHeight = catalogHeight
         prefs.edit().apply {
             focal?.let { putFloat("plate_focal_length_mm", it) }
             pixel?.let { putFloat("plate_pixel_size_um", it) }
@@ -225,24 +210,17 @@ fun PlateSolveScreen(
             result = null
             try {
                 val hints = withContext(Dispatchers.IO) { FitsSolveHintReader.read(file) }
-                val sensor = sensors.firstOrNull { it.id == selectedSensorId }
-                val catalogHeight = sensor?.heightPx?.takeIf {
-                    sensor.id != OpticsEquipment.CUSTOM_SENSOR_ID && it > 0
-                } ?: 0
-                val scalePixel = sensor?.let {
-                    pixelSizeForSensor(it, pixel?.toDouble())
-                } ?: pixel?.toDouble()
+                val scalePixel = PlateSolveOptics.pixelSizeForImage(hints, fallbackPixel)
                 val fov = PlateSolveOptics.astapFovDeg(
                     hints = hints,
                     userFocalLengthMm = focal?.toDouble(),
                     userPixelSizeUm = scalePixel,
-                    catalogHeightPx = catalogHeight
+                    catalogHeightPx = fallbackHeight
                 )?.coerceIn(0.2, 6.0)
                 if (fov == null) {
                     result = PlateSolveResult(false, context.getString(R.string.plate_solve_need_optics))
                     return@launch
                 }
-                computedFovDeg = fov
                 result = if (PlateSolveRouting.select(
                         PlateSolveInputKind.EXTERNAL_CAMERA,
                         focal?.toDouble()
@@ -275,7 +253,8 @@ fun PlateSolveScreen(
         }
     }
 
-    val canSolve = selectedFile != null && d50Status.installed && !progress.active && !solving && !loadingFile && computedFovDeg != null
+    val canSolve = selectedFile != null && loadedHints?.first == selectedFile && userFocal != null &&
+        d50Status.installed && !progress.active && !solving && !loadingFile && computedFovDeg != null
     LaunchedEffect(autoSolve, canSolve) {
         if (autoSolve && canSolve && !autoSolveAttempted) {
             autoSolveAttempted = true
@@ -396,14 +375,16 @@ fun PlateSolveScreen(
                         onFocalLengthChange = { focalLengthText = it },
                         selectedSensorId = selectedSensorId,
                         onSensorSelected = { sensor ->
+                            sensorEdited = true
                             selectedSensorId = sensor.id
                             pixelSizeText = formatPixelSizeUm(sensor.pixelSizeUm)
                         },
                         pixelSizeText = pixelSizeText,
-                        onPixelSizeChange = { pixelSizeText = it },
+                        onPixelSizeChange = { sensorEdited = true; pixelSizeText = it },
                         sensors = sensors,
                         computedFovHeightDeg = computedFovDeg,
-                        enabled = !progress.active && !solving
+                        enabled = !progress.active && !solving,
+                        automaticSensor = automaticSensor
                     )
                     Button(
                         onClick = ::solveSelectedFile,

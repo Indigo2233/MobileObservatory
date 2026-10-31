@@ -27,6 +27,15 @@ class StackResultMetadataTest {
         assertEquals(recipe(),StackResultMetadata.parseParameters(JSONObject(legacy.toString())))
     }
 
+    @Test fun missingDisplayVersionSelectsLegacyProcessingAndUnknownVersionsAreRejected() {
+        val legacy=StackResultMetadata.parameters(recipe())
+        legacy.remove("displayVersion")
+        assertEquals(recipe().copy(displayVersion=1),StackResultMetadata.parseParameters(legacy))
+        legacy.put("displayVersion",3)
+        try { StackResultMetadata.parseParameters(legacy);fail("Unsupported display version accepted") }
+        catch (expected:IllegalArgumentException) { assertTrue(expected.message!!.contains("version")) }
+    }
+
     @Test fun reloadedRecipeReproducesActualProcessedPixelsAndBackgroundModel() {
         val width=96;val height=96
         val image=LinearImage(width,height,3,FloatArray(width*height*3) { i ->

@@ -51,7 +51,7 @@ class StackPreparedProcessingTest {
             none,rgb,rgb,"696519dd204bbf8bbb57dc05136681b7d5df4ccebdbaef4e7d6b8d74202168bc",none)
         var case = 0
         for (channels in listOf(1,3)) for (p in recipes()) {
-            val result = StackPostProcessor.process(image(channels),p)
+            val result = StackPostProcessor.process(image(channels),p.copy(displayVersion=1))
             assertEquals("Pixels case $case",pixels[case],hash(result.image.pixels))
             assertEquals("Background case $case",models[case],hash(result.background.toString().toByteArray()))
             case++

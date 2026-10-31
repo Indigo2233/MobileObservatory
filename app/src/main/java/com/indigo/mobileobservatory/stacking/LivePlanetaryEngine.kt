@@ -13,7 +13,8 @@ class LivePlanetaryEngine(
     private val options: PlanetaryOptions = PlanetaryOptions(),
     private val qualityKeepPercent: Double = 50.0,
     private val qualityWindowFrames: Int = 64,
-    private val referenceWarmupFrames: Int = 3
+    private val referenceWarmupFrames: Int = 3,
+    private val previewMaxSide: Int? = null
 ) : LiveStackEngine {
     private var width = 0; private var height = 0; private var channels = 0
     private var sums = DoubleArray(0)
@@ -72,7 +73,7 @@ class LivePlanetaryEngine(
             if (image.width < 12 || image.height < 12 || ((reference != null || bootstrapBest != null) &&
                 (image.width != width || image.height != height || image.channels != channels))) return reject("GEOMETRY")
             if (image.pixelCount.toLong() > PlanetaryStacker.MAX_PIXELS) return reject("PIXEL_BUDGET")
-            val bytes = estimateWorkingBytes(image.width, image.height, image.channels)
+            val bytes = estimateWorkingBytes(image.width, image.height, image.channels, previewMaxSide)
             if (bytes > memoryBudgetBytes) return reject("MEMORY_BUDGET")
             if (accepted >= PlanetaryStacker.MAX_SELECTED_FRAMES) return reject("FRAME_LIMIT")
             for (y in 0 until image.height) {
@@ -196,6 +197,26 @@ class LivePlanetaryEngine(
         return LiveStackSnapshot(LinearImage(width, height, channels, output), weights.copyOf(), state, snapshotDetails())
     }
 
+    override fun previewSnapshot(state: LiveStackState, maxSide: Int): LiveStackSnapshot? {
+        if (accepted == 0L) return null
+        val grid = StackPreviewGrid(width, height, maxSide)
+        val coverage = FloatArray(grid.width * grid.height) { weights[grid.sourcePixel(it)] }
+        val output = FloatArray(coverage.size * channels) { i ->
+            val p = i / channels
+            if (coverage[p] > 0) (sums[grid.sourcePixel(p) * channels + i % channels] / coverage[p]).toFloat() else 0f
+        }
+        return LiveStackSnapshot(LinearImage(grid.width, grid.height, channels, output), coverage, state, snapshotDetails())
+    }
+
+    override fun exportSnapshot(state: LiveStackState): LiveStackSnapshot? {
+        if (accepted == 0L) return null
+        val output = FloatArray(sums.size) { i ->
+            val count = weights[i / channels]
+            if (count > 0) (sums[i] / count).toFloat() else 0f
+        }
+        return LiveStackSnapshot(LinearImage(width, height, channels, output), weights, state, snapshotDetails())
+    }
+
     override fun snapshotDetails(): Map<String, Any> = mapOf(
             "algorithm" to "planetary_online_rolling_quality_ncc_double_accumulation",
             "target" to "planetary",
@@ -234,14 +255,18 @@ class LivePlanetaryEngine(
 
         /** Persistent double sums/coverage + reference/reusable source planes; raw queue/input,
          * three retained snapshot pairs, decode/render scratch, largest two displacement meshes. */
-        fun estimateWorkingBytes(width: Int, height: Int, channels: Int): Long {
+        fun estimateWorkingBytes(width: Int, height: Int, channels: Int, previewMaxSide: Int? = null): Long {
             require(width > 0 && height > 0 && channels in listOf(1, 3))
             val pixels = Math.multiplyExact(width.toLong(), height.toLong())
-            val images = Math.multiplyExact(pixels, channels * 40L + 36L)
+            val images = Math.multiplyExact(pixels, if (previewMaxSide == null) channels * 40L + 36L else channels * 12L + 12L)
+            val preview = previewMaxSide?.let { StackPreviewGrid.workingBytes(width, height, channels, it) } ?: 0L
+            return Math.addExact(Math.addExact(images, meshBytes(width, height)), 8L * 1024 * 1024 + preview)
+        }
+
+        internal fun meshBytes(width: Int, height: Int): Long {
             val meshColumns = (width.toLong() + 3) / 4 + 1
             val meshRows = (height.toLong() + 3) / 4 + 1
-            val meshes = Math.multiplyExact(Math.multiplyExact(meshColumns, meshRows), 8L)
-            return Math.addExact(Math.addExact(images, meshes), 8L * 1024 * 1024)
+            return Math.multiplyExact(Math.multiplyExact(meshColumns, meshRows), 8L)
         }
     }
 }

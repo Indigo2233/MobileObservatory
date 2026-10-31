@@ -1079,7 +1079,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         syncOffsetCapability(cam)
                         syncUsbBandwidthCapability(cam)
                         _roi.value = cam.currentRoi
-                        syncBinningState(cam, appBin = (cam as? CameraBinningCapable)?.currentHardwareBin ?: 1)
+                        try {
+                            withContext(Dispatchers.IO) {
+                                val connectedBin = (cam as? CameraBinningCapable)?.currentHardwareBin ?: 1
+                                if (requiresColourBinFallback(cam)) applyBinning(cam, connectedBin)
+                                else syncBinningState(cam, appBin = connectedBin)
+                            }
+                        } catch (failure: CancellationException) { throw failure }
+                        catch (failure: Exception) {
+                            Log.e(TAG, "Connected camera binning could not be verified", failure)
+                            _statusMessage.value = app.getString(R.string.capture_error_detail, failure.message.orEmpty())
+                            return@collect
+                        }
                         _longExposureEnabled.value = cam.longExposureEnabled
                         refreshExposureUiLimits()
                         _statusMessage.value = ""
@@ -3456,7 +3467,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val cam = cameraManager.activeCamera ?: return
         if (binningSwitching) return
         val requested = bin.coerceAtLeast(1)
-        if (requested == _binning.value) return
+        if (!binningNeedsApply(cam, requested)) return
         invalidateStackSettings(layoutChanged = true)
         binningSwitching = true
         changeCaptureSettings(cam) {
@@ -3471,8 +3482,23 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun applyBinning(cam: Camera, requested: Int) {
-        publishBinPlan(cam, AppBinning.apply(requested, cam as? CameraBinningCapable))
+        val preserveColour = cam.currentPixelFormat.isBayer
+        val plan = AppBinning.apply(requested, cam as? CameraBinningCapable) { bin ->
+            !preserveColour || (cam.currentPixelFormat.isBayer &&
+                (bin % 2 == 1 || cam.sciencePixelTraits?.bayerPatternAtOutput == true))
+        }
+        publishBinPlan(cam, plan)
     }
+
+    private fun requiresColourBinFallback(cam: Camera): Boolean {
+        val bin = (cam as? CameraBinningCapable)?.currentHardwareBin ?: 1
+        return cam.currentPixelFormat.isBayer && bin % 2 == 0 &&
+            cam.sciencePixelTraits?.bayerPatternAtOutput != true
+    }
+
+    private fun binningNeedsApply(cam: Camera, requested: Int): Boolean =
+        requested != _binning.value || (cam as? CameraBinningCapable)?.binningStateVerified == false ||
+            requiresColourBinFallback(cam)
 
     private fun syncBinningState(cam: Camera, appBin: Int) {
         val capable = cam as? CameraBinningCapable
@@ -4649,7 +4675,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         try { applyCaptureSettingsAndRestart(cam) { exposureWriteMutex.withLock {
             val uiMax = ExposureLimits.uiMaxUs(cam, true)
             val requestedBinning = binning.coerceAtLeast(1)
-            if (requestedBinning != _binning.value) applyBinning(cam, requestedBinning)
+            if (binningNeedsApply(cam, requestedBinning)) applyBinning(cam, requestedBinning)
             cam.longExposureEnabled = true
             _longExposureEnabled.value = true
             cam.setExposureTime((exposureSeconds * 1_000_000.0).toFloat().coerceIn(cam.exposureRange.min, uiMax))

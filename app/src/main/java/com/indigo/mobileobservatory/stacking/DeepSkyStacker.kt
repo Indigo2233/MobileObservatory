@@ -15,7 +15,7 @@ data class DeepSkySnapshot(val image: LinearImage, val weights: FloatArray, val 
  * while reset/close cancels and discards the engine. Previously returned snapshots stay valid.
  */
 class DeepSkyStacker(private val config: DeepSkyConfig = DeepSkyConfig(), private val livePreviewOverlap: Boolean = true,
-                     private val reusableOfflineInput: Boolean = false) {
+                     private val reusableOfflineInput: Boolean = false, private val livePreviewMaxSide: Int? = null) {
     private val starDetectionWorkspace = StarRegistration.Workspace()
     private var reference: StarField? = null
     private var width = 0; private var height = 0; private var channels = 0
@@ -40,7 +40,7 @@ class DeepSkyStacker(private val config: DeepSkyConfig = DeepSkyConfig(), privat
         if (reference != null && (image.width != width || image.height != height || image.channels != channels)) return reject(DeepSkyRejection.GEOMETRY)
         // Admission precedes accumulation. Offline rendering starts after the engine releases
         // its workspace; live decoding/accumulation and immutable previews can overlap.
-        val workingBytes = if (livePreviewOverlap) estimateWorkingBytes(image.width, image.height, image.channels)
+        val workingBytes = if (livePreviewOverlap) estimateWorkingBytes(image.width, image.height, image.channels, livePreviewMaxSide)
             else estimateOfflineWorkingBytes(image.width, image.height, image.channels, reusableOfflineInput)
         if (workingBytes > config.memoryBudgetBytes) return reject(DeepSkyRejection.MEMORY_BUDGET)
         val field = StarRegistration.detect(image, workspace = starDetectionWorkspace, cancelled = cancelled)
@@ -107,6 +107,20 @@ class DeepSkyStacker(private val config: DeepSkyConfig = DeepSkyConfig(), privat
 
     fun snapshot(): DeepSkySnapshot? = if (stats.accepted == 0) null else DeepSkySnapshot(LinearImage(width, height, channels, mean.copyOf()), weights.copyOf(), stats)
 
+    internal fun previewSnapshot(maxSide: Int): DeepSkySnapshot? {
+        if (stats.accepted == 0) return null
+        val grid = StackPreviewGrid(width, height, maxSide)
+        val pixels = FloatArray(grid.width * grid.height * channels) { i ->
+            mean[grid.sourcePixel(i / channels) * channels + i % channels]
+        }
+        val coverage = FloatArray(grid.width * grid.height) { weights[grid.sourcePixel(it)] }
+        return DeepSkySnapshot(LinearImage(grid.width, grid.height, channels, pixels), coverage, stats)
+    }
+
+    /** Only the serialized science worker may read this view while accumulation is held. */
+    internal fun borrowedSnapshot(): DeepSkySnapshot? = if (stats.accepted == 0) null else
+        DeepSkySnapshot(LinearImage(width, height, channels, mean), weights, stats)
+
     /** Finish a sequential offline pass by moving its accumulated arrays into the result.
      * Reset/reuse can never mutate that result. Live callers must keep using snapshot(). */
     internal fun takeResult(): DeepSkySnapshot? {
@@ -123,7 +137,10 @@ class DeepSkyStacker(private val config: DeepSkyConfig = DeepSkyConfig(), privat
         // the bounded raw queue and decoder, accumulators, automatic background output,
         // and simultaneous sharpening/local-contrast scratch. Calibration is added by
         // the coordinator because its masters and sensor geometry can differ after binning.
-        fun estimateWorkingBytes(width: Int, height: Int, channels: Int): Long = width.toLong() * height * (channels * 40L + 32L) + 8L * 1024 * 1024
+        fun estimateWorkingBytes(width: Int, height: Int, channels: Int, previewMaxSide: Int? = null): Long =
+            if (previewMaxSide == null) width.toLong() * height * (channels * 40L + 32L) + 8L * 1024 * 1024
+            else width.toLong() * height * (channels * 12L + 4) +
+                StackPreviewGrid.workingBytes(width, height, channels, previewMaxSide) + 8L * 1024 * 1024
         // Decoder/master storage is supplied separately by the offline coordinator. Generic
         // sources keep old/new read headroom; only the explicit buffered contract saves it.
         fun estimateOfflineWorkingBytes(width: Int, height: Int, channels: Int, reusableInput: Boolean = false): Long =

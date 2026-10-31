@@ -24,15 +24,17 @@ object AppBinning {
     }
 
     /** The adapter must confirm the applied factor before a software remainder is selected. */
-    fun apply(requested: Int, camera: CameraBinningCapable?): AppBinPlan {
+    fun apply(requested: Int, camera: CameraBinningCapable?,
+              acceptsOutput: (Int) -> Boolean = { true }): AppBinPlan {
         val app = requested.coerceAtLeast(1)
         if (camera == null) return AppBinPlan(app, 1, app)
         for (candidate in hardwareCandidates(app, camera.supportedHardwareBins)) {
             if ((camera.binningStateVerified && camera.currentHardwareBin == candidate || camera.setHardwareBin(candidate)) &&
-                camera.binningStateVerified && camera.currentHardwareBin == candidate) return AppBinPlan(app, candidate, app / candidate)
+                camera.binningStateVerified && camera.currentHardwareBin == candidate &&
+                acceptsOutput(candidate)) return AppBinPlan(app, candidate, app / candidate)
         }
         check((camera.binningStateVerified && camera.currentHardwareBin == 1 || camera.setHardwareBin(1)) &&
-            camera.binningStateVerified && camera.currentHardwareBin == 1) {
+            camera.binningStateVerified && camera.currentHardwareBin == 1 && acceptsOutput(1)) {
             "Cannot restore camera bin 1 before software binning"
         }
         return AppBinPlan(app, 1, app)

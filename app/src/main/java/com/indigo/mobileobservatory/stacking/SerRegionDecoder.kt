@@ -36,6 +36,8 @@ internal object SerRegionDecoder {
 
         /** Reusable RGB tile payload, zero until the first Bayer decode. */
         val borrowedOutputBytes: Long get() = rgb.size.toLong() * 4L
+        val retainedBytes: Long get() = bandBytes + borrowedOutputBytes + sensor.retainedBytes +
+            calibration.retainedBytes + demosaic.scratchBytes
 
         internal fun band(size: Int): ByteArray {
             if (band.size < size) { band = ByteArray(size); bandAllocations++ }

@@ -17,7 +17,8 @@ enum class PolarSamplePhase { EMPTY, CAPTURING, SOLVING, COMPLETE, FAILED, CANCE
 data class PolarSolveConfiguration(val focalLengthMm: Double?, val pixelSizeUm: Double?, val catalogHeightPx: Int,
                                    val useMountHint: Boolean, val searchRadiusDeg: Double, val blindFallback: Boolean = true) {
     fun fieldOfView(hints: FitsSolveHints): Double? =
-        PlateSolveOptics.astapFovDeg(hints, focalLengthMm, pixelSizeUm, catalogHeightPx)
+        PlateSolveOptics.astapFovDeg(hints, focalLengthMm,
+            PlateSolveOptics.pixelSizeForImage(hints, pixelSizeUm), catalogHeightPx)
 }
 
 data class PolarSample(
@@ -27,7 +28,8 @@ data class PolarSample(
     val failure: String? = null,
     val failedPhase: PolarSamplePhase? = null,
     val capturedAt: Instant? = null,
-    val displaySequence: Long = 0L
+    val displaySequence: Long = 0L,
+    val imported: Boolean = false
 )
 
 data class PolarResumePlan(val startIndex: Int, val reset: Boolean, val moveFirst: Boolean)
@@ -48,7 +50,10 @@ class PolarSampleSession(private val onEvent: (Int, PolarSample) -> Unit = { _, 
     private val _samples = MutableStateFlow(List(SLOT_COUNT) { PolarSample() })
     val samples = _samples.asStateFlow()
 
-    fun import(index: Int, file: File) = synchronized(lock) { revisions[index]++; update(index, PolarSample(file = file)) }
+    fun import(index: Int, file: File) = synchronized(lock) {
+        revisions[index]++
+        update(index, PolarSample(file = file, imported = true))
+    }
     fun clear() = synchronized(lock) { revisions.indices.forEach { revisions[it]++ }; _samples.value = List(SLOT_COUNT) { PolarSample() } }
     private fun update(index: Int, sample: PolarSample, revision: Long? = null) = synchronized(lock) {
         if (revision != null && revisions[index] != revision) return@synchronized
@@ -83,12 +88,18 @@ class PolarSampleSession(private val onEvent: (Int, PolarSample) -> Unit = { _, 
                         missingOptics: String = "Image dimensions, focal length and pixel size are required.",
                         exposureTime: suspend (File) -> Instant = { Instant.now() }): PlateSolveResult {
         var sample = PolarSample(PolarSamplePhase.CAPTURING)
-        val revision = synchronized(lock) { revisions[index]++; update(index, sample); revisions[index] }
+        val (previous, revision) = synchronized(lock) {
+            val previous = samples.value[index]
+            revisions[index]++
+            update(index, sample)
+            previous to revisions[index]
+        }
         try {
             val file = capture() ?: error(noFrame)
             currentCoroutineContext().ensureActive()
             // Preserve the image before optics validation or solver execution can fail.
-            sample = sample.copy(phase = PolarSamplePhase.SOLVING, file = file)
+            sample = sample.copy(phase = PolarSamplePhase.SOLVING, file = file,
+                imported = previous.imported && previous.file == file)
             update(index, sample, revision)
             sample = sample.copy(capturedAt = exposureTime(file))
             val fov = fieldOfView(file)?.takeIf { it.isFinite() && it in .2..90.0 } ?: error(missingOptics)
