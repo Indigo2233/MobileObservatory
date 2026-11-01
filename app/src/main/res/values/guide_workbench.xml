@@ -29,6 +29,8 @@
     <string name="gw_profile">Star energy profile</string>
     <string name="gw_profile_legend" formatted="false">Blue: horizontal · yellow: vertical · center: 0 px · white: ±HFR · red: saturation</string>
     <string name="gw_profile_radius">Radius 0–%1$.1f %2$s · vertical line: HFR</string>
+    <string name="gw_star_view_raw">Star view: raw pixels · tap for the interpolated view</string>
+    <string name="gw_star_view_smooth">Star view: interpolated · tap for the raw pixels</string>
     <string name="gw_rms">RMS  RA %1$.2f · DEC %2$.2f · total %3$.2f %4$s  |  %5$d / %6$d samples</string>
     <string name="gw_bit_depth">Image format / bit depth</string>
     <string name="gw_readout">Camera readout mode</string>

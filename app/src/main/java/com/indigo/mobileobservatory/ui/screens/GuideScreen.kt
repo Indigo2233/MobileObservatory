@@ -61,6 +61,7 @@ fun GuideScreen(viewModel: CameraViewModel, onBack: () -> Unit) {
     val display by viewModel.guideDisplayFrame.collectAsStateWithPageLifecycle()
     val references by viewModel.guideReferenceStars.collectAsStateWithPageLifecycle()
     val selectedStar by viewModel.guideReferenceStar.collectAsStateWithPageLifecycle()
+    val starRawView by viewModel.guideStarRawView.collectAsStateWithPageLifecycle()
     val history by viewModel.guideHistory.collectAsStateWithPageLifecycle()
     val focal by viewModel.guideFocalLength.collectAsStateWithPageLifecycle()
     val geometry by viewModel.guideCameraGeometry.collectAsStateWithPageLifecycle()
@@ -105,7 +106,7 @@ fun GuideScreen(viewModel: CameraViewModel, onBack: () -> Unit) {
             text = { Box(Modifier.fillMaxWidth().heightIn(max = 440.dp)) {
                 when (panel) {
                     "devices" -> GuideDevices(viewModel) { panel = "" }
-                    "star" -> GuideStarPanel(display, Modifier.fillMaxWidth())
+                    "star" -> GuideStarPanel(display, starRawView, viewModel::setGuideStarRawView, Modifier.fillMaxWidth())
                     "plots" -> GuidePlotSettings(samples, { samples = it }, showPulses, { showPulses = it },
                         plotRange, { plotRange = it }, unit)
                 }
@@ -152,7 +153,7 @@ fun GuideScreen(viewModel: CameraViewModel, onBack: () -> Unit) {
                         Modifier.weight(1f).fillMaxHeight(), foreground && panel.isEmpty())
                     Column(Modifier.width(diagnosticsWidth).fillMaxHeight()
                         .verticalScroll(rememberScrollState())) {
-                        GuideStarSummary(display) { panel = "star" }
+                        GuideStarSummary(display, starRawView, viewModel::setGuideStarRawView) { panel = "star" }
                         GuidePlots(window, factor, unit, plotRange, showPulses, plotHeight,
                             onSettings = { panel = "plots" }, onClear = viewModel::clearGuideHistory)
                     }
@@ -161,7 +162,7 @@ fun GuideScreen(viewModel: CameraViewModel, onBack: () -> Unit) {
                 Column(Modifier.fillMaxSize()) {
                     GuidePreview(display, references, viewModel::selectGuideStar, displayedStatus,
                         Modifier.weight(1f).fillMaxWidth(), foreground && panel.isEmpty())
-                    GuideStarSummary(display) { panel = "star" }
+                    GuideStarSummary(display, starRawView, viewModel::setGuideStarRawView) { panel = "star" }
                     GuidePlots(window, factor, unit, plotRange, showPulses, plotHeight,
                         onSettings = { panel = "plots" }, onClear = viewModel::clearGuideHistory)
                 }
@@ -185,25 +186,25 @@ private fun GuidePreview(frame: GuideDisplayFrame?, references: List<GuideStar>,
 }
 
 @Composable
-private fun GuideStarSummary(frame: GuideDisplayFrame?, onDetails: () -> Unit) {
+private fun GuideStarSummary(frame: GuideDisplayFrame?, raw: Boolean, onToggleRaw: (Boolean) -> Unit, onDetails: () -> Unit) {
     val description = stringResource(R.string.gw_star_details)
     Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant)
-        .clickable(onClickLabel = description, onClick = onDetails).testTag("guide-star-summary")
-        .padding(horizontal = 8.dp, vertical = 6.dp),
+        .testTag("guide-star-summary").padding(horizontal = 8.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         val profile = frame?.profile
-        if (profile != null) GuideStarThumbnail(profile, Modifier.size(40.dp))
+        if (profile != null) GuideStarThumbnail(profile, Modifier.size(40.dp).testTag("guide-star-view"), raw) { onToggleRaw(!raw) }
         else Box(Modifier.size(40.dp).background(Color.Black), contentAlignment = Alignment.Center) {
             Icon(Icons.Default.StarOutline, null, Modifier.size(22.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        Column(Modifier.weight(1f)) {
+        // The star view owns its own click, so the details entry stays on the text.
+        Column(Modifier.weight(1f).clickable(onClickLabel = description, onClick = onDetails)) {
             Text(stringResource(R.string.guide_star), fontSize = 13.sp, lineHeight = 18.sp)
             Text(if (profile == null) stringResource(R.string.no_star_detected) else
                 "HFR ${number(profile.hfrPx)} px · SNR ${number(frame.primary?.snr ?: 0f)}",
                 fontSize = 13.sp, lineHeight = 18.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
                 color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("guide-hfr"))
         }
-        Icon(Icons.Default.ChevronRight, description, Modifier.size(20.dp))
+        Icon(Icons.Default.ChevronRight, description, Modifier.size(20.dp).clickable(onClick = onDetails))
     }
 }
 
@@ -306,15 +307,13 @@ internal fun GuideImage(frame: GuideDisplayFrame?, references: List<GuideStar>, 
                 drawImage(source.bitmap.asImageBitmap(), dstSize = IntSize(source.width, source.height))
                 val stroke = 1.5.dp.toPx() / viewport.scale
                 val radius = 8.dp.toPx() / viewport.scale
-                // PHD2 draws the secondary-star markers at their locked reference positions
-                // (src/guider_multistar.cpp, GuiderMultiStar::OnPaint) while the primary box
-                // follows the measured star. Keeping the references fixed makes the
-                // relative motion visible, as in PHD2.
-                references.drop(1).filter { viewport.contains(it.x, it.y) }.forEach { star ->
-                    drawCircle(Color(0xFF70DDA0), radius, Offset(star.x, star.y), style = Stroke(stroke))
-                }
-                // The primary marker tracks the star it currently locks onto.
-                (source.primary ?: references.firstOrNull())?.takeIf { viewport.contains(it.x, it.y) }?.let { star ->
+                // The region of interest stays on the locked reference positions, so a drifting
+                // star leaves the marker and the offset becomes visible. PHD2 keeps the
+                // lock-point crosshair on LockPosition() and the secondary markers on their
+                // reference points (src/guider.cpp, Guider::PaintHelper and
+                // src/guider_multistar.cpp, GuiderMultiStar::OnPaint).
+                val selected = references.ifEmpty { source.stars }
+                selected.filter { viewport.contains(it.x, it.y) }.forEach { star ->
                     drawCircle(Color(0xFF70DDA0), radius, Offset(star.x, star.y), style = Stroke(stroke))
                 }
                 (references.firstOrNull() ?: source.primary)?.takeIf { viewport.contains(it.x, it.y) }?.let { star ->
@@ -329,7 +328,7 @@ internal fun GuideImage(frame: GuideDisplayFrame?, references: List<GuideStar>, 
 }
 
 @Composable
-private fun GuideStarPanel(frame: GuideDisplayFrame?, modifier: Modifier) {
+private fun GuideStarPanel(frame: GuideDisplayFrame?, raw: Boolean, onToggleRaw: (Boolean) -> Unit, modifier: Modifier) {
     Column(modifier.background(MaterialTheme.colorScheme.surfaceVariant).verticalScroll(rememberScrollState())
         .testTag("guide-star-details").padding(8.dp)) {
         Text(stringResource(R.string.guide_star), style = MaterialTheme.typography.labelMedium)
@@ -337,21 +336,23 @@ private fun GuideStarPanel(frame: GuideDisplayFrame?, modifier: Modifier) {
         if (profile == null) {
             Text(stringResource(R.string.no_star_detected), fontSize = 11.sp)
         } else {
-            GuideStarDetails(profile, frame.primary)
+            GuideStarDetails(profile, frame.primary, raw, onToggleRaw)
         }
     }
 }
 
 @Composable
-private fun GuideStarDetails(profile: GuideStarProfile, primary: GuideStar?) {
+private fun GuideStarDetails(profile: GuideStarProfile, primary: GuideStar?, raw: Boolean, onToggleRaw: (Boolean) -> Unit) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            GuideStarThumbnail(profile, Modifier.size(64.dp))
+            GuideStarThumbnail(profile, Modifier.size(64.dp).testTag("guide-star-view-detail"), raw) { onToggleRaw(!raw) }
             Column(Modifier.padding(start = 6.dp)) {
                 Text("HFR ${number(profile.hfrPx)} px", fontSize = 11.sp, modifier = Modifier.testTag("guide-hfr-detail"))
                 Text("SNR ${number(primary?.snr ?: 0f)}", fontSize = 11.sp)
                 Text(stringResource(R.string.gw_peak, profile.peak), fontSize = 11.sp)
             }
         }
+        Text(stringResource(if (raw) R.string.gw_star_view_raw else R.string.gw_star_view_smooth),
+            fontSize = 10.sp, modifier = Modifier.testTag("guide-star-view-mode"))
         Text(stringResource(R.string.gw_flux, profile.flux), fontSize = 11.sp)
         Text(stringResource(if (profile.saturated) R.string.gw_star_saturated else R.string.gw_star_not_saturated),
             color = if (profile.saturated) decColor else MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp,
@@ -385,26 +386,21 @@ private fun GuideStarDetails(profile: GuideStarProfile, primary: GuideStar?) {
 }
 
 @Composable
-internal fun GuideStarThumbnail(profile: GuideStarProfile, modifier: Modifier) {
-    val pixels = remember(profile) {
-        if (!profile.isBayer) profile.pixels else List(profile.pixels.size) { index ->
-            val columns = min(2, profile.width); val rows = min(2, profile.height)
-            val x = min(index % profile.width / 2 * 2, profile.width - columns)
-            val y = min(index / profile.width / 2 * 2, profile.height - rows)
-            var sum = 0f
-            for (dy in 0 until rows) for (dx in 0 until columns) sum += profile.pixels[(y + dy) * profile.width + x + dx]
-            sum / (columns * rows)
-        }
-    }
+internal fun GuideStarThumbnail(profile: GuideStarProfile, modifier: Modifier, raw: Boolean = false,
+    onToggleRaw: (() -> Unit)? = null) {
+    val view = remember(profile, raw) { GuideStarView.render(profile, raw) }
+    val pixels = view.pixels
     val peak = ((pixels.maxOrNull() ?: profile.background) - profile.background).coerceAtLeast(1f)
-    Canvas(modifier.background(Color.Black)) {
+    val columns = view.width
+    Canvas(modifier.background(Color.Black)
+        .then(if (onToggleRaw != null) Modifier.pointerInput(Unit) { detectTapGestures { onToggleRaw() } } else Modifier)) {
         pixels.forEachIndexed { index, value ->
             val level = ((value - profile.background) / peak).coerceIn(0f, 1f)
-            val x = index % profile.width; val y = index / profile.width
-            val left = (x * size.width / profile.width).roundToInt().toFloat()
-            val top = (y * size.height / profile.height).roundToInt().toFloat()
-            val right = ((x + 1) * size.width / profile.width).roundToInt().toFloat()
-            val bottom = ((y + 1) * size.height / profile.height).roundToInt().toFloat()
+            val x = index % columns; val y = index / columns
+            val left = (x * size.width / columns).roundToInt().toFloat()
+            val top = (y * size.height / view.height).roundToInt().toFloat()
+            val right = ((x + 1) * size.width / columns).roundToInt().toFloat()
+            val bottom = ((y + 1) * size.height / view.height).roundToInt().toFloat()
             drawRect(Color(level, level, level), Offset(left, top), Size(right - left, bottom - top))
         }
     }

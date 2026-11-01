@@ -705,6 +705,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val showDevicePicker: StateFlow<Boolean> = _showDevicePicker.asStateFlow()
 
     private val prefs = application.getSharedPreferences("mobile_observatory", Context.MODE_PRIVATE)
+
+    // PHD2 toggles the star view between raw pixels and an interpolated display
+    // (src/star_profile.cpp, ProfileWindow::OnLClick). The choice is a display
+    // preference, so it survives restarts.
+    private val _guideStarRawView = MutableStateFlow(prefs.getBoolean("guide_star_raw_view", false))
+    val guideStarRawView: StateFlow<Boolean> = _guideStarRawView.asStateFlow()
+
+    fun setGuideStarRawView(raw: Boolean) {
+        _guideStarRawView.value = raw
+        prefs.edit().putBoolean("guide_star_raw_view", raw).apply()
+    }
+
     private val deviceSettings = DeviceSettingsRepository(application)
     private val _sequenceSettings = MutableStateFlow(deviceSettings.sequenceSettings())
     val sequenceSettings: StateFlow<SequenceSettings> = _sequenceSettings.asStateFlow()

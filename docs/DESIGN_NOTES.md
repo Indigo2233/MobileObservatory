@@ -68,10 +68,17 @@ FIT/FITS 通过分享请求、`ClipData` 和文件 URI 类型统一声明为 `ap
 
 ## 导星图像的标记与显示平滑（2026-11-02）
 
-导星页的星点标记分工与 PHD2 一致。主星方框跟着当前锁定星移动，副星圆圈固定在锁定时的参考位置，
-这样画面上能直接看出星点相对参考框的位移量。黄色十字仍固定在锁定坐标。
-依据 `src/guider_multistar.cpp` 的 `GuiderMultiStar::OnPaint`：主星方框画在 `m_primaryStar`，
-副星画在 `referencePoint`。副星丢失并重新捕获时参考点才重置。
+导星页的星点标记是固定的观测区域，不跟随星点移动。绿色圆圈画在锁定时的参考位置，
+黄色方框与十字画在锁定坐标，星点漂移后离开标记，位移量直接可见。
+依据 `src/guider.cpp` 的 `Guider::PaintHelper`：锁位十字画在 `LockPosition()`，
+是固定坐标而非当前测量位置。副星圆圈同样画在 `referencePoint`
+（`src/guider_multistar.cpp` 的 `GuiderMultiStar::OnPaint`），副星丢失并重新捕获时参考点才重置。
+
+星点图（星点详情里的星点缩略图）提供原始像素与平滑显示两种视图，点击切换，
+与 PHD2 的星点窗一致。PHD2 用 `wxIMAGE_QUALITY_NEAREST` 与 `wxIMAGE_QUALITY_HIGH`
+切换同一子帧的缩放方式（`src/star_profile.cpp` 的 `ProfileWindow::OnLClick` 与 `OnPaint`），
+本项目对应原始像素硬块与双线性插值两种渲染。切换只影响显示，
+峰值、流量、HFR 与剖面等测量值始终取自原始像素。
 
 彩色导星预览的降采样由点采样改为覆盖区平均。Bayer 帧先合成完整感光格，再对输出像素覆盖到的
 全部感光格求平均，避免 4K 传感器缩到 4MP 时星点碎成硬块或整颗消失。PHD2 在显示层用
@@ -84,7 +91,8 @@ PHD2 自动选星前的整帧 `Median3` 未移植，该步骤只用于消除热�
 
 回归：`CfaLuminancePreviewTest.downsamplingAveragesEveryCoveredCellInsteadOfPointSampling`、
 `downsamplingKeepsUniformFramesUniform`、`downsamplingKeepsEveryOutputPixelInsideTheFrame`、
-`GuideWorkbenchInstrumentedTest.primaryMarkerFollowsTheStarWhileSecondaryMarkersStayAtTheirReferences`
+`GuideStarViewTest`、`GuideWorkbenchInstrumentedTest.theRegionOfInterestStaysOnTheLockedPositionWhileTheStarMoves`、
+`tappingTheStarViewSwitchesBetweenRawPixelsAndTheInterpolatedView`
 
 ---
 

@@ -29,6 +29,8 @@
     <string name="gw_profile">星点能量分布</string>
     <string name="gw_profile_legend" formatted="false">蓝：横向 · 黄：纵向 · 中心 0 px · 白：±HFR · 红：饱和线</string>
     <string name="gw_profile_radius">半径 0–%1$.1f %2$s · 竖线 HFR</string>
+    <string name="gw_star_view_raw">星点图：原始像素 · 点击切换为平滑显示</string>
+    <string name="gw_star_view_smooth">星点图：平滑显示 · 点击切换为原始像素</string>
     <string name="gw_rms">RMS  RA %1$.2f · DEC %2$.2f · 总计 %3$.2f %4$s  |  %5$d / %6$d 点</string>
     <string name="gw_bit_depth">图像格式 / 位深</string>
     <string name="gw_readout">相机读出模式</string>

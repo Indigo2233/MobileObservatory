@@ -9,6 +9,75 @@ data class GuideStarProfile(val width: Int, val height: Int, val pixels: List<Fl
     val verticalOffsets: List<Float> = emptyList(), val verticalIntensity: List<Float> = emptyList(),
     val saturationLevel: Float = 255f, val saturated: Boolean = false, val isBayer: Boolean = false)
 
+/**
+ * Renders the star view the way PHD2 does: the raw view shows the sensor samples
+ * one to one, while the interpolated view spreads them over the displayed pixels.
+ * PHD2 switches between wxIMAGE_QUALITY_NEAREST and wxIMAGE_QUALITY_HIGH on a
+ * click in the star window (src/star_profile.cpp, ProfileWindow::OnLClick and
+ * ProfileWindow::OnPaint). The measured values never change with the display mode.
+ */
+object GuideStarView {
+    /** The rendered star view and its pixel grid. */
+    data class Rendered(val pixels: FloatArray, val width: Int, val height: Int)
+
+    /** The luminance samples of the star view. Bayer cells are averaged over 2x2. */
+    fun luminance(profile: GuideStarProfile): FloatArray {
+        val count = profile.width * profile.height
+        if (count <= 0) return FloatArray(0)
+        val values = FloatArray(count)
+        if (!profile.isBayer) {
+            for (index in 0 until count) values[index] = profile.pixels[index]
+            return values
+        }
+        val columns = min(2, profile.width); val rows = min(2, profile.height)
+        for (index in 0 until count) {
+            val x = min(index % profile.width / 2 * 2, profile.width - columns)
+            val y = min(index / profile.width / 2 * 2, profile.height - rows)
+            var sum = 0f
+            for (dy in 0 until rows) for (dx in 0 until columns) sum += profile.pixels[(y + dy) * profile.width + x + dx]
+            values[index] = sum / (columns * rows)
+        }
+        return values
+    }
+
+    /**
+     * The raw view keeps every sensor sample in a hard block; the interpolated view
+     * blends the neighbouring samples. PHD2 switches between wxIMAGE_QUALITY_NEAREST
+     * and wxIMAGE_QUALITY_HIGH for the same subframe (src/star_profile.cpp,
+     * ProfileWindow::OnPaint), so only the display changes and the measurements stay.
+     */
+    fun render(profile: GuideStarProfile, raw: Boolean, scale: Int = 4): Rendered {
+        val source = luminance(profile)
+        if (source.isEmpty()) return Rendered(source, 0, 0)
+        val width = profile.width; val height = profile.height
+        val factor = scale.coerceAtLeast(1)
+        val outWidth = width * factor; val outHeight = height * factor
+        val out = FloatArray(outWidth * outHeight)
+        if (raw) {
+            for (y in 0 until outHeight) for (x in 0 until outWidth)
+                out[y * outWidth + x] = source[(y / factor) * width + (x / factor)]
+            return Rendered(out, outWidth, outHeight)
+        }
+        for (y in 0 until outHeight) {
+            // Sample at the centre of the output pixel, in source coordinates.
+            val sourceY = ((y + .5f) / factor - .5f).coerceIn(0f, (height - 1).toFloat())
+            val y0 = floor(sourceY).toInt().coerceIn(0, height - 1)
+            val y1 = (y0 + 1).coerceAtMost(height - 1)
+            val fy = sourceY - y0
+            for (x in 0 until outWidth) {
+                val sourceX = ((x + .5f) / factor - .5f).coerceIn(0f, (width - 1).toFloat())
+                val x0 = floor(sourceX).toInt().coerceIn(0, width - 1)
+                val x1 = (x0 + 1).coerceAtMost(width - 1)
+                val fx = sourceX - x0
+                val top = source[y0 * width + x0] * (1 - fx) + source[y0 * width + x1] * fx
+                val bottom = source[y1 * width + x0] * (1 - fx) + source[y1 * width + x1] * fx
+                out[y * outWidth + x] = top * (1 - fy) + bottom * fy
+            }
+        }
+        return Rendered(out, outWidth, outHeight)
+    }
+}
+
 object GuideStarAnalysis {
     fun arcsecPerPixel(pixelSizeUm: Float?, focalLengthMm: Float): Float? =
         pixelSizeUm?.takeIf { it.isFinite() && it > 0 && focalLengthMm.isFinite() && focalLengthMm > 0 }

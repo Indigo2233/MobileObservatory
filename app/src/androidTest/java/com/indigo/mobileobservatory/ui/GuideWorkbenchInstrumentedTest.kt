@@ -4,6 +4,9 @@ import android.graphics.Bitmap
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.geometry.Offset
@@ -22,6 +25,7 @@ import com.indigo.mobileobservatory.ui.screens.GuideStarThumbnail
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
+import kotlin.math.abs
 
 class GuideWorkbenchInstrumentedTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
@@ -108,6 +112,26 @@ class GuideWorkbenchInstrumentedTest {
         assertEquals(180f, profile.peak, 0f)
     }
 
+    @Test fun tappingTheStarViewSwitchesBetweenRawPixelsAndTheInterpolatedView() {
+        // PHD2 switches the star view between wxIMAGE_QUALITY_NEAREST and
+        // wxIMAGE_QUALITY_HIGH on a click (src/star_profile.cpp, ProfileWindow::OnLClick).
+        val pixels = MutableList(25 * 25) { 0f }
+        pixels[12 * 25 + 12] = 200f
+        val profile = GuideStarProfile(25, 25, pixels, 2f, 100f, 200f, 0f, emptyList(), emptyList())
+        var raw by mutableStateOf(false)
+        compose.setContent { MaterialTheme {
+            GuideStarThumbnail(profile, Modifier.size(64.dp).testTag("star-view"), raw) { raw = !raw }
+        } }
+        val smooth = compose.onNodeWithTag("star-view").captureToImage().toPixelMap()
+        compose.onNodeWithTag("star-view").performTouchInput { click(center) }
+        compose.runOnIdle { assertTrue("The click must switch the view", raw) }
+        val rawPixels = compose.onNodeWithTag("star-view").captureToImage().toPixelMap()
+        var differences = 0
+        for (y in 0 until smooth.height) for (x in 0 until smooth.width)
+            if (abs(smooth[x, y].red - rawPixels[x, y].red) > .01f) differences++
+        assertTrue("The two views must differ", differences > 0)
+    }
+
     @Test fun selectionUsesSourceCoordinatesAndRejectsTheLetterbox() {
         val frame = frame()
         val selections = mutableListOf<Pair<Float, Float>>()
@@ -157,9 +181,10 @@ class GuideWorkbenchInstrumentedTest {
         compose.runOnIdle { assertEquals(listOf(1920f to 1080f), selections) }
     }
 
-    @Test fun primaryMarkerFollowsTheStarWhileSecondaryMarkersStayAtTheirReferences() {
-        // PHD2 draws the secondary-star markers at the locked reference positions and lets
-        // the primary box follow the measured star (src/guider_multistar.cpp, OnPaint).
+    @Test fun theRegionOfInterestStaysOnTheLockedPositionWhileTheStarMoves() {
+        // PHD2 keeps the lock-point crosshair and the secondary markers on the locked
+        // positions (src/guider.cpp, Guider::PaintHelper), so a drifting star leaves the
+        // marker and the offset becomes visible.
         val primary = GuideStar(160f, 120f, 20f)
         val secondary = GuideStar(320f, 120f, 15f)
         val references = listOf(primary, secondary)
@@ -173,15 +198,15 @@ class GuideWorkbenchInstrumentedTest {
         val pixels = compose.onNodeWithTag("guide-image").captureToImage().toPixelMap()
         val markers = greenMarkers(pixels)
         assertTrue("Both markers must be drawn", markers.size >= 2)
-        // The primary marker follows the moved star; the secondary stays at its reference.
-        val movedX = imageX(movedPrimary.x, 640, pixels.width)
-        val referenceX = imageX(primary.x, 640, pixels.width)
-        val secondaryX = imageX(secondary.x, 640, pixels.width)
-        assertTrue("A marker must follow the drifted star", markers.any { kotlin.math.abs(it - movedX) < 6f })
+        val movedX = imageX(movedPrimary.x, 640, 480, pixels.width, pixels.height)
+        val referenceX = imageX(primary.x, 640, 480, pixels.width, pixels.height)
+        val secondaryX = imageX(secondary.x, 640, 480, pixels.width, pixels.height)
+        assertTrue("The region of interest must stay on the locked position",
+            markers.any { kotlin.math.abs(it - referenceX) < 6f })
         assertTrue("The secondary marker must stay at its reference position",
             markers.any { kotlin.math.abs(it - secondaryX) < 6f })
-        assertTrue("The primary reference must no longer carry a marker",
-            markers.none { kotlin.math.abs(it - referenceX) < 6f })
+        assertTrue("The drifted star must no longer carry a marker",
+            markers.none { kotlin.math.abs(it - movedX) < 6f })
     }
 
     private fun frame(): GuideDisplayFrame {
@@ -191,24 +216,28 @@ class GuideWorkbenchInstrumentedTest {
     }
 
     /** Screen x of an image coordinate under the letterboxed preview transform. */
-    private fun imageX(imageX: Float, imageWidth: Int, canvasWidth: Int): Float {
-        val scale = minOf(canvasWidth.toFloat() / imageWidth, 200f / 480f)
+    private fun imageX(imageX: Float, imageWidth: Int, imageHeight: Int, canvasWidth: Int, canvasHeight: Int): Float {
+        val scale = minOf(canvasWidth.toFloat() / imageWidth, canvasHeight.toFloat() / imageHeight)
         return (canvasWidth - imageWidth * scale) / 2f + imageX * scale
     }
 
-    /** Horizontal centres of the green star markers in the captured preview. */
+    /** Horizontal centres of the green star markers in the captured preview. The yellow
+     * crosshair overlaps the marker row, so the whole image is scanned for green pixels. */
     private fun greenMarkers(pixels: androidx.compose.ui.graphics.PixelMap): List<Float> {
-        val centres = mutableListOf<Float>()
-        var run = mutableListOf<Int>()
-        for (x in 0 until pixels.width) {
-            val green = pixels[x, pixels.height / 2].green
-            val marked = green > .5f && pixels[x, pixels.height / 2].red < .6f && pixels[x, pixels.height / 2].blue < .7f
-            if (marked) run.add(x) else if (run.isNotEmpty()) {
-                centres.add(run.average().toFloat()); run = mutableListOf()
-            }
+        val points = mutableListOf<Pair<Int, Int>>()
+        for (y in 0 until pixels.height) for (x in 0 until pixels.width) {
+            val color = pixels[x, y]
+            if (color.green > .6f && color.green > color.red * 1.4f && color.green > color.blue * 1.2f)
+                points.add(x to y)
         }
-        if (run.isNotEmpty()) centres.add(run.average().toFloat())
-        return centres
+        // The circles are hollow, so group the green pixels into rings and take the
+        // centre of each bounding box.
+        val groups = mutableListOf<MutableList<Pair<Int, Int>>>()
+        for (point in points) {
+            val group = groups.firstOrNull { candidate -> candidate.any { abs(it.first - point.first) < 40 && abs(it.second - point.second) < 40 } }
+            if (group != null) group.add(point) else groups.add(mutableListOf(point))
+        }
+        return groups.map { group -> group.map { it.first }.average().toFloat() }
     }
 
     private fun yellowCenter(pixels: androidx.compose.ui.graphics.PixelMap): Float {
