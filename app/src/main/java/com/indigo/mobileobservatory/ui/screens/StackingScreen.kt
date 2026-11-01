@@ -288,8 +288,14 @@ private fun LiveStackControls(vm: CameraViewModel, state: LiveStackState, showSt
     val rendering by c.rendering.collectAsStateWithPageLifecycle()
     var readiness by remember { mutableStateOf(vm.liveStackStartIssue()) }
     var suggestedBin by remember { mutableStateOf(vm.recommendedLiveStackBin()) }
-    LaunchedEffect(vm, scienceReady) { while (true) {
-        readiness = vm.liveStackStartIssue(); suggestedBin = vm.recommendedLiveStackBin(); delay(500)
+    var suggestedRoi by remember { mutableStateOf(vm.recommendedLiveStackRoi()) }
+    var diagnostic by remember { mutableStateOf(vm.liveStackDiagnostic()) }
+    LaunchedEffect(vm, scienceReady, state.phase) { while (true) {
+        readiness = vm.liveStackStartIssue()
+        suggestedBin = vm.recommendedLiveStackBin()
+        suggestedRoi = vm.recommendedLiveStackRoi()
+        diagnostic = vm.liveStackDiagnostic()
+        delay(500)
     } }
     val recording by vm.isRecording.collectAsStateWithPageLifecycle()
     val recordedFrames by vm.recordingFrameCount.collectAsStateWithPageLifecycle()
@@ -303,6 +309,11 @@ private fun LiveStackControls(vm: CameraViewModel, state: LiveStackState, showSt
         suggestedBin?.let { bin ->
             OutlinedButton(onClick = vm::useRecommendedLiveStackBin, enabled = !recording && !task.busy) {
                 Text(stringResource(R.string.stack_use_hardware_bin, bin))
+            }
+        }
+        suggestedRoi?.let { roi ->
+            OutlinedButton(onClick = vm::useRecommendedLiveStackRoi, enabled = !recording && !task.busy) {
+                Text(stringResource(R.string.stack_use_roi, roi.width, roi.height))
             }
         }
         when (readiness) {
@@ -337,6 +348,11 @@ private fun LiveStackControls(vm: CameraViewModel, state: LiveStackState, showSt
         style = MaterialTheme.typography.bodySmall)
     }
     if (state.reason.isNotEmpty()) Text(stackMessage(state.reason), color = MaterialTheme.colorScheme.tertiary)
+    diagnostic?.takeIf { !it.startable && (readiness == "memory_budget" || readiness == "input_budget") }?.let {
+        Text(stringResource(R.string.stack_live_budget_detail, it.workingBytes / 1048576,
+            it.budgetBytes / 1048576), style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         when (state.phase) {
             LiveStackPhase.EMPTY -> Button(onClick = vm::startLiveStack, enabled = readiness == null && !calibration.busy, modifier = Modifier.weight(1f)) { Text(stringResource(R.string.stack_start)) }

@@ -303,6 +303,20 @@ class StackingCoordinator(
         return LiveStackAdmission.issue(key, liveInputBudget(calibrationBytes), calibrationBytes, calibrationBytes > 0)
     }
 
+    fun liveInputBudgetSnapshot(key: StackSessionKey): LiveInputDiagnostic {
+        val calibrationBytes = calibration.memoryBytes
+        val budget = liveInputBudget(calibrationBytes)
+        val working = LiveStackAdmission.workingBytes(key, calibrationBytes, calibrationBytes > 0)
+        return LiveInputDiagnostic(
+            issue = LiveStackAdmission.issue(key, budget, calibrationBytes, calibrationBytes > 0).orEmpty(),
+            input = key,
+            budgetBytes = budget,
+            workingBytes = working,
+            calibrationBytes = calibrationBytes,
+            retainedSession = live.state.value.phase != LiveStackPhase.EMPTY
+        )
+    }
+
     private fun availableBudget(retainedStackBytes: Long): Long {
         val nonStackBytes = (heapUsageBytes() - retainedStackBytes).coerceAtLeast(0)
         return StackMemoryBudget.forHeap(heapLimitBytes, nonStackBytes)

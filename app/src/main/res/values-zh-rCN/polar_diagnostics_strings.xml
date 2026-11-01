@@ -32,6 +32,8 @@
     <string name="polar_capture_interrupted">等待图像时相机采集已停止，请恢复采集后重试。</string>
     <string name="polar_capture_timeout">%1$d 秒内未收到新图像（曝光 %2$.1f 秒）。相机报告：%3$s</string>
     <string name="polar_capture_busy">其他拍摄或参数设置任务正在进行，请等待完成。</string>
+    <string name="polar_settings_busy">相机参数正在写回，请等待设置完成后重试。</string>
+    <string name="polar_capture_owned">定位拍摄正在进行，请等待完成或停止当前任务。</string>
     <string name="polar_capture_manual_exposure">请先关闭自动曝光，再拍摄极轴采样图像。</string>
     <string name="polar_capture_settings_changed">拍摄期间相机参数发生变化，请重新拍摄当前点。</string>
     <string name="polar_capture_no_sdk_error">SDK 未报告错误</string>

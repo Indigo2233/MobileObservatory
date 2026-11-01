@@ -101,6 +101,8 @@
     <string name="stack_reason_processing_size">Capture resolution exceeds the stacking limit. Camera binning preserves the field of view; a capture ROI uses a smaller area.</string>
     <string name="stack_reason_invalid_dimensions">Invalid image dimensions. Check the source file or camera ROI.</string>
     <string name="stack_use_hardware_bin">Use full-frame %1$d× camera binning</string>
+    <string name="stack_use_roi">Use %1$d×%2$d capture ROI</string>
+    <string name="stack_live_budget_detail">Live stacking needs about %1$d MiB; %2$d MiB is available.</string>
     <string name="stack_reason_settings">Capture settings changed; save the result and reset the session.</string>
     <string name="stack_reason_disconnect">Camera disconnected; result retained. Reconnect and start a new session.</string>
     <string name="stack_reason_stars">Too few stars for reliable alignment</string>

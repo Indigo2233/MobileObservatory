@@ -82,6 +82,22 @@ class CapturePortraitInstrumentedTest {
         edit.commit()
     }
 
+    @Test fun portraitExposureSheetSharesLongExposureModeWithTheCamera() {
+        startDemo()
+        compose.runOnIdle { if (vm.longExposureEnabled.value) vm.toggleLongExposure() }
+        compose.onNodeWithTag("capture-exposure").performClick()
+        compose.onNodeWithTag("capture-long-exposure").assertIsOff().performClick().assertIsOn()
+        compose.onNode(hasSetTextAction()).performTextReplacement("10s")
+        compose.onNode(hasSetTextAction()).performImeAction()
+        compose.waitUntil(5_000) { vm.exposureUs.value == 10_000_000f }
+        assertTrue(vm.cameraManager.activeCamera!!.longExposureEnabled)
+        compose.onNodeWithContentDescription(app.getString(R.string.close)).performClick()
+        compose.onNodeWithTag("capture-exposure").performClick()
+        compose.onNodeWithTag("capture-long-exposure").assertIsOn().performClick().assertIsOff()
+        compose.waitUntil(5_000) { !vm.cameraManager.activeCamera!!.longExposureEnabled }
+        assertFalse(vm.longExposureEnabled.value)
+    }
+
     @Test fun portraitFillsWidthAndSettingsNeverResizeOrReplaceThePreview() {
         startDemo()
         val width = compose.onNodeWithTag("capture-preview").getUnclippedBoundsInRoot().width

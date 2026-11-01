@@ -589,6 +589,11 @@
     <string name="trial_capture_disabled">试用版已禁用拍摄</string>
     <string name="saved_file">已保存：%s</string>
     <string name="capture_error_detail">拍摄错误：%s</string>
+    <string name="capture_snapshot_paused">预览已暂停，无法取得新的拍摄帧；请先恢复预览。</string>
+    <string name="capture_snapshot_pending">上一张拍摄仍在等待相机帧，请稍后重试。</string>
+    <string name="capture_snapshot_finishing">上一张拍摄正在结束，请稍后重试。</string>
+    <string name="record_resume_capture">请先恢复相机采集，再开始录像。</string>
+    <string name="media_share_solve_diagnostics">分享原图与解析日志</string>
     <string name="no_usb_serial">无 USB 串口设备</string>
     <string name="mount_error">赤道仪错误</string>
     <string name="tracking_on">启用跟踪</string>

@@ -42,7 +42,10 @@ fun polarResumePlan(samples: List<PolarSample>, positionedPoint: Int, canResume:
 }
 
 /** Sample execution is independent of the screen so failure evidence survives navigation. */
-class PolarSampleSession(private val onEvent: (Int, PolarSample) -> Unit = { _, _ -> }) {
+class PolarSampleSession(
+    private val retainFailure: suspend (Int, PolarSample) -> Unit = { _, _ -> },
+    private val onEvent: (Int, PolarSample) -> Unit = { _, _ -> }
+) {
     companion object { const val PREVIEW_INDEX = 4; const val SLOT_COUNT = 5 }
     private val lock = Any()
     private val revisions = LongArray(SLOT_COUNT)
@@ -94,7 +97,7 @@ class PolarSampleSession(private val onEvent: (Int, PolarSample) -> Unit = { _, 
             update(index, sample)
             previous to revisions[index]
         }
-        try {
+        val result = try {
             val file = capture() ?: error(noFrame)
             currentCoroutineContext().ensureActive()
             // Preserve the image before optics validation or solver execution can fail.
@@ -110,21 +113,34 @@ class PolarSampleSession(private val onEvent: (Int, PolarSample) -> Unit = { _, 
                 check(ra != null && dec != null && ra.isFinite() && dec.isFinite() &&
                     ra in 0.0..360.0 && dec in -90.0..90.0) { "Solver returned an invalid sky position." }
             }
-            update(index, sample.copy(
+            sample = sample.copy(
                 phase = if (result.success) PolarSamplePhase.COMPLETE else PolarSamplePhase.FAILED,
                 result = result,
                 failure = result.message.takeUnless { result.success },
                 failedPhase = PolarSamplePhase.SOLVING.takeUnless { result.success }
-            ), revision)
-            return result
+            )
+            update(index, sample, revision)
+            result
         } catch (cancel: CancellationException) {
             update(index, sample.copy(phase = PolarSamplePhase.CANCELLED, failedPhase = sample.phase), revision)
             throw cancel
         } catch (failure: Exception) {
-            update(index, sample.copy(phase = PolarSamplePhase.FAILED, failure = failure.message ?: failure.javaClass.simpleName,
+            val failed = sample.copy(phase = PolarSamplePhase.FAILED, failure = failure.message ?: failure.javaClass.simpleName,
                 failedPhase = sample.phase,
-                result = PlateSolveResult(false, failure.message ?: failure.javaClass.simpleName, log = failure.stackTraceToString())), revision)
+                result = PlateSolveResult(false, failure.message ?: failure.javaClass.simpleName, log = failure.stackTraceToString()))
+            update(index, failed, revision)
+            retainFailureSafely(index, failed)
             throw failure
         }
+        // Persistence is outside the solver's catch block: storage errors must not
+        // replace a completed result or turn it into a different solver failure.
+        if (!result.success) retainFailureSafely(index, sample)
+        return result
+    }
+
+    private suspend fun retainFailureSafely(index: Int, sample: PolarSample) {
+        try { retainFailure(index, sample) }
+        catch (cancel: CancellationException) { throw cancel }
+        catch (_: Exception) { /* Evidence storage is best effort; keep the original failure. */ }
     }
 }

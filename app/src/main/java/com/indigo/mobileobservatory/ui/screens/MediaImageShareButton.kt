@@ -25,6 +25,9 @@ internal fun MediaImageShareButton(file: File, preview: Bitmap?, enabled: Boolea
     val scope = rememberCoroutineScope()
     var expanded by remember { mutableStateOf(false) }
     var preparing by remember { mutableStateOf(false) }
+    val solveLog = remember(file) {
+        com.indigo.mobileobservatory.astrometry.SolveFailureArchive.logFor(file).takeIf { it.isFile }
+    }
     fun share(files: List<File>) {
         if (!shareMediaFiles(context, files)) Toast.makeText(context, R.string.media_share_failed, Toast.LENGTH_LONG).show()
     }
@@ -54,6 +57,8 @@ internal fun MediaImageShareButton(file: File, preview: Bitmap?, enabled: Boolea
                 })
             DropdownMenuItem(text = { Text(stringResource(R.string.media_share_original)) },
                 onClick = { expanded = false; share(listOf(file)) })
+            if (solveLog != null) DropdownMenuItem(text = { Text(stringResource(R.string.media_share_solve_diagnostics)) },
+                onClick = { expanded = false; share(listOf(file, solveLog)) })
             Text(stringResource(R.string.media_share_preview_hint), style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.widthIn(max = 280.dp).padding(12.dp))
         }

@@ -589,6 +589,11 @@
     <string name="trial_capture_disabled">Trial version — capture disabled</string>
     <string name="saved_file">Saved: %s</string>
     <string name="capture_error_detail">Capture error: %s</string>
+    <string name="capture_snapshot_paused">Preview is paused, so a new capture frame cannot be acquired. Resume preview first.</string>
+    <string name="capture_snapshot_pending">The previous capture is still waiting for a camera frame. Retry shortly.</string>
+    <string name="capture_snapshot_finishing">The previous capture is finishing. Retry shortly.</string>
+    <string name="record_resume_capture">Resume camera capture before starting a recording.</string>
+    <string name="media_share_solve_diagnostics">Share image and solve log</string>
     <string name="no_usb_serial">No USB serial device</string>
     <string name="mount_error">Mount error</string>
     <string name="tracking_on">Enable tracking</string>

@@ -487,6 +487,7 @@ internal fun CaptureWorkspaceScreen(
                 autoExposureMode == com.indigo.mobileobservatory.camera.AutoExposureMode.OFF, autoStretch, portraitDetails,
                 viewModel::setExposure, viewModel::setGain, viewModel::setAutoStretch, { portraitDetails = true },
                 isRecording, viewModel::stopRecording,
+                longExposureEnabled = longExposureEnabled, onToggleLongExposure = viewModel::toggleLongExposure,
                 safetyControls = { MountMotionStopBanner(mountMotionState, viewModel::stopMountMotion) })
         }, fullControls = {
             if (connectionState is ConnectionState.Connected) {

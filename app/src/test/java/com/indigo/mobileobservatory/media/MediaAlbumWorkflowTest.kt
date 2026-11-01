@@ -148,13 +148,16 @@ class MediaAlbumWorkflowTest {
         val captures = File(root, "captures")
         val image = File(captures, "FITS/edited.fit").apply { parentFile!!.mkdirs(); writeText("pixels") }
         val sidecar = MediaLineage.sidecar(image).apply { writeText("recipe") }
+        val solveLog = com.indigo.mobileobservatory.astrometry.SolveFailureArchive.logFor(image).apply { writeText("solver log") }
         val trash = File(root, "recordings/.trash")
         assertTrue(MediaTrash.move(image, trash))
-        assertFalse(image.exists()); assertFalse(sidecar.exists())
+        assertFalse(image.exists()); assertFalse(sidecar.exists()); assertFalse(solveLog.exists())
         val deleted = File(trash, image.name)
         assertTrue(MediaLineage.sidecar(deleted).exists())
+        assertTrue(com.indigo.mobileobservatory.astrometry.SolveFailureArchive.logFor(deleted).exists())
         assertTrue(MediaTrash.restore(deleted, File(root, "wrong-folder"), listOf(captures)))
         assertEquals("pixels", image.readText()); assertEquals("recipe", sidecar.readText())
+        assertEquals("solver log", solveLog.readText())
         assertTrue(trash.listFiles()!!.isEmpty())
         assertTrue(MediaTrash.move(image, trash))
         image.writeText("new-image")

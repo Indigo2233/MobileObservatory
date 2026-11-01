@@ -1129,3 +1129,16 @@ APK SHA-256:
 `apk-verification.json` records both signing identities, the source snapshot,
 ARM64-only packaging, disabled sequence entries and unchanged frozen ZWO
 libraries. Physical-camera and real M31 validation remain for the night test.
+## 2026-10-31 现场实时叠加预算诊断
+
+现场日志 `app(4).log` 记录 Uranus-C PRO 的 3856×2180 BAYER_RG16、Bin 1 实时叠加启动检查。
+日志中约 410 MiB 的 `ceiling` 为叠加配置上限，按堆上限的 80% 计算，对应约
+512 MiB 的应用堆上限。21:55–21:56 的六次请求中，当前可分配预算为 218–312 MiB，
+同尺寸工作集超过预算，实际拒绝原因均为 `memory_budget`。该段明确记录的构建为
+`main-16bb1f9402bb-20261031-212320+08:00`；后续 `f2cdc8d` 已统一就绪提示和启动的
+堆预算检查，不能用该旧包的现象判定当前源码仍存在相同判断差异。
+
+源码追加当前工作集与可用预算的数值说明及 `LiveInputDiagnostic` 启动日志；
+超预算时提供当前预算下可被同一准入检查接受的中心裁切。Bin 和 ROI 的实际应用继续
+沿用原有采集重启、参数失效和校准匹配路径。以上为源码修改，按用户要求尚未执行
+测试、编译或出包。

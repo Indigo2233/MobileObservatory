@@ -9,6 +9,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.recording.SERReader
 import com.indigo.mobileobservatory.stacking.LiveStackPhase
 import com.indigo.mobileobservatory.stacking.PixelTraits
@@ -22,7 +23,6 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.*
@@ -35,6 +35,23 @@ class CameraCfaPipelineInstrumentedTest {
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
     private val app get() = instrumentation.targetContext.applicationContext as Application
     private fun main(action: () -> Unit) = instrumentation.runOnMainSync(action)
+
+    @Test fun pausedAcquisitionRejectsRecordingBeforeCreatingAnyOutput() = runBlocking {
+        workspace(tokens = true) { vm, camera ->
+            await { camera.emitLatest(); vm.scienceCaptureReady.value }
+            main { vm.togglePreviewPause() }
+            await { !camera.isCapturing.value }
+            val directory = checkNotNull(app.getExternalFilesDir("recordings"))
+            val before = directory.walkTopDown().map { it.absolutePath }.toSet()
+            for (format in listOf("MP4", "SER", "PSER", "FITS")) {
+                main { vm.setRecordFormat(format); vm.startRecording() }
+                assertFalse(vm.isRecording.value)
+                assertNull(vm.getActiveRecordingFile())
+                assertEquals(app.getString(R.string.record_resume_capture), vm.statusMessage.value)
+                assertEquals(before, directory.walkTopDown().map { it.absolutePath }.toSet())
+            }
+        }
+    }
 
     @Test fun mp4IsFinalizedBeforeTheCameraAcceptsADifferentPixelFormat() = runBlocking {
         workspace(tokens = true) { vm, camera ->
@@ -142,8 +159,7 @@ class CameraCfaPipelineInstrumentedTest {
         workspace(tokens = true) { vm, camera ->
             main { assertTrue(vm.applyCameraCfa(SerCfaInterpretation.BGGR)) }
             await { camera.starts == 2 && !vm.cameraCfaApplying.value }
-            val pending = vm.javaClass.getDeclaredField("pendingFrameSnapshot").apply { isAccessible = true }
-            fun awaitingFrame() = (pending.get(vm) as AtomicReference<*>).get() != null
+            fun awaitingFrame() = snapshots(vm).state != null
             val fitsTask = async(Dispatchers.IO) { vm.captureTempFitsForPlateSolve() }
             await { camera.singleStarts == 1 }
             main { assertFalse(vm.applyCameraCfa(SerCfaInterpretation.RGGB)) }
@@ -226,6 +242,7 @@ class CameraCfaPipelineInstrumentedTest {
 
     @Test fun cancellingAPolarExposureStopsItAndLeavesPreviewPaused() = runBlocking {
         workspace(tokens = true) { vm, camera ->
+            fun pending() = snapshots(vm).state
             val task = async(Dispatchers.IO) { vm.captureTempFitsForPlateSolve() }
             await { camera.singleStarts == 1 }
             task.cancelAndJoin()
@@ -236,6 +253,36 @@ class CameraCfaPipelineInstrumentedTest {
             delay(100)
             assertEquals(1, camera.singleStarts)
             assertFalse(camera.isCapturing.value)
+            main { vm.togglePreviewPause() }
+            await { camera.isCapturing.value }
+            assertNull("A stale snapshot from the cancelled exposure cannot block the next one", pending())
+        }
+    }
+
+    @Test fun pausingPreviewReleasesAPendingSnapshotBeforePolarAcquisition() = runBlocking {
+        workspace(tokens = true) { vm, camera ->
+            await { camera.emitLatest(); vm.scienceCaptureReady.value }
+            // A still from the preview waits for the next frame; polar uses a separate
+            // single-exposure path and cannot reproduce the blocked preview request.
+            main { vm.setCaptureFormat("JPG"); vm.capture() }
+            await { snapshots(vm).state?.owner == "photo_jpg" }
+            val blocked = runCatching { vm.captureTempFitsForPlateSolve(camera.currentExposureUs) }.exceptionOrNull()
+            assertEquals(app.getString(R.string.capture_snapshot_pending), blocked?.message)
+            assertEquals(0, camera.singleStarts)
+            main { vm.togglePreviewPause() }
+            assertNull(snapshots(vm).state)
+            await { !camera.isCapturing.value }
+            assertTrue(vm.previewPaused.value)
+            val polar = async(Dispatchers.IO) { vm.captureTempFitsForPlateSolve(camera.currentExposureUs) }
+            await { camera.singleStarts == 1 && camera.isCapturing.value }
+            delay(20); camera.emitLatest()
+            val file = polar.await()
+            try {
+                assertTrue(file != null && file.length() > 0)
+                assertNull(snapshots(vm).state)
+                assertFalse(camera.isCapturing.value)
+                assertTrue(vm.previewPaused.value)
+            } finally { file?.delete() }
         }
     }
 
@@ -308,6 +355,9 @@ class CameraCfaPipelineInstrumentedTest {
             app.getSharedPreferences("mobile_observatory", 0).edit().remove(key).remove("${key}_layout").commit()
         }
     }
+    private fun snapshots(vm: CameraViewModel): FrameSnapshotRequests<*> =
+        vm.javaClass.getDeclaredField("frameSnapshots").apply { isAccessible = true }.get(vm) as FrameSnapshotRequests<*>
+
     private suspend fun await(test: () -> Boolean) = withTimeout(15_000) { while (!test()) delay(20) }
 
     private class CameraFixture(private val tokens: Boolean) : Camera, CameraSingleExposureCapable {

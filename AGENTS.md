@@ -11,6 +11,15 @@ for continuity.
 - Main source root: `app/src/main/java/com/indigo/mobileobservatory`
 - APK output: `bin/Installer/IndigoObservatory_android.apk`
 
+## Required workspace
+
+All work on this project must use `D:\Unity\MobileObservatory`, on `main`.
+The maintainer explicitly requires the main project directory. Do not create or
+switch to another worktree or checkout, including Codex-managed worktrees.
+If the session starts in another checkout, use the main project for every project
+read, edit, test, build and Git operation. Keep generated task files under this
+project's ignored output directories.
+
 ## Build
 
 Use the project script from PowerShell:

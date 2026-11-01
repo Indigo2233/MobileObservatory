@@ -21,6 +21,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
+import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.DatagramPacket
 import java.net.DatagramSocket
@@ -1167,10 +1168,12 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
         }
         val bytes = ArrayList<Byte>(32)
         val buffer = ByteArray(64)
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (System.currentTimeMillis() < deadline) {
-            val remaining = (deadline - System.currentTimeMillis()).toInt().coerceIn(50, 250)
-            val count = runCatching { port.read(buffer, remaining) }.getOrDefault(0)
+        val deadline = elapsedRealtime() + timeoutMs
+        while (elapsedRealtime() < deadline) {
+            val remaining = (deadline - elapsedRealtime()).toInt().coerceIn(1, 250)
+            val count = try { port.read(buffer, remaining) } catch (failure: IOException) {
+                throw IOException("Mount serial read failed command=$command received=${bytes.size}: ${failure.message}", failure)
+            }
             if (count <= 0) continue
             val chunk = buffer.copyOf(count)
             Log.i(TAG, "USB serial rx ${chunk.toHexString()} ${chunk.toPrintableString()}")
@@ -1183,7 +1186,7 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
                 if (bytes.size > 128) error("Mount response is too long.")
             }
         }
-        error("Mount serial read timeout.")
+        error("Mount serial read timeout command=$command timeoutMs=$timeoutMs received=${bytes.toByteArray().toHexString()}")
     }
 
     @Synchronized

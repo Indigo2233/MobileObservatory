@@ -32,6 +32,8 @@
     <string name="polar_capture_interrupted">Camera acquisition stopped while waiting for the image. Resume capture and retry.</string>
     <string name="polar_capture_timeout">No new image within %1$d seconds (exposure %2$.1f s). Camera report: %3$s</string>
     <string name="polar_capture_busy">Another capture or settings task is active. Wait for it to finish.</string>
+    <string name="polar_settings_busy">Camera settings are still being written. Wait for the write to finish, then retry.</string>
+    <string name="polar_capture_owned">A positioning exposure is active. Wait for it to finish or stop the current task.</string>
     <string name="polar_capture_manual_exposure">Disable automatic exposure before capturing polar alignment samples.</string>
     <string name="polar_capture_settings_changed">Camera settings changed during capture. Capture this point again.</string>
     <string name="polar_capture_no_sdk_error">no SDK error was reported</string>

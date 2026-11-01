@@ -84,14 +84,18 @@ class VirtualObservatoryTest {
         }
         val camera = VirtualCamera(model, pixels, "test")
         val module = GuideModule()
-        val result = GuideCalibrator(GuideCalibrationConfig(), pulse = { direction, ms ->
+        // The fixture moves at 4/6 px/s. Fixed 500 ms pulses provide enough
+        // samples on both axes for the residual/backlash checks below.
+        val result = GuideCalibrator(GuideCalibrationConfig(initialPulseMs = 500), pulse = { direction, ms ->
             model.start(direction, true, ms); time += ms; model.stop()
         }, measure = {
             // Match a 2 s guide exposure plus processing, including drift between pulses.
             time += 2_200
             module.usableStars(module.detectStars(FrameData(camera.render(model.snapshot()), 1024, 768, PixelFormat.MONO8, 0, time)))
         }).run().calibration
-        assertTrue(result.eastSteps >= 7 && result.northSteps >= 7)
+        assertTrue("calibration=$result", result.eastSteps >= 7 && result.northSteps >= 7)
+        assertEquals(4f, result.eastRatePxPerSec, .3f)
+        assertEquals(6f, result.northRatePxPerSec, .3f)
         assertTrue(result.fitResidualPx < .5f)
         assertEquals(1800f, result.decBacklashMs.toFloat(), 500f)
         camera.close()

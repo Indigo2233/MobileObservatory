@@ -10,6 +10,50 @@ import org.junit.Test
 import java.io.File
 
 class PolarSampleSessionTest {
+    @Test fun failureEvidenceSurvivesTheNextAttemptReplacingTheDisplayedSample(): Unit = runTest {
+        val evidence = mutableListOf<PolarSample>()
+        val session = PolarSampleSession(retainFailure = { _, sample -> evidence += sample })
+        val failure = PlateSolveResult(false, "No match", log = "Found 80 stars\nNo solution")
+        session.execute(0, { File("failed.fits") }, { 1.5 }, { _, _ -> failure })
+        session.execute(0, { File("retry.fits") }, { 1.5 }, { _, _ ->
+            PlateSolveResult(true, "Solved", raDeg = 30.0, decDeg = 20.0)
+        })
+        assertEquals(1, evidence.size)
+        assertEquals(File("failed.fits"), evidence.single().file)
+        assertEquals(failure.log, evidence.single().result!!.log)
+        assertEquals(File("retry.fits"), session.samples.value[0].file)
+    }
+
+    @Test fun storageFailureCannotReplaceTheSolverResultOrException(): Unit = runTest {
+        var callbacks = 0
+        val session = PolarSampleSession(retainFailure = { _, _ -> callbacks++; throw java.io.IOException("Disk full") })
+        val failure = PlateSolveResult(false, "No match", log = "Found 80 stars")
+        assertSame(failure, session.execute(0, { File("failed.fits") }, { 1.5 }, { _, _ -> failure }))
+        assertSame(failure, session.samples.value[0].result)
+        val solverError = IllegalStateException("Solver failed to launch")
+        try {
+            session.execute(0, { File("failed.fits") }, { 1.5 }, { _, _ -> throw solverError })
+            fail("Solver error lost")
+        } catch (actual: IllegalStateException) { assertSame(solverError, actual) }
+        assertEquals(solverError.message, session.samples.value[0].failure)
+        assertEquals(2, callbacks)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test fun stoppingDuringEvidenceRetentionPreventsFollowingMotion(): Unit = runTest {
+        val session = PolarSampleSession(retainFailure = { _, _ -> awaitCancellation() })
+        var moved = false
+        val task = launch {
+            session.execute(0, { File("failed.fits") }, { 1.5 }, { _, _ -> PlateSolveResult(false, "No match") })
+            moved = true
+        }
+        runCurrent()
+        task.cancelAndJoin()
+        assertFalse(moved)
+        assertEquals(PolarSamplePhase.FAILED, session.samples.value[0].phase)
+        assertEquals("No match", session.samples.value[0].failure)
+    }
+
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test fun anOldCancelledScreenCannotReplaceANewerAttempt(): Unit = runTest {
         val session = PolarSampleSession()

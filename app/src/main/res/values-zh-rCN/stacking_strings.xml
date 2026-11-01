@@ -101,6 +101,8 @@
     <string name="stack_reason_processing_size">采集分辨率超出叠加上限。像素合并可保留视野，也可回拍摄设置裁切。</string>
     <string name="stack_reason_invalid_dimensions">图像尺寸无效，请检查源文件或相机裁切设置。</string>
     <string name="stack_use_hardware_bin">使用全幅 %1$d× 像素合并</string>
+    <string name="stack_use_roi">使用 %1$d×%2$d 可启动裁切</string>
+    <string name="stack_live_budget_detail">实时叠加预计需要 %1$d MiB，当前可分配 %2$d MiB。</string>
     <string name="stack_reason_settings">采集参数已变化；请保存结果并重置会话。</string>
     <string name="stack_reason_disconnect">相机已断开，结果已保留。重新连接后请开始新会话。</string>
     <string name="stack_reason_stars">星点不足，无法可靠配准</string>

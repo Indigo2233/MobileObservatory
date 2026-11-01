@@ -2,6 +2,7 @@ package com.indigo.mobileobservatory.ui.components
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Tune
@@ -16,6 +17,7 @@ import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import com.indigo.mobileobservatory.R
@@ -65,7 +67,9 @@ internal fun PortraitCaptureControls(exposureUs: Float, exposureMin: Float, expo
     gain: Float, capability: GainCapability?, gainBusy: Boolean, manualEnabled: Boolean,
     autoStretch: Boolean, settingsOpen: Boolean, onExposure: (Float) -> Unit, onGain: (Float) -> Unit,
     onStretch: (Boolean) -> Unit, onSettings: () -> Unit,
-    recording: Boolean, onStopRecording: () -> Unit, safetyControls: @Composable () -> Unit = {}) {
+    recording: Boolean, onStopRecording: () -> Unit,
+    longExposureEnabled: Boolean, onToggleLongExposure: () -> Unit,
+    safetyControls: @Composable () -> Unit = {}) {
     var edit by rememberSaveable { mutableStateOf<String?>(null) }
     Surface(color = MaterialTheme.colorScheme.surfaceVariant) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -91,7 +95,21 @@ internal fun PortraitCaptureControls(exposureUs: Float, exposureMin: Float, expo
             safetyControls()
             CaptureSheetHeader(stringResource(if (edit == "exposure") R.string.exposure else R.string.gain), recording, onStopRecording) { edit = null }
             Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
-                if (edit == "exposure") ExposureSlider(exposureUs, exposureMin, exposureMax, enabled = manualEnabled, onExposureChange = onExposure)
+                if (edit == "exposure") {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                            .testTag("capture-long-exposure")
+                            .toggleable(value = longExposureEnabled, enabled = manualEnabled,
+                                role = Role.Switch, onValueChange = { onToggleLongExposure() }),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(stringResource(R.string.long_exp), modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.labelMedium)
+                        Switch(checked = longExposureEnabled, onCheckedChange = null, enabled = manualEnabled)
+                    }
+                    ExposureSlider(exposureUs, exposureMin, exposureMax, longExposure = longExposureEnabled,
+                        enabled = manualEnabled, onExposureChange = onExposure)
+                }
                 else capability?.let { GainControl(capability = it, gain = gain, onGainChange = onGain, enabled = manualEnabled, writeInProgress = gainBusy) }
             }
         }

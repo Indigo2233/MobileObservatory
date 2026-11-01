@@ -451,7 +451,7 @@ class PlayerOneCamera : Camera, CameraSingleExposureCapable, CameraOffsetCapable
             var handedOff = false
             var output: ByteArray? = null
             try {
-                val ready = awaitPlayerOneSingleImage(
+                val ready = awaitPlayerOneImage(
                     active = { running.get() && !disconnected && captureGeneration.isActive(generation) },
                     imageReady = { cam.isImageReady },
                     readImage = { buffer.clear(); cam.getImageData(buffer, GRAB_TIMEOUT_MS) })
@@ -868,8 +868,16 @@ class PlayerOneCamera : Camera, CameraSingleExposureCapable, CameraOffsetCapable
                 val bpp = currentPixelFormat.bytesPerPixel
                 val expectedSize = w * h * bpp
                 slot = freeSlots.take()
-                slot.buffer.clear()
-                cam.getImageData(slot.buffer, GRAB_TIMEOUT_MS)
+                val buffer = slot.buffer
+                // Long exposures wait for readiness before the bounded USB transfer.
+                // Short exposures retain the blocking SDK stream to avoid imposing
+                // the readiness polling interval on high-frame-rate planetary capture.
+                val ready = awaitPlayerOneImage(
+                    active = { running.get() && !disconnected && captureGeneration.isActive(generation) },
+                    imageReady = { cam.isImageReady },
+                    waitForReady = currentExposureUs >= 1_000_000f,
+                    readImage = { buffer.clear(); cam.getImageData(buffer, GRAB_TIMEOUT_MS) })
+                if (!ready) { freeSlots.offer(slot); slot = null; break }
                 lastCaptureError = null
                 if (!captureGeneration.isActive(generation)) { freeSlots.offer(slot); slot = null; break }
                 val previewOnly = !startup.acceptCompleteFrame()

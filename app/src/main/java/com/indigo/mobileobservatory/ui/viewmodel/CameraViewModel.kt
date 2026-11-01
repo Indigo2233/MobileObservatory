@@ -76,6 +76,8 @@ import com.indigo.mobileobservatory.recording.RecordingWriteOutcome
 import com.indigo.mobileobservatory.recording.RecordingWriteSession
 import com.indigo.mobileobservatory.stacking.LiveStackPhase
 import com.indigo.mobileobservatory.stacking.LiveStackAdmission
+import com.indigo.mobileobservatory.stacking.StackRoiAspect
+import com.indigo.mobileobservatory.stacking.StackRoiPlanner
 import com.indigo.mobileobservatory.stacking.StackRoiContext
 import com.indigo.mobileobservatory.stacking.StackRoiApplyPhase
 import com.indigo.mobileobservatory.stacking.StackRoiApplyState
@@ -93,7 +95,6 @@ import com.indigo.mobileobservatory.settings.FocuserDefaults
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.delay
@@ -612,8 +613,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _guideReverseDec = MutableStateFlow(false)
     val guideReverseDec: StateFlow<Boolean> = _guideReverseDec.asStateFlow()
 
-    private val pendingFrameSnapshot = AtomicReference<CompletableDeferred<CameraCfaLayout.Snapshot>?>(null)
-    private val frameSnapshotMutex = Mutex()
+    private val frameSnapshots = FrameSnapshotRequests<CameraCfaLayout.Snapshot>()
     private val cameraDefaultsMutex = Mutex()
     private val gainWriteMutex = Mutex()
     private val exposureWriteMutex = Mutex()
@@ -1105,6 +1105,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     }
                     is ConnectionState.Disconnected -> {
                         previewEpoch.invalidate()
+                        cancelPendingFrameSnapshot("camera_disconnected")
                         _showCameraCfaDialog.value = false
                         _cameraCfa.value = SerCfaInterpretation.AUTO
                         stacking.live.invalidate("camera_disconnected")
@@ -1257,6 +1258,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun cancelOwnedJobs() {
         previewEpoch.invalidate()
+        cancelPendingFrameSnapshot("workspace_closed")
         stacking.close()
         viewModelScope.coroutineContext.cancelChildren()
         previewPipeline.close()
@@ -1344,7 +1346,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         mountModule.syncMountToTarget(name, jnowRa, jnowDec)
     }
 
-    val precisionSamples = com.indigo.mobileobservatory.polar.PolarSampleSession()
+    val precisionSamples = com.indigo.mobileobservatory.polar.PolarSampleSession(retainFailure = { index, sample ->
+        com.indigo.mobileobservatory.polar.retainSolveFailure(app, "precision_goto", index, sample)
+    })
     private val precisionSolveMutex = Mutex()
 
     private fun precisionSolveSettings() = SolveCaptureSettings(
@@ -1572,6 +1576,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun disconnectCamera() {
         if (_virtualObservation.value != null) { stopVirtualObservation(); return }
         previewEpoch.invalidate()
+        cancelPendingFrameSnapshot("camera_disconnected")
         stopRecording()
         stopExposureTimer()
         previewPipeline.stop()
@@ -2628,7 +2633,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     return
                 }
 
-                fulfillFrameSnapshot(processed, traits)
+                fulfillFrameSnapshot(processed, traits, runEpoch)
 
                 if (autoExpFrameSkip++ % 10 == 0) {
                     val aeMax = if (_longExposureEnabled.value) {
@@ -2720,7 +2725,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             format = cam?.currentPixelFormat ?: PixelFormat.MONO8,
             recording = _isRecording.value || recordingWriteSession != null || currentRecordingFile != null,
             calibration = stacking.calibration.state.value.busy,
-            snapshot = pointingCaptureOwned.get() || pendingFrameSnapshot.get() != null || frameSnapshotMutex.isLocked,
+            snapshot = pointingCaptureOwned.get() || frameSnapshots.state != null,
             settings = includeSettings && (_cameraCfaApplying.value || pendingCaptureChanges.get() != 0 || _gainWriteInProgress.value || binningSwitching),
             stackExists = stacking.live.state.value.phase !in setOf(LiveStackPhase.EMPTY, LiveStackPhase.CLOSED)), selection, resetConfirmed)
     }
@@ -2752,7 +2757,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             _statusMessage.value = cameraCfaIssueMessage(it); return@synchronized false
         }
         _cameraCfaApplying.value = true
-        changeCaptureSettings(cam, onFinished = { _cameraCfaApplying.value = false }) {
+        changeCaptureSettings(cam, layoutChanged = true, onFinished = { _cameraCfaApplying.value = false }) {
             cameraCfaChangeIssue(selection, resetConfirmed = true, includeSettings = false)?.let { error(cameraCfaIssueMessage(it)) }
             if (resetLiveStack) stacking.resetLive()
             previewPipeline.stop(clearFrame = true)
@@ -2813,6 +2818,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         return stacking.liveInputIssue(key)
     }
 
+    fun liveStackDiagnostic(): com.indigo.mobileobservatory.stacking.LiveInputDiagnostic? {
+        val key = currentStackKey() ?: return null
+        return stacking.liveInputBudgetSnapshot(key)
+    }
+
     /** Explicit recovery, using actual device bins. Never silently crop or discard calibration. */
     fun recommendedLiveStackBin(): Int? {
         val calibration = stacking.calibration.state.value
@@ -2825,6 +2835,21 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val key = currentStackKey() ?: return null
         return LiveStackAdmission.recommendHardwareBin(key, info.sensorWidth, info.sensorHeight,
             cam.supportedHardwareBins, stacking.liveMemoryBudgetBytes)
+    }
+
+    fun recommendedLiveStackRoi(): Roi? {
+        val budgetIssue = liveStackStartIssue()
+        if (budgetIssue !in setOf("processing_size", "memory_budget", "input_budget", "bayer_hardware_bin")) return null
+        val context = buildStackRoiContext() ?: return null
+        if (context.blockedReason != null) return null
+        val target = stacking.liveMemoryBudgetBytes
+        return StackRoiPlanner.maximum(context.copy(budgetBytes = target), StackRoiAspect.SENSOR)
+    }
+
+    fun useRecommendedLiveStackRoi() {
+        val context = stackRoiContext() ?: return
+        val roi = recommendedLiveStackRoi() ?: return
+        applyStackRoi(context, roi)
     }
 
     fun useRecommendedLiveStackBin() { recommendedLiveStackBin()?.let(::setBinning) }
@@ -2840,7 +2865,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val calibration = stacking.calibration.state.value
         val blocked = when {
             _isRecording.value || recordingWriteSession != null || currentRecordingFile != null -> "recording_active"
-            pointingCaptureOwned.get() || pendingFrameSnapshot.get() != null || frameSnapshotMutex.isLocked -> "roi_capture_busy"
+            pointingCaptureOwned.get() || frameSnapshots.state != null -> "roi_capture_busy"
             (!ignorePendingCaptureChanges && pendingCaptureChanges.get() != 0) || binningSwitching ||
                 _cameraCfaApplying.value || _gainWriteInProgress.value -> "settings_busy"
             stacking.live.state.value.phase != LiveStackPhase.EMPTY -> "reset_live_first"
@@ -2876,7 +2901,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         invalidateStackSettings(layoutChanged = true)
         var applied = false
         var failureReason = "roi_apply_failed"
-        changeCaptureSettings(camera, onFinished = {
+        changeCaptureSettings(camera, layoutChanged = true, onFinished = {
             _stackRoiApplyState.value = if (applied && cameraManager.activeCamera === camera)
                 StackRoiApplyState(StackRoiApplyPhase.APPLIED)
             else StackRoiApplyState(StackRoiApplyPhase.FAILED, failureReason)
@@ -2909,11 +2934,19 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun startLiveStack() {
+        val rawIssue = liveStackStartIssue()
+        val diagnostic = liveStackDiagnostic()
         FileLogger.i(TAG, "Live stack requested camera=${cameraManager.activeCamera?.cameraInfo?.name} " +
             "input=$stackFrameGeometry appBin=${_binning.value} target=${stacking.liveTarget.value} " +
             "demosaic=${stacking.demosaicAlgorithm.value} budget=${stacking.liveMemoryBudgetBytes} " +
-            "ceiling=${stacking.memoryBudgetBytes}")
-        liveStackStartIssue()?.let { stacking.report(it); return }
+            "ceiling=${stacking.memoryBudgetBytes} issue=${rawIssue ?: "none"} " +
+            "diagnostic=${com.indigo.mobileobservatory.stacking.liveStackDiagnosticText(diagnostic)}")
+        rawIssue?.let {
+            FileLogger.w(TAG, "Live stack rejected: $it diagnostic=" +
+                com.indigo.mobileobservatory.stacking.liveStackDiagnosticText(diagnostic))
+            stacking.report(it)
+            return
+        }
         val key = currentStackKey() ?: run { stacking.report("wait_frame"); return }
         if (stacking.live.state.value.phase == LiveStackPhase.PAUSED) stacking.live.resume(key)
         else stacking.startLive(key)
@@ -2972,10 +3005,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /** Serialize stop -> control writes -> fresh SDK acquisition; never relabel buffered frames. */
-    private fun changeCaptureSettings(cam: Camera, onFinished: () -> Unit = {},
+    private fun changeCaptureSettings(cam: Camera, layoutChanged: Boolean = false, onFinished: () -> Unit = {},
                                       onFailure: (Throwable) -> Unit = {}, action: suspend () -> Unit) {
         pendingCaptureChanges.incrementAndGet()
-        invalidateStackSettings()
+        invalidateStackSettings(layoutChanged)
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 applyCaptureSettingsAndRestart(cam, action)
@@ -3135,7 +3168,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setExposure(us: Float) {
-        invalidateStackSettings()
         val cam = cameraManager.activeCamera ?: return
         val uiMax = ExposureLimits.uiMaxUs(cam, _longExposureEnabled.value)
         val uiMin = cam.exposureRange.min
@@ -3148,6 +3180,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
         if (pendingCaptureChanges.get() == 0 && clamped == cam.currentExposureUs) {
             _exposureUs.value = cam.currentExposureUs
+            invalidateStackSettings()
             return
         }
         changeCaptureSettings(cam) {
@@ -3162,7 +3195,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun toggleLongExposure() {
-        invalidateStackSettings()
         val cam = cameraManager.activeCamera ?: return
         val newState = !_longExposureEnabled.value
         _longExposureEnabled.value = newState
@@ -3208,7 +3240,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setGain(value: Float) {
-        invalidateStackSettings()
         val cam = cameraManager.activeCamera ?: return
         changeCaptureSettings(cam) {
             gainWriteMutex.withLock {
@@ -3262,9 +3293,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setPixelFormat(format: PixelFormat) {
         val cam = cameraManager.activeCamera ?: return
         if (pixelFormatSwitching) return
-        invalidateStackSettings(layoutChanged = true)
         pixelFormatSwitching = true
-        changeCaptureSettings(cam) {
+        changeCaptureSettings(cam, layoutChanged = true) {
             try {
                 frameProcessor.resetBitShiftDetection(
                     forceDeclaredLayout = cam is PlayerOneCamera &&
@@ -3290,9 +3320,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setReadoutMode(mode: ReadoutMode) {
-        invalidateStackSettings(layoutChanged = true)
         val cam = cameraManager.activeCamera ?: return
-        changeCaptureSettings(cam) {
+        changeCaptureSettings(cam, layoutChanged = true) {
             cam.setReadoutMode(mode)
             _readoutMode.value = cam.currentReadoutMode
             syncGainState(cam)
@@ -3308,8 +3337,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setNativeReadoutMode(id: String) {
         val cam = cameraManager.activeCamera ?: return
         val camera = cam as? CameraNativeReadoutModeCapable ?: return
-        invalidateStackSettings(layoutChanged = true)
-        changeCaptureSettings(cam) {
+        changeCaptureSettings(cam, layoutChanged = true) {
             if (camera.setNativeReadoutMode(id)) {
                 _nativeReadoutModes.value = camera.supportedNativeReadoutModes
                 _nativeReadoutModeId.value = camera.currentNativeReadoutModeId
@@ -3492,15 +3520,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         listOf(info.name, info.serialNumber.ifBlank { "unknown" }).joinToString("_")
 
     fun setRoi(roi: Roi) {
-        invalidateStackSettings(layoutChanged = true)
         val cam = cameraManager.activeCamera ?: return
-        changeCaptureSettings(cam) { cam.setRoi(roi); _roi.value = cam.currentRoi }
+        changeCaptureSettings(cam, layoutChanged = true) { cam.setRoi(roi); _roi.value = cam.currentRoi }
     }
 
     fun resetRoi() {
-        invalidateStackSettings(layoutChanged = true)
         val cam = cameraManager.activeCamera ?: return
-        changeCaptureSettings(cam) { cam.resetRoi(); _roi.value = cam.currentRoi }
+        changeCaptureSettings(cam, layoutChanged = true) { cam.resetRoi(); _roi.value = cam.currentRoi }
     }
 
     @Volatile private var binningSwitching = false
@@ -3510,9 +3536,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (binningSwitching) return
         val requested = bin.coerceAtLeast(1)
         if (!binningNeedsApply(cam, requested)) return
-        invalidateStackSettings(layoutChanged = true)
         binningSwitching = true
-        changeCaptureSettings(cam) {
+        changeCaptureSettings(cam, layoutChanged = true) {
             try {
                 applyBinning(cam, requested)
             } catch (e: Throwable) {
@@ -3626,6 +3651,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (!newPaused && pointingCaptureOwned.get()) { _statusMessage.value = app.getString(R.string.polar_capture_busy); return }
         _previewPaused.value = newPaused
         if (newPaused) {
+            cancelPendingFrameSnapshot("preview_paused")
             stacking.live.pause("capture_paused")
         }
         synchronizePreviewCapture(cam)
@@ -3916,6 +3942,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             _statusMessage.value = app.getString(R.string.recording_finishing)
             return
         }
+        if (source == null || !source.isOpen.value) return
+        if (_previewPaused.value || !source.isCapturing.value) {
+            FileLogger.w(TAG, "Recording rejected: previewPaused=${_previewPaused.value} capturing=${source.isCapturing.value}")
+            _statusMessage.value = app.getString(R.string.record_resume_capture)
+            return
+        }
         (cameraManager.activeCamera as? SimulatedCamera)?.let { startSimulatedRecording(it); return }
         if (!License.canRecord) {
             _statusMessage.value = app.getString(R.string.trial_recording_disabled)
@@ -4197,8 +4229,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             check(cam.recordsLiveViewAsScience && cam.currentPixelFormat != PixelFormat.RGB24) {
                 app.getString(R.string.dslr_live_view_not_science)
             }
-            check(!pointingCaptureOwned.get() && pendingFrameSnapshot.get() == null && !frameSnapshotMutex.isLocked) {
-                app.getString(R.string.polar_capture_busy)
+            if (pointingCaptureOwned.get()) rejectPolarCapture("capture_owned", R.string.polar_capture_owned)
+            frameSnapshots.state?.let { snapshot ->
+                rejectPolarCapture("snapshot_${snapshot.phase.name.lowercase()}",
+                    if (snapshot.phase == FrameSnapshotRequests.Phase.WAITING) R.string.capture_snapshot_pending
+                    else R.string.capture_snapshot_finishing)
             }
             check(autoExposureController.mode == AutoExposureMode.OFF) { app.getString(R.string.polar_capture_manual_exposure) }
             check(!_isRecording.value && currentRecordingFile == null && stacking.live.state.value.phase != LiveStackPhase.RUNNING) {
@@ -4209,11 +4244,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     app.getString(R.string.polar_exposure_out_of_range, cam.exposureRange.min / 1_000_000f, cam.hwExposureMaxUs / 1_000_000f)
                 }
             }
-            check(pendingCaptureChanges.get() == 0 && pointingCaptureOwned.compareAndSet(false, true)) {
-                app.getString(R.string.polar_capture_busy)
-            }
+            if (pendingCaptureChanges.get() != 0) rejectPolarCapture("settings_pending", R.string.polar_settings_busy)
+            if (!pointingCaptureOwned.compareAndSet(false, true))
+                rejectPolarCapture("capture_owned", R.string.polar_capture_owned)
             try {
                 _previewPaused.value = true
+                cancelPendingFrameSnapshot("polar_capture_started")
                 previewEpoch.invalidate()
                 previewPipeline.stop(clearFrame = false)
                 stopExposureTimer()
@@ -4556,7 +4592,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             liveStackBusy = stacking.live.state.value.phase == LiveStackPhase.RUNNING,
             calibrationBusy = stacking.calibration.state.value.busy,
             referenceBusy = pointingCaptureOwned.get() && !ownedByThisCapture,
-            snapshotBusy = pendingFrameSnapshot.get() != null || frameSnapshotMutex.isLocked,
+            snapshotBusy = frameSnapshots.state != null,
             settingsBusy = pendingCaptureChanges.get() != 0 || _gainWriteInProgress.value || binningSwitching,
             autoExposureOff = autoExposureController.mode == AutoExposureMode.OFF,
             previewPaused = _previewPaused.value, filterMoving = filterWheelMoving.value,
@@ -4618,7 +4654,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         throw t
                     }
                     val generation = requireNotNull(cam.scienceCaptureGeneration)
-                    val frame = awaitFrameSnapshot(PointingReferencePreflight.FRAME_TIMEOUT_MS) ?: error(app.getString(R.string.precision_goto_no_frame))
+                    val frame = awaitFrameSnapshot(PointingReferencePreflight.FRAME_TIMEOUT_MS, "pointing_reference") ?: error(app.getString(R.string.precision_goto_no_frame))
                     val ended = android.os.SystemClock.elapsedRealtime()
                     check(frame.captureGeneration == generation && cam.scienceCaptureGeneration == generation && cameraManager.activeCamera === cam)
                         { "Camera settings changed during reference capture" }
@@ -4730,7 +4766,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
         } } } finally { pendingCaptureChanges.decrementAndGet() }
         val timeoutMs = (exposureSeconds * 1_000.0 + 20_000.0).toLong().coerceAtLeast(45_000L)
-        val frame = awaitFrameSnapshot(timeoutMs) ?: throw IllegalStateException("frame")
+        val frame = awaitFrameSnapshot(timeoutMs, "sequence") ?: throw IllegalStateException("frame")
         destDir.mkdirs()
         val filterName = currentFilterName()
         val stamp = DateTimeFormatter.ofPattern("HHmmss").format(LocalDateTime.now())
@@ -4845,7 +4881,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val target = CaptureTargetNames.canonical(_targetName.value) // Snapshot the capture task before awaiting a frame.
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val frame = awaitFrameSnapshot() ?: return@launch
+                val frame = awaitFrameSnapshot(owner = "photo_fits") ?: return@launch
                 val dir = File(
                     getApplication<Application>().getExternalFilesDir("captures"),
                     "FITS"
@@ -4877,6 +4913,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     _statusMessage.value = app.getString(R.string.saved_file, file.name)
                 }
             } catch (e: Throwable) {
+                if (e is CancellationException) throw e
                 Log.e(TAG, "captureFits failed", e)
                 withContext(Dispatchers.Main) {
                     _statusMessage.value = app.getString(R.string.capture_error_detail, e.message.orEmpty())
@@ -4932,7 +4969,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val snapshot = awaitFrameSnapshotWithTraits() ?: return@launch
+                val snapshot = awaitFrameSnapshotWithTraits(owner = "photo_jpg") ?: return@launch
                 val frame = snapshot.frame
                 val dir = File(
                     getApplication<Application>().getExternalFilesDir("captures"),
@@ -4957,6 +4994,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     _statusMessage.value = app.getString(R.string.saved_file, fileName)
                 }
             } catch (e: Throwable) {
+                if (e is CancellationException) throw e
                 Log.e(TAG, "captureJpg failed", e)
                 withContext(Dispatchers.Main) {
                     _statusMessage.value = app.getString(R.string.capture_error_detail, e.message.orEmpty())
@@ -5041,30 +5079,34 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    private fun fulfillFrameSnapshot(frame: FrameData, traits: PixelTraits?) {
-        val request = pendingFrameSnapshot.getAndSet(null) ?: return
-        if (!request.isActive) return
-        try {
-            request.complete(CameraCfaLayout.ownedSnapshot(frame, traits))
-        } catch (error: Throwable) {
-            request.completeExceptionally(error)
+    private fun fulfillFrameSnapshot(frame: FrameData, traits: PixelTraits?, runEpoch: Long) {
+        frameSnapshots.fulfill(accept = { previewEpoch.isCurrent(runEpoch) && !_previewPaused.value }) {
+            CameraCfaLayout.ownedSnapshot(frame, traits)
         }
     }
 
-    private suspend fun awaitFrameSnapshot(timeoutMs: Long = 45_000L): FrameData? =
-        awaitFrameSnapshotWithTraits(timeoutMs)?.frame
+    private fun cancelPendingFrameSnapshot(reason: String) {
+        val cancelled = frameSnapshots.cancel(reason) ?: return
+        FileLogger.i("CaptureSnapshot", "Cancelled reason=$reason owner=${cancelled.owner} phase=${cancelled.phase}")
+    }
 
-    private suspend fun awaitFrameSnapshotWithTraits(timeoutMs: Long = 45_000L): CameraCfaLayout.Snapshot? =
-        frameSnapshotMutex.withLock {
+    private suspend fun awaitFrameSnapshot(timeoutMs: Long = 45_000L, owner: String): FrameData? =
+        awaitFrameSnapshotWithTraits(timeoutMs, owner)?.frame
+
+    private suspend fun awaitFrameSnapshotWithTraits(timeoutMs: Long = 45_000L, owner: String): CameraCfaLayout.Snapshot? =
+        frameSnapshots.await(owner, timeoutMs) {
             check(!_cameraCfaApplying.value) { app.getString(R.string.camera_cfa_busy_settings) }
-            val request = CompletableDeferred<CameraCfaLayout.Snapshot>()
-            check(pendingFrameSnapshot.compareAndSet(null, request))
-            try {
-                withTimeoutOrNull(timeoutMs) { request.await() }
-            } finally {
-                pendingFrameSnapshot.compareAndSet(request, null)
-            }
+            check(!_previewPaused.value) { app.getString(R.string.capture_snapshot_paused) }
+            check(cameraManager.activeCamera?.isCapturing?.value == true) { app.getString(R.string.polar_capture_interrupted) }
+            FileLogger.i("CaptureSnapshot", "Waiting owner=$owner timeoutMs=$timeoutMs exposureUs=${_exposureUs.value}")
         }
+
+    private fun rejectPolarCapture(reason: String, messageId: Int): Nothing {
+        FileLogger.w("PolarCapture", "Preflight blocked reason=$reason snapshot=${frameSnapshots.state} " +
+            "captureOwned=${pointingCaptureOwned.get()} pendingSettings=${pendingCaptureChanges.get()} " +
+            "previewPaused=${_previewPaused.value} capturing=${cameraManager.activeCamera?.isCapturing?.value}")
+        error(app.getString(messageId))
+    }
 
     private fun updateFps() {
         frameCount++
