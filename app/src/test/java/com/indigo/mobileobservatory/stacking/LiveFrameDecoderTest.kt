@@ -117,13 +117,16 @@ class LiveFrameDecoderTest {
         val key = key(input, 2, DemosaicAlgorithm.DDFAPD)
         val decoder = LiveFrameDecoder()
         try {
-            val image = decoder.decode(input, key, CalibrationSelection(), CalibrationCapture())
+            val image = decoder.decodeInput(input, key, CalibrationSelection(), CalibrationCapture())
             assertEquals(1928, image.width)
             assertEquals(1090, image.height)
             assertEquals(3, image.channels)
-            assertTrue(decoder.retainedBytes < image.pixels.size * 4L + (4L shl 20))
+            assertTrue(image is CompactLinearImage16)
+            assertTrue(image.storageBytes < 13_000_000L)
+            assertTrue(decoder.retainedBytes < 14_000_000L)
+            assertTrue(decoder.retainedBytes < image.storageBytes + (4L shl 20))
             val allocations = decoder.arrayAllocations
-            assertSame(image.pixels, decoder.decode(input, key, CalibrationSelection(), CalibrationCapture()).pixels)
+            assertSame(image, decoder.decodeInput(input, key, CalibrationSelection(), CalibrationCapture()))
             assertEquals(allocations, decoder.arrayAllocations)
             println("585 live decoder retainedBytes=${decoder.retainedBytes} arrays=$allocations")
         } finally { decoder.release() }

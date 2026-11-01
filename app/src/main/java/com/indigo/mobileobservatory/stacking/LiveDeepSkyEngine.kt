@@ -5,7 +5,10 @@ class LiveDeepSkyEngine(memoryBudgetBytes: Long, previewMaxSide: Int? = null) : 
     private val algorithm = DeepSkyStacker(DeepSkyConfig(memoryBudgetBytes = memoryBudgetBytes),
         livePreviewMaxSide = previewMaxSide)
 
-    override fun add(image: LinearImage, exposureSeconds: Double, cancelled: () -> Boolean): LiveFrameOutcome {
+    override fun add(image: LinearImage, exposureSeconds: Double, cancelled: () -> Boolean): LiveFrameOutcome =
+        add(image as LinearSamples, exposureSeconds, cancelled)
+
+    override fun add(image: LinearSamples, exposureSeconds: Double, cancelled: () -> Boolean): LiveFrameOutcome {
         val result = algorithm.add(image, exposureSeconds, cancelled)
         return LiveFrameOutcome(result.accepted, result.stats.stars, result.stats.registrationRmsPx,
             result.stats.rotationDegrees, result.reason?.name.orEmpty())
@@ -27,6 +30,8 @@ class LiveDeepSkyEngine(memoryBudgetBytes: Long, previewMaxSide: Int? = null) : 
             "algorithm" to "rigid_star_ransac_online_welford_sigma",
             "rejectedPixelSamples" to snapshot.stats.rejectedPixelSamples,
             "estimatedWorkingBytes" to snapshot.stats.estimatedWorkingBytes,
+            "inputEncoding" to snapshot.stats.inputEncoding,
+            "maximumInputQuantizationError" to snapshot.stats.maximumInputQuantizationError,
             "rejectionLimit" to DeepSkyStacker.REJECTION_LIMITATION
         ))
     }

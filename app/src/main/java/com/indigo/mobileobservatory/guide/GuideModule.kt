@@ -317,11 +317,28 @@ class GuideModule {
             backlash.pulse(decMs, decDirection, calibration.decBacklashMs, backlashEnabled), raDirection, decDirection))
     }
 
+    /** PHD2 graph RMS is the population deviation around each axis's mean in this window. */
     fun rms(points: List<GuideHistoryPoint>): GuideRms {
         if (points.isEmpty()) return GuideRms(0f, 0f, 0f)
-        val ra = sqrt(points.sumOf { (it.raErrorPx * it.raErrorPx).toDouble() } / points.size).toFloat()
-        val dec = sqrt(points.sumOf { (it.decErrorPx * it.decErrorPx).toDouble() } / points.size).toFloat()
-        return GuideRms(ra, dec, hypot(ra, dec))
+        var count = 0
+        var raMean = 0.0
+        var decMean = 0.0
+        var raM2 = 0.0
+        var decM2 = 0.0
+        for (point in points) {
+            count++
+            val ra = point.raErrorPx.toDouble()
+            val dec = point.decErrorPx.toDouble()
+            val raDelta = ra - raMean
+            val decDelta = dec - decMean
+            raMean += raDelta / count
+            decMean += decDelta / count
+            raM2 += raDelta * (ra - raMean)
+            decM2 += decDelta * (dec - decMean)
+        }
+        val ra = sqrt((raM2 / count).coerceAtLeast(0.0))
+        val dec = sqrt((decM2 / count).coerceAtLeast(0.0))
+        return GuideRms(ra.toFloat(), dec.toFloat(), hypot(ra, dec).toFloat())
     }
 
     fun resetFilter(raAxis: Boolean? = null) {

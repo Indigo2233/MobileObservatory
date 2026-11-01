@@ -7,13 +7,24 @@ import com.indigo.mobileobservatory.camera.FrameData
 internal class LiveFrameDecoder {
     private val workspace = SerRegionDecoder.Workspace()
     private var output = FloatArray(0)
+    private var compactOutput: CompactLinearImage16? = null
+    private var compactTile = FloatArray(0)
 
-    val retainedBytes: Long get() = output.size * 4L + workspace.retainedBytes
+    val retainedBytes: Long get() = output.size * 4L + (compactOutput?.storageBytes ?: 0L) +
+        compactTile.size * 4L + workspace.retainedBytes
     val arrayAllocations: Long get() = workspace.arrayAllocations + outputAllocations
     private var outputAllocations = 0L
 
     fun decode(frame: FrameData, key: StackSessionKey, calibration: CalibrationSelection,
-               capture: CalibrationCapture, cancelCheck: () -> Unit = {}): LinearImage {
+               capture: CalibrationCapture, cancelCheck: () -> Unit = {}): LinearImage =
+        decodeImpl(frame, key, calibration, capture, compact = false, cancelCheck = cancelCheck) as LinearImage
+
+    fun decodeInput(frame: FrameData, key: StackSessionKey, calibration: CalibrationSelection,
+                    capture: CalibrationCapture, cancelCheck: () -> Unit = {}): LinearSamples =
+        decodeImpl(frame, key, calibration, capture, compact = usesCompactInput(key), cancelCheck = cancelCheck)
+
+    private fun decodeImpl(frame: FrameData, key: StackSessionKey, calibration: CalibrationSelection,
+                           capture: CalibrationCapture, compact: Boolean, cancelCheck: () -> Unit): LinearSamples {
         require(frame.width == key.width && frame.height == key.height && frame.pixelFormat == key.format) {
             "source_geometry_changed"
         }
@@ -31,9 +42,31 @@ internal class LiveFrameDecoder {
         calibration.validate(geometry, capture)
         cancelCheck()
         val size = plan.width * plan.height * plan.channels
-        if (output.size != size) {
-            output = FloatArray(size)
-            outputAllocations++
+        val encoded = if (compact) {
+            output = FloatArray(0)
+            val previous = compactOutput
+            val image = if (previous != null && previous.width == plan.width && previous.height == plan.height &&
+                previous.channels == plan.channels) previous else {
+                CompactLinearImage16(plan.width, plan.height, plan.channels).also {
+                    compactOutput = it
+                    outputAllocations += 3
+                }
+            }
+            val tileSize = OfflineRegionPlan.TILE * OfflineRegionPlan.TILE * plan.channels
+            if (compactTile.size != tileSize) {
+                compactTile = FloatArray(tileSize)
+                outputAllocations++
+            }
+            image.beginFrame()
+            image
+        } else {
+            compactOutput = null
+            compactTile = FloatArray(0)
+            if (output.size != size) {
+                output = FloatArray(size)
+                outputAllocations++
+            }
+            null
         }
         val bin = plan.softwareBin
         val channels = plan.channels
@@ -69,21 +102,40 @@ internal class LiveFrameDecoder {
                             val sy = tile.top - read.top + y * bin + by
                             sum += rgb.pixels[(sy * read.width + sx) * channels + channel]
                         }
-                        output[((oy + y) * plan.width + ox + x) * channels + channel] =
-                            (sum / (bin * bin)).toFloat()
+                        val value = (sum / (bin * bin)).toFloat()
+                        if (encoded == null) output[((oy + y) * plan.width + ox + x) * channels + channel] = value
+                        else compactTile[(y * w + x) * channels + channel] = value
                     }
                 }
+                encoded?.writeBlock(ox, oy, w, h, compactTile, cancelCheck)
             }
         }
-        return LinearImage(plan.width, plan.height, channels, output)
+        return encoded ?: LinearImage(plan.width, plan.height, channels, output)
     }
 
     fun release() {
         output = FloatArray(0)
+        compactOutput = null
+        compactTile = FloatArray(0)
         workspace.release()
     }
 
     companion object {
+        fun usesCompactInput(key: StackSessionKey): Boolean = key.target == StackTarget.DEEP_SKY &&
+            !key.format.isMono && (key.hardwareBin > 1 || key.softwareBin > 1)
+
+        fun outputStorageBytes(key: StackSessionKey): Long {
+            val plan = plan(key)
+            return if (usesCompactInput(key)) CompactLinearImage16.storageBytes(plan.width, plan.height, plan.channels)
+            else plan.width.toLong() * plan.height * plan.channels * 4
+        }
+
+        fun compactScratchBytes(key: StackSessionKey): Long = if (usesCompactInput(key))
+            OfflineRegionPlan.TILE.toLong() * OfflineRegionPlan.TILE * 3 * 4 else 0
+
+        fun overheadBytes(key: StackSessionKey, calibrationBytes: Long = 0, calibrated: Boolean = false): Long =
+            plan(key, calibrationBytes, calibrated).overheadBytes + compactScratchBytes(key)
+
         fun plan(key: StackSessionKey, calibrationBytes: Long = 0, calibrated: Boolean = false) =
             OfflineRegionPlan(key.width, key.height, key.format, PixelRoi(0, 0, key.width, key.height),
                 key.demosaicAlgorithm, key.target, key.softwareBin, calibrationBytes, calibrated)

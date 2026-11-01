@@ -14,8 +14,9 @@ internal object LiveStackMemory {
         val raw = key.width.toLong() * key.height * key.format.bytesPerPixel * MAX_IN_FLIGHT_FRAMES
         val engine = if (key.target == StackTarget.PLANETARY)
             LivePlanetaryEngine.estimateWorkingBytes(plan.width, plan.height, channels, PREVIEW_MAX_SIDE)
-        else DeepSkyStacker.estimateWorkingBytes(plan.width, plan.height, channels, PREVIEW_MAX_SIDE)
-        val stacking = engine + raw + plan.overheadBytes
+        else DeepSkyStacker.estimateWorkingBytes(plan.width, plan.height, channels, PREVIEW_MAX_SIDE,
+            LiveFrameDecoder.outputStorageBytes(key))
+        val stacking = engine + raw + plan.overheadBytes + LiveFrameDecoder.compactScratchBytes(key)
         val preview = StackPreviewGrid.workingBytes(plan.width, plan.height, channels, PREVIEW_MAX_SIDE)
         // Deep-sky export borrows mean/coverage. Planetary export normalizes Double sums into
         // one Float RGB result, while retaining its registration and accumulation workspaces.

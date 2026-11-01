@@ -723,6 +723,40 @@ estimate exceeded the previous 307.2 MiB admission ceiling on a 512 MiB VM heap.
 
 ### Colour and capture ownership
 
+2026-11-01 source update (validation deferred): Player One RAW8/RAW16 now prefers
+SDK colour binning. `PlayerOneBinning` reads the actual image factor, format, ROI,
+`POA_MONO_BIN` and sensor `POA_HARDWARE_BIN`. A binned Bayer output requires both
+mixing controls to be confirmed disabled. A camera without sensor hardware-bin
+support has that control explicitly represented as unavailable for activation;
+an advertised but unreadable control does not establish a safe colour layout.
+Read-only controls already confirmed false are accepted. Sensor binning remains
+preferred for explicitly monochrome output.
+
+Control writes and bin changes run while capture is stopped. The resulting
+factor/format/geometry and control values are read back together. SDK colour-bin
+ROI origins are aligned to even output coordinates to retain the advertised CFA
+at the delivered origin. A rejected operation restores the previous factor,
+format, ROI and known control values; failed restoration leaves acquisition
+unverified and stopped. Capture resume verifies the established state without
+enabling sensor hardware bin. Format/readout changes re-establish the output,
+and the shared settings boundary reconciles the selected total Bin with the
+actual SDK factor before restarting preview.
+
+Confirmed SDK Bin 2 delivers 1928x1090 RAW16 for the 3856x2180 IMX585 example:
+4,203,040 bytes per application input packet, compared with 16,812,160 bytes for
+the native Bin 1 packet. Camera direct buffers are resized to the delivered
+extent, and retired-size byte arrays are excluded from the pool. The UI uses its
+existing SDK-bin indicator. Vendor-internal workspaces and USB transfer behaviour
+remain SDK-specific. Unknown colour controls retain the application software-bin
+fallback described below.
+
+Added regression sources cover control readback, read-only/unsupported controls,
+factor/format/geometry mismatch and rollback, ROI phase, resume without writes,
+application Bin selection and settings-reset fallback. Android coverage adds
+the delivered-size live-input path. These new tests and the updated application
+have not been compiled or run; the local build61 APK predates this source update.
+The dated acceptance results later in this section apply to the prior code.
+
 `AppBinning` now requires both SDK factor readback and an accepted output layout.
 If an even-bin colour layout is unknown, the camera is restored to verified Bin 1
 and the requested total Bin uses software processing. Reconnection and reselecting
@@ -737,10 +771,63 @@ retain the raw acquisition dimensions, including native Bin 1 when the fallback 
 active; select the desired processing Bin for an offline result. This change does
 not reconstruct colour already lost by a camera's mixed-colour hardware binning.
 
+### Compact binned live colour input (2026-11-01, validation pending)
+
+Live deep-sky colour input with SDK or software Bin greater than 1 now uses
+`CompactLinearImage16`. Sensor calibration, CFA reconstruction and RGB averaging
+still execute in that order on bounded tiles. Each output tile is encoded directly
+into one reusable UInt16 RGB buffer. No full-resolution RGB intermediate or
+full-size Float32 version of the binned input is constructed. Registration,
+luminance measurement and inverse-warp sampling read the compact source directly
+through `LinearSamples`. Mean, M2, coverage and saved scientific output remain
+Float32. Unbinned colour, monochrome, planetary and offline inputs retain their
+existing Float32 input path.
+
+Each 64x64 output block/channel stores its actual Float32 minimum and a Double
+linear step `(maximum - minimum) / 65535`. Signed calibrated values and
+above-white values retain their ranges. Constant channels are exact. Other
+samples receive one bounded quantization: the absolute reconstruction error is
+at most half the block step plus Float32 rounding. A block spanning 0..1 has a
+half-step of approximately 7.63e-6; the bound increases with that block's actual
+range. This is an input-codec error bound, not a guarantee on subsequent quality
+gates or fitted registration. The history is never requantized into UInt16.
+
+Exports record `inputEncoding=uint16_block_affine_v1`,
+`maximumInputQuantizationError` (the largest input-codec bound among accepted
+frames, in linear sample units) and `decodedInputBytes`. Original camera frames,
+SER/PSER and calibration masters are unchanged.
+
+For 3856x2180 RAW16 with software Bin 2, the allocation formulas now give:
+
+| Storage/stage | Bytes | Status |
+|---|---:|---|
+| Prior Float32 binned RGB input | 25,218,240 | Previous code |
+| Compact binned RGB input including ranges | 12,629,208 | New layout |
+| Additional reusable encoding tile | 49,152 | New layout |
+| Decoder-retained arrays including existing DDFAPD workspace | 13,932,760 | Derived from array extents |
+| Stacking-stage estimate | 117,699,176 | Formula, not a new heap measurement |
+| Export-stage estimate | 117,717,520 | Existing export headroom retained |
+
+Admission, the start action and engine budget use the compact allocation plus
+its tile scratch. The full-resolution export stage now sets the larger estimate,
+about 112.3 MiB, for this example. Confirmed SDK Bin 2 can have the same admission
+peak because its export geometry is identical, despite using a smaller raw
+acquisition packet.
+
+Regression sources cover bounded quantization, negative/above-white and constant
+channels, block-edge interpolation, calibration-before-bin, all CFA patterns and
+demosaic algorithms, cancellation/reuse, direct compact engine delivery and
+Float32 sub-code accumulation. The existing Android 585 export/resume test now
+checks the encoding and input-allocation metadata. These changes have only
+received static review; compilation, numerical execution and Android/physical
+camera measurements are deferred to the next requested test/package run. The
+build61 APK currently on disk predates this optimization.
+
 ### Reusable live storage and export
 
 `LiveFrameDecoder` uses fixed-extent tiles and demosaic halos, writes one reusable
-Float32 output, and validates calibration against the original sensor geometry.
+output in the representation described above, and validates calibration against
+the original sensor geometry.
 No full-size sensor or DDFAPD scratch plane is retained. The input queue admits
 one owned raw packet in total across waiting/processing. Overflow increments the
 drop count. Deep-sky channel mean/M2 arithmetic and planetary Double sums are
@@ -770,6 +857,8 @@ non-stack term to avoid double-counting. The UI distinguishes the ceiling from
 the start-time available budget. No physical-RAM percentage or heap-limit override
 is introduced.
 
+The following dated estimates and acceptance measurements describe the
+2026-10-31 Float32-input implementation, before the compact-input source update.
 For 3856×2180 RAW16, DDFAPD, three colour channels, no calibration masters:
 
 | Workflow | Previous estimate | Current estimate | Science output |

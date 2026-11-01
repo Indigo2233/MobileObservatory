@@ -85,6 +85,75 @@ class GuideModuleTest {
     }
 
     @Test
+    fun rmsCentersEachAxisOnItsOwnMeasuredMean() {
+        val points = listOf(
+            GuideHistoryPoint(1, 4f, -8f, raPulseMs = 100, decPulseMs = -200),
+            GuideHistoryPoint(2, 6f, -4f, raPulseMs = -50, decPulseMs = 75)
+        )
+        val before = points.toList()
+        val rms = module.rms(points)
+
+        assertEquals(1f, rms.raPx, .00001f)
+        assertEquals(2f, rms.decPx, .00001f)
+        assertEquals(kotlin.math.sqrt(5.0).toFloat(), rms.totalPx, .00001f)
+        assertEquals(before, points)
+    }
+
+    @Test
+    fun rmsUsesPopulationVarianceForTheSuppliedSamples() {
+        val rms = module.rms(listOf(
+            GuideHistoryPoint(1, 2f, -3f),
+            GuideHistoryPoint(2, 4f, -3f),
+            GuideHistoryPoint(3, 6f, -3f)
+        ))
+        val expected = kotlin.math.sqrt(8.0 / 3).toFloat()
+        assertEquals(expected, rms.raPx, .00001f)
+        assertEquals(0f, rms.decPx, 0f)
+        assertEquals(expected, rms.totalPx, .00001f)
+    }
+
+    @Test
+    fun constantOffsetsSingleSamplesAndEmptyWindowsHaveNoMeasuredScatter() {
+        for (points in listOf(
+            emptyList(),
+            listOf(GuideHistoryPoint(1, 3f, -4f)),
+            List(50) { GuideHistoryPoint(it.toLong(), 3f, -4f) },
+            List(50) { GuideHistoryPoint(it.toLong(), Float.MAX_VALUE, -Float.MAX_VALUE) }
+        )) {
+            assertEquals(GuideRms(0f, 0f, 0f), module.rms(points))
+        }
+    }
+
+    @Test
+    fun addingIndependentConstantOffsetsDoesNotChangeRms() {
+        val points = listOf(
+            GuideHistoryPoint(1, 1f, -3f),
+            GuideHistoryPoint(2, -2f, 1f),
+            GuideHistoryPoint(3, 4f, 0f),
+            GuideHistoryPoint(4, -1f, 2f)
+        )
+        val expected = module.rms(points)
+        val shifted = module.rms(points.map { it.copy(raErrorPx = it.raErrorPx + 12.5f, decErrorPx = it.decErrorPx - 7.25f) })
+        assertEquals(expected.raPx, shifted.raPx, .00001f)
+        assertEquals(expected.decPx, shifted.decPx, .00001f)
+        assertEquals(expected.totalPx, shifted.totalPx, .00001f)
+    }
+
+    @Test
+    fun doublePrecisionCenteredMomentsRetainSmallScatterOnLargeOffsets() {
+        val rms = module.rms(listOf(
+            GuideHistoryPoint(1, 1_000_000.125f, -2_000_000.25f),
+            GuideHistoryPoint(2, 1_000_000.25f, -2_000_000.5f),
+            GuideHistoryPoint(3, 1_000_000.375f, -2_000_000.75f)
+        ))
+        val ra = kotlin.math.sqrt(2 * .125 * .125 / 3)
+        val dec = kotlin.math.sqrt(2 * .25 * .25 / 3)
+        assertEquals(ra.toFloat(), rms.raPx, .00001f)
+        assertEquals(dec.toFloat(), rms.decPx, .00001f)
+        assertEquals(kotlin.math.hypot(ra, dec).toFloat(), rms.totalPx, .00001f)
+    }
+
+    @Test
     fun hysteresisKeepsSmallFractionOfPreviousCorrection() {
         module.filter(100f, raAxis = true, GuideAlgorithm.HYSTERESIS, aggressiveness = 1.0f)
         val second = module.filter(0f, raAxis = true, GuideAlgorithm.HYSTERESIS, aggressiveness = 1.0f)

@@ -50,8 +50,7 @@ class LiveStackAdmissionTest {
         assertEquals("bayer_hardware_bin", LiveStackAdmission.issue(bin2, 256L shl 20))
         assertTrue(LiveStackAdmission.workingBytes(bin2, 0, false) < 192L shl 20)
         assertNull(LiveStackAdmission.issue(input.copy(softwareBin = 2), 192L shl 20))
-        // Actual Player One Auto reports a sensor CFA, not a verified post-bin CFA.
-        // Do not invent a safe even-bin colour layout merely because its dimensions fit.
+        // A sensor-only CFA cannot establish a verified post-bin layout from dimensions alone.
         assertNull(LiveStackAdmission.recommendHardwareBin(input, 3856, 2180, listOf(1, 2), 256L shl 20))
         assertNull(LiveStackAdmission.recommendHardwareBin(input, 3856, 2180, listOf(1, 2, 4), 256L shl 20))
         val verifiedOutput = input.copy(pixelTraits = traits.copy(bayerPatternAtOutput = true))

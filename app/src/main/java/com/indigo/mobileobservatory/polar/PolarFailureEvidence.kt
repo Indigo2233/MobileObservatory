@@ -25,6 +25,7 @@ internal suspend fun retainSolveFailure(context: Context, task: String, index: I
             }
             val job = currentCoroutineContext()
             val saved = SolveFailureArchive.save(directory, file, diagnostics, checkActive = { job.ensureActive() })
+                ?: return@withContext
             FileLogger.i("SolveEvidence", "Saved image=${saved.image.absolutePath} log=${saved.log.absolutePath}")
         } catch (cancel: CancellationException) {
             throw cancel

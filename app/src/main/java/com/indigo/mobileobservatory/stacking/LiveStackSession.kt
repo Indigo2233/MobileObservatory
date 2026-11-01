@@ -79,6 +79,10 @@ data class LiveFrameOutcome(
 /** Testable engine boundary. Called only by the single session worker. */
 interface LiveStackEngine {
     fun add(image: LinearImage, exposureSeconds: Double, cancelled: () -> Boolean): LiveFrameOutcome
+    fun add(image: LinearSamples, exposureSeconds: Double, cancelled: () -> Boolean): LiveFrameOutcome {
+        require(image is LinearImage) { "compact_input_unsupported" }
+        return add(image, exposureSeconds, cancelled)
+    }
     fun snapshot(state: LiveStackState): LiveStackSnapshot?
     fun previewSnapshot(state: LiveStackState, maxSide: Int): LiveStackSnapshot? = snapshot(state)
     /** Read only on the science worker, with ingestion/accumulation held until export returns. */
@@ -96,7 +100,7 @@ interface LiveStackEngine {
 class LiveStackSession(
     scope: CoroutineScope,
     private val engineFactory: () -> LiveStackEngine,
-    private val decode: (FrameData, StackSessionKey) -> LinearImage,
+    private val decode: (FrameData, StackSessionKey) -> LinearSamples,
     private val onSnapshot: (LiveStackSnapshot?) -> Unit,
     private val nativeHeapBytes: () -> Long = { 0L },
     private val nowNanos: () -> Long = System::nanoTime,

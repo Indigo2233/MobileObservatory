@@ -5,7 +5,12 @@ import java.util.concurrent.CancellationException
 
 data class DeepSkyConfig(val minimumStars: Int = 6, val maxElongation: Double = 2.2, val minimumTransparency: Double = 0.35, val sigmaThreshold: Double = 5.0, val warmupSamples: Int = 5, val memoryBudgetBytes: Long = 192L * 1024 * 1024)
 enum class DeepSkyRejection { TOO_FEW_STARS, TRAILING, CLOUD, REGISTRATION, GEOMETRY, MEMORY_BUDGET, INVALID_PIXELS }
-data class DeepSkyStats(val received: Int = 0, val accepted: Int = 0, val rejected: Int = 0, val exposureSeconds: Double = 0.0, val stars: Int = 0, val registrationRmsPx: Double = 0.0, val rotationDegrees: Double = 0.0, val rejectedPixelSamples: Long = 0, val elapsedMs: Long = 0, val estimatedWorkingBytes: Long = 0)
+data class DeepSkyStats(
+    val received: Int = 0, val accepted: Int = 0, val rejected: Int = 0, val exposureSeconds: Double = 0.0,
+    val stars: Int = 0, val registrationRmsPx: Double = 0.0, val rotationDegrees: Double = 0.0,
+    val rejectedPixelSamples: Long = 0, val elapsedMs: Long = 0, val estimatedWorkingBytes: Long = 0,
+    val inputEncoding: String = "float32", val maximumInputQuantizationError: Double = 0.0
+)
 data class DeepSkyFrameResult(val accepted: Boolean, val reason: DeepSkyRejection?, val stats: DeepSkyStats)
 data class DeepSkySnapshot(val image: LinearImage, val weights: FloatArray, val stats: DeepSkyStats)
 
@@ -29,18 +34,19 @@ class DeepSkyStacker(private val config: DeepSkyConfig = DeepSkyConfig(), privat
         stats = DeepSkyStats()
     }
 
-    fun add(image: LinearImage, exposureSeconds: Double, cancelled: () -> Boolean = { false }): DeepSkyFrameResult {
+    fun add(image: LinearSamples, exposureSeconds: Double, cancelled: () -> Boolean = { false }): DeepSkyFrameResult {
         val start = System.nanoTime()
         stats = stats.copy(received = stats.received + 1)
         fun reject(reason: DeepSkyRejection): DeepSkyFrameResult {
             stats = stats.copy(rejected = stats.rejected + 1, elapsedMs = (System.nanoTime() - start) / 1_000_000)
             return DeepSkyFrameResult(false, reason, stats)
         }
-        if (image.pixels.any { !it.isFinite() } || !exposureSeconds.isFinite() || exposureSeconds < 0) return reject(DeepSkyRejection.INVALID_PIXELS)
+        if (!image.allFinite() || !exposureSeconds.isFinite() || exposureSeconds < 0) return reject(DeepSkyRejection.INVALID_PIXELS)
         if (reference != null && (image.width != width || image.height != height || image.channels != channels)) return reject(DeepSkyRejection.GEOMETRY)
         // Admission precedes accumulation. Offline rendering starts after the engine releases
         // its workspace; live decoding/accumulation and immutable previews can overlap.
-        val workingBytes = if (livePreviewOverlap) estimateWorkingBytes(image.width, image.height, image.channels, livePreviewMaxSide)
+        val workingBytes = if (livePreviewOverlap) estimateWorkingBytes(image.width, image.height, image.channels,
+            livePreviewMaxSide, image.storageBytes)
             else estimateOfflineWorkingBytes(image.width, image.height, image.channels, reusableOfflineInput)
         if (workingBytes > config.memoryBudgetBytes) return reject(DeepSkyRejection.MEMORY_BUDGET)
         val field = StarRegistration.detect(image, workspace = starDetectionWorkspace, cancelled = cancelled)
@@ -52,7 +58,7 @@ class DeepSkyStacker(private val config: DeepSkyConfig = DeepSkyConfig(), privat
         if (ref != null && (registration.transparency < config.minimumTransparency || field.stars.size < ref.stars.size * 0.25 || field.background > ref.background + max(0.08, ref.noise * 20))) return reject(DeepSkyRejection.CLOUD)
         if (ref == null) {
             width = image.width; height = image.height; channels = image.channels
-            mean = FloatArray(image.pixels.size); m2 = FloatArray(image.pixels.size); weights = FloatArray(width * height)
+            mean = FloatArray(image.pixelCount * channels); m2 = FloatArray(image.pixelCount * channels); weights = FloatArray(width * height)
             reference = field
         }
         val t = registration.transform; val c = t.cosine; val s = t.sine
@@ -71,11 +77,9 @@ class DeepSkyStacker(private val config: DeepSkyConfig = DeepSkyConfig(), privat
             val ax = fx - ix; val ay = fy - iy
             val p = y * width + x; val weight = weights[p]
             var reject = false
+            image.sampleBilinear(ix, iy, ix1, iy1, ax, ay, sampled)
             for (ch in 0 until channels) {
-                val v00 = image.pixels[(iy * width + ix) * channels + ch]; val v10 = image.pixels[(iy * width + ix1) * channels + ch]
-                val v01 = image.pixels[(iy1 * width + ix) * channels + ch]; val v11 = image.pixels[(iy1 * width + ix1) * channels + ch]
-                val value = ((v00 * (1 - ax) + v10 * ax) * (1 - ay) + (v01 * (1 - ax) + v11 * ax) * ay).toFloat()
-                sampled[ch] = value
+                val value = sampled[ch]
                 if (weight >= config.warmupSamples) {
                     val i = p * channels + ch
                     // Local range allows interpolation variations on stellar cores without clipping signal.
@@ -101,7 +105,9 @@ class DeepSkyStacker(private val config: DeepSkyConfig = DeepSkyConfig(), privat
         }
         stats = stats.copy(accepted = stats.accepted + 1, exposureSeconds = stats.exposureSeconds + exposureSeconds,
             registrationRmsPx = registration.rmsPixels, rotationDegrees = Math.toDegrees(atan2(s,c)),
-            rejectedPixelSamples = stats.rejectedPixelSamples + rejectedPixels, elapsedMs = (System.nanoTime() - start) / 1_000_000)
+            rejectedPixelSamples = stats.rejectedPixelSamples + rejectedPixels, elapsedMs = (System.nanoTime() - start) / 1_000_000,
+            inputEncoding = image.encoding,
+            maximumInputQuantizationError = max(stats.maximumInputQuantizationError, image.maximumQuantizationError))
         return DeepSkyFrameResult(true, null, stats)
     }
 
@@ -137,10 +143,14 @@ class DeepSkyStacker(private val config: DeepSkyConfig = DeepSkyConfig(), privat
         // the bounded raw queue and decoder, accumulators, automatic background output,
         // and simultaneous sharpening/local-contrast scratch. Calibration is added by
         // the coordinator because its masters and sensor geometry can differ after binning.
-        fun estimateWorkingBytes(width: Int, height: Int, channels: Int, previewMaxSide: Int? = null): Long =
-            if (previewMaxSide == null) width.toLong() * height * (channels * 40L + 32L) + 8L * 1024 * 1024
-            else width.toLong() * height * (channels * 12L + 4) +
-                StackPreviewGrid.workingBytes(width, height, channels, previewMaxSide) + 8L * 1024 * 1024
+        fun estimateWorkingBytes(width: Int, height: Int, channels: Int, previewMaxSide: Int? = null,
+                                 inputStorageBytes: Long = width.toLong() * height * channels * 4): Long {
+            val floatingInput = width.toLong() * height * channels * 4
+            val base = if (previewMaxSide == null) width.toLong() * height * (channels * 40L + 32L) + 8L * 1024 * 1024
+                else width.toLong() * height * (channels * 12L + 4) +
+                    StackPreviewGrid.workingBytes(width, height, channels, previewMaxSide) + 8L * 1024 * 1024
+            return base - floatingInput + inputStorageBytes
+        }
         // Decoder/master storage is supplied separately by the offline coordinator. Generic
         // sources keep old/new read headroom; only the explicit buffered contract saves it.
         fun estimateOfflineWorkingBytes(width: Int, height: Int, channels: Int, reusableInput: Boolean = false): Long =

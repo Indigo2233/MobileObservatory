@@ -16,7 +16,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import java.util.concurrent.CopyOnWriteArrayList
 
-/** Real connection/settings/callback path with an SDK adapter whose even-bin CFA is unknown. */
+/** Connection, setting changes and callbacks exercise verified SDK colour bin and software fallback. */
 @RunWith(AndroidJUnit4::class)
 class ColourBinningInstrumentedTest {
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
@@ -56,11 +56,55 @@ class ColourBinningInstrumentedTest {
         }
     }
 
-    private suspend fun workspace(initialBin: Int, connect: Boolean,
+    @Test fun confirmedSdkColourBinReachesLiveStackAtTheDeliveredSize() = runBlocking {
+        workspace(initialBin = 2, connect = true, colourBinVerified = true) { vm, camera ->
+            await { camera.isCapturing.value && vm.scienceCaptureReady.value }
+            assertEquals(2, vm.binning.value)
+            assertEquals(2, camera.currentHardwareBin)
+            assertTrue(vm.binningUsesSdk.value)
+            assertFalse(vm.binningUsesHardware.value)
+            assertFalse(vm.binningUsesSoftware.value)
+            assertTrue(camera.binWrites.isEmpty())
+            await { vm.liveStackStartIssue() == null }
+            main { vm.startLiveStack() }
+            assertEquals(vm.stacking.task.value.message, LiveStackPhase.RUNNING, vm.stacking.live.state.value.phase)
+            val key = requireNotNull(vm.stacking.live.state.value.key)
+            assertEquals(2, key.hardwareBin)
+            assertEquals(1, key.softwareBin)
+            assertEquals(SimulatedCamera.WIDTH / 2, key.width)
+            assertEquals(SimulatedCamera.HEIGHT / 2, key.height)
+            assertTrue(key.pixelTraits.bayerPatternAtOutput)
+            await { vm.stacking.live.state.value.received > 0 }
+            assertNotEquals(LiveStackPhase.FAILED, vm.stacking.live.state.value.phase)
+        }
+    }
+
+    @Test fun readoutResetKeepsTheSelectedTotalBinWhenSdkColourSupportIsLost() = runBlocking {
+        workspace(initialBin = 2, connect = true, colourBinVerified = true) { vm, camera ->
+            await { camera.isCapturing.value && vm.scienceCaptureReady.value }
+            camera.resetColourBinOnReadout = true
+            main { vm.setReadoutMode(ReadoutMode.HCG) }
+            await { camera.currentReadoutMode == ReadoutMode.HCG && vm.binningUsesSoftware.value &&
+                camera.isCapturing.value && vm.scienceCaptureReady.value }
+            assertEquals(2, vm.binning.value)
+            assertEquals(1, camera.currentHardwareBin)
+            assertEquals(listOf(2, 1), camera.binWrites.toList())
+            await { vm.liveStackStartIssue() == null }
+            main { vm.startLiveStack() }
+            assertEquals(vm.stacking.task.value.message, LiveStackPhase.RUNNING, vm.stacking.live.state.value.phase)
+            val key = requireNotNull(vm.stacking.live.state.value.key)
+            assertEquals(1, key.hardwareBin)
+            assertEquals(2, key.softwareBin)
+            assertEquals(SimulatedCamera.WIDTH, key.width)
+            assertEquals(SimulatedCamera.HEIGHT, key.height)
+        }
+    }
+
+    private suspend fun workspace(initialBin: Int, connect: Boolean, colourBinVerified: Boolean = false,
         test: suspend (CameraViewModel, BinningCamera) -> Unit) {
         val store = ViewModelStore()
         lateinit var vm: CameraViewModel
-        val camera = BinningCamera(initialBin)
+        val camera = BinningCamera(initialBin, colourBinVerified)
         try {
             main { vm = ViewModelProvider(store, ViewModelProvider.AndroidViewModelFactory(app))[CameraViewModel::class.java] }
             await { vm.stacking.calibration.state.value.initialized }
@@ -78,16 +122,26 @@ class ColourBinningInstrumentedTest {
         } finally { main { store.clear() }; camera.close() }
     }
 
-    private class BinningCamera(initialBin: Int, private val delegate: SimulatedCamera =
+    private class BinningCamera(initialBin: Int, @Volatile var colourBinVerified: Boolean,
+        private val delegate: SimulatedCamera =
         SimulatedCamera("Colour bin fallback fixture")) : Camera by delegate, CameraBinningCapable {
         override val recordsLiveViewAsScience = true
         override val sciencePixelTraits get() = CameraScienceLayouts.fullContainer(currentPixelFormat)
+            ?.copy(bayerPatternAtOutput = colourBinVerified && currentHardwareBin > 1)
         override val supportedHardwareBins = listOf(1, 2)
         @Volatile override var currentHardwareBin = initialBin
+        override val roiSensorScale get() = currentHardwareBin
+        @Volatile override var currentReadoutMode = ReadoutMode.NORMAL
+            private set
+        override val supportedReadoutModes = listOf(ReadoutMode.NORMAL, ReadoutMode.HCG)
+        @Volatile var resetColourBinOnReadout = false
         private var nextRun = 0L
         @Volatile private var activeRun: Long? = null
         override val scienceCaptureGeneration get() = activeRun
         val binWrites = CopyOnWriteArrayList<Int>()
+        init {
+            delegate.setRoi(Roi(0, 0, SimulatedCamera.WIDTH / initialBin, SimulatedCamera.HEIGHT / initialBin))
+        }
         override fun startCapture(callback: FrameCallback) {
             val run = ++nextRun
             activeRun = run
@@ -97,11 +151,22 @@ class ColourBinningInstrumentedTest {
         }
         override fun stopCapture() { activeRun = null; delegate.stopCapture() }
         override fun close() { activeRun = null; delegate.close() }
+        override fun setReadoutMode(mode: ReadoutMode) {
+            check(!isCapturing.value)
+            currentReadoutMode = mode
+            if (resetColourBinOnReadout) {
+                activeRun = null
+                currentHardwareBin = 1
+                colourBinVerified = false
+                delegate.resetRoi()
+            }
+        }
         override fun setHardwareBin(bin: Int): Boolean {
             check(!isCapturing.value)
             activeRun = null
             binWrites += bin
             currentHardwareBin = bin
+            delegate.setRoi(Roi(0, 0, SimulatedCamera.WIDTH / bin, SimulatedCamera.HEIGHT / bin))
             return true
         }
     }

@@ -56,11 +56,11 @@ object StarRegistration {
         fun release() { values = DoubleArray(0); size = 0 }
     }
 
-    fun detect(image: LinearImage, maximumStars: Int = 100,
+    fun detect(image: LinearSamples, maximumStars: Int = 100,
                cancelled: () -> Boolean = { false }): StarField =
         detect(image,maximumStars,Workspace(),cancelled)
 
-    internal fun detect(image: LinearImage, maximumStars: Int = 100, workspace: Workspace,
+    internal fun detect(image: LinearSamples, maximumStars: Int = 100, workspace: Workspace,
                         cancelled: () -> Boolean = { false }): StarField {
         val scratch = workspace.acquire()
         try {
@@ -70,7 +70,7 @@ object StarRegistration {
         }
     }
 
-    private fun detectImpl(image: LinearImage, maximumStars: Int, scratch: DetectionScratch,
+    private fun detectImpl(image: LinearSamples, maximumStars: Int, scratch: DetectionScratch,
                            cancelled: () -> Boolean): StarField {
         val w = image.width; val h = image.height
         if (w < 16 || h < 16) return StarField(emptyList(), 0.0, 0.0, 1.0)
@@ -207,10 +207,7 @@ object StarRegistration {
         return RigidTransform(angle, rx - cos(angle) * sx + sin(angle) * sy, ry - sin(angle) * sx - cos(angle) * sy)
     }
 
-    internal fun luminance(image: LinearImage, pixel: Int): Double = if (image.channels == 1) image.pixels[pixel].toDouble() else {
-        val i = pixel * image.channels
-        image.pixels[i] * 0.2126 + image.pixels[i + 1] * 0.7152 + image.pixels[i + 2] * 0.0722
-    }
+    internal fun luminance(image: LinearSamples, pixel: Int): Double = image.luminanceSample(pixel)
     internal fun median(values: List<Double>): Double {
         if (values.isEmpty()) return 0.0
         val sorted = values.sorted(); return if (sorted.size % 2 == 1) sorted[sorted.size / 2] else (sorted[sorted.size / 2 - 1] + sorted[sorted.size / 2]) / 2

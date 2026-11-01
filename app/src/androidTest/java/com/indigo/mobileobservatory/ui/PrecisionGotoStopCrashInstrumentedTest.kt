@@ -152,4 +152,30 @@ class PrecisionGotoStopCrashInstrumentedTest {
             assertFalse(compose.activity.isFinishing || compose.activity.isDestroyed)
         }
     }
+
+    @Test fun disconnectingDuringSolveAllowsAFreshSessionToCenterAgain() {
+        val previous = requireNotNull(vm.virtualObservation.value)
+        previous.solveLatencyMs = 60_000
+        beginCentering()
+        compose.waitUntil(30_000) { vm.precisionSamples.samples.value[0].phase == PolarSamplePhase.SOLVING }
+        val captured = requireNotNull(vm.precisionSamples.samples.value[0].file)
+        compose.runOnIdle { vm.stopVirtualObservation() }
+        compose.waitUntil(15_000) {
+            vm.virtualObservation.value == null && !vm.mountBusy.value &&
+                vm.mountCoordinates.value == null && !vm.mountMotionState.value.isActive &&
+                vm.precisionSamples.samples.value[0].phase == PolarSamplePhase.CANCELLED &&
+                vm.precisionGotoProgress.value.phase == PrecisionGotoPhase.CANCELLED
+        }
+        assertFalse(captured.exists())
+        assertFalse(previous.primary.isOpen.value || previous.guide.isOpen.value)
+        compose.runOnIdle { vm.startVirtualObservation() }
+        compose.waitUntil(25_000) { vm.virtualObservation.value != null || vm.virtualObservationMessage.value.isNotEmpty() }
+        assertNotNull(vm.virtualObservationMessage.value, vm.virtualObservation.value)
+        assertNotSame(previous, vm.virtualObservation.value)
+        compose.waitUntil(15_000) { vm.guideDisplayFrame.value?.stars?.isNotEmpty() == true }
+        beginCentering()
+        compose.waitUntil(30_000) { !vm.precisionGotoProgress.value.isActive }
+        assertEquals(vm.precisionGotoProgress.value.message, PrecisionGotoPhase.SUCCEEDED, vm.precisionGotoProgress.value.phase)
+        assertFalse(compose.activity.isFinishing || compose.activity.isDestroyed)
+    }
 }

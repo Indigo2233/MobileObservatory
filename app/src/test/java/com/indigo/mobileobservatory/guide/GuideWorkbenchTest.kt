@@ -96,4 +96,18 @@ class GuideWorkbenchTest {
         assertEquals(2.062648f, GuideStarAnalysis.arcsecPerPixel(3f, 300f)!!, .0001f)
         assertNull(GuideStarAnalysis.arcsecPerPixel(3f, 0f))
     }
+
+    @Test fun plotRmsUsesTheVisibleSamplesOwnMeanWithoutOlderHistory() {
+        val old = List(100) { GuideHistoryPoint(it.toLong() + 1, 1000f, -1000f) }
+        val recent = List(50) { sample ->
+            val sign = if (sample % 2 == 0) -1f else 1f
+            GuideHistoryPoint(sample.toLong() + 101, 10f + sign, -20f + 2 * sign)
+        }
+        val window = GuidePlotWindow(old + recent, 50)
+        val rms = GuideModule().rms(window.points)
+        assertEquals(101L, window.points.first().timestampMs)
+        assertEquals(1f, rms.raPx, .00001f)
+        assertEquals(2f, rms.decPx, .00001f)
+        assertEquals(kotlin.math.sqrt(5.0).toFloat(), rms.totalPx, .00001f)
+    }
 }

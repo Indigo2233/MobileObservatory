@@ -147,7 +147,7 @@ class StackingCoordinator(
             val cancelCheck = {
                 if (closed || liveGeneration() != generation) throw CancellationException("stack_cancelled")
             }
-            liveDecoder.decode(frame, key, fixedCalibration, liveCapture(key), cancelCheck)
+            liveDecoder.decodeInput(frame, key, fixedCalibration, liveCapture(key), cancelCheck)
         },
         onSnapshot = { snapshot -> synchronized(stateLock) {
             // Validate and publish under the SAME monitor as resetLive. A delayed callback
@@ -352,7 +352,7 @@ class StackingCoordinator(
         val capture = liveCapture(key)
         try { selectedCalibration.validate(geometry, capture) }
         catch (error: Exception) { report(error.message ?: "calibration_settings_mismatch"); return }
-        val decoderBytes = LiveFrameDecoder.plan(key, selectedCalibration.memoryBytes, selectedCalibration.enabled).overheadBytes +
+        val decoderBytes = LiveFrameDecoder.overheadBytes(key, selectedCalibration.memoryBytes, selectedCalibration.enabled) +
             key.width.toLong() * key.height * key.format.bytesPerPixel * LiveStackMemory.MAX_IN_FLIGHT_FRAMES
         activateModeLocked(StackMode.LIVE)
         liveCalibration = selectedCalibration
@@ -1088,6 +1088,7 @@ class StackingCoordinator(
             "demosaicAlgorithm" to (s.key?.takeIf { it.format.isBayer }?.demosaicAlgorithm?.name ?: "NONE"),
             "demosaicScratchBytes" to (s.key?.let { LiveFrameDecoder.plan(it).demosaicScratchBytes } ?: 0).toString(),
             "decoderWorkingBytes" to liveDecoderBytes.toString(),
+            "decodedInputBytes" to (s.key?.let(LiveFrameDecoder::outputStorageBytes) ?: 0).toString(),
             "estimatedWorkingBytes" to (s.key?.let {
                 LiveStackAdmission.workingBytes(it, liveCalibration.memoryBytes, liveCalibration.enabled)
             } ?: 0).toString(),

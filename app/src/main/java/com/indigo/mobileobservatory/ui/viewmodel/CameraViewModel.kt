@@ -2618,7 +2618,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
                 // SER/PSER retain sensor samples and geometry. Copy before display binning
                 // can combine CFA colors or recycle the SDK-owned input buffer.
-                if (_isRecording.value && cam !is SimulatedCamera && rawRecordingLayout != null) {
+                if (_isRecording.value && !isSimulationCamera(cam) && rawRecordingLayout != null) {
                     if (scienceKey?.rawRecordingKey() != recordingCaptureKey || scienceKey == null) recordingCaptureChanged = true
                     val initialTemperature = recordingCaptureTemperature
                     val temperature = calibrationTemperature()
@@ -2651,7 +2651,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 updateSoftwareStackingProgress(cam)
 
                 val display = CameraCfaLayout.displayFrame(processed, traits)
-                if (_isRecording.value && cam !is SimulatedCamera && rawRecordingLayout == null) enqueueRecordingFrame(display)
+                if (_isRecording.value && !isSimulationCamera(cam) && rawRecordingLayout == null) enqueueRecordingFrame(display)
 
                 // Ownership transfers to the preview pipeline after all synchronous readers finish.
                 previewPipeline.submit(display, traits?.copy(bayerPatternAtOutput = true), previewRun, runRecycler)
@@ -3034,8 +3034,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val restart = cam.isCapturing.value
             previewEpoch.invalidate()
             if (restart) cam.stopCapture()
-            try { action() }
-            finally {
+            try {
+                action()
+                if (cameraManager.activeCamera === cam && cam is CameraBinningCapable && cam.binningStateVerified) {
+                    val selectedBin = _binning.value
+                    if (cam.currentHardwareBin.toLong() * softwareBinning.factor != selectedBin.toLong() ||
+                        requiresColourBinFallback(cam)) {
+                        applyBinning(cam, selectedBin)
+                    } else {
+                        syncBinningState(cam, selectedBin)
+                    }
+                }
+            } finally {
                 if (restart && cameraManager.activeCamera === cam && !_previewPaused.value) startPreview()
             }
         }
@@ -3898,20 +3908,24 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private var simulatedRecordingJob: Job? = null
     private val simulatedRecordingEpoch = java.util.concurrent.atomic.AtomicLong()
 
-    private fun startSimulatedRecording(camera: SimulatedCamera) {
+    private fun isSimulationCamera(camera: Camera?): Boolean =
+        camera is SimulatedCamera || camera is com.indigo.mobileobservatory.simulation.VirtualCamera
+
+    private fun startSimulatedRecording(camera: Camera, framesEmitted: () -> Long) {
         if (!camera.isCapturing.value) { _statusMessage.value = app.getString(R.string.sim_camera_resume); return }
         val run = simulatedRecordingEpoch.incrementAndGet()
         val started = android.os.SystemClock.elapsedRealtime()
-        val first = camera.framesEmitted
+        val first = framesEmitted()
         _recordingFrameCount.value = 0; _recordingDurationMs.value = 0; _recordingBytes.value = 0
         _isRecording.value = true
         _statusMessage.value = app.getString(R.string.sim_camera_recording)
         simulatedRecordingJob = viewModelScope.launch {
             try {
-                while (isActive && _isRecording.value && cameraManager.activeCamera === camera && simulatedRecordingEpoch.get() == run) {
+                while (isActive && _isRecording.value && camera.isCapturing.value &&
+                    cameraManager.activeCamera === camera && simulatedRecordingEpoch.get() == run) {
                     delay(100)
                     _recordingDurationMs.value = android.os.SystemClock.elapsedRealtime() - started
-                    _recordingFrameCount.value = (camera.framesEmitted - first).coerceIn(0, Int.MAX_VALUE.toLong()).toInt()
+                    _recordingFrameCount.value = (framesEmitted() - first).coerceIn(0, Int.MAX_VALUE.toLong()).toInt()
                     val limit = _recordLimit.value
                     if (limit.type == RecordLimitType.TIME && _recordingDurationMs.value >= limit.value * 1000L ||
                         limit.type == RecordLimitType.FRAMES && _recordingFrameCount.value >= limit.value) break
@@ -3948,7 +3962,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             _statusMessage.value = app.getString(R.string.record_resume_capture)
             return
         }
-        (cameraManager.activeCamera as? SimulatedCamera)?.let { startSimulatedRecording(it); return }
+        when (source) {
+            is SimulatedCamera -> { startSimulatedRecording(source) { source.framesEmitted }; return }
+            is com.indigo.mobileobservatory.simulation.VirtualCamera -> {
+                startSimulatedRecording(source) { source.framesEmitted }; return
+            }
+        }
         if (!License.canRecord) {
             _statusMessage.value = app.getString(R.string.trial_recording_disabled)
             return
@@ -4205,7 +4224,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun capture() {
-        if (cameraManager.activeCamera is SimulatedCamera) {
+        if (isSimulationCamera(cameraManager.activeCamera)) {
             _statusMessage.value = app.getString(R.string.sim_camera_capture_done)
             return
         }
@@ -4220,9 +4239,21 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         captureSettingsMutex.withLock {
             _virtualObservation.value?.let { session ->
                 check(cameraManager.activeCamera === session.primary) { app.getString(R.string.polar_capture_no_camera) }
-                _previewPaused.value = true
-                previewEpoch.invalidate(); previewPipeline.stop(clearFrame = false); stopExposureTimer()
-                return@withLock session.capture(requestedExposureUs ?: session.primary.currentExposureUs, requestedGain)
+                check(!_isRecording.value) { app.getString(R.string.polar_exposure_capture_busy) }
+                if (!pointingCaptureOwned.compareAndSet(false, true))
+                    rejectPolarCapture("capture_owned", R.string.polar_capture_owned)
+                try {
+                    _previewPaused.value = true
+                    cancelPendingFrameSnapshot("polar_capture_started")
+                    previewEpoch.invalidate(); previewPipeline.stop(clearFrame = false); stopExposureTimer()
+                    return@withLock session.capture(requestedExposureUs ?: session.primary.currentExposureUs, requestedGain)
+                } finally {
+                    if (cameraManager.activeCamera === session.primary) {
+                        _exposureUs.value = session.primary.currentExposureUs
+                        syncGainState(session.primary)
+                    }
+                    pointingCaptureOwned.set(false)
+                }
             }
             val cam = cameraManager.activeCamera ?: error(app.getString(R.string.polar_capture_no_camera))
             check(cam.isOpen.value) { app.getString(R.string.polar_capture_no_camera) }

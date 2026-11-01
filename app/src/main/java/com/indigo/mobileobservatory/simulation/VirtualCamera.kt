@@ -31,6 +31,7 @@ class VirtualCamera(val observatory: VirtualObservatory, private val sky: ByteAr
     override var longExposureEnabled = false
     private val epoch = AtomicLong()
     private val sequence = AtomicLong()
+    val framesEmitted get() = sequence.get()
     private var job: Job? = null
     @Volatile private var captureError: String? = null
     override val lastCaptureError get() = captureError

@@ -110,6 +110,10 @@ class Live585MemoryInstrumentedTest {
         assertEquals("2", metadata["frameCount"])
         assertEquals(bin.toString(), metadata["softwareBin"])
         assertEquals(10.0, metadata.getValue("exposureSeconds").toDouble(), 0.0)
+        assertEquals(if (bin > 1) CompactLinearImage16.ENCODING else "float32", metadata["inputEncoding"])
+        assertEquals(LiveFrameDecoder.outputStorageBytes(key).toString(), metadata["decodedInputBytes"])
+        assertTrue(metadata.getValue("maximumInputQuantizationError").toDouble().isFinite())
+        if (bin > 1) assertTrue(metadata.getValue("decodedInputBytes").toLong() < 13_000_000L)
         assertArrayEquals(original, preview.image.pixels, 0f)
         RandomAccessFile(fits, "r").use { file ->
             FitsHeaderParser.read(file)

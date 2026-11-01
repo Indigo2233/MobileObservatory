@@ -46,7 +46,10 @@ import kotlin.math.roundToInt
 class PlayerOneCamera : Camera, CameraSingleExposureCapable, CameraOffsetCapable, CoolingCapable, CameraUsbBandwidthCapable,
     CameraEnvironmentControlCapable, CameraBinningCapable {
 
-    override val sciencePixelTraits get() = if (binningStateValid) CameraScienceLayouts.fullContainer(currentPixelFormat) else null
+    override val sciencePixelTraits get() = if (binningStateValid && binning?.state != null)
+        CameraScienceLayouts.fullContainer(currentPixelFormat)?.copy(
+            bayerPatternAtOutput = currentPixelFormat.isBayer && binning?.outputCfaConfirmed == true)
+        else null
     private val captureGeneration = CaptureGeneration()
     override val scienceCaptureGeneration get() = captureGeneration.scienceGeneration
     private var captureStopFailed = false
@@ -126,8 +129,9 @@ class PlayerOneCamera : Camera, CameraSingleExposureCapable, CameraOffsetCapable
     private var bayer = PoaBayerPattern.MONO
     private var currentPoaFormat = PoaImageFormat.RAW8
     private var currentBin = 1
-    private var hardwareBinControlAvailable = false
-    private var binningStateValid = true
+    private var sensorHardwareBinSupported = false
+    private var binning: PlayerOneBinning? = null
+    @Volatile private var binningStateValid = false
     private var sensorHardwareBin = false
     private var supportedBins: List<Int> = listOf(1)
     override val currentHardwareBin: Int get() = currentBin
@@ -198,12 +202,11 @@ class PlayerOneCamera : Camera, CameraSingleExposureCapable, CameraOffsetCapable
             bayer = props.bayerPattern
             supportedBins = props.bins.ifEmpty { listOf(1) }
             currentBin = 1
-            binningStateValid = true
+            binningStateValid = false
             sensorHardwareBin = false
-            hardwareBinControlAvailable = props.supportsHardwareBin() && runCatching {
-                cam.getConfigAttributes(PoaConfig.HARDWARE_BIN).isWritable
-            }.getOrDefault(false)
-            FileLogger.i(TAG, "SDK bins=${supportedBins.joinToString()} current=$currentBin sensorHardwareControl=$hardwareBinControlAvailable")
+            sensorHardwareBinSupported = props.supportsHardwareBin()
+            binning = createBinning(cam)
+            FileLogger.i(TAG, "SDK bins=${supportedBins.joinToString()} current=$currentBin sensorHardwareSupported=$sensorHardwareBinSupported")
 
             cameraInfo = CameraInfo(
                 name = props.cameraModelName ?: "Player One Camera",
@@ -225,16 +228,7 @@ class PlayerOneCamera : Camera, CameraSingleExposureCapable, CameraOffsetCapable
             readGainOffsetPresets(cam)
             readEnvironmentControls(cam)
 
-            val maxW = (sensorW / currentBin / PoaMapping.ROI_WIDTH_ALIGN) * PoaMapping.ROI_WIDTH_ALIGN
-            val maxH = (sensorH / currentBin / PoaMapping.ROI_HEIGHT_ALIGN) * PoaMapping.ROI_HEIGHT_ALIGN
-            try {
-                cam.setImageBin(currentBin)
-                cam.setImageStartPosition(0, 0)
-                cam.setImageSize(maxW.coerceAtLeast(PoaMapping.ROI_MIN), maxH.coerceAtLeast(PoaMapping.ROI_MIN))
-            } catch (e: PoaException) {
-                FileLogger.w(TAG, "Initial ROI setup: ${e.error}")
-            }
-            syncRoiFromCamera(cam)
+            publishBinning(checkNotNull(binning?.apply(1, currentPoaFormat)) { "Cannot initialize Player One bin 1" })
 
             if (props.hasCooler()) {
                 initCooling(cam)
@@ -264,6 +258,8 @@ class PlayerOneCamera : Camera, CameraSingleExposureCapable, CameraOffsetCapable
     private fun cleanupFailedOpen() {
         try { poa?.close() } catch (_: Throwable) {}
         poa = null
+        binning = null
+        binningStateValid = false
         if (claimed) {
             PlayerOneSdkHost.release(cameraId)
             claimed = false
@@ -297,6 +293,8 @@ class PlayerOneCamera : Camera, CameraSingleExposureCapable, CameraOffsetCapable
         _isOpen.value = false
         frameCallback = null
         poa = null
+        binning = null
+        binningStateValid = false
         acceptRecycledBuffers.set(false)
         bufferPool.clear()
         directBuffers = null
@@ -323,6 +321,8 @@ class PlayerOneCamera : Camera, CameraSingleExposureCapable, CameraOffsetCapable
             FileLogger.w(TAG, "close: ${e.message}")
         }
         poa = null
+        binning = null
+        binningStateValid = false
         _isOpen.value = false
         cameraInfo = null
         acceptRecycledBuffers.set(false)
@@ -343,7 +343,7 @@ class PlayerOneCamera : Camera, CameraSingleExposureCapable, CameraOffsetCapable
             FileLogger.w(TAG, "Cannot start while the previous capture has not stopped")
             return
         }
-        preferHardwareBinBeforeCapture(cam)
+        verifyBinningBeforeCapture()
         val verified = runCatching {
             val exposureConfig = cam.getConfig(PoaConfig.EXPOSURE_MICROSECONDS)
             val gainConfig = cam.getConfig(PoaConfig.GAIN)
@@ -422,7 +422,7 @@ class PlayerOneCamera : Camera, CameraSingleExposureCapable, CameraOffsetCapable
         check(binningStateValid) { "Camera binning state is unknown; reconnect camera" }
         val cam = poa ?: error("Player One camera is not connected")
         check(_isOpen.value && !disconnected && isCaptureStopped) { "Previous Player One acquisition has not stopped" }
-        preferHardwareBinBeforeCapture(cam)
+        verifyBinningBeforeCapture()
         val exposureConfig = cam.getConfig(PoaConfig.EXPOSURE_MICROSECONDS)
         val gainConfig = cam.getConfig(PoaConfig.GAIN)
         val exposure = exposureConfig.value.asInteger().toFloat()
@@ -556,10 +556,14 @@ class PlayerOneCamera : Camera, CameraSingleExposureCapable, CameraOffsetCapable
             else -> PoaImageFormat.RAW16
         }
         try {
+            binning?.invalidate()
+            binningStateValid = false
             cam.setImageFormat(poaFmt)
-            currentPoaFormat = poaFmt
-            currentPixelFormat = format
-            directBuffers = null
+            currentPoaFormat = cam.imageFormat
+            currentPixelFormat = checkNotNull(PoaMapping.toPixelFormat(currentPoaFormat, bayer))
+            check(currentPoaFormat == poaFmt && currentPixelFormat == format) { "Camera image format readback differs" }
+            restoreBinningAfterSettings(currentBin, currentRoi)
+            directBuffers = null; bufferPool.clear()
             FileLogger.i(TAG, "PixelFormat -> ${format.name} ($poaFmt)")
             readGainRange(cam)
             readGainOffsetPresets(cam)
@@ -588,7 +592,11 @@ class PlayerOneCamera : Camera, CameraSingleExposureCapable, CameraOffsetCapable
         val previousGain = currentGain
         val previousOffset = currentOffset
         val previousFormat = currentPoaFormat
+        val previousBin = currentBin
+        val previousRoi = currentRoi
         try {
+            binning?.invalidate()
+            binningStateValid = false
             cam.setSensorMode(index)
             currentReadoutMode = mode
             try {
@@ -602,7 +610,10 @@ class PlayerOneCamera : Camera, CameraSingleExposureCapable, CameraOffsetCapable
             setGain(previousGain)
             if (offsetSupported) setOffset(previousOffset)
             readCurrentImagingSettings(cam)
-            directBuffers = null
+            currentPoaFormat = cam.imageFormat
+            currentPixelFormat = checkNotNull(PoaMapping.toPixelFormat(currentPoaFormat, bayer))
+            restoreBinningAfterSettings(previousBin, previousRoi)
+            directBuffers = null; bufferPool.clear()
             FileLogger.i(
                 TAG,
                 "SensorMode -> $mode (index=$index), restored exposure=${currentExposureUs.toInt()}us " +
@@ -620,49 +631,21 @@ class PlayerOneCamera : Camera, CameraSingleExposureCapable, CameraOffsetCapable
 
     @Synchronized override fun setHardwareBin(bin: Int): Boolean {
         captureGeneration.invalidateScience()
-        val cam = poa ?: return false
+        if (poa == null) return false
         if (disconnected) return false
         val b = if (bin in supportedBins) bin else return false
-        if (b == currentBin && binningStateValid) return true
+        val controller = binning ?: return false
         val wasCapturing = _isCapturing.value
         val cb = frameCallback
         if (wasCapturing) stopCapture()
         if (captureThread?.isAlive == true || deliveryThread?.isAlive == true || captureStopFailed) return false
-        val previous = currentBin
-        val previousRoi = currentRoi
-        val previousHardware = if (hardwareBinControlAvailable) cam.getConfig(PoaConfig.HARDWARE_BIN).value.asBoolean() else false
         val applied = try {
-            cam.setImageBin(b)
-            val maxW = (sensorW / b / PoaMapping.ROI_WIDTH_ALIGN) * PoaMapping.ROI_WIDTH_ALIGN
-            val maxH = (sensorH / b / PoaMapping.ROI_HEIGHT_ALIGN) * PoaMapping.ROI_HEIGHT_ALIGN
-            cam.setImageStartPosition(0, 0)
-            cam.setImageSize(maxW.coerceAtLeast(PoaMapping.ROI_MIN), maxH.coerceAtLeast(PoaMapping.ROI_MIN))
-            check(enableHardwareBinControl(cam, b > 1)) { "Hardware bin control rejected" }
-            syncRoiFromCamera(cam)
-            check(cam.imageFormat == currentPoaFormat && currentBin == b && currentRoi == Roi(0, 0, maxW, maxH)) {
-                "Camera bin format/geometry readback differs"
-            }
-            binningStateValid = true
-            FileLogger.i(TAG, "Bin -> $b, imageSize=${currentRoi.width}x${currentRoi.height}")
-            true
-        } catch (e: Exception) {
-            FileLogger.w(TAG, "setImageBin failed: ${e.message}")
-            val restored = runCatching {
-                cam.setImageBin(previous)
-                check(enableHardwareBinControl(cam, previousHardware))
-                cam.setImageFormat(currentPoaFormat)
-                cam.setImageSize(previousRoi.width, previousRoi.height)
-                cam.setImageStartPosition(previousRoi.x, previousRoi.y)
-                syncRoiFromCamera(cam)
-                check(cam.imageFormat == currentPoaFormat && currentBin == previous && currentRoi == previousRoi)
-                if (hardwareBinControlAvailable) check(cam.getConfig(PoaConfig.HARDWARE_BIN).value.asBoolean() == previousHardware)
-            }.isSuccess
-            if (!restored) {
-                binningStateValid = false
-                throw IllegalStateException("Cannot restore camera binning; reconnect camera", e)
-            }
-            false
+            controller.apply(b, currentPoaFormat, currentRoi.takeIf { b == currentBin }) != null
+        } finally {
+            binningStateValid = false
+            controller.state?.let(::publishBinning)
         }
+        if (!applied) FileLogger.w(TAG, "SDK bin $b rejected; previous output restored")
         if (wasCapturing && cb != null) startCapture(cb)
         return applied
     }
@@ -670,28 +653,72 @@ class PlayerOneCamera : Camera, CameraSingleExposureCapable, CameraOffsetCapable
     fun getBin(): Int = currentBin
     fun getSupportedBins(): List<Int> = supportedBins
 
-    private fun enableHardwareBinControl(cam: PoaCamera, enable: Boolean): Boolean {
-        if (!hardwareBinControlAvailable) { sensorHardwareBin = false; return true }
-        cam.setConfig(PoaConfig.HARDWARE_BIN, ConfigValue.ofBoolean(enable), false)
-        val actual = cam.getConfig(PoaConfig.HARDWARE_BIN).value.asBoolean()
-        sensorHardwareBin = actual
-        FileLogger.i(TAG, "POA_HARDWARE_BIN requested=$enable actual=$actual")
-        return actual == enable
+    private fun createBinning(cam: PoaCamera) = PlayerOneBinning(object : PlayerOneBinning.Port {
+        override fun read(): PlayerOneBinning.State {
+            val size = cam.imageSize
+            val pos = cam.imageStartPosition
+            return PlayerOneBinning.State(cam.imageBin, Roi(pos.x, pos.y, size.width, size.height), cam.imageFormat,
+                if (sensorHardwareBinSupported) readBinControl(cam, PoaConfig.HARDWARE_BIN)
+                else PlayerOneBinning.Control(false, false),
+                if (bayer != PoaBayerPattern.MONO) readBinControl(cam, PoaConfig.MONO_BIN) else null)
+        }
+        override fun setBin(bin: Int) { cam.setImageBin(bin) }
+        override fun setFormat(format: PoaImageFormat) { cam.setImageFormat(format) }
+        override fun setRoi(roi: Roi) {
+            cam.setImageStartPosition(0, 0)
+            cam.setImageSize(roi.width, roi.height)
+            cam.setImageStartPosition(roi.x, roi.y)
+        }
+        override fun setHardware(enabled: Boolean) {
+            cam.setConfig(PoaConfig.HARDWARE_BIN, ConfigValue.ofBoolean(enabled), false)
+        }
+        override fun setMono(enabled: Boolean) {
+            cam.setConfig(PoaConfig.MONO_BIN, ConfigValue.ofBoolean(enabled), false)
+        }
+    }, sensorW, sensorH, bayer != PoaBayerPattern.MONO, supportedBins)
+
+    private fun readBinControl(cam: PoaCamera, config: PoaConfig): PlayerOneBinning.Control? = runCatching {
+        val attrs = cam.getConfigAttributes(config)
+        check(attrs.isReadable) { "$config is not readable" }
+        val current = cam.getConfig(config)
+        check(!current.isAuto && current.value.type == PoaValueType.BOOLEAN) { "$config is not a manual boolean" }
+        PlayerOneBinning.Control(current.value.asBoolean(), attrs.isWritable)
+    }.getOrNull()
+
+    private fun publishBinning(state: PlayerOneBinning.State) {
+        if (currentBin != state.bin || currentRoi != state.roi) {
+            directBuffers = null
+            bufferPool.clear()
+        }
+        currentBin = state.bin
+        currentRoi = state.roi
+        cropInfo = CropInfo(state.roi.x, state.roi.y, state.roi.width, state.roi.height)
+        sensorHardwareBin = state.hardware?.value == true
+        binningStateValid = true
+        FileLogger.i(TAG, "SDK bin=$currentBin output=${currentRoi.width}x${currentRoi.height}" +
+            "@${currentRoi.x},${currentRoi.y} format=${state.format} hardware=${state.hardware?.value}" +
+            " mono=${state.mono?.value} outputCfa=${binning?.outputCfaConfirmed}")
     }
 
-    private fun preferHardwareBinBeforeCapture(cam: PoaCamera) {
-        if (currentBin <= 1 || !hardwareBinControlAvailable) return
-        val bin = currentBin
-        val roi = currentRoi
-        enableHardwareBinControl(cam, true)
-        syncRoiFromCamera(cam)
-        binningStateValid = cam.imageFormat == currentPoaFormat && currentBin == bin && currentRoi == roi
-        check(binningStateValid) { "Hardware bin mode changed camera format/geometry; reconnect camera" }
+    private fun restoreBinningAfterSettings(bin: Int, roi: Roi) {
+        val controller = checkNotNull(binning)
+        binningStateValid = false
+        val restored = controller.apply(bin, currentPoaFormat, roi) ?: controller.apply(1, currentPoaFormat)
+        publishBinning(checkNotNull(restored) { "Cannot restore Player One output after settings change" })
+    }
+
+    private fun verifyBinningBeforeCapture() {
+        binningStateValid = false
+        val state = checkNotNull(binning).verify()
+        check(state.bin == currentBin && state.roi == currentRoi && state.format == currentPoaFormat) {
+            "Player One output changed before capture"
+        }
+        publishBinning(state)
     }
 
     @Synchronized override fun setRoi(roi: Roi) {
         captureGeneration.invalidateScience()
-        val cam = poa ?: return
+        if (poa == null) return
         if (disconnected) return
         val maxW = sensorW / currentBin
         val maxH = sensorH / currentBin
@@ -703,10 +730,14 @@ class PlayerOneCamera : Camera, CameraSingleExposureCapable, CameraOffsetCapable
         if (captureThread?.isAlive == true || deliveryThread?.isAlive == true || captureStopFailed) return
 
         try {
-            cam.setImageStartPosition(aligned.x, aligned.y)
-            cam.setImageSize(aligned.width, aligned.height)
-            syncRoiFromCamera(cam)
-            directBuffers = null
+            val controller = checkNotNull(binning)
+            val applied = try {
+                controller.apply(currentBin, currentPoaFormat, aligned)
+            } finally {
+                binningStateValid = false
+                controller.state?.let(::publishBinning)
+            }
+            checkNotNull(applied) { "Player One ROI readback differs; previous output restored" }
             FileLogger.i(TAG, "ROI set: ${currentRoi.width}x${currentRoi.height}@(${currentRoi.x},${currentRoi.y})")
         } catch (e: PoaException) {
             FileLogger.w(TAG, "setRoi ${e.error}: ${e.message}")
@@ -723,7 +754,8 @@ class PlayerOneCamera : Camera, CameraSingleExposureCapable, CameraOffsetCapable
     }
 
     override fun recycleBuffer(buf: ByteArray) {
-        if (acceptRecycledBuffers.get()) bufferPool.release(buf)
+        val expected = currentRoi.width.toLong() * currentRoi.height * currentPixelFormat.bytesPerPixel
+        if (acceptRecycledBuffers.get() && buf.size.toLong() == expected) bufferPool.release(buf)
     }
 
     // --- CoolingCapable ---
@@ -1006,20 +1038,8 @@ class PlayerOneCamera : Camera, CameraSingleExposureCapable, CameraOffsetCapable
         val h = currentRoi.height.coerceAtLeast(PoaMapping.ROI_MIN)
         val need = w * h * currentPixelFormat.bytesPerPixel.coerceAtLeast(1)
         val existing = directBuffers
-        if (existing != null && existing.isNotEmpty() && existing[0].capacity() >= need) return
+        if (existing != null && existing.isNotEmpty() && existing[0].capacity() == need) return
         directBuffers = Array(DIRECT_BUF_COUNT) { ByteBuffer.allocateDirect(need) }
-    }
-
-    private fun syncRoiFromCamera(cam: PoaCamera) {
-        try {
-            val size = cam.imageSize
-            val pos = cam.imageStartPosition
-            currentRoi = Roi(pos.x, pos.y, size.width, size.height)
-            cropInfo = CropInfo(pos.x, pos.y, size.width, size.height)
-            currentBin = cam.imageBin
-        } catch (e: PoaException) {
-            FileLogger.w(TAG, "syncRoi ${e.error}")
-        }
     }
 
     private fun readExposureRange(cam: PoaCamera) {
