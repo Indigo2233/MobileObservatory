@@ -20,7 +20,7 @@ $destination = if ([IO.Path]::IsPathRooted($OutputDirectory)) { $OutputDirectory
 $classes = Join-Path $destination 'classes'
 New-Item -ItemType Directory -Force -Path $classes | Out-Null
 $main = Join-Path $root 'app/src/main/java/com/indigo/mobileobservatory/stacking'
-$sourceFiles = @('LinearImage.kt', 'StarRegistration.kt', 'DeepSkyStacker.kt', 'StackPreviewGrid.kt', 'OfflineDeepSkyMemory.kt') |
+$sourceFiles = @('LinearSamples.kt', 'LinearImage.kt', 'StarRegistration.kt', 'DeepSkyStacker.kt', 'StackPreviewGrid.kt', 'OfflineDeepSkyMemory.kt') |
     ForEach-Object { Join-Path $main $_ }
 
 # Generate an experimental copy of the current production engine. Only its class name,

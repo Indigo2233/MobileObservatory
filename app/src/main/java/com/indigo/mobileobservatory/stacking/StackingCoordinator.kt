@@ -131,6 +131,11 @@ class StackingCoordinator(
         private set
     val heapLimitBytes: Long = Runtime.getRuntime().maxMemory()
     val memoryBudgetBytes: Long = StackMemoryBudget.forHeap(heapLimitBytes)
+    private val heapAdmission = StackHeapAdmission(heapLimitBytes, heapUsageBytes) {
+        val before = heapUsageBytes()
+        System.gc()
+        FileLogger.i("Stacking", "Heap pressure recheck usedBefore=$before usedAfter=${heapUsageBytes()}")
+    }
     private val cache = File(app.cacheDir, "stack-analysis")
     private val engine = PlanetaryStacker()
     @Volatile private var liveCalibration = CalibrationSelection()
@@ -163,7 +168,10 @@ class StackingCoordinator(
             }
         } },
         nativeHeapBytes = { Debug.getNativeHeapAllocatedSize() },
-        onWorkerReset = liveDecoder::release,
+        onWorkerReset = {
+            liveDecoder.release()
+            heapAdmission.allocationsReleased()
+        },
         queueCapacity = 1,
         previewMaxSide = LiveStackMemory.PREVIEW_MAX_SIDE,
         maxInFlightFrames = LiveStackMemory.MAX_IN_FLIGHT_FRAMES
@@ -295,18 +303,20 @@ class StackingCoordinator(
     val liveMemoryBudgetBytes: Long
         get() = liveInputBudget(calibration.memoryBytes)
 
-    private fun liveInputBudget(calibrationBytes: Long): Long =
-        if (live.state.value.phase == LiveStackPhase.EMPTY) availableBudget(calibrationBytes) else memoryBudgetBytes
+    private fun liveInputBudget(calibrationBytes: Long, requiredBytes: Long = 0): Long =
+        if (live.state.value.phase == LiveStackPhase.EMPTY) availableBudget(calibrationBytes, requiredBytes) else memoryBudgetBytes
 
     fun liveInputIssue(key: StackSessionKey): String? {
         val calibrationBytes = calibration.memoryBytes
-        return LiveStackAdmission.issue(key, liveInputBudget(calibrationBytes), calibrationBytes, calibrationBytes > 0)
+        LiveStackAdmission.issue(key, memoryBudgetBytes, calibrationBytes, calibrationBytes > 0)?.let { return it }
+        val working = LiveStackAdmission.workingBytes(key, calibrationBytes, calibrationBytes > 0)
+        return LiveStackAdmission.issue(key, liveInputBudget(calibrationBytes, working), calibrationBytes, calibrationBytes > 0)
     }
 
     fun liveInputBudgetSnapshot(key: StackSessionKey): LiveInputDiagnostic {
         val calibrationBytes = calibration.memoryBytes
-        val budget = liveInputBudget(calibrationBytes)
         val working = LiveStackAdmission.workingBytes(key, calibrationBytes, calibrationBytes > 0)
+        val budget = liveInputBudget(calibrationBytes, working)
         return LiveInputDiagnostic(
             issue = LiveStackAdmission.issue(key, budget, calibrationBytes, calibrationBytes > 0).orEmpty(),
             input = key,
@@ -317,12 +327,16 @@ class StackingCoordinator(
         )
     }
 
-    private fun availableBudget(retainedStackBytes: Long): Long {
-        val nonStackBytes = (heapUsageBytes() - retainedStackBytes).coerceAtLeast(0)
-        return StackMemoryBudget.forHeap(heapLimitBytes, nonStackBytes)
+    private fun availableBudget(retainedStackBytes: Long, requiredBytes: Long = 0): Long =
+        heapAdmission.available(retainedStackBytes, requiredBytes, allowCollection = !Thread.holdsLock(stateLock))
+
+    fun startLive(key: StackSessionKey) {
+        // Finish any pressure-driven collection before acquiring the task/render publication lock.
+        if (!closed && live.state.value.phase == LiveStackPhase.EMPTY) liveInputIssue(key)
+        startLiveLocked(key)
     }
 
-    fun startLive(key: StackSessionKey) = synchronized(stateLock) {
+    private fun startLiveLocked(key: StackSessionKey) = synchronized(stateLock) {
         if (closed) return
         FileLogger.i("Stacking", "Live requested input=${key.width}x${key.height} format=${key.format} " +
             "hardwareBin=${key.hardwareBin} softwareBin=${key.softwareBin} target=${key.target} " +
@@ -974,7 +988,7 @@ class StackingCoordinator(
         FileLogger.i("Stacking", "Offline input=${source.info.width}x${source.info.height} region=${source.plan.region} " +
             "bin=${source.plan.softwareBin} output=${source.width}x${source.height} estimate=${source.plan.workingBytes} " +
             "budget=$memoryBudgetBytes heapLimit=$heapLimitBytes target=${source.plan.target}")
-        val available = availableBudget(source.calibration.memoryBytes)
+        val available = availableBudget(source.calibration.memoryBytes, source.plan.workingBytes)
         FileLogger.i("Stacking", "Offline heap admission available=$available ceiling=$memoryBudgetBytes")
         source.plan.issue(available)?.let { error(it) }
     }

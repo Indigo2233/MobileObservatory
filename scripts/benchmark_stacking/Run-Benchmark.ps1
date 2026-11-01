@@ -34,7 +34,7 @@ $output="$benchmarkRoot/classes-$Variant"
 $source="$benchmarkRoot/source-$Variant"
 $paths=@('camera/CameraModels.kt','recording/RawRecordingNormalizer.kt')
 $paths+=@('LinearImage','LinearPixelDecoder','DemosaicAlgorithm','DdfapdDemosaicer','VngDemosaicer','PlanetaryStacker','PlanetaryQuality','PlanetaryRegistration','StarRegistration','DeepSkyStacker','LiveStackSession','LiveDeepSkyEngine','BackgroundGradient','StackPostProcessor') | ForEach-Object { "stacking/$_.kt" }
-if($Variant -eq 'current') { $paths+='stacking/OfflineDeepSkyMemory.kt' }
+if($Variant -eq 'current') { $paths+=@('stacking/OfflineDeepSkyMemory.kt','stacking/LinearSamples.kt') }
 if(-not $SkipCompile) {
     New-Item -ItemType Directory -Force -Path $source,$output | Out-Null
     $manifest=@()
