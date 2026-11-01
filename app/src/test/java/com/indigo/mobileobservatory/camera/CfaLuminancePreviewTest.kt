@@ -54,4 +54,41 @@ class CfaLuminancePreviewTest {
             }
         }
     }
+
+    @Test fun downsamplingAveragesEveryCoveredCellInsteadOfPointSampling() {
+        // A single bright cell inside the sampled area must survive the reduction.
+        // Point sampling would pick one cell and drop the rest of the star's energy.
+        val pixels = ByteArray(8 * 8)
+        pixels[3 * 8 + 3] = 200.toByte()
+        val preview = CfaLuminancePreview.compose(FrameData(pixels, 8, 8, PixelFormat.BAYER_RG8, 1, 0),
+            ByteArray(16), ByteOrder.LITTLE_ENDIAN, sampleStep = 4)
+        assertEquals(2, preview.width); assertEquals(2, preview.height)
+        // The bright cell is covered by the first output pixel and contributes to its mean.
+        assertTrue("The covered bright cell must reach the output pixel",
+            (preview.data[0].toInt() and 255) > 0)
+        // Averaging spreads the star over the covered area instead of concentrating it.
+        assertTrue("The averaged pixel must stay below the source cell value",
+            (preview.data[0].toInt() and 255) < 200)
+    }
+
+    @Test fun downsamplingKeepsUniformFramesUniform() {
+        for (format in listOf(PixelFormat.BAYER_RG8, PixelFormat.BAYER_BG8)) {
+            val pixels = ByteArray(16 * 16) { 90.toByte() }
+            val preview = CfaLuminancePreview.compose(FrameData(pixels, 16, 16, format, 1, 0),
+                ByteArray(64), ByteOrder.LITTLE_ENDIAN, sampleStep = 4)
+            assertEquals(4, preview.width); assertEquals(4, preview.height)
+            for (y in 0 until preview.height) for (x in 0 until preview.width)
+                assertEquals(90, preview.data[y * preview.width + x].toInt() and 255)
+        }
+    }
+
+    @Test fun downsamplingKeepsEveryOutputPixelInsideTheFrame() {
+        for ((width, height) in listOf(5 to 3, 7 to 5, 9 to 6)) {
+            val pixels = ByteArray(width * height) { (it % 251).toByte() }
+            val preview = CfaLuminancePreview.compose(FrameData(pixels, width, height, PixelFormat.BAYER_RG8, 1, 0),
+                ByteArray(width * height), ByteOrder.LITTLE_ENDIAN, sampleStep = 2)
+            assertEquals((width / 2).coerceAtLeast(1), preview.width)
+            assertEquals((height / 2).coerceAtLeast(1), preview.height)
+        }
+    }
 }

@@ -66,6 +66,28 @@ Player One 使用 SDK 原生单次曝光 `startExposure(true)`，触发前清空
 
 FIT/FITS 通过分享请求、`ClipData` 和文件 URI 类型统一声明为 `application/octet-stream`，接收软件按通用附件处理。包含 FITS 的多选也使用文件分享类型，保持原始文件名、扩展名和字节内容，并仅授予临时读取权限。JPEG/PNG、MP4、ZIP、日志和 APK 更新继续使用各自已有类型；文件入口及授权目录沿用现有配置。
 
+## 导星图像的标记与显示平滑（2026-11-02）
+
+导星页的星点标记分工与 PHD2 一致。主星方框跟着当前锁定星移动，副星圆圈固定在锁定时的参考位置，
+这样画面上能直接看出星点相对参考框的位移量。黄色十字仍固定在锁定坐标。
+依据 `src/guider_multistar.cpp` 的 `GuiderMultiStar::OnPaint`：主星方框画在 `m_primaryStar`，
+副星画在 `referencePoint`。副星丢失并重新捕获时参考点才重置。
+
+彩色导星预览的降采样由点采样改为覆盖区平均。Bayer 帧先合成完整感光格，再对输出像素覆盖到的
+全部感光格求平均，避免 4K 传感器缩到 4MP 时星点碎成硬块或整颗消失。PHD2 在显示层用
+`wxIMAGE_QUALITY_BILINEAR` 重采样整帧（`src/guider.cpp` 的 `Guider::PaintHelper`），
+本项目的平均处理与之等价。降采样仍然只发生在显示路径，拍摄与 FITS 保持原图。
+
+测量层保持原样：峰值定位继续使用 3×3 加权核，背景统计与质心沿用现有实现。
+PHD2 自动选星前的整帧 `Median3` 未移植，该步骤只用于消除热像素，
+对当前逐点候选确认已经生效的路径收益有限，暂不引入整帧滤波的额外内存开销。
+
+回归：`CfaLuminancePreviewTest.downsamplingAveragesEveryCoveredCellInsteadOfPointSampling`、
+`downsamplingKeepsUniformFramesUniform`、`downsamplingKeepsEveryOutputPixelInsideTheFrame`、
+`GuideWorkbenchInstrumentedTest.primaryMarkerFollowsTheStarWhileSecondaryMarkersStayAtTheirReferences`
+
+---
+
 ## 实时与后期叠加
 
 2026-11-01 实时深空彩色 Bin 输入压缩：按传感器校准、分块去马赛克、RGB Bin 的顺序，直接生成可复用的16位紧凑输入；每块每通道保存线性缩放和偏移，覆盖校准负值与超过白点的数值。配准与累计直接采样紧凑缓冲，历史均值、方差统计、权重及科学输出沿用 Float32。585 软件 Bin2 的输入存储按数组尺寸计算约12.63 MB，预算继续覆盖导出阶段；编码误差上限与输入字节数写入导出诊断。已通过 JVM 单测与设备用例，说明见 [紧凑输入](STACKING_CALIBRATION.md#compact-binned-live-colour-input-2026-11-01-validation-pending)。

@@ -306,8 +306,15 @@ internal fun GuideImage(frame: GuideDisplayFrame?, references: List<GuideStar>, 
                 drawImage(source.bitmap.asImageBitmap(), dstSize = IntSize(source.width, source.height))
                 val stroke = 1.5.dp.toPx() / viewport.scale
                 val radius = 8.dp.toPx() / viewport.scale
-                val selected = references.ifEmpty { source.stars }
-                selected.filter { viewport.contains(it.x, it.y) }.forEach { star ->
+                // PHD2 draws the secondary-star markers at their locked reference positions
+                // (src/guider_multistar.cpp, GuiderMultiStar::OnPaint) while the primary box
+                // follows the measured star. Keeping the references fixed makes the
+                // relative motion visible, as in PHD2.
+                references.drop(1).filter { viewport.contains(it.x, it.y) }.forEach { star ->
+                    drawCircle(Color(0xFF70DDA0), radius, Offset(star.x, star.y), style = Stroke(stroke))
+                }
+                // The primary marker tracks the star it currently locks onto.
+                (source.primary ?: references.firstOrNull())?.takeIf { viewport.contains(it.x, it.y) }?.let { star ->
                     drawCircle(Color(0xFF70DDA0), radius, Offset(star.x, star.y), style = Stroke(stroke))
                 }
                 (references.firstOrNull() ?: source.primary)?.takeIf { viewport.contains(it.x, it.y) }?.let { star ->

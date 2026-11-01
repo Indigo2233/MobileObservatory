@@ -157,10 +157,58 @@ class GuideWorkbenchInstrumentedTest {
         compose.runOnIdle { assertEquals(listOf(1920f to 1080f), selections) }
     }
 
+    @Test fun primaryMarkerFollowsTheStarWhileSecondaryMarkersStayAtTheirReferences() {
+        // PHD2 draws the secondary-star markers at the locked reference positions and lets
+        // the primary box follow the measured star (src/guider_multistar.cpp, OnPaint).
+        val primary = GuideStar(160f, 120f, 20f)
+        val secondary = GuideStar(320f, 120f, 15f)
+        val references = listOf(primary, secondary)
+        val bitmap = Bitmap.createBitmap(640, 480, Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.BLACK) }
+        // The tracked star has drifted away from its locked reference position.
+        val movedPrimary = GuideStar(160f + 40f, 120f, 20f)
+        val frame = GuideDisplayFrame(bitmap, 640, 480, listOf(movedPrimary, secondary), movedPrimary, null)
+        compose.setContent { MaterialTheme {
+            GuideImage(frame, references, { _, _ -> }, Modifier.size(320.dp, 200.dp))
+        } }
+        val pixels = compose.onNodeWithTag("guide-image").captureToImage().toPixelMap()
+        val markers = greenMarkers(pixels)
+        assertTrue("Both markers must be drawn", markers.size >= 2)
+        // The primary marker follows the moved star; the secondary stays at its reference.
+        val movedX = imageX(movedPrimary.x, 640, pixels.width)
+        val referenceX = imageX(primary.x, 640, pixels.width)
+        val secondaryX = imageX(secondary.x, 640, pixels.width)
+        assertTrue("A marker must follow the drifted star", markers.any { kotlin.math.abs(it - movedX) < 6f })
+        assertTrue("The secondary marker must stay at its reference position",
+            markers.any { kotlin.math.abs(it - secondaryX) < 6f })
+        assertTrue("The primary reference must no longer carry a marker",
+            markers.none { kotlin.math.abs(it - referenceX) < 6f })
+    }
+
     private fun frame(): GuideDisplayFrame {
         val bitmap = Bitmap.createBitmap(160, 120, Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.BLACK) }
         val star = GuideStar(240f, 240f, 20f)
         return GuideDisplayFrame(bitmap, 640, 480, listOf(star), star, null)
+    }
+
+    /** Screen x of an image coordinate under the letterboxed preview transform. */
+    private fun imageX(imageX: Float, imageWidth: Int, canvasWidth: Int): Float {
+        val scale = minOf(canvasWidth.toFloat() / imageWidth, 200f / 480f)
+        return (canvasWidth - imageWidth * scale) / 2f + imageX * scale
+    }
+
+    /** Horizontal centres of the green star markers in the captured preview. */
+    private fun greenMarkers(pixels: androidx.compose.ui.graphics.PixelMap): List<Float> {
+        val centres = mutableListOf<Float>()
+        var run = mutableListOf<Int>()
+        for (x in 0 until pixels.width) {
+            val green = pixels[x, pixels.height / 2].green
+            val marked = green > .5f && pixels[x, pixels.height / 2].red < .6f && pixels[x, pixels.height / 2].blue < .7f
+            if (marked) run.add(x) else if (run.isNotEmpty()) {
+                centres.add(run.average().toFloat()); run = mutableListOf()
+            }
+        }
+        if (run.isNotEmpty()) centres.add(run.average().toFloat())
+        return centres
     }
 
     private fun yellowCenter(pixels: androidx.compose.ui.graphics.PixelMap): Float {
