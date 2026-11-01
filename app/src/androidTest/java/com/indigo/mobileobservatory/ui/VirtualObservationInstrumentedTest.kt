@@ -249,6 +249,6 @@ class VirtualObservationInstrumentedTest {
         compose.waitUntil(45_000) { !vm.precisionGotoProgress.value.isActive }
         assertEquals(vm.precisionGotoProgress.value.message, com.indigo.mobileobservatory.mount.PrecisionGotoPhase.SUCCEEDED,
             vm.precisionGotoProgress.value.phase)
-        assertTrue(requireNotNull(vm.precisionGotoProgress.value.errorArcmin) < 6.0)
+        assertTrue(requireNotNull(vm.precisionGotoProgress.value.errorArcmin) <= 1.0)
     }
 }

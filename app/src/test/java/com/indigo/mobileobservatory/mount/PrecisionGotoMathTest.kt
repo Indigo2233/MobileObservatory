@@ -6,11 +6,12 @@ import org.junit.Test
 
 class PrecisionGotoMathTest {
     @Test
-    fun defaultStopIsSixArcminAndUserValuesAreClamped() {
-        assertEquals(6.0, PrecisionGotoMath.TOLERANCE_ARCMIN, 0.0)
-        assertTrue(PrecisionGotoMath.withinTolerance(5.9))
-        assertTrue(PrecisionGotoMath.withinTolerance(6.0))
-        assertTrue(!PrecisionGotoMath.withinTolerance(6.1))
+    fun defaultStopIsOneArcminAndUserValuesAreClamped() {
+        assertEquals(1.0, PrecisionGotoMath.TOLERANCE_ARCMIN, 0.0)
+        assertTrue(PrecisionGotoMath.withinTolerance(.9))
+        assertTrue(PrecisionGotoMath.withinTolerance(1.0))
+        assertTrue(!PrecisionGotoMath.withinTolerance(1.01))
+        assertTrue(!PrecisionGotoMath.withinTolerance(5.9))
         assertEquals(1.0, PrecisionGotoMath.clampToleranceArcmin(0.2), 0.0)
         assertEquals(30.0, PrecisionGotoMath.clampToleranceArcmin(90.0), 0.0)
         assertTrue(PrecisionGotoMath.withinTolerance(8.0, toleranceArcmin = 10.0))
@@ -19,6 +20,16 @@ class PrecisionGotoMathTest {
             "star_map_precision_tolerance_arcmin",
             PrecisionGotoMath.PREFS_TOLERANCE_ARCMIN
         )
+    }
+
+    @Test
+    fun previousSixArcminDefaultMigratesOnceWhileLaterUserChoicesRemainAvailable() {
+        assertEquals(1.0, PrecisionGotoMath.initialToleranceArcmin(6.0, defaultApplied = false), 0.0)
+        assertEquals(1.0, PrecisionGotoMath.initialToleranceArcmin(1.0, defaultApplied = false), 0.0)
+        assertEquals(2.0, PrecisionGotoMath.initialToleranceArcmin(2.0, defaultApplied = false), 0.0)
+        assertEquals(6.0, PrecisionGotoMath.initialToleranceArcmin(6.0, defaultApplied = true), 0.0)
+        assertEquals(1.0, PrecisionGotoMath.initialToleranceArcmin(.2, defaultApplied = true), 0.0)
+        assertEquals(30.0, PrecisionGotoMath.initialToleranceArcmin(90.0, defaultApplied = true), 0.0)
     }
 
     @Test

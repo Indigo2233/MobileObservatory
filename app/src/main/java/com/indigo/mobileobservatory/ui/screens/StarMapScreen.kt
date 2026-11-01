@@ -507,14 +507,17 @@ fun StarMapScreen(
         mutableStateOf(prefs.getBoolean("star_map_star_labels", false))
     }
     var precisionToleranceText by remember {
-        mutableStateOf(
-            formatStoredTolerance(
-                prefs.getFloat(
-                    PrecisionGotoMath.PREFS_TOLERANCE_ARCMIN,
-                    PrecisionGotoMath.TOLERANCE_ARCMIN.toFloat()
-                )
-            )
+        val defaultApplied = prefs.getBoolean(PrecisionGotoMath.PREFS_ONE_ARCMIN_DEFAULT, false)
+        val initial = PrecisionGotoMath.initialToleranceArcmin(
+            prefs.getFloat(PrecisionGotoMath.PREFS_TOLERANCE_ARCMIN,
+                PrecisionGotoMath.TOLERANCE_ARCMIN.toFloat()).toDouble(),
+            defaultApplied
         )
+        if (!defaultApplied) prefs.edit()
+            .putFloat(PrecisionGotoMath.PREFS_TOLERANCE_ARCMIN, initial.toFloat())
+            .putBoolean(PrecisionGotoMath.PREFS_ONE_ARCMIN_DEFAULT, true)
+            .apply()
+        mutableStateOf(formatStoredTolerance(initial.toFloat()))
     }
     val moveEnabled = mountConnected && mountPointingCapabilities.manualMove && !mountBusy
     val canGoto = mountConnected && mountPointingCapabilities.goto && !mountBusy

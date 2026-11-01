@@ -77,10 +77,6 @@ fun CameraPreviewTools(
     onChooseTarget: () -> Unit,
     onOpenLiveStack: () -> Unit = {},
     onCfaSettings: () -> Unit = {},
-    simulated: Boolean = false,
-    canStartSimulation: Boolean = false,
-    onStartSimulation: () -> Unit = {},
-    onStopSimulation: () -> Unit = {},
     portrait: Boolean = false,
     showSequence: Boolean = false,
     onOpenSequence: () -> Unit = {},
@@ -140,9 +136,6 @@ fun CameraPreviewTools(
                 onDismissRequest = { menuOpen = false }
             ) {
                 PopupWindowBackHandler(enabled = menuOpen) { menuOpen = false }
-                if (simulated || canStartSimulation) DropdownMenuItem(
-                    text = { Text(stringResource(if (simulated) R.string.sim_camera_stop else R.string.sim_camera_start)) },
-                    onClick = { menuOpen = false; if (simulated) onStopSimulation() else onStartSimulation() })
                 if (mountConnected) DropdownMenuItem(
                     text = { Text(stringResource(R.string.capture_mount_pad)) },
                     onClick = { menuOpen = false; onToggleMountPad() },

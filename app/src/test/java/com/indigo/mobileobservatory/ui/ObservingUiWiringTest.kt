@@ -492,7 +492,7 @@ class ObservingUiWiringTest {
     }
 
     @Test
-    fun precisionGotoUnifiesEpochsAndExposesSixArcminTolerance() {
+    fun precisionGotoUnifiesEpochsAndExposesOneArcminTolerance() {
         val camera = read(
             "src/main/java/com/indigo/mobileobservatory/ui/screens/SkyWorkspaceScreen.kt"
         )
@@ -519,7 +519,7 @@ class ObservingUiWiringTest {
         assertTrue(starMap.contains("centerOnRaDec(ra, dec, frame = \"JNOW\")"))
         assertTrue(starMap.contains("onPrecisionGoto(target, currentPrecisionToleranceArcmin())"))
         assertTrue(hud.contains("R.string.precision_goto_tolerance"))
-        assertTrue(math.contains("const val TOLERANCE_ARCMIN = 6.0"))
+        assertTrue(math.contains("const val TOLERANCE_ARCMIN = 1.0"))
         assertTrue(mount.contains("if (controller.supportsSync)"))
         assertTrue(mount.contains("controller.syncTo(solved)"))
         assertTrue(mount.contains("PrecisionGotoMath.withinTolerance(errorArcmin, stopArcmin)"))

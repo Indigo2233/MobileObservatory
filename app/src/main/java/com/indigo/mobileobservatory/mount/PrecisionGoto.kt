@@ -35,11 +35,17 @@ data class PrecisionGotoProgress(
 }
 
 object PrecisionGotoMath {
-    const val TOLERANCE_ARCMIN = 6.0
+    const val TOLERANCE_ARCMIN = 1.0
     const val MIN_TOLERANCE_ARCMIN = 1.0
     const val MAX_TOLERANCE_ARCMIN = 30.0
     const val MAX_ITERATIONS = 5
     const val PREFS_TOLERANCE_ARCMIN = "star_map_precision_tolerance_arcmin"
+    const val PREFS_ONE_ARCMIN_DEFAULT = "star_map_precision_one_arcmin_default_applied"
+    private const val PREVIOUS_DEFAULT_ARCMIN = 6.0
+
+    fun initialToleranceArcmin(storedValue: Double, defaultApplied: Boolean): Double =
+        clampToleranceArcmin(if (!defaultApplied && storedValue == PREVIOUS_DEFAULT_ARCMIN)
+            TOLERANCE_ARCMIN else storedValue)
 
     fun clampToleranceArcmin(value: Double): Double =
         value.coerceIn(MIN_TOLERANCE_ARCMIN, MAX_TOLERANCE_ARCMIN)
