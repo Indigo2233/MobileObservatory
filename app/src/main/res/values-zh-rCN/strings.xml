@@ -293,6 +293,7 @@
     <string name="synscan_app_address">赤道仪 Wi‑Fi 地址</string>
     <string name="udp_port">UDP 端口</string>
     <string name="synscan_connection_hint">手机先连赤道仪热点（SSID 一般为 SynScan_xxxx），再点连接，默认 192.168.4.1:11880。连接前选择赤道仪或经纬仪模式。请在极轴页填好经纬度；零位开机或连上后对一颗星同步。</string>
+    <string name="ioptron_tcp_connection_hint">HAE29C 等艾顿赤道仪使用 iOptron RS-232 指令集，通过 TCP 连接。手机先连赤道仪热点（SSID 一般为 HAECser_xxxx），再选 iOptron 协议连接默认地址 10.10.100.254:8899。</string>
     <string name="synscan_mode_equatorial">赤道仪</string>
     <string name="synscan_mode_altaz">经纬仪</string>
     <string name="guiding_module">导星模块</string>

@@ -7,6 +7,7 @@ import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothSocket
 import android.content.Context
 import android.content.pm.PackageManager
+import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbManager
 import android.os.Build
@@ -331,17 +332,12 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
 
                 if (protocol != MountProtocolType.LX200_ONSTEP &&
                     protocol != MountProtocolType.SKYWATCHER) {
-                    runCatching { port.setDTR(false) }
-                    runCatching { port.setRTS(false) }
-                    Thread.sleep(500)
-                    drainSerialInput(port)
-                    val modelCode = runCatching { probeIoptron() }.getOrNull()
+                    val modelCode = handshakeIoptron(port)
                     if (modelCode != null) {
                         activeProtocol = MountProtocolType.IOPTRON
                         mountModel = IOPTRON_MODELS[modelCode] ?: "iOptron ($modelCode)"
                         return@withContext readCoordinates()
                     }
-                    drainSerialInput(port)
                 }
 
                 if (protocol != MountProtocolType.LX200_ONSTEP &&
@@ -1061,6 +1057,29 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
         return response
     }
 
+    /**
+     * The iOptron USB bridge needs the data lines in a defined state before it
+     * answers. Some HAEc boards only enable the UART with DTR high, others with
+     * DTR low, so every documented line state is probed before giving up.
+     */
+    private fun handshakeIoptron(port: UsbSerialPort): String? {
+        for (mode in IOPTRON_LINE_MODES) {
+            FileLogger.i(TAG, "USB iOptron handshake try mode=${mode.name}")
+            runCatching { port.setDTR(mode.dtr) }
+            runCatching { port.setRTS(mode.rts) }
+            Thread.sleep(mode.delayMs)
+            drainSerialInput(port)
+            val modelCode = runCatching { probeIoptron() }.getOrNull()
+            if (modelCode != null) {
+                FileLogger.i(TAG, "USB iOptron handshake ok mode=${mode.name} model=$modelCode")
+                return modelCode
+            }
+            drainSerialInput(port)
+        }
+        FileLogger.w(TAG, "USB iOptron handshake found no :MountInfo# response")
+        return null
+    }
+
     private fun sendIoptronOk(command: String): Boolean {
         return sendFixedCommand(command, 1) == "1"
     }
@@ -1524,6 +1543,12 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
             SerialLineMode("DTR0_RTS1", dtr = false, rts = true, delayMs = 800L),
             SerialLineMode("DTR1_RTS1", dtr = true, rts = true, delayMs = 3500L)
         )
+        private val IOPTRON_LINE_MODES = listOf(
+            SerialLineMode("DTR1_RTS0", dtr = true, rts = false, delayMs = 800L),
+            SerialLineMode("DTR0_RTS0", dtr = false, rts = false, delayMs = 800L),
+            SerialLineMode("DTR1_RTS1", dtr = true, rts = true, delayMs = 800L),
+            SerialLineMode("DTR0_RTS1", dtr = false, rts = true, delayMs = 800L)
+        )
 
         fun listUsbDevices(context: Context): List<MountUsbDevice> {
             val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
@@ -1545,9 +1570,14 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
                     )
                 }
             val attachedDevices = runCatching {
-                usbManager.deviceList.values.joinToString { device ->
-                    "${device.deviceName} %04x:%04x id=%d".format(
-                        Locale.US, device.vendorId, device.productId, device.deviceId
+                usbManager.deviceList.values.joinToString { device: UsbDevice ->
+                    val interfaces = (0 until device.interfaceCount).joinToString { index ->
+                        val usbInterface = device.getInterface(index)
+                        "if${usbInterface.id}(class=${usbInterface.interfaceClass}" +
+                            ",sub=${usbInterface.interfaceSubclass})"
+                    }
+                    "${device.deviceName} %04x:%04x id=%d %s".format(
+                        Locale.US, device.vendorId, device.productId, device.deviceId, interfaces
                     )
                 }.ifBlank { "none" }
             }.getOrElse { "unavailable (${it.javaClass.simpleName})" }

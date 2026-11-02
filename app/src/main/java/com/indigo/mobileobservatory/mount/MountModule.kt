@@ -29,8 +29,10 @@ class MountModule(
     private val application: Application,
     private val scope: CoroutineScope
 ) {
-    private companion object {
+    internal companion object {
         const val ACTION_MOUNT_USB_PERMISSION = "com.indigo.mobileobservatory.MOUNT_USB_PERMISSION"
+        const val DEFAULT_TCP_HOST = "10.10.100.254"
+        const val DEFAULT_TCP_PORT = 8899
         const val DEFAULT_SYNSCAN_HOST = "192.168.4.1"
         const val DEFAULT_SYNSCAN_PORT = 11880
         const val MOTION_STABLE_TOLERANCE_DEG = GotoArrival.MOTION_STABLE_DEG
@@ -40,6 +42,19 @@ class MountModule(
         internal fun migratedSynScanEndpoint(host: String, port: Int): Pair<String, Int> {
             return if (host == "127.0.0.1" && port == 11882) {
                 DEFAULT_SYNSCAN_HOST to DEFAULT_SYNSCAN_PORT
+            } else {
+                host to port
+            }
+        }
+
+        /**
+         * Legacy builds defaulted the iOptron TCP endpoint to an address that the
+         * HAEc/HAEc2 built-in Wi-Fi module never serves. Move those users onto the
+         * documented iOptron Wi-Fi endpoint so the TCP transport can reach HAE29C.
+         */
+        internal fun migratedTcpEndpoint(host: String, port: Int): Pair<String, Int> {
+            return if (host == "192.168.0.1" && port == 9998) {
+                DEFAULT_TCP_HOST to DEFAULT_TCP_PORT
             } else {
                 host to port
             }
@@ -68,10 +83,15 @@ class MountModule(
     private val _mountConnectionState = MutableStateFlow<MountConnectionState>(MountConnectionState.Disconnected)
     val mountConnectionState: StateFlow<MountConnectionState> = _mountConnectionState.asStateFlow()
 
-    private val _mountHost = MutableStateFlow(prefs.getString("mount_lx200_host", "192.168.0.1") ?: "192.168.0.1")
+    private val tcpEndpoint = migratedTcpEndpoint(
+        prefs.getString("mount_lx200_host", DEFAULT_TCP_HOST) ?: DEFAULT_TCP_HOST,
+        prefs.getInt("mount_lx200_port", DEFAULT_TCP_PORT)
+    )
+
+    private val _mountHost = MutableStateFlow(tcpEndpoint.first)
     val mountHost: StateFlow<String> = _mountHost.asStateFlow()
 
-    private val _mountPort = MutableStateFlow(prefs.getInt("mount_lx200_port", 9998).toString())
+    private val _mountPort = MutableStateFlow(tcpEndpoint.second.toString())
     val mountPort: StateFlow<String> = _mountPort.asStateFlow()
 
     private val synScanEndpoint = migratedSynScanEndpoint(
@@ -331,7 +351,7 @@ class MountModule(
             MountTransportType.TCP -> Unit
         }
         val host = _mountHost.value.trim()
-        val port = _mountPort.value.toIntOrNull() ?: 9998
+        val port = _mountPort.value.toIntOrNull() ?: DEFAULT_TCP_PORT
         if (host.isBlank()) {
             _mountConnectionState.value = MountConnectionState.Error("Mount host is empty")
             return
@@ -385,8 +405,20 @@ class MountModule(
         scanMountUsbDevices()
         val devices = _mountUsbDevices.value
         if (devices.isEmpty()) {
-            FileLogger.w(TAG, "connectUsb found no serial device")
-            _mountConnectionState.value = MountConnectionState.Error("No USB serial mount found")
+            val attachedCount = runCatching {
+                val usbManager = application.getSystemService(Context.USB_SERVICE) as UsbManager
+                usbManager.deviceList.size
+            }.getOrDefault(-1)
+            FileLogger.w(
+                TAG,
+                "connectUsb found no serial device attachedUsbDevices=$attachedCount"
+            )
+            val message = if (attachedCount == 0) {
+                "No USB device attached. Check the cable, OTG support and the mount power."
+            } else {
+                "No USB serial mount found among $attachedCount attached device(s)."
+            }
+            _mountConnectionState.value = MountConnectionState.Error(message)
             _statusMessage.value = "Mount error: no USB serial device"
             return
         }

@@ -440,6 +440,11 @@ fun MountControlScreen(
                                 modifier = Modifier.width(100.dp)
                             )
                         }
+                        Text(
+                            stringResource(R.string.ioptron_tcp_connection_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
                     }
                     MountTransportType.USB_SERIAL -> {
                         Row(

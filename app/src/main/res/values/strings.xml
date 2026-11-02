@@ -293,6 +293,7 @@
     <string name="synscan_app_address">Mount Wi-Fi address</string>
     <string name="udp_port">UDP port</string>
     <string name="synscan_connection_hint">Join the mount hotspot (SSID SynScan_xxxx), then connect. Default is 192.168.4.1:11880. Choose equatorial or alt-azimuth mode before connecting. Set site coordinates on the polar-alignment page, power on at zero, or sync a star after connecting.</string>
+    <string name="ioptron_tcp_connection_hint">iOptron mounts such as HAE29C use the iOptron RS-232 command language over TCP. Join the mount hotspot (SSID HAECser_xxxx), then connect to the default 10.10.100.254:8899 with the iOptron protocol selected.</string>
     <string name="synscan_mode_equatorial">Equatorial</string>
     <string name="synscan_mode_altaz">Alt-azimuth</string>
     <string name="guiding_module">Guiding module</string>
