@@ -18,7 +18,6 @@ import androidx.compose.material.icons.filled.FilterCenterFocus
 import androidx.compose.material.icons.filled.FitScreen
 import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Search
@@ -75,7 +74,6 @@ fun CameraPreviewTools(
     onToggleLp750: (Boolean) -> Unit,
     onSolveCurrentFrame: () -> Unit,
     onChooseTarget: () -> Unit,
-    onOpenLiveStack: () -> Unit = {},
     onCfaSettings: () -> Unit = {},
     portrait: Boolean = false,
     showSequence: Boolean = false,
@@ -179,11 +177,6 @@ fun CameraPreviewTools(
                         trailingIcon = {
                             Switch(checked = showCenterMarker, onCheckedChange = null)
                         }
-                    )
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.stack_live)) },
-                        onClick = { menuOpen = false; onOpenLiveStack() },
-                        leadingIcon = { Icon(Icons.Default.Layers, contentDescription = null) }
                     )
                     DropdownMenuItem(
                         text = { Text(selectedTarget ?: stringResource(R.string.wf_choose_target)) },

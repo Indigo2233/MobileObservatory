@@ -202,10 +202,15 @@ fun CameraScreen(viewModel: CameraViewModel, redNightMode: Boolean = false,
     UpdateAvailableDialog(updateState, updateViewModel::downloadAndInstall,
         updateViewModel::installOrRequestPermission, updateViewModel::dismissPrompt,
         updateViewModel::openInstallPermissionSettings)
+    // The picture carries only the save notice. Every other device message reaches
+    // the user as a short toast, so nothing covers the live view.
+    StatusMessageToast(viewModel)
 
     CompositionLocalProvider(LocalSettingsExitRegistry provides settingsExits, LocalObservatoryImmersion provides immersion) {
     BoxWithConstraints(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).testTag("observatory-shell")) {
-        val rail = !immersion.active && (maxWidth >= 600.dp || (maxWidth >= 520.dp && maxWidth > maxHeight))
+        // A full-screen picture covers the navigation as well, the rail included.
+        val rail = !immersion.active && !immersion.pictureFullScreen &&
+            (maxWidth >= 600.dp || (maxWidth >= 520.dp && maxWidth > maxHeight))
         val railLabels = maxWidth >= 600.dp
         val entries = listOf(
             ObservatoryNavEntry("STAR_MAP", stringResource(R.string.star_map), Icons.Default.Star),
@@ -219,10 +224,13 @@ fun CameraScreen(viewModel: CameraViewModel, redNightMode: Boolean = false,
                 contentInsets = WindowInsets.displayCutout.only(WindowInsetsSides.Start))
             Column(Modifier.weight(1f).fillMaxSize().windowInsetsPadding(WindowInsets.displayCutout.only(
                 if (rail) WindowInsetsSides.End else WindowInsetsSides.Horizontal))) {
-                ObservatoryDeviceBar(viewModel, redNightMode, onRedNightModeChange,
-                    onSettings = { open(ObservatoryDestination.SETTINGS) },
-                    onDevice = { key -> if (key == "guide") open(ObservatoryDestination.GUIDE) else quickDevice = key })
-                if (showRoot && navigation.workspace != ObservatoryWorkspace.CAPTURE) EaaSessionBar(viewModel) { openStack(StackMode.LIVE) }
+                // A full-screen picture covers the whole screen, the device bar
+                // included. The picture has no settings entry of its own.
+                if (!immersion.pictureFullScreen) {
+                    ObservatoryDeviceBar(viewModel, redNightMode, onRedNightModeChange,
+                        onSettings = { open(ObservatoryDestination.SETTINGS) },
+                        onDevice = { key -> if (key == "guide") open(ObservatoryDestination.GUIDE) else quickDevice = key })
+                }
                 ObservatorySequenceSummary(viewModel, navigation.current, open)
                 VirtualObservationBar(viewModel)
                 Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -257,7 +265,9 @@ fun CameraScreen(viewModel: CameraViewModel, redNightMode: Boolean = false,
                     }
                     }
                 }
-                if (!immersion.active && !rail) ObservatoryBottomBar(entries, navigation.workspace.name, selectKey)
+                if (!immersion.active && !immersion.pictureFullScreen && !rail) {
+                    ObservatoryBottomBar(entries, navigation.workspace.name, selectKey)
+                }
             }
         }
     }
@@ -469,8 +479,7 @@ private fun ObservatoryContent(
                 onPlateSolve = { open(ObservatoryDestination.PLATE_SOLVE) },
                 onTargets = { open(ObservatoryDestination.TARGETS) },
                 onSequence = { open(ObservatoryDestination.SEQUENCE) }, selectedTarget = target?.name,
-                onCurrentFrameSolve = onCurrentFrameSolve,
-                onOpenLiveStack = { openStack(StackMode.LIVE) })
+                onCurrentFrameSolve = onCurrentFrameSolve)
             ObservatoryWorkspace.STAR_MAP -> SkyWorkspaceScreen(vm, target, redNightMode,
                 onTargets = { open(ObservatoryDestination.TARGETS) },
                 onPreparation = { open(ObservatoryDestination.PREPARATION) }, onPushTo = pushTo,

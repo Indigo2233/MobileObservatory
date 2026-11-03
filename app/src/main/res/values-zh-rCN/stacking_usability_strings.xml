@@ -34,4 +34,6 @@
     <string name="stack_hide_details">收起技术详情</string>
     <string name="stack_show_advanced">展开高级图像调节</string>
     <string name="stack_hide_advanced">收起高级图像调节</string>
+    <string name="stack_fullscreen_rotate">旋转 90 度</string>
+    <string name="stack_fullscreen_open">全屏打开图像</string>
 </resources>

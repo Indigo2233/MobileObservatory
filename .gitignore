@@ -4,6 +4,7 @@ local.properties
 **/build/
 **/.cxx/
 bin/
+out/
 *.iml
 secrets/
 .build_locked_backup/

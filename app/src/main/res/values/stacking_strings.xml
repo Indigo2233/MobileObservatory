@@ -111,6 +111,7 @@
     <string name="stack_reason_registration">Registration failed</string>
     <string name="stack_reason_background">Paused because the app entered the background</string>
     <string name="stack_reason_background_cancel">Offline task cancelled when entering the background; retry in the foreground.</string>
+    <string name="stack_reason_workspace_left">Paused because you left this page</string>
     <string name="stack_reason_camera">Connect a main camera first</string>
     <string name="stack_reason_ae">Turn off automatic exposure before starting a live stack</string>
     <string name="stack_reason_preview">This camera live view is a display preview; science stacking requires raw exposure frames.</string>

@@ -136,8 +136,10 @@ class ObservatoryWorkflowInstrumentedTest {
         compose.onNodeWithTag("stack-target-DEEP_SKY").assertIsSelected()
         systemBack()
         workspace("MEDIA").assertIsSelected()
-        selectWorkspace("CAPTURE")
-        compose.onNodeWithText(app.getString(R.string.stack_live)).performClick()
+        // Live stacking is owned by the tools section. The capture workspace offers
+        // no live-stack entry any more.
+        selectWorkspace("TOOLS")
+        compose.onNodeWithTag("tool-live_stack").performScrollTo().performClick()
         compose.onNodeWithTag("stack-target-DEEP_SKY").assertIsSelected()
         compose.onNodeWithTag("stack-target-PLANETARY").performClick().assertIsSelected()
         captureWorkflowEvidence("live-planetary")
@@ -147,7 +149,7 @@ class ObservatoryWorkflowInstrumentedTest {
             org.junit.Assert.assertEquals(StackTarget.DEEP_SKY, vm.stacking.offlineTarget.value)
         }
         systemBack()
-        workspace("CAPTURE").assertIsSelected()
+        workspace("TOOLS").assertIsSelected()
         selectWorkspace("MEDIA")
         compose.onNodeWithTag("media-post-stack").performClick()
         compose.onNodeWithTag("stack-target-DEEP_SKY").assertIsSelected()

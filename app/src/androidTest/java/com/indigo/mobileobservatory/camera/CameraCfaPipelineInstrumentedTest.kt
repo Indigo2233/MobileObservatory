@@ -159,7 +159,6 @@ class CameraCfaPipelineInstrumentedTest {
         workspace(tokens = true) { vm, camera ->
             main { assertTrue(vm.applyCameraCfa(SerCfaInterpretation.BGGR)) }
             await { camera.starts == 2 && !vm.cameraCfaApplying.value }
-            fun awaitingFrame() = snapshots(vm).state != null
             val fitsTask = async(Dispatchers.IO) { vm.captureTempFitsForPlateSolve() }
             await { camera.singleStarts == 1 }
             main { assertFalse(vm.applyCameraCfa(SerCfaInterpretation.RGGB)) }
@@ -181,12 +180,14 @@ class CameraCfaPipelineInstrumentedTest {
             val before = jpegDirectory.listFiles()?.map { it.absolutePath }?.toSet().orEmpty()
             var jpeg: File? = null
             try {
-                main { vm.setCaptureFormat("JPG"); vm.capture() }
-                await(::awaitingFrame)
+                // Show a frame, then save it. The still is written from the picture
+                // on screen, so no later frame is awaited.
                 camera.emitLatest()
+                await { vm.previewBitmap.value != null }
+                main { vm.setCaptureFormat("JPG"); vm.capture() }
                 await {
                     jpeg = jpegDirectory.listFiles()?.firstOrNull { it.absolutePath !in before && it.name.contains(camera.cameraInfo.name) }
-                    jpeg?.isFile == true && vm.statusMessage.value.contains(jpeg!!.name)
+                    jpeg?.isFile == true && vm.captureNotice.value.contains(jpeg!!.name)
                 }
                 val bitmap = checkNotNull(BitmapFactory.decodeFile(jpeg!!.absolutePath))
                 try { assertTrue(Color.red(bitmap.getPixel(12,12)) > Color.blue(bitmap.getPixel(12,12)) + 40) }
@@ -242,7 +243,7 @@ class CameraCfaPipelineInstrumentedTest {
 
     @Test fun cancellingAPolarExposureStopsItAndLeavesPreviewPaused() = runBlocking {
         workspace(tokens = true) { vm, camera ->
-            fun pending() = snapshots(vm).state
+            fun pending() = snapshots(vm).currentState
             val task = async(Dispatchers.IO) { vm.captureTempFitsForPlateSolve() }
             await { camera.singleStarts == 1 }
             task.cancelAndJoin()
@@ -262,15 +263,26 @@ class CameraCfaPipelineInstrumentedTest {
     @Test fun pausingPreviewReleasesAPendingSnapshotBeforePolarAcquisition() = runBlocking {
         workspace(tokens = true) { vm, camera ->
             await { camera.emitLatest(); vm.scienceCaptureReady.value }
-            // A still from the preview waits for the next frame; polar uses a separate
-            // single-exposure path and cannot reproduce the blocked preview request.
+            // The preview must hold a frame, so the save has something to write.
+            await { vm.previewBitmap.value != null }
+            // A still from the preview writes the frame that is on screen. The request
+            // stays open for the whole write; polar uses a separate single-exposure
+            // path and cannot reproduce the blocked preview request.
+            val occupied = CompletableDeferred<FrameSnapshotRequests.State>()
+            val watcher = launch(Dispatchers.IO) {
+                snapshots(vm).state.collect { state ->
+                    if (state?.owner == "photo_jpg") occupied.complete(state)
+                }
+            }
             main { vm.setCaptureFormat("JPG"); vm.capture() }
-            await { snapshots(vm).state?.owner == "photo_jpg" }
+            val held = withTimeout(15_000) { occupied.await() }
+            assertEquals(FrameSnapshotRequests.Phase.COPYING, held.phase)
             val blocked = runCatching { vm.captureTempFitsForPlateSolve(camera.currentExposureUs) }.exceptionOrNull()
-            assertEquals(app.getString(R.string.capture_snapshot_pending), blocked?.message)
+            assertEquals(app.getString(R.string.capture_snapshot_finishing), blocked?.message)
             assertEquals(0, camera.singleStarts)
             main { vm.togglePreviewPause() }
-            assertNull(snapshots(vm).state)
+            assertNull(snapshots(vm).currentState)
+            watcher.cancelAndJoin()
             await { !camera.isCapturing.value }
             assertTrue(vm.previewPaused.value)
             val polar = async(Dispatchers.IO) { vm.captureTempFitsForPlateSolve(camera.currentExposureUs) }
@@ -279,7 +291,7 @@ class CameraCfaPipelineInstrumentedTest {
             val file = polar.await()
             try {
                 assertTrue(file != null && file.length() > 0)
-                assertNull(snapshots(vm).state)
+                assertNull(snapshots(vm).currentState)
                 assertFalse(camera.isCapturing.value)
                 assertTrue(vm.previewPaused.value)
             } finally { file?.delete() }

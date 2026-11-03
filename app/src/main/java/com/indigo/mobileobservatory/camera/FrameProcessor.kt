@@ -164,6 +164,22 @@ class FrameProcessor(private val bitmapBufferCount: Int = 2, private val downsam
         awbPending = false
     }
 
+    /**
+     * A one-shot renderer for the frame currently on screen reuses the live display
+     * recipe: the same gains, the same stretch and the same detected sample layout.
+     * Without the layout a saved still would use a different black/white stretch
+     * than the preview.
+     */
+    fun inheritDisplayStateFrom(source: FrameProcessor) {
+        detectedBitShift = source.detectedBitShift
+        detectedEffectiveBits = source.detectedEffectiveBits
+        applyPreviewSettings(source.previewSettings())
+        // Reuse the stretch and the LP700 mapping the live renderer last produced, so
+        // the saved still shows the same brightness and colour as the preview.
+        fixedWindow = source.renderedWindow
+        fixedLpRecipe = source.renderedLpRecipe
+    }
+
     private var cachedBitmaps: Array<Bitmap>? = null
     private var cachedPixels: IntArray? = null
     private var cachedBayerRaw8: IntArray? = null
@@ -398,6 +414,12 @@ class FrameProcessor(private val bitmapBufferCount: Int = 2, private val downsam
         val data = frame.data
         val totalPixels = w * h
         val monoBounds = if (rawMonochrome) displayBounds(hist, 255) else null
+        // Estimate the gains before the pixel loop so the very same frame already
+        // carries the new white balance.
+        if (!rawMonochrome && (awbPending || awbMode == AwbMode.CONTINUOUS)) {
+            computeRgb24Wb(frame, w, h)
+            awbPending = false
+        }
         for (i in 0 until totalPixels) {
             val base = i * 3
             if (base + 2 >= data.size) break
@@ -409,8 +431,35 @@ class FrameProcessor(private val bitmapBufferCount: Int = 2, private val downsam
                 val luminance = (r * 299 + g * 587 + b * 114) / 1000
                 val value = ((luminance - bounds.first) * 255 / (bounds.second - bounds.first).coerceAtLeast(1)).coerceIn(0, 255)
                 r = value; g = value; b = value
+            } else {
+                r = (r * wbRedGain).toInt().coerceIn(0, 255)
+                g = (g * wbGreenGain).toInt().coerceIn(0, 255)
+                b = (b * wbBlueGain).toInt().coerceIn(0, 255)
             }
             pixels[i] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+        }
+    }
+
+    private fun computeRgb24Wb(frame: FrameData, w: Int, h: Int) {
+        val data = frame.data
+        val step = 8
+        var sumR = 0.0; var sumG = 0.0; var sumB = 0.0
+        var count = 0
+        for (i in 0 until w * h step step) {
+            val base = i * 3
+            if (base + 2 >= data.size) break
+            sumR += data[base].toInt() and 0xFF
+            sumG += data[base + 1].toInt() and 0xFF
+            sumB += data[base + 2].toInt() and 0xFF
+            count++
+        }
+        if (count == 0) return
+        val avgR = sumR / count; val avgG = sumG / count; val avgB = sumB / count
+        if (avgR > 0 && avgB > 0) {
+            wbRedGain = (avgG / avgR).toFloat().coerceIn(0.2f, 5.0f)
+            wbGreenGain = 1.0f
+            wbBlueGain = (avgG / avgB).toFloat().coerceIn(0.2f, 5.0f)
+            android.util.Log.i("FrameProcessor", "RGB24 AWB: R=%.3f G=1.0 B=%.3f".format(wbRedGain, wbBlueGain))
         }
     }
 
@@ -443,6 +492,13 @@ class FrameProcessor(private val bitmapBufferCount: Int = 2, private val downsam
         val (bp, wp) = displayBounds(hist, 65535, 6)
         val range = (wp - bp).coerceAtLeast(1)
 
+        // Estimate the gains before the pixel loop. Applying them afterwards made the
+        // white balance land one frame late.
+        if (!rawMonochrome && (awbPending || awbMode == AwbMode.CONTINUOUS)) {
+            computeRgb48Wb(frame, w, h)
+            awbPending = false
+        }
+
         for (i in 0 until totalPixels) {
             val base = i * 6
             if (base + 5 >= data.size) {
@@ -463,11 +519,6 @@ class FrameProcessor(private val bitmapBufferCount: Int = 2, private val downsam
             g = ((g - bp) * 255 / range).coerceIn(0, 255)
             b = ((b - bp) * 255 / range).coerceIn(0, 255)
             pixels[i] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
-        }
-
-        if (!rawMonochrome && (awbPending || awbMode == AwbMode.CONTINUOUS)) {
-            computeRgb48Wb(frame, w, h)
-            awbPending = false
         }
     }
 

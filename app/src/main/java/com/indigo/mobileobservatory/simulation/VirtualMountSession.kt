@@ -17,7 +17,13 @@ class VirtualMountSession(val observatory: VirtualObservatory) : MountSession {
     override fun startMove(direction: MountDirection) = observatory.start(direction, rate == MountSlewRate.GUIDE)
     override fun startGuidePulse(direction: MountDirection, durationMs: Int) = observatory.start(direction, true, durationMs)
     override fun stopMove(direction: MountDirection?) = observatory.stop()
-    override fun setMoveRate(rate: MountSlewRate) { this.rate = rate }
+    override fun setMoveRate(rate: MountSlewRate) {
+        this.rate = rate
+        // A guide pulse travels at the commanded rate; the calibration estimator
+        // divides the requested travel by the same multiplier.
+        if (rate == MountSlewRate.GUIDE || rate.guideRateMultiplier < 1f)
+            observatory.guideRate(rate.guideRateMultiplier.toDouble())
+    }
     override fun setTracking(enabled: Boolean) = observatory.tracking(enabled)
     override fun readTracking() = if (observatory.isTracking) MountTrackingState(true, MountTrackingRate.SIDEREAL)
         else MountTrackingState(false, MountTrackingRate.OFF)

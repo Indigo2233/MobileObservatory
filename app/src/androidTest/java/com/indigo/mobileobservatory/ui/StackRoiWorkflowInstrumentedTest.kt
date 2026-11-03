@@ -87,8 +87,10 @@ class StackRoiWorkflowInstrumentedTest {
                 assertFalse(vm.applyStackRoi(previous, previous.key.roi))
                 assertEquals(previous.key.roi, vm.roi.value)
             }
-            compose.onNodeWithContentDescription(app.getString(R.string.camera_preview_tools)).performClick()
-            compose.onNodeWithText(app.getString(R.string.stack_live)).performClick()
+            // Live stacking is owned by the tools section. The preview menu offers
+            // no live-stack entry any more.
+            compose.onNodeWithTag("workspace-TOOLS").performClick()
+            compose.onNodeWithTag("tool-live_stack").performScrollTo().performClick()
             compose.onNodeWithTag("stack-roi-open").performScrollTo().performClick()
             compose.onNodeWithTag("stack-roi-planner").assertExists()
             compose.onNodeWithContentDescription(app.getString(R.string.close)).performClick()

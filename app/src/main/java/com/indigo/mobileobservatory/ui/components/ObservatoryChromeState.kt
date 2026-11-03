@@ -38,6 +38,14 @@ class ObservatoryImmersion {
     val active get() = requests.values.any { it }
     fun update(token: Any, immersive: Boolean) { requests[token] = immersive }
     fun remove(token: Any) { requests.remove(token) }
+    /**
+     * A full-screen picture covers the device bar as well. The bar carries the
+     * settings entry, which the picture itself does not offer.
+     */
+    private val pictureRequests = mutableStateMapOf<Any, Boolean>()
+    val pictureFullScreen get() = pictureRequests.values.any { it }
+    fun updatePicture(token: Any, fullScreen: Boolean) { pictureRequests[token] = fullScreen }
+    fun removePicture(token: Any) { pictureRequests.remove(token) }
 }
 
 val LocalObservatoryImmersion = staticCompositionLocalOf<ObservatoryImmersion?> { null }
@@ -50,4 +58,14 @@ fun ReportObservatoryImmersion(immersive: Boolean) {
     val foreground = rememberPageForeground()
     SideEffect { state?.update(token, immersive && foreground) }
     DisposableEffect(state, token) { onDispose { state?.remove(token) } }
+}
+
+/** A full-screen picture covers the device bar and the workspace navigation. */
+@Composable
+fun ReportObservatoryPictureFullScreen(fullScreen: Boolean) {
+    val state = LocalObservatoryImmersion.current
+    val token = remember { Any() }
+    val foreground = rememberPageForeground()
+    SideEffect { state?.updatePicture(token, fullScreen && foreground) }
+    DisposableEffect(state, token) { onDispose { state?.removePicture(token) } }
 }

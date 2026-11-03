@@ -111,6 +111,7 @@
     <string name="stack_reason_registration">配准失败</string>
     <string name="stack_reason_background">应用进入后台，已暂停</string>
     <string name="stack_reason_background_cancel">应用进入后台，离线任务已取消；请回到前台重新执行。</string>
+    <string name="stack_reason_workspace_left">已离开该页面，叠加已暂停</string>
     <string name="stack_reason_camera">请先连接主相机</string>
     <string name="stack_reason_ae">开始实时叠加前请关闭自动曝光</string>
     <string name="stack_reason_preview">此相机的实时画面仅供预览；叠加需要原始曝光帧。</string>

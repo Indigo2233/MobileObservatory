@@ -1,6 +1,7 @@
 package com.indigo.mobileobservatory.guide
 
 import com.indigo.mobileobservatory.mount.MountDirection
+import com.indigo.mobileobservatory.mount.MountSlewRate
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
 import org.junit.Test
@@ -71,5 +72,32 @@ class GuidePhd2CalibrationTest {
         assertEquals(GuideCalibrationPhase.WEST, phases.first())
         assertTrue(phases.indexOf(GuideCalibrationPhase.CLEAR_NORTH) >
             phases.lastIndexOf(GuideCalibrationPhase.EAST))
+    }
+
+    /**
+     * The pulse estimate divides the requested travel by the commanded sidereal rate.
+     * A mount that turns at a different rate than the estimate assumed scales every
+     * step, so the calibration overshoots its travel target in fewer steps.
+     */
+    @Test fun theCalibrationReachesItsTravelTargetInTheConfiguredStepCount() = runTest {
+        val scale = requireNotNull(GuideStarAnalysis.arcsecPerPixel(2.9f, 220f))
+        val commandedRate = MountSlewRate.forGuideRateSidereal(.5f)
+        val config = GuideCalibrationConfig(7, 15f, 1200, scale, commandedRate.guideRateMultiplier)
+        // The mount turns at the commanded rate: 15 arcsec/s at 0.5x sidereal.
+        val arcsecPerMs = 15.0 * commandedRate.guideRateMultiplier / 1000.0
+        var x = 200f; var y = 200f
+        val steps = mutableListOf<Float>()
+        GuideCalibrator(config, { direction, ms ->
+            when (direction) {
+                MountDirection.WEST -> x -= (ms * arcsecPerMs / scale).toFloat()
+                MountDirection.EAST -> x += (ms * arcsecPerMs / scale).toFloat()
+                MountDirection.NORTH -> y += (ms * arcsecPerMs / scale).toFloat()
+                MountDirection.SOUTH -> y -= (ms * arcsecPerMs / scale).toFloat()
+            }
+        }, { listOf(GuideStar(x, y, 30f, 200f)) }, {
+            if (it.phase == GuideCalibrationPhase.WEST) steps += it.distancePx
+        }).run()
+        assertTrue("The outward steps must reach the requested travel", steps.isNotEmpty())
+        assertTrue("The travel must not overshoot the target: $steps", steps.last() < 15f * 1.2f)
     }
 }

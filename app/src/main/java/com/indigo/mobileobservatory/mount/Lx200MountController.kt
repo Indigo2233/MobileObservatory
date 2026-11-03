@@ -143,10 +143,39 @@ enum class MountSlewRate(val label: String, val index: Int) {
 
     val skyWatcherRate: Int get() = index.coerceIn(0, 9)
 
+    /**
+     * The sidereal multiplier this rate actually commands. The guide pulse estimator
+     * divides the requested travel by the same multiplier, so a snapped ladder step
+     * must never be estimated as a finer rate.
+     */
+    val guideRateMultiplier: Float get() = when (this) {
+        RATE_0_25X -> .25f
+        RATE_0_5X -> .5f
+        RATE_1X -> 1f
+        // Faster ladder steps are never used for guide pulses.
+        else -> 1f
+    }
+
     companion object {
         val DEFAULT = RATE_8X
         /** Pulse-guide / autoguide baseline; matches OnStep `:RG#` = 1×. */
         val GUIDE = RATE_1X
+
+        /**
+         * The guide rate actually commanded to the mount for a pulse. The app's guide
+         * rate setting is a sidereal multiplier; the pulse estimator divides the
+         * requested travel by this value. Estimating with one rate and pulsing at
+         * another scales every calibration step by their ratio. The mount ladder is
+         * discrete, so the estimate always uses the multiplier actually commanded.
+         */
+        fun forGuideRateSidereal(multiplier: Float): MountSlewRate {
+            require(multiplier.isFinite() && multiplier > 0f) { "Guide rate must be positive" }
+            return when {
+                multiplier <= .25f -> RATE_0_25X
+                multiplier <= .75f -> RATE_0_5X
+                else -> RATE_1X
+            }
+        }
 
         fun fromStoredName(raw: String?): MountSlewRate {
             if (raw.isNullOrBlank()) return DEFAULT

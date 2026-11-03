@@ -34,6 +34,8 @@ class VirtualObservatory(private val clock: () -> Long = System::currentTimeMill
     private var mountDec = EquatorialEpoch.j2000DegToJnowHours(origin.raDeg, origin.decDeg).second
     private var moving: MountDirection? = null
     private var guide = false
+    /** Sidereal multiplier of the commanded guide rate; the estimator uses the same value. */
+    private var guideRateMultiplier = 1.0
     private var tracking = true
     val isTracking: Boolean @Synchronized get() = tracking
     private var previousDec: MountDirection? = null
@@ -49,7 +51,8 @@ class VirtualObservatory(private val clock: () -> Long = System::currentTimeMill
             val ra = direction == MountDirection.EAST || direction == MountDirection.WEST
             val effective = if (guide && !ra) (activeMs - slackMs).coerceAtLeast(0.0) else activeMs
             if (guide && !ra) slackMs = (slackMs - activeMs).coerceAtLeast(0.0)
-            val rate = if (guide) (if (ra) .004 else .006) * SCALE_ARCSEC / 3600.0 else manualDegreesPerSecond / 1000.0
+            val rate = if (guide) (if (ra) .004 else .006) * guideRateMultiplier * SCALE_ARCSEC / 3600.0
+            else manualDegreesPerSecond / 1000.0
             val angle = effective * rate * if (direction == MountDirection.EAST || direction == MountDirection.NORTH) 1 else -1
             if (ra) {
                 val rotation = angle / if (guide) max(.15, cos(Math.toRadians(mountDec))) else 1.0
@@ -85,6 +88,7 @@ class VirtualObservatory(private val clock: () -> Long = System::currentTimeMill
         guide = guiding; moving = direction; pulseDeadline = durationMs?.let { last + it }
     }
     @Synchronized fun stop() { advance(); moving = null; pulseDeadline = null }
+    @Synchronized fun guideRate(multiplier: Double) { guideRateMultiplier = multiplier.coerceIn(0.05, 1.0) }
     @Synchronized fun tracking(enabled: Boolean) { advance(); tracking = enabled }
     @Synchronized fun slew(target: MountCoordinates) {
         stop()

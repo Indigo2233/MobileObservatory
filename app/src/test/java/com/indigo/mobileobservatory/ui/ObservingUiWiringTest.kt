@@ -604,6 +604,156 @@ class ObservingUiWiringTest {
         assertTrue(player.contains("MediaLibrary.list"))
     }
 
+    @Test
+    fun liveStackingIsOwnedByTheToolsSectionAndTheCapturePreviewStaysCameraOnly() {
+        val tools = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/components/CameraPreviewTools.kt"
+        )
+        val camera = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/CameraScreen.kt"
+        )
+        val shell = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/ObservatoryShell.kt"
+        )
+        val toolsScreen = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/ToolsScreen.kt"
+        )
+        // The preview overflow menu carries no live-stack entry any more.
+        assertTrue(!tools.contains("onOpenLiveStack"))
+        assertTrue(!tools.contains("R.string.stack_live"))
+        // The capture workspace shows the camera frame, never the accumulated stack.
+        assertTrue(!camera.contains("stacking.livePreview"))
+        assertTrue(!camera.contains("showLiveStack"))
+        assertTrue(!camera.contains("EaaSessionBar"))
+        // The tool section keeps the entry.
+        assertTrue(toolsScreen.contains("onOpenLiveStacking"))
+        assertTrue(toolsScreen.contains("R.string.stack_live"))
+        // No workspace shows the live-session bar outside the tool page.
+        assertTrue(!shell.contains("EaaSessionBar"))
+    }
+
+    @Test
+    fun theCapturePreviewShowsOnlyTheSaveNoticeForThreeSeconds() {
+        val camera = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/CameraScreen.kt"
+        )
+        val viewModel = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/viewmodel/CameraViewModel.kt"
+        )
+        assertTrue(camera.contains("captureNotice"))
+        assertTrue(!camera.contains("viewModel.statusMessage"))
+        assertTrue(viewModel.contains("private const val CAPTURE_NOTICE_MS = 3_000L"))
+        assertTrue(viewModel.contains("showCaptureNotice(app.getString(R.string.saved_file"))
+        // A failed save is logged; it never covers the picture.
+        val fitsCatch = viewModel.substring(
+            viewModel.indexOf("Log.e(TAG, \"captureFits failed\""),
+            viewModel.indexOf("private fun captureJpg()")
+        )
+        assertTrue(!fitsCatch.contains("showCaptureNotice"))
+        val jpgCatch = viewModel.substring(
+            viewModel.indexOf("Log.e(TAG, \"captureJpg failed\""),
+            viewModel.indexOf("private fun saveJpegFileToGallery")
+        )
+        assertTrue(!jpgCatch.contains("showCaptureNotice"))
+    }
+
+    @Test
+    fun aFailedSaveReachesTheUserThroughTheShortToast() {
+        val viewModel = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/viewmodel/CameraViewModel.kt"
+        )
+        val toast = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/StatusMessageToast.kt"
+        )
+        // Every save path reports its failure. A silent failure would leave the
+        // user without a file and without a reason.
+        val fitsCatch = viewModel.substring(
+            viewModel.indexOf("Log.e(TAG, \"captureFits failed\""),
+            viewModel.indexOf("private fun captureJpg()")
+        )
+        assertTrue(fitsCatch.contains("_statusMessage.value = app.getString(R.string.capture_error_detail"))
+        val stillCatch = viewModel.substring(
+            viewModel.indexOf("Log.e(TAG, \"captureJpg still failed\""),
+            viewModel.indexOf("private fun saveJpegFileToGallery")
+        )
+        assertTrue(stillCatch.contains("_statusMessage.value = app.getString(R.string.capture_error_detail"))
+        val jpgCatch = viewModel.substring(
+            viewModel.indexOf("Log.e(TAG, \"captureJpg failed\""),
+            viewModel.indexOf("private fun saveJpegFileToGallery")
+        )
+        assertTrue(jpgCatch.contains("_statusMessage.value = app.getString(R.string.capture_error_detail"))
+        // The toast carries the device message, so the failure stays visible
+        // without covering the picture.
+        assertTrue(toast.contains("viewModel.statusMessage"))
+        assertTrue(toast.contains("Toast.makeText"))
+    }
+
+    @Test
+    fun aFullScreenPictureHidesTheNavigationRailAsWell() {
+        val shell = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/ObservatoryShell.kt"
+        )
+        // The wide layout keeps the navigation in a rail. The full-screen
+        // picture has to take the rail away as well.
+        val railStatement = shell.substring(
+            shell.indexOf("val rail ="),
+            shell.indexOf("val railLabels =")
+        )
+        assertTrue(railStatement.contains("!immersion.pictureFullScreen"))
+        // The bottom bar already steps aside for the full-screen picture.
+        assertTrue(shell.contains("!immersion.pictureFullScreen && !rail"))
+    }
+
+    @Test
+    fun aStillIsWrittenFromTheFrameOnScreenAndTheWhiteBalanceAppliesToTheSameFrame() {
+        val viewModel = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/viewmodel/CameraViewModel.kt"
+        )
+        val processor = read(
+            "src/main/java/com/indigo/mobileobservatory/camera/FrameProcessor.kt"
+        )
+        // The still comes from the retained display frame, not from a later frame.
+        assertTrue(viewModel.contains("awaitDisplayedScienceFrame(owner = \"photo_fits\")"))
+        assertTrue(viewModel.contains("awaitDisplayedScienceFrame(owner = \"photo_jpg\")"))
+        assertTrue(viewModel.contains("captureFrameProcessor.inheritDisplayStateFrom(frameProcessor)"))
+        // The auto white balance is estimated before the pixel loop of the same frame.
+        val rgb24 = processor.substring(
+            processor.indexOf("private fun fillRgb24Pixels"),
+            processor.indexOf("private fun computeRgb24Wb")
+        )
+        val estimate = rgb24.indexOf("computeRgb24Wb(frame, w, h)")
+        val pixels = rgb24.indexOf("for (i in 0 until totalPixels)")
+        assertTrue(estimate > 0 && pixels > estimate)
+        val rgb48 = processor.substring(
+            processor.indexOf("private fun fillRgb48Pixels"),
+            processor.indexOf("private fun computeRgb48Wb")
+        )
+        val estimate48 = rgb48.indexOf("computeRgb48Wb(frame, w, h)")
+        val pixels48 = rgb48.indexOf("for (i in 0 until totalPixels)")
+        assertTrue(estimate48 > 0 && pixels48 > estimate48)
+    }
+
+    @Test
+    fun theStackedPictureOpensAFullScreenViewerWithZoomAndRotation() {
+        val stacking = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/StackingScreen.kt"
+        )
+        val viewer = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/components/FullscreenImageViewer.kt"
+        )
+        assertTrue(stacking.contains("FullscreenImageViewer("))
+        assertTrue(stacking.contains("fullscreenImage = true"))
+        assertTrue(stacking.contains("fullscreenImage -> fullscreenImage = false"))
+        // A magnify control opens the viewer, so it does not depend on a hidden gesture.
+        assertTrue(stacking.contains("stack-fullscreen-open"))
+        // The system back button closes the viewer.
+        assertTrue(viewer.contains("BackHandler(onBack = onDismiss)"))
+        // Pinch zoom, drag and rotation.
+        assertTrue(viewer.contains("detectTransformGestures"))
+        assertTrue(viewer.contains("detectTapGestures"))
+        assertTrue(viewer.contains("rotation = (rotation + 90) % 360"))
+    }
+
     private fun read(relative: String): String {
         val candidates = listOf(File(relative), File("app/$relative"))
         val file = candidates.firstOrNull { it.isFile }

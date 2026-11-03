@@ -147,6 +147,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         private const val MOTION_STABLE_TOLERANCE_DEG = 0.01
         private const val MOTION_STABLE_SAMPLES = 3
         private const val RECORD_QUEUE_CAPACITY = 8
+        /** A save notice stays visible for three seconds, then disappears. */
+        private const val CAPTURE_NOTICE_MS = 3_000L
+        /** One retained preview frame; a 26 MP RGB48 frame stays below this bound. */
+        private const val MAX_DISPLAYED_FRAME_BYTES = 160L * 1024 * 1024
+        /** Copy bandwidth for the retained frame; keeps the preview's cost unchanged. */
+        private const val DISPLAYED_FRAME_COPY_BYTES_PER_SECOND = 256L * 1024 * 1024
+        /** The shortest gap between two retained copies. */
+        private const val MIN_DISPLAYED_FRAME_COPY_INTERVAL_MS = 50L
     }
 
     val cameraManager = DahengCameraManager(application)
@@ -484,6 +492,45 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _statusMessage = MutableStateFlow("")
     val statusMessage: StateFlow<String> = _statusMessage.asStateFlow()
 
+    /**
+     * A short-lived notice shown once in the preview, e.g. the name of a saved
+     * file. It is cleared on its own so the preview never keeps a stale caption.
+     */
+    private val _captureNotice = MutableStateFlow("")
+    val captureNotice: StateFlow<String> = _captureNotice.asStateFlow()
+    private var captureNoticeJob: Job? = null
+
+    /**
+     * The science frame behind the picture currently on screen. A still is written
+     * from this frame, so a long exposure saves the exposure the user was looking
+     * at instead of a later, unrelated frame. The bytes live in [displayedFrameBuffer]
+     * and every read happens under [displayedFrameLock], so a save never mixes two
+     * frames and never reads a buffer the preview thread is writing.
+     */
+    private val displayedFrameLock = Any()
+    private var displayedFrameBuffer: ByteArray? = null
+    private var displayedFrameWidth = 0
+    private var displayedFrameHeight = 0
+    private var displayedFrameFormat: PixelFormat? = null
+    private var displayedFrameId = 0L
+    private var displayedFrameTimestamp = 0L
+    private var displayedFrameTraits: PixelTraits? = null
+    private var displayedFrameExposureUs = 0f
+    private var displayedFrameGain = 0f
+    private var displayedFrameArrivalMs = 0L
+    private var displayedFrameValid = false
+    @Volatile private var displayedFrameCopyAtMs = 0L
+
+    /** One frame with the exposure and gain that produced it. */
+    private data class DisplayedScienceFrame(
+        val frame: FrameData,
+        val traits: PixelTraits?,
+        val exposureUs: Float,
+        val gain: Float,
+        /** Wall-clock arrival, used to date the exposure in the FITS header. */
+        val arrivalMs: Long
+    )
+
     val guideConnectionState: StateFlow<ConnectionState> = guideCameraManager.connectionState
     val guideDevices: StateFlow<List<DeviceEntry>> = guideCameraManager.devices
 
@@ -655,7 +702,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val virtual = guideCameraManager.activeCamera as? com.indigo.mobileobservatory.simulation.VirtualCamera
             check((virtual == null && mountModule.virtualObservatory == null) ||
                 virtual != null && virtual.observatory === mountModule.virtualObservatory) { "Guide camera and mount simulation sessions do not match" }
-            mountModule.setGuideRate(); mountModule.startGuidePulse(direction, durationMs)
+            // The pulse estimator divides the requested travel by the configured sidereal
+            // multiplier. The mount must turn at that same multiplier, or every step
+            // travels a scaled distance and the calibration overshoots its target.
+            mountModule.setGuideRate(com.indigo.mobileobservatory.mount.MountSlewRate
+                .forGuideRateSidereal(_guideRateSidereal.value))
+            mountModule.startGuidePulse(direction, durationMs)
         },
         { direction ->
             try { mountModule.stopGuidePulse(direction) }
@@ -1118,6 +1170,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     is ConnectionState.Disconnected -> {
                         previewEpoch.invalidate()
                         cancelPendingFrameSnapshot("camera_disconnected")
+                        clearDisplayedScienceFrame()
                         _showCameraCfaDialog.value = false
                         _cameraCfa.value = SerCfaInterpretation.AUTO
                         stacking.live.invalidate("camera_disconnected")
@@ -2153,12 +2206,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val multiStar = _guideMultiStarEnabled.value
             val focalLength = _guideFocalLength.value
             val geometry = _guideCameraGeometry.value
+            // The mount ladder is discrete. Estimate the pulse with the multiplier that is
+            // actually commanded, so the requested travel and the measured travel agree.
+            val guideRate = com.indigo.mobileobservatory.mount.MountSlewRate
+                .forGuideRateSidereal(_guideRateSidereal.value).guideRateMultiplier
             val config = try {
                 com.indigo.mobileobservatory.guide.GuideCalibrationConfig(_guideCalibrationSteps.value,
                     _guideCalibrationDistance.value, _guideCalibrationPulseMs.value,
                     com.indigo.mobileobservatory.guide.GuideStarAnalysis.arcsecPerPixel(
                         geometry?.let { it.pixelSizeUm * it.binning }, focalLength),
-                    _guideRateSidereal.value, mountCoordinates.value?.decDeg?.takeIf { it.isFinite() }
+                    guideRate, mountCoordinates.value?.decDeg?.takeIf { it.isFinite() }
                         ?.toFloat()?.coerceIn(-90f, 90f) ?: 0f)
             } catch (failure: IllegalArgumentException) {
                 _guideStatus.value = app.getString(R.string.calibration_failed_detail, failure.message.orEmpty())
@@ -2647,6 +2704,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
                 fulfillFrameSnapshot(processed, traits, runEpoch)
 
+                // Retain the science frame behind the picture on screen. A still is
+                // written from this frame, so a long exposure saves the exposure the
+                // user was looking at instead of a later, unrelated frame.
+                retainDisplayedScienceFrame(processed, traits, cam.currentExposureUs, cam.currentGain)
+
                 if (autoExpFrameSkip++ % 10 == 0) {
                     val aeMax = if (_longExposureEnabled.value) {
                         ExposureLimits.absoluteMaxUs(cam)
@@ -2737,7 +2799,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             format = cam?.currentPixelFormat ?: PixelFormat.MONO8,
             recording = _isRecording.value || recordingWriteSession != null || currentRecordingFile != null,
             calibration = stacking.calibration.state.value.busy,
-            snapshot = pointingCaptureOwned.get() || frameSnapshots.state != null,
+            snapshot = pointingCaptureOwned.get() || frameSnapshots.currentState != null,
             settings = includeSettings && (_cameraCfaApplying.value || pendingCaptureChanges.get() != 0 || _gainWriteInProgress.value || binningSwitching),
             stackExists = stacking.live.state.value.phase !in setOf(LiveStackPhase.EMPTY, LiveStackPhase.CLOSED)), selection, resetConfirmed)
     }
@@ -2877,7 +2939,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val calibration = stacking.calibration.state.value
         val blocked = when {
             _isRecording.value || recordingWriteSession != null || currentRecordingFile != null -> "recording_active"
-            pointingCaptureOwned.get() || frameSnapshots.state != null -> "roi_capture_busy"
+            pointingCaptureOwned.get() || frameSnapshots.currentState != null -> "roi_capture_busy"
             (!ignorePendingCaptureChanges && pendingCaptureChanges.get() != 0) || binningSwitching ||
                 _cameraCfaApplying.value || _gainWriteInProgress.value -> "settings_busy"
             stacking.live.state.value.phase != LiveStackPhase.EMPTY -> "reset_live_first"
@@ -3687,7 +3749,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _focusAssistEnabled.value = newState
         frameProcessor.focusAssistEnabled = newState
         if (newState) {
-            if (stacking.showLiveStack.value) stacking.toggleLiveDisplay()
             frameProcessor.resetFocusRange()
             _focusHistory.value = emptyList()
         }
@@ -4273,7 +4334,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 app.getString(R.string.dslr_live_view_not_science)
             }
             if (pointingCaptureOwned.get()) rejectPolarCapture("capture_owned", R.string.polar_capture_owned)
-            frameSnapshots.state?.let { snapshot ->
+            frameSnapshots.currentState?.let { snapshot ->
                 rejectPolarCapture("snapshot_${snapshot.phase.name.lowercase()}",
                     if (snapshot.phase == FrameSnapshotRequests.Phase.WAITING) R.string.capture_snapshot_pending
                     else R.string.capture_snapshot_finishing)
@@ -4635,7 +4696,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             liveStackBusy = stacking.live.state.value.phase == LiveStackPhase.RUNNING,
             calibrationBusy = stacking.calibration.state.value.busy,
             referenceBusy = pointingCaptureOwned.get() && !ownedByThisCapture,
-            snapshotBusy = frameSnapshots.state != null,
+            snapshotBusy = frameSnapshots.currentState != null,
             settingsBusy = pendingCaptureChanges.get() != 0 || _gainWriteInProgress.value || binningSwitching,
             autoExposureOff = autoExposureController.mode == AutoExposureMode.OFF,
             previewPaused = _previewPaused.value, filterMoving = filterWheelMoving.value,
@@ -4924,36 +4985,43 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val target = CaptureTargetNames.canonical(_targetName.value) // Snapshot the capture task before awaiting a frame.
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val frame = awaitFrameSnapshot(owner = "photo_fits") ?: return@launch
-                val dir = File(
-                    getApplication<Application>().getExternalFilesDir("captures"),
-                    "FITS"
-                )
-                dir.mkdirs()
-                val ts = winJuposTimestamp()
-                val info = cam.cameraInfo
-                val cameraShort = (info?.sensorName ?: info?.name)?.replace(" ", "")?.take(20) ?: "Camera"
-                val filterPart = if (filterName != null) "-$filterName" else ""
-                val file = File(dir, "$ts-$target$filterPart-$cameraShort.fits")
-                val focalLengthMm = prefs.getFloat("plate_focal_length_mm", 0f).takeIf { it > 0f }
-                fitsWriter.write(
-                    file = file,
-                    frame = frame,
-                    exposureSeconds = cam.currentExposureUs / 1_000_000f,
-                    gain = cam.currentGain,
-                    gainKind = cam.gainCapability.kind,
-                    gainLabel = cam.gainCapability.label,
-                    gainUnit = cam.gainCapability.unit,
-                    gainDbEquivalent = cam.gainDbEquivalent(cam.currentGain),
-                    cameraName = info?.name,
-                    filterName = filterName,
-                    configuredFormat = frame.pixelFormat,
-                    pixelSizeUm = info?.pixelSizeUm,
-                    focalLengthMm = focalLengthMm,
-                    binning = _binning.value
-                )
-                withContext(Dispatchers.Main) {
-                    _statusMessage.value = app.getString(R.string.saved_file, file.name)
+                // The still must be the picture on screen. A long exposure delivers its
+                // frame long after the shutter closed, so waiting for a fresh frame here
+                // would save an unrelated exposure.
+                awaitDisplayedScienceFrame(owner = "photo_fits") { displayed ->
+                    val frame = displayed.frame
+                    val dir = File(
+                        getApplication<Application>().getExternalFilesDir("captures"),
+                        "FITS"
+                    )
+                    dir.mkdirs()
+                    val ts = winJuposTimestamp()
+                    val info = cam.cameraInfo
+                    val cameraShort = (info?.sensorName ?: info?.name)?.replace(" ", "")?.take(20) ?: "Camera"
+                    val filterPart = if (filterName != null) "-$filterName" else ""
+                    val file = File(dir, "$ts-$target$filterPart-$cameraShort.fits")
+                    val focalLengthMm = prefs.getFloat("plate_focal_length_mm", 0f).takeIf { it > 0f }
+                    fitsWriter.write(
+                        file = file,
+                        frame = frame,
+                        exposureSeconds = displayed.exposureUs / 1_000_000f,
+                        gain = displayed.gain,
+                        gainKind = cam.gainCapability.kind,
+                        gainLabel = cam.gainCapability.label,
+                        gainUnit = cam.gainCapability.unit,
+                        gainDbEquivalent = cam.gainDbEquivalent(displayed.gain),
+                        cameraName = info?.name,
+                        filterName = filterName,
+                        configuredFormat = frame.pixelFormat,
+                        pixelSizeUm = info?.pixelSizeUm,
+                        focalLengthMm = focalLengthMm,
+                        binning = _binning.value,
+                        exposureStartedAt = java.time.Instant.ofEpochMilli(displayed.arrivalMs)
+                            .minusMillis((displayed.exposureUs / 1000f).toLong())
+                    )
+                    withContext(Dispatchers.Main) {
+                        showCaptureNotice(app.getString(R.string.saved_file, file.name))
+                    }
                 }
             } catch (e: Throwable) {
                 if (e is CancellationException) throw e
@@ -4999,7 +5067,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     }
                     saveJpegFileToGallery(dest, fileName)
                     withContext(Dispatchers.Main) {
-                        _statusMessage.value = app.getString(R.string.saved_file, fileName)
+                        showCaptureNotice(app.getString(R.string.saved_file, fileName))
                     }
                 } catch (e: Throwable) {
                     Log.e(TAG, "captureJpg still failed", e)
@@ -5012,29 +5080,34 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val snapshot = awaitFrameSnapshotWithTraits(owner = "photo_jpg") ?: return@launch
-                val frame = snapshot.frame
-                val dir = File(
-                    getApplication<Application>().getExternalFilesDir("captures"),
-                    "JPG"
-                )
-                dir.mkdirs()
-                val ts = winJuposTimestamp()
-                val info = cam.cameraInfo
-                val cameraShort = (info?.sensorName ?: info?.name)?.replace(" ", "")?.take(20) ?: "Camera"
-                val filterPart = if (filterName != null) "-$filterName" else ""
-                val fileName = "$ts-$target$filterPart-$cameraShort.jpg"
-                val file = File(dir, fileName)
+                // Save the picture on screen, rendered with the live display recipe.
+                awaitDisplayedScienceFrame(owner = "photo_jpg") { displayed ->
+                    val frame = displayed.frame
+                    val dir = File(
+                        getApplication<Application>().getExternalFilesDir("captures"),
+                        "JPG"
+                    )
+                    dir.mkdirs()
+                    val ts = winJuposTimestamp()
+                    val info = cam.cameraInfo
+                    val cameraShort = (info?.sensorName ?: info?.name)?.replace(" ", "")?.take(20) ?: "Camera"
+                    val filterPart = if (filterName != null) "-$filterName" else ""
+                    val fileName = "$ts-$target$filterPart-$cameraShort.jpg"
+                    val file = File(dir, fileName)
 
-                val bmp = captureFrameProcessor.frameToBitmap(frame, snapshot.traits)
-                FileOutputStream(file).use { fos ->
-                    bmp.compress(Bitmap.CompressFormat.JPEG, 95, fos)
-                }
+                    // Render the still with the live display recipe so the file matches
+                    // the picture on screen: same white balance, stretch and LP700 mapping.
+                    captureFrameProcessor.inheritDisplayStateFrom(frameProcessor)
+                    val bmp = captureFrameProcessor.frameToBitmap(frame, displayed.traits)
+                    FileOutputStream(file).use { fos ->
+                        bmp.compress(Bitmap.CompressFormat.JPEG, 95, fos)
+                    }
 
-                saveJpgToGallery(bmp, fileName)
+                    saveJpgToGallery(bmp, fileName)
 
-                withContext(Dispatchers.Main) {
-                    _statusMessage.value = app.getString(R.string.saved_file, fileName)
+                    withContext(Dispatchers.Main) {
+                        showCaptureNotice(app.getString(R.string.saved_file, fileName))
+                    }
                 }
             } catch (e: Throwable) {
                 if (e is CancellationException) throw e
@@ -5128,6 +5201,54 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    /**
+     * Keeps one private copy of the science frame behind the current preview. A save
+     * takes its own copy out under the same lock, so a file never mixes two frames.
+     * Copying a full sensor frame for every preview frame would cost more than the
+     * preview itself, so the copy rate follows a bandwidth budget. A long exposure
+     * delivers one frame per exposure and is always copied in full.
+     */
+    private fun retainDisplayedScienceFrame(frame: FrameData, traits: PixelTraits?, exposureUs: Float, gain: Float) {
+        if (frame.previewOnly) return
+        val bytes = frame.width.toLong() * frame.height * frame.bytesPerPixel
+        if (bytes <= 0 || bytes > MAX_DISPLAYED_FRAME_BYTES) return
+        val now = System.currentTimeMillis()
+        val intervalMs = (bytes * 1000L / DISPLAYED_FRAME_COPY_BYTES_PER_SECOND)
+            .coerceIn(MIN_DISPLAYED_FRAME_COPY_INTERVAL_MS, 1_000L)
+        if (now - displayedFrameCopyAtMs < intervalMs) return
+        displayedFrameCopyAtMs = now
+        try {
+            synchronized(displayedFrameLock) {
+                val buffer = displayedFrameBuffer
+                    ?.takeIf { it.size >= bytes }
+                    ?: ByteArray(bytes.toInt()).also { displayedFrameBuffer = it }
+                frame.data.copyInto(buffer, 0, 0, bytes.toInt())
+                // The buffer now holds this frame together with the metadata of the
+                // same frame. A save that starts after this point sees a consistent
+                // image and matching exposure.
+                displayedFrameWidth = frame.width
+                displayedFrameHeight = frame.height
+                displayedFrameFormat = frame.pixelFormat
+                displayedFrameId = frame.frameId
+                displayedFrameTimestamp = frame.timestamp
+                displayedFrameTraits = traits
+                displayedFrameExposureUs = exposureUs
+                displayedFrameGain = gain
+                displayedFrameArrivalMs = System.currentTimeMillis()
+                displayedFrameValid = true
+            }
+        } catch (_: OutOfMemoryError) {
+            // A still is a convenience; failing to keep the copy only disables it.
+        }
+    }
+
+    private fun camExposureUs(): Float = cameraManager.activeCamera?.currentExposureUs ?: _exposureUs.value
+    private fun camGain(): Float = cameraManager.activeCamera?.currentGain ?: _gain.value
+
+    private fun clearDisplayedScienceFrame() {
+        synchronized(displayedFrameLock) { displayedFrameValid = false }
+    }
+
     private fun cancelPendingFrameSnapshot(reason: String) {
         val cancelled = frameSnapshots.cancel(reason) ?: return
         FileLogger.i("CaptureSnapshot", "Cancelled reason=$reason owner=${cancelled.owner} phase=${cancelled.phase}")
@@ -5135,6 +5256,85 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private suspend fun awaitFrameSnapshot(timeoutMs: Long = 45_000L, owner: String): FrameData? =
         awaitFrameSnapshotWithTraits(timeoutMs, owner)?.frame
+
+    /**
+     * Waits for the science frame behind the visible preview. A still is written from
+     * that frame, so the saved image matches what the user was looking at. When no
+     * frame has been retained yet, one is awaited and retained.
+     *
+     * The request is registered with the snapshot queue for the whole write, even
+     * when a retained frame is already available. A pending still must stay visible
+     * to the other capture paths, which use that queue to refuse a conflicting
+     * request.
+     */
+    private suspend fun awaitDisplayedScienceFrame(
+        owner: String,
+        write: suspend (DisplayedScienceFrame) -> Unit
+    ) {
+        // A long exposure delivers its frame only after the shutter closed, so the
+        // wait must cover the exposure length.
+        val exposureUs = camExposureUs()
+        val timeoutMs = (exposureUs / 1000f).toLong().coerceAtLeast(0L) + 45_000L
+        val retained = copyDisplayedFrame()
+        frameSnapshots.hold(owner, timeoutMs, {
+            check(!_cameraCfaApplying.value) { app.getString(R.string.camera_cfa_busy_settings) }
+            check(!_previewPaused.value) { app.getString(R.string.capture_snapshot_paused) }
+            check(cameraManager.activeCamera?.isCapturing?.value == true) { app.getString(R.string.polar_capture_interrupted) }
+            FileLogger.i("CaptureSnapshot", "Waiting owner=$owner timeoutMs=$timeoutMs exposureUs=${_exposureUs.value}")
+        }, { retained != null }) { snapshot ->
+            val displayed = if (snapshot != null) {
+                // The snapshot owns its bytes, so it can be retained without another copy.
+                retainDisplayedScienceFrame(snapshot.frame, snapshot.traits, camExposureUs(), camGain())
+                copyDisplayedFrame()
+            } else {
+                retained
+            } ?: return@hold
+            write(displayed)
+        }
+    }
+
+    /**
+     * Takes a private copy of the retained frame under the same lock the preview
+     * thread uses, so the bytes and the metadata always belong to the same frame.
+     */
+    private fun copyDisplayedFrame(): DisplayedScienceFrame? {
+        return synchronized(displayedFrameLock) {
+            val format = displayedFrameFormat ?: return@synchronized null
+            val bytes = displayedFrameWidth.toLong() * displayedFrameHeight * format.bytesPerPixel
+            if (!displayedFrameValid || bytes <= 0 || bytes > Int.MAX_VALUE) return@synchronized null
+            val copied = try {
+                displayedFrameBuffer?.copyOf(bytes.toInt())
+            } catch (_: OutOfMemoryError) {
+                null
+            } ?: return@synchronized null
+            // The saved file carries the canonical sensor layout: right-aligned,
+            // little-endian samples and the CFA descriptor of the ROI origin.
+            val raw = FrameData(
+                data = copied,
+                width = displayedFrameWidth,
+                height = displayedFrameHeight,
+                pixelFormat = format,
+                frameId = displayedFrameId,
+                timestamp = displayedFrameTimestamp)
+            val canonical = CameraCfaLayout.canonicalOwned(raw, displayedFrameTraits)
+            DisplayedScienceFrame(
+                frame = canonical.frame,
+                traits = canonical.traits,
+                exposureUs = displayedFrameExposureUs,
+                gain = displayedFrameGain,
+                arrivalMs = displayedFrameArrivalMs)
+        }
+    }
+
+    /** A save notice is shown once and then removed on its own. */
+    private fun showCaptureNotice(message: String) {
+        _captureNotice.value = message
+        captureNoticeJob?.cancel()
+        captureNoticeJob = viewModelScope.launch {
+            delay(CAPTURE_NOTICE_MS)
+            _captureNotice.value = ""
+        }
+    }
 
     private suspend fun awaitFrameSnapshotWithTraits(timeoutMs: Long = 45_000L, owner: String): CameraCfaLayout.Snapshot? =
         frameSnapshots.await(owner, timeoutMs) {
@@ -5145,7 +5345,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
 
     private fun rejectPolarCapture(reason: String, messageId: Int): Nothing {
-        FileLogger.w("PolarCapture", "Preflight blocked reason=$reason snapshot=${frameSnapshots.state} " +
+        FileLogger.w("PolarCapture", "Preflight blocked reason=$reason snapshot=${frameSnapshots.currentState} " +
             "captureOwned=${pointingCaptureOwned.get()} pendingSettings=${pendingCaptureChanges.get()} " +
             "previewPaused=${_previewPaused.value} capturing=${cameraManager.activeCamera?.isCapturing?.value}")
         error(app.getString(messageId))

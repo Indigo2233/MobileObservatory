@@ -1530,8 +1530,12 @@ class MountModule(
         startMountCoordinatePolling()
     }
 
-    suspend fun setGuideRate() {
-        controller.setMoveRate(MountSlewRate.GUIDE)
+    /**
+     * Command the rate used for guide pulses. The calibration pulse estimator divides the
+     * requested travel by the same sidereal multiplier, so both sides must agree.
+     */
+    suspend fun setGuideRate(rate: MountSlewRate = MountSlewRate.GUIDE) {
+        controller.setMoveRate(rate)
     }
 
     suspend fun startGuidePulse(direction: MountDirection, durationMs: Int) {

@@ -20,6 +20,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -85,6 +86,10 @@ fun StackingScreen(viewModel: CameraViewModel, mode: StackMode, onBack: () -> Un
     }
     var browseRecordings by rememberSaveable { mutableStateOf(false) }
     var observingOnly by rememberSaveable { mutableStateOf(false) }
+    // The full-screen picture viewer sits above the workspace.
+    var fullscreenImage by remember { mutableStateOf(false) }
+    // The viewer takes the whole screen, so the workspace chrome steps aside.
+    com.indigo.mobileobservatory.ui.components.ReportObservatoryPictureFullScreen(fullscreenImage)
     var showDetails by rememberSaveable { mutableStateOf(false) }
     var editBackground by rememberSaveable { mutableStateOf(false) }
     var editCalibration by rememberSaveable { mutableStateOf(false) }
@@ -109,6 +114,7 @@ fun StackingScreen(viewModel: CameraViewModel, mode: StackMode, onBack: () -> Un
     }
     val navigateBack: () -> Unit = {
         when {
+            fullscreenImage -> fullscreenImage = false
             editBackground -> editBackground = false
             editCalibration -> editCalibration = false
             browseRecordings -> browseRecordings = false
@@ -224,13 +230,23 @@ fun StackingScreen(viewModel: CameraViewModel, mode: StackMode, onBack: () -> Un
                 }
             }
         }
+        // A magnify control opens the picture full screen. The full-screen viewer
+        // owns the pinch zoom, the drag and the rotation.
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Spacer(Modifier.weight(1f))
+            IconButton(onClick = { fullscreenImage = true }, enabled = bitmap != null,
+                modifier = Modifier.testTag("stack-fullscreen-open")) {
+                Icon(Icons.Default.Fullscreen, stringResource(R.string.stack_fullscreen_open))
+            }
+        }
         if (drawRoi) Text(stringResource(R.string.stack_offline_drag_hint), Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.primary)
         val preview: @Composable (Modifier) -> Unit = { modifier ->
             val masks = if (mode == StackMode.PLANETARY && (drawRoi || offlineResultStale || !coordinator.hasResult(mode)))
                 selectedRegion?.let { r -> task.source?.let { s -> listOf(TargetMask(r.left.toDouble()/s.width,
                     r.top.toDouble()/s.height, r.right.toDouble()/s.width, r.bottom.toDouble()/s.height)) } }.orEmpty()
                 else parameters.background.targetMasks
-            StackImage(bitmap, masks, drawRoi, modifier) { rectangle ->
+            StackImage(bitmap, masks, drawRoi, modifier,
+                onOpenFullscreen = if (bitmap != null && !drawRoi) ({ fullscreenImage = true }) else null) { rectangle ->
                 task.source?.let { source ->
                     val x = (rectangle.left * source.width).toInt().coerceIn(0, source.width - 1)
                     val y = (rectangle.top * source.height).toInt().coerceIn(0, source.height - 1)
@@ -271,6 +287,15 @@ fun StackingScreen(viewModel: CameraViewModel, mode: StackMode, onBack: () -> Un
                 val panel = children[1].measure(Constraints.fixed(w,h-pictureHeight))
                 layout(w,h) { picture.placeRelative(0,0); panel.placeRelative(0,pictureHeight) }
             }
+        }
+    }
+    // The viewer covers the whole workspace; the system back button closes it.
+    if (fullscreenImage) {
+        bitmap?.let { picture ->
+            com.indigo.mobileobservatory.ui.components.FullscreenImageViewer(
+                bitmap = picture,
+                onDismiss = { fullscreenImage = false },
+                modifier = Modifier.fillMaxSize())
         }
     }
 }
@@ -625,25 +650,6 @@ internal fun AppRecordingPicker(vm: CameraViewModel, onDismiss: () -> Unit,
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } })
 }
 
-/** Keep the camera controls honest when their preview is showing a retained EAA stack. */
-@Composable
-internal fun EaaSessionBar(vm: CameraViewModel, onOpen: () -> Unit = { vm.stacking.open(StackMode.LIVE) }) {
-    val state by vm.stacking.live.state.collectAsStateWithPageLifecycle()
-    val showStack by vm.stacking.showLiveStack.collectAsStateWithPageLifecycle()
-    if (state.phase == LiveStackPhase.EMPTY || state.phase == LiveStackPhase.CLOSED) return
-    Surface(color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth()) {
-        Row(Modifier.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextButton(onClick = onOpen) { Text("${stringResource(R.string.stack_live)} · ${stackLivePhase(state.phase)}") }
-            Text(stringResource(R.string.stack_eaa_summary, state.accepted, state.exposureSeconds),
-                Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
-            TextButton(onClick = vm.stacking::toggleLiveDisplay) {
-                Text(stringResource(if (showStack) R.string.stack_switch_single else R.string.stack_switch_accumulated))
-            }
-        }
-    }
-}
-
 @Composable
 internal fun StackSlider(label: Int, value: Double, range: ClosedFloatingPointRange<Double>, change: (Double) -> Unit) {
     Column {
@@ -687,18 +693,23 @@ private fun QualityHistogram(values: List<Long>) {
 internal fun StackImage(bitmap: Bitmap?, masks: List<TargetMask>, selecting: Boolean, modifier: Modifier,
     points: List<BackgroundSamplePoint> = emptyList(), sampleRadius: Double = .025,
     candidatePoint: BackgroundSamplePoint? = null,
-    onPoint: ((BackgroundSamplePoint) -> Unit)? = null, selected: (TargetMask) -> Unit) {
+    onPoint: ((BackgroundSamplePoint) -> Unit)? = null,
+    onOpenFullscreen: (() -> Unit)? = null, selected: (TargetMask) -> Unit) {
     var dragStart by remember { mutableStateOf<Offset?>(null) }
     var dragEnd by remember { mutableStateOf<Offset?>(null) }
     val maskColor = MaterialTheme.colorScheme.tertiary
     val candidateColor = MaterialTheme.colorScheme.primary
     val latestPoint by rememberUpdatedState(onPoint)
     val latestSelected by rememberUpdatedState(selected)
+    val latestOpenFullscreen by rememberUpdatedState(onOpenFullscreen)
     Box(modifier.background(Color.Black), contentAlignment = Alignment.Center) {
         if (bitmap == null) Text(stringResource(R.string.stack_empty), Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
         else {
-            Image(bitmap.asImageBitmap(), stringResource(R.string.stack_accumulated), Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
-            Canvas(Modifier.fillMaxSize().testTag("stack-sample-surface").pointerInput(bitmap.width, bitmap.height, selecting, onPoint != null) {
+            Image(bitmap.asImageBitmap(), stringResource(R.string.stack_accumulated),
+                Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+            // The canvas owns the pointer gestures. A click on the picture opens the
+            // full-screen viewer, which offers the pinch zoom and the rotation.
+            Canvas(Modifier.fillMaxSize().testTag("stack-sample-surface").pointerInput(bitmap.width, bitmap.height, selecting, onPoint != null, onOpenFullscreen != null) {
                 fun normalized(point: Offset): Offset {
                     val scale = min(size.width.toFloat() / bitmap.width, size.height.toFloat() / bitmap.height)
                     val w = bitmap.width * scale; val h = bitmap.height * scale
@@ -712,14 +723,17 @@ internal fun StackImage(bitmap: Bitmap?, masks: List<TargetMask>, selecting: Boo
                             latestSelected(TargetMask(min(a.x, b.x).toDouble(), min(a.y, b.y).toDouble(), max(a.x, b.x).toDouble(), max(a.y, b.y).toDouble()))
                         dragStart = null; dragEnd = null
                     }) { change, _ -> change.consume(); dragEnd = normalized(change.position) }
-                else if (onPoint != null) detectTapGestures { position ->
+                else detectTapGestures { position ->
                     val scale = min(size.width.toFloat() / bitmap.width, size.height.toFloat() / bitmap.height)
                     val w = bitmap.width * scale; val h = bitmap.height * scale
                     val ox = (size.width - w) / 2; val oy = (size.height - h) / 2
                     // Letterboxing is not a sample location.
-                    if (position.x in ox..(ox+w) && position.y in oy..(oy+h)) {
-                        val p = normalized(position)
+                    if (position.x !in ox..(ox+w) || position.y !in oy..(oy+h)) return@detectTapGestures
+                    val p = normalized(position)
+                    if (latestPoint != null) {
                         latestPoint?.invoke(BackgroundSamplePoint(p.x.toDouble(), p.y.toDouble()))
+                    } else {
+                        latestOpenFullscreen?.invoke()
                     }
                 }
             }) {
@@ -801,6 +815,7 @@ internal fun stackMessage(code: String): String {
         "TRAILING" -> R.string.stack_reason_trailing; "CLOUD" -> R.string.stack_reason_cloud
         "REGISTRATION", "GLOBAL_MATCH" -> R.string.stack_reason_registration
         "background_paused" -> R.string.stack_reason_background; "background_cancelled" -> R.string.stack_reason_background_cancel
+        "workspace_left" -> R.string.stack_reason_workspace_left
         "connect_camera" -> R.string.stack_reason_camera; "disable_auto_exposure" -> R.string.stack_reason_ae
         "preview_only_camera" -> R.string.stack_reason_preview; "software_exposure_unknown" -> R.string.stack_reason_software
         "unknown_science_layout" -> R.string.stack_reason_layout

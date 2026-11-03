@@ -39,7 +39,6 @@ import com.indigo.mobileobservatory.mount.MountMotionType
 import com.indigo.mobileobservatory.mount.MountConnectionState
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.sequence.SequenceFeature
-import com.indigo.mobileobservatory.stacking.StackMode
 import java.io.File
 import kotlinx.coroutines.launch
 
@@ -50,8 +49,7 @@ internal fun CaptureWorkspaceScreen(
     onTargets: () -> Unit,
     onSequence: () -> Unit,
     selectedTarget: String?,
-    onCurrentFrameSolve: (File) -> Unit,
-    onOpenLiveStack: () -> Unit = { viewModel.stacking.open(StackMode.LIVE) }
+    onCurrentFrameSolve: (File) -> Unit
 ) {
     val connectionState by viewModel.connectionState.collectAsStateWithPageLifecycle()
     val configuration = LocalConfiguration.current
@@ -99,7 +97,7 @@ internal fun CaptureWorkspaceScreen(
     val recordFormat by viewModel.recordFormat.collectAsStateWithPageLifecycle()
     val recordLimit by viewModel.recordLimit.collectAsStateWithPageLifecycle()
     val previewPaused by viewModel.previewPaused.collectAsStateWithPageLifecycle()
-    val statusMessage by viewModel.statusMessage.collectAsStateWithPageLifecycle()
+    val captureNotice by viewModel.captureNotice.collectAsStateWithPageLifecycle()
     val recordingFinalizing by viewModel.recordingFinalizing.collectAsStateWithPageLifecycle()
     val focusAssistEnabled by viewModel.focusAssistEnabled.collectAsStateWithPageLifecycle()
     val lp750Enabled by viewModel.lp750PreviewEnabled.collectAsStateWithPageLifecycle()
@@ -222,7 +220,6 @@ internal fun CaptureWorkspaceScreen(
                 modifier = Modifier
                     .fillMaxSize()
             ) {
-        EaaSessionBar(viewModel, onOpenLiveStack)
         if (simulated) Surface(color = MaterialTheme.colorScheme.tertiaryContainer) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(stringResource(R.string.sim_camera_badge), modifier = Modifier.weight(1f), style = MaterialTheme.typography.labelMedium)
@@ -322,7 +319,9 @@ internal fun CaptureWorkspaceScreen(
                             }
                         }
 
-                        if (statusMessage.isNotEmpty()) {
+                        // Only the save notice appears over the picture. It removes
+                        // itself after three seconds.
+                        if (captureNotice.isNotEmpty()) {
                             Surface(
                                 modifier = Modifier
                                     .align(Alignment.BottomStart)
@@ -332,7 +331,7 @@ internal fun CaptureWorkspaceScreen(
                                 shape = RoundedCornerShape(10.dp)
                             ) {
                                 Text(
-                                    statusMessage,
+                                    captureNotice,
                                     color = ObservatoryTheme.colors.onImage,
                                     style = MaterialTheme.typography.bodySmall,
                                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
@@ -465,7 +464,6 @@ internal fun CaptureWorkspaceScreen(
                     onToggleLp750 = viewModel::setLp750PreviewEnabled,
                     onSolveCurrentFrame = ::requestCurrentFrameSolve,
                     onChooseTarget = onTargets,
-                    onOpenLiveStack = onOpenLiveStack,
                     onCfaSettings = viewModel::showCameraCfaSettings,
                     portrait = portrait,
                     showSequence = SequenceFeature.ENABLED,
@@ -874,10 +872,8 @@ private fun MainPreviewImage(
     preferFullWidth: Boolean
 ) {
     val bitmap by viewModel.previewBitmap.collectAsStateWithPageLifecycle()
-    val stackBitmap by viewModel.stacking.livePreview.collectAsStateWithPageLifecycle()
-    val showStack by viewModel.stacking.showLiveStack.collectAsStateWithPageLifecycle()
     LivePreview(
-        bitmap = if (showStack && stackBitmap != null) stackBitmap else bitmap,
+        bitmap = bitmap,
         flipH = flipH,
         flipV = flipV,
         rotationDeg = rotation,

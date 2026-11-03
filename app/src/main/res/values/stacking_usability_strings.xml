@@ -34,4 +34,6 @@
     <string name="stack_hide_details">Hide technical details</string>
     <string name="stack_show_advanced">Advanced image adjustments</string>
     <string name="stack_hide_advanced">Hide advanced adjustments</string>
+    <string name="stack_fullscreen_rotate">Rotate 90 degrees</string>
+    <string name="stack_fullscreen_open">Open the picture full screen</string>
 </resources>

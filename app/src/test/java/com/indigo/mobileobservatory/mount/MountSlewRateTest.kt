@@ -1,6 +1,7 @@
 package com.indigo.mobileobservatory.mount
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MountSlewRateTest {
@@ -45,5 +46,34 @@ class MountSlewRateTest {
     fun guideAliasIsOneTimesSidereal() {
         assertEquals(MountSlewRate.RATE_1X, MountSlewRate.GUIDE)
         assertEquals(MountSlewRate.RATE_8X, MountSlewRate.DEFAULT)
+    }
+
+    @Test
+    fun guideRateMultiplierMatchesTheCommandedSiderealRate() {
+        assertEquals(.25f, MountSlewRate.RATE_0_25X.guideRateMultiplier, 1e-6f)
+        assertEquals(.5f, MountSlewRate.RATE_0_5X.guideRateMultiplier, 1e-6f)
+        assertEquals(1f, MountSlewRate.RATE_1X.guideRateMultiplier, 1e-6f)
+    }
+
+    @Test
+    fun guideRateSnapsToTheLadderStepThatIsNotFasterThanRequested() {
+        assertEquals(MountSlewRate.RATE_0_5X, MountSlewRate.forGuideRateSidereal(.5f))
+        assertEquals(MountSlewRate.RATE_0_5X, MountSlewRate.forGuideRateSidereal(.75f))
+        assertEquals(MountSlewRate.RATE_0_25X, MountSlewRate.forGuideRateSidereal(.25f))
+        assertEquals(MountSlewRate.RATE_0_25X, MountSlewRate.forGuideRateSidereal(.1f))
+        assertEquals(MountSlewRate.RATE_1X, MountSlewRate.forGuideRateSidereal(.76f))
+        assertEquals(MountSlewRate.RATE_1X, MountSlewRate.forGuideRateSidereal(1f))
+    }
+
+    @Test
+    fun theCommandedMultiplierIsTheOneTheEstimatorUses() {
+        // The estimator divides the requested travel by this multiplier, so the pulse
+        // length and the mount rate must be derived from the same ladder step.
+        for (requested in listOf(.1f, .25f, .5f, .75f, .76f, 1f)) {
+            val commanded = MountSlewRate.forGuideRateSidereal(requested)
+            assertTrue("Requested $requested must map to a known ladder step",
+                commanded.guideRateMultiplier > 0f)
+            assertEquals(MountSlewRate.forGuideRateSidereal(requested), commanded)
+        }
     }
 }

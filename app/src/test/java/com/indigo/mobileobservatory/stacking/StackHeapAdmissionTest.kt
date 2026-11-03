@@ -76,4 +76,35 @@ class StackHeapAdmissionTest {
         assertEquals(352L shl 20, budget.available(0, 100L shl 20))
         assertEquals(2, collections)
     }
+
+    @Test fun aReleasedWorkspaceIsCollectedOnceEvenWhenThePlanIsUnchanged() {
+        var used = 500L shl 20
+        var collections = 0
+        val budget = StackHeapAdmission(heap, { used }) { collections++; used = 96L shl 20 }
+        // The first session collects the retired images and admits the plan.
+        assertEquals(352L shl 20, budget.available(0, 200L shl 20))
+        assertEquals(1, collections)
+        // Reset releases the workspace. The next identical plan must re-sample the heap,
+        // otherwise the budget keeps measuring the retired session's arrays.
+        budget.allocationsReleased()
+        assertEquals(352L shl 20, budget.available(0, 200L shl 20))
+        assertEquals(2, collections)
+        // The budget recovered; a following check needs no further collection.
+        assertEquals(352L shl 20, budget.available(0, 200L shl 20))
+        assertEquals(2, collections)
+    }
+
+    @Test fun aReleasedWorkspaceRecoversTheBudgetForAnUnchangedPlan() {
+        var used = 200L shl 20
+        var collections = 0
+        val budget = StackHeapAdmission(heap, { used }) { collections++; used = 64L shl 20 }
+        // The plan fits the retained heap, so nothing is collected yet.
+        val before = budget.available(0, 200L shl 20)
+        assertEquals(0, collections)
+        assertTrue("A retained workspace must shrink the budget", before < 384L shl 20)
+        budget.allocationsReleased()
+        val after = budget.available(0, 200L shl 20)
+        assertTrue("A released workspace must restore the budget", after > before)
+        assertEquals(1, collections)
+    }
 }

@@ -213,8 +213,12 @@ class StackingCoordinator(
     fun leave() = synchronized(stateLock) {
         _destination.value = null
         rememberRecipeLocked(_processing.value)
-        // The camera screen displays livePreview. Returning from an offline workspace must
-        // therefore resume live rendering, even if opening that workspace could not run a task.
+        // Leaving the workspace stops the live acquisition. A running session would
+        // otherwise keep copying every camera frame and compete with the capture
+        // preview. The accumulated result is kept, so the tool resumes the session.
+        if (live.state.value.phase == LiveStackPhase.RUNNING) live.pause("workspace_left")
+        // Returning from an offline workspace must show the live result again, even if
+        // opening that workspace could not run a task.
         if (activeMode != StackMode.LIVE && live.state.value.phase !in setOf(LiveStackPhase.EMPTY, LiveStackPhase.CLOSED)) {
             cancelRenderingLocked()
             activateModeLocked(StackMode.LIVE)
@@ -387,9 +391,19 @@ class StackingCoordinator(
         if (pendingAutoStretchMode == StackMode.LIVE) pendingAutoStretchMode = null
         liveAutoStretchEligible = true
         live.reset()
+        // The accumulated product owns a full-resolution Float image. Keeping it after a
+        // reset leaves that array live, so the next session's budget is computed against
+        // memory that no longer produces a result.
+        liveProduct = null
+        _livePreview.value = null
+        if (activeMode == StackMode.LIVE) _preview.value = null
         liveCalibration = CalibrationSelection()
         liveCalibrationWarnings = emptyList()
         liveDecoderBytes = 0L
+        // The previous workspace's arrays are unreachable now. Collect them and re-admit
+        // the heap, otherwise the next session's budget still measures the retired
+        // session and its ROI comes out smaller than the one just used.
+        heapAdmission.allocationsReleased()
     }
 
     /** One-shot display adaptation on the existing renderer; raw accumulation is unchanged. */
