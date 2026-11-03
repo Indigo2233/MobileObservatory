@@ -686,6 +686,19 @@ class ObservingUiWiringTest {
         // without covering the picture.
         assertTrue(toast.contains("viewModel.statusMessage"))
         assertTrue(toast.contains("Toast.makeText"))
+        assertTrue(toast.contains("consumeStatusMessage(message)"))
+    }
+
+    @Test
+    fun consumedStatusMessagesCanBeShownAgain() {
+        val viewModel = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/viewmodel/CameraViewModel.kt"
+        )
+        val consume = viewModel.substring(
+            viewModel.indexOf("internal fun consumeStatusMessage"),
+            viewModel.indexOf("private val _captureNotice")
+        )
+        assertTrue(consume.contains("if (_statusMessage.value == shown) _statusMessage.value = \"\""))
     }
 
     @Test

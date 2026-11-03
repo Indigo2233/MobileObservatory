@@ -59,23 +59,40 @@ class AstapRunner internal constructor(
         inputFile: File, fovDeg: Double, mountCoordinates: MountCoordinates?, searchRadiusDeg: Double?
     ): PlateSolveResult = withContext(Dispatchers.IO) {
         val started = System.currentTimeMillis()
-        val first = solveAttempt(inputFile, fovDeg, mountCoordinates, searchRadiusDeg)
-        val original = retryDenseJpegSolve(inputFile, first) { maxStars ->
-            solveAttempt(inputFile, fovDeg, mountCoordinates, searchRadiusDeg, maxStars = maxStars)
+        val task = kotlinx.coroutines.currentCoroutineContext()
+        val gray = AstapGrayInput.inspect(inputFile)
+        val grayFile = gray?.let { input ->
+            File.createTempFile("astap_gray_", ".fits", context.cacheDir).also { file ->
+                file.delete()
+                input.write(file) { task.ensureActive() }
+            }
         }
-        if (!astapNeedsSum2Retry(original)) return@withContext original
-        val sum = AstapSum2Input.inspect(inputFile) ?: return@withContext original
-        val base = createAstapOutputBase(context.cacheDir)
-        val temporary = File(base.parentFile, "input-sum2.fits")
         try {
-            val task = kotlinx.coroutines.currentCoroutineContext()
-            sum.write(temporary) { task.ensureActive() }
-            val retry = solveAttempt(temporary, fovDeg, mountCoordinates, searchRadiusDeg, base, 1)
-            val restored = sum.restore(retry)
-            val attempt = if (sum.outputBitpix == 32) "int32_sum2" else "uint16_sum2"
-            restored.copy(elapsedMs = elapsed(started), log = original.log +
-                "\nattempt=$attempt originalDims=${sum.width}x${sum.height} solverDims=${sum.width / 2}x${sum.height / 2}\n" + restored.log)
-        } finally { temporary.delete() }
+            val first = solveAttempt(grayFile ?: inputFile, fovDeg, mountCoordinates, searchRadiusDeg)
+            val original = if (grayFile != null) {
+                first.copy(log = "attempt=cfa_bilinear_gray sourceDims=${gray.width}x${gray.height}\n" + first.log)
+            } else {
+                retryDenseJpegSolve(inputFile, first) { maxStars ->
+                    solveAttempt(inputFile, fovDeg, mountCoordinates, searchRadiusDeg, maxStars = maxStars)
+                }
+            }
+            if (!astapNeedsSum2Retry(original) || grayFile != null) return@withContext original
+            val sum = AstapSum2Input.inspect(inputFile) ?: return@withContext original
+            val base = createAstapOutputBase(context.cacheDir)
+            val temporary = File(base.parentFile, "input-sum2.fits")
+            try {
+                sum.write(temporary) { task.ensureActive() }
+                val retry = solveAttempt(temporary, fovDeg, mountCoordinates, searchRadiusDeg, base, 1)
+                val restored = sum.restore(retry)
+                val attempt = if (sum.outputBitpix == 32) "int32_sum2" else "uint16_sum2"
+                restored.copy(elapsedMs = elapsed(started), log = original.log +
+                    "\nattempt=$attempt originalDims=${sum.width}x${sum.height} solverDims=${sum.width / 2}x${sum.height / 2}\n" + restored.log)
+            } finally {
+                temporary.delete()
+            }
+        } finally {
+            grayFile?.delete()
+        }
     }
 
     private suspend fun solveAttempt(

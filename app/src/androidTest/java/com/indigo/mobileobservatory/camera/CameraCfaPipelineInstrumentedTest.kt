@@ -348,6 +348,29 @@ class CameraCfaPipelineInstrumentedTest {
         }
     }
 
+    @Test fun gotoCaptureTemporarilyUsesFullFrameAndRestoresTheUserRoi() = runBlocking {
+        workspace(tokens = true) { vm, camera ->
+            await { camera.emitLatest(); vm.scienceCaptureReady.value }
+            main { vm.setRoi(Roi(2, 2, 24, 24)) }
+            await { camera.roiWrites == 1 && camera.currentRoi == Roi(2, 2, 24, 24) }
+            var captured: Roi? = null
+            val task = async(Dispatchers.IO) {
+                vm.captureTempFitsForPlateSolve(preferFullFrame = true) { roi, _ -> captured = roi }
+            }
+            await { camera.singleStarts == 1 }
+            camera.emitLatest()
+            val file = checkNotNull(task.await())
+            try {
+                assertEquals(Roi(0, 0, 24, 24), captured)
+                assertEquals(Roi(2, 2, 24, 24), camera.currentRoi)
+                val header = file.readBytes().copyOfRange(0, 2880).toString(Charsets.US_ASCII)
+                assertEquals("24", Regex("NAXIS1\\s*=\\s+(\\d+)").find(header)!!.groupValues[1])
+            } finally {
+                file.delete()
+            }
+        }
+    }
+
     private suspend fun workspace(tokens: Boolean, block: suspend (CameraViewModel, CameraFixture) -> Unit) {
         val store = ViewModelStore(); lateinit var vm: CameraViewModel
         val camera = CameraFixture(tokens)
@@ -393,6 +416,7 @@ class CameraCfaPipelineInstrumentedTest {
         @Volatile var singleStarts = 0
         @Volatile var lastFrameTimestamp = 0L
         @Volatile var pixelFormatWrites = 0
+        @Volatile var roiWrites = 0
         private val callbacks = CopyOnWriteArrayList<FrameCallback>()
         private val ids = java.util.concurrent.atomic.AtomicLong()
         val releases = ConcurrentHashMap<ByteArray, AtomicInteger>()
@@ -417,7 +441,7 @@ class CameraCfaPipelineInstrumentedTest {
         override fun setExposureTime(us: Float) {}
         override fun setGain(value: Float) {}
         override fun setPixelFormat(format: PixelFormat) { currentPixelFormat = format; pixelFormatWrites++ }
-        override fun setRoi(roi: Roi) { currentRoi = roi }
-        override fun resetRoi() {}
+        override fun setRoi(roi: Roi) { currentRoi = roi; roiWrites++ }
+        override fun resetRoi() { currentRoi = Roi(0, 0, 24, 24) }
     }
 }

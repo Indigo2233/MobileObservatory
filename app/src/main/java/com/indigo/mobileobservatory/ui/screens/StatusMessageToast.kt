@@ -20,6 +20,7 @@ internal fun StatusMessageToast(viewModel: CameraViewModel) {
     LaunchedEffect(message) {
         if (message.isNotBlank()) {
             Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+            viewModel.consumeStatusMessage(message)
         }
     }
 }

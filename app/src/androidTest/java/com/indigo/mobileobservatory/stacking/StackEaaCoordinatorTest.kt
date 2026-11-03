@@ -108,6 +108,7 @@ class StackEaaCoordinatorTest {
             main { c.open(StackMode.PLANETARY);c.selectPreset(ProcessingPreset.RAW);c.leave() }
             assertNull(c.destination.value)
             assertEquals(liveRecipe,c.processing.value)
+            assertEquals(LiveStackPhase.RUNNING,c.live.state.value.phase)
             await { !c.rendering.value }
             val before=c.livePreview.value
             main { c.acceptFrame(frame(2),key) }

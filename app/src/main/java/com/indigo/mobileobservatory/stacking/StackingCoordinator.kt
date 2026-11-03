@@ -213,10 +213,8 @@ class StackingCoordinator(
     fun leave() = synchronized(stateLock) {
         _destination.value = null
         rememberRecipeLocked(_processing.value)
-        // Leaving the workspace stops the live acquisition. A running session would
-        // otherwise keep copying every camera frame and compete with the capture
-        // preview. The accumulated result is kept, so the tool resumes the session.
-        if (live.state.value.phase == LiveStackPhase.RUNNING) live.pause("workspace_left")
+        // Live stacking is a shared task. Navigation must not pause acquisition or
+        // stop frames from reaching the running session.
         // Returning from an offline workspace must show the live result again, even if
         // opening that workspace could not run a task.
         if (activeMode != StackMode.LIVE && live.state.value.phase !in setOf(LiveStackPhase.EMPTY, LiveStackPhase.CLOSED)) {

@@ -85,8 +85,8 @@ android {
         applicationId = "com.indigo.mobileobservatory"
         minSdk = 26
         targetSdk = 34
-        versionCode = 61
-        versionName = "1.0.9"
+        versionCode = 62
+        versionName = "1.0.10"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("boolean", "STELLARIUM_ENABLED", stellariumNonCommercial.toString())
         buildConfigField("boolean", "SEQUENCE_ENABLED", sequenceEnabled.toString())

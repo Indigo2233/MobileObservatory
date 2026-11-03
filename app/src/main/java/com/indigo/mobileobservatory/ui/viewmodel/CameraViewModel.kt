@@ -492,6 +492,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _statusMessage = MutableStateFlow("")
     val statusMessage: StateFlow<String> = _statusMessage.asStateFlow()
 
+    /** Clears only the message that was presented, so an identical later event can show again. */
+    internal fun consumeStatusMessage(shown: String) {
+        if (_statusMessage.value == shown) _statusMessage.value = ""
+    }
+
     /**
      * A short-lived notice shown once in the preview, e.g. the name of a saved
      * file. It is cleared on its own so the preview never keeps a stale caption.
@@ -1474,21 +1479,24 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
         val camera = synchronized(recordingLifecycleLock) { requirePointingReferenceReady(singleExposure = options) }
         val info = requireNotNull(camera.cameraInfo)
-        val roi = camera.currentRoi
-        val roiScale = camera.roiSensorScale
         val identity = CameraReferenceIdentity.of(camera)
         pointingRepository.observeConnectedCamera("primary", identity)
         val revision = pointingRepository.captureRevision("primary")
         var captureStamp: com.indigo.mobileobservatory.pointing.ObservationStamp? = null
         var captureFile: File? = null
+        var captureRoi = camera.currentRoi
+        var captureRoiScale = camera.roiSensorScale
         val solved = retrySolveCapture(maxAttempts = 3) {
             precisionSamples.execute(0,
                 capture = {
                     check(cameraManager.activeCamera === camera) { app.getString(R.string.polar_capture_no_camera) }
-                    check(camera.currentRoi == roi && camera.roiSensorScale == roiScale) { app.getString(R.string.wfp_configuration_changed) }
                     val startedUtc = System.currentTimeMillis()
                     val started = android.os.SystemClock.elapsedRealtime()
-                    val file = captureTempFitsForPlateSolve(options.exposureUs, options.gain, options.focalLengthMm?.toFloat())
+                    val file = captureTempFitsForPlateSolve(options.exposureUs, options.gain,
+                        options.focalLengthMm?.toFloat(), preferFullFrame = true) { roi, scale ->
+                        captureRoi = roi
+                        captureRoiScale = scale
+                    }
                     val ended = android.os.SystemClock.elapsedRealtime()
                     check(kotlin.math.abs((System.currentTimeMillis() - startedUtc) - (ended - started)) <= 250) {
                         "Clock changed during reference capture"
@@ -1510,8 +1518,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         check(solved.success) { solved.message }
         val wcs = requireNotNull(solved.imageWcs) { "ASTAP returned no image geometry" }
         val observation = withContext(Dispatchers.IO) {
-            recordSolvedReference(requireNotNull(captureFile), requireNotNull(captureStamp), roi, info,
-                wcs.width, wcs.height, "primary", roiScale, identity, revision, solved)
+            recordSolvedReference(requireNotNull(captureFile), requireNotNull(captureStamp), captureRoi, info,
+                wcs.width, wcs.height, "primary", captureRoiScale, identity, revision, solved)
         }
         val direction = observation.direction
         recordPlateSolveResult(solved)
@@ -4308,7 +4316,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     suspend fun captureTempFitsForPlateSolve(requestedExposureUs: Float? = null, requestedGain: Float? = null,
-        focalLengthMm: Float? = null): File? = withContext(Dispatchers.IO) {
+        focalLengthMm: Float? = null, preferFullFrame: Boolean = false,
+        onCaptureGeometry: (Roi, Int) -> Unit = { _, _ -> }): File? = withContext(Dispatchers.IO) {
         captureSettingsMutex.withLock {
             _virtualObservation.value?.let { session ->
                 check(cameraManager.activeCamera === session.primary) { app.getString(R.string.polar_capture_no_camera) }
@@ -4404,55 +4413,70 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         }
                     }
                 }
-                val exposure = cam.currentExposureUs
-                val gain = cam.currentGain
-                val roi = cam.currentRoi
-                val bin = _binning.value
-                val format = cam.currentPixelFormat
-                val requestedAt = System.currentTimeMillis()
-                val timeout = com.indigo.mobileobservatory.astrometry.plateSolveFrameWaitMs(exposure)
-                val earliestEnd = requestedAt + kotlin.math.ceil(exposure / 1000.0).toLong()
-                val selection = loadCameraCfa(cam)
-                FileLogger.i("PolarCapture", "Single exposure camera=${cam.cameraInfo?.name} native=${cam is CameraSingleExposureCapable} exposureUs=$exposure gain=$gain roi=$roi format=$format waitMs=$timeout")
-                val captured = captureSingleExposureFrame(
-                    camera = cam, timeoutMs = timeout, elapsedMs = android.os.SystemClock::elapsedRealtime,
-                    checkCamera = {
-                        check(cameraManager.activeCamera === cam && cam.isOpen.value) { app.getString(R.string.polar_capture_no_camera) }
-                        check(cam.currentExposureUs == exposure && cam.currentGain == gain && cam.currentRoi == roi &&
-                            cam.currentPixelFormat == format && _binning.value == bin) { app.getString(R.string.polar_capture_settings_changed) }
-                    },
-                    acceptFrame = { frame ->
-                        val generation = cam.scienceCaptureGeneration
-                        frame.timestamp >= earliestEnd &&
-                            (generation == null || frame.captureGeneration == null || frame.captureGeneration == generation)
-                    },
-                    snapshot = { frame ->
-                        val interpreted = CameraCfaLayout.interpret(frame, selection)
-                        val traits = cameraCfaTraits(cam, selection)
-                        val processed = softwareBinning.apply(interpreted, traits)
-                        try { CameraCfaLayout.ownedSnapshot(processed, traits) }
-                        finally { if (processed.data !== interpreted.data) softwareBinning.release(processed.data) }
-                    }
-                ) ?: error(app.getString(R.string.polar_capture_timeout, timeout / 1000, exposure / 1_000_000f,
-                    cam.lastCaptureError ?: app.getString(R.string.polar_capture_no_sdk_error)))
-                val frame = captured.frame
-                FileLogger.i("PolarCapture", "Single exposure complete; camera stopped before FITS/solve")
-                val dir = File(app.cacheDir, "polar_align").also { check(it.isDirectory || it.mkdirs()) }
-                val file = File(dir, "polar_${System.currentTimeMillis()}_${java.util.UUID.randomUUID().toString().take(8)}.fits")
-                val info = cam.cameraInfo
+                val previousRoi = cam.currentRoi
+                val useFullFrame = preferFullFrame && cam.supportsHostRoi
+                if (useFullFrame) {
+                    cam.resetRoi()
+                    _roi.value = cam.currentRoi
+                }
                 try {
-                    fitsWriter.write(file = file, frame = frame, exposureSeconds = exposure / 1_000_000f,
-                        gain = gain, gainKind = cam.gainCapability.kind, gainLabel = cam.gainCapability.label,
-                        gainUnit = cam.gainCapability.unit, gainDbEquivalent = cam.gainDbEquivalent(gain),
-                        cameraName = info?.name, filterName = currentFilterName(), configuredFormat = frame.pixelFormat,
-                        pixelSizeUm = info?.pixelSizeUm,
-                        focalLengthMm = focalLengthMm ?: prefs.getFloat("plate_focal_length_mm", 0f).takeIf { it > 0f }, binning = bin,
-                        exposureStartedAt = java.time.Instant.ofEpochMilli(frame.timestamp)
-                            .minusNanos((exposure.toDouble() * 1000).toLong()))
-                    currentCoroutineContext().ensureActive()
-                    FileLogger.i("PolarCapture", "Captured file=${file.absolutePath} bytes=${file.length()} frame=${frame.width}x${frame.height} timestamp=${frame.timestamp}")
-                    file
-                } catch (failure: Throwable) { file.delete(); throw failure }
+                    val exposure = cam.currentExposureUs
+                    val gain = cam.currentGain
+                    val roi = cam.currentRoi
+                    val bin = _binning.value
+                    val format = cam.currentPixelFormat
+                    val requestedAt = System.currentTimeMillis()
+                    val timeout = com.indigo.mobileobservatory.astrometry.plateSolveFrameWaitMs(exposure)
+                    val earliestEnd = requestedAt + kotlin.math.ceil(exposure / 1000.0).toLong()
+                    val selection = loadCameraCfa(cam)
+                    onCaptureGeometry(roi, cam.roiSensorScale)
+                    FileLogger.i("PolarCapture", "Single exposure camera=${cam.cameraInfo?.name} native=${cam is CameraSingleExposureCapable} exposureUs=$exposure gain=$gain roi=$roi format=$format waitMs=$timeout")
+                    val captured = captureSingleExposureFrame(
+                        camera = cam, timeoutMs = timeout, elapsedMs = android.os.SystemClock::elapsedRealtime,
+                        checkCamera = {
+                            check(cameraManager.activeCamera === cam && cam.isOpen.value) { app.getString(R.string.polar_capture_no_camera) }
+                            check(cam.currentExposureUs == exposure && cam.currentGain == gain && cam.currentRoi == roi &&
+                                cam.currentPixelFormat == format && _binning.value == bin) { app.getString(R.string.polar_capture_settings_changed) }
+                        },
+                        acceptFrame = { frame ->
+                            val generation = cam.scienceCaptureGeneration
+                            frame.timestamp >= earliestEnd &&
+                                (generation == null || frame.captureGeneration == null || frame.captureGeneration == generation)
+                        },
+                        snapshot = { frame ->
+                            val interpreted = CameraCfaLayout.interpret(frame, selection)
+                            val traits = cameraCfaTraits(cam, selection)
+                            val processed = softwareBinning.apply(interpreted, traits)
+                            try { CameraCfaLayout.ownedSnapshot(processed, traits) }
+                            finally { if (processed.data !== interpreted.data) softwareBinning.release(processed.data) }
+                        }
+                    ) ?: error(app.getString(R.string.polar_capture_timeout, timeout / 1000, exposure / 1_000_000f,
+                        cam.lastCaptureError ?: app.getString(R.string.polar_capture_no_sdk_error)))
+                    val frame = captured.frame
+                    FileLogger.i("PolarCapture", "Single exposure complete; camera stopped before FITS/solve")
+                    val dir = File(app.cacheDir, "polar_align").also { check(it.isDirectory || it.mkdirs()) }
+                    val file = File(dir, "polar_${System.currentTimeMillis()}_${java.util.UUID.randomUUID().toString().take(8)}.fits")
+                    val info = cam.cameraInfo
+                    try {
+                        fitsWriter.write(file = file, frame = frame, exposureSeconds = exposure / 1_000_000f,
+                            gain = gain, gainKind = cam.gainCapability.kind, gainLabel = cam.gainCapability.label,
+                            gainUnit = cam.gainCapability.unit, gainDbEquivalent = cam.gainDbEquivalent(gain),
+                            cameraName = info?.name, filterName = currentFilterName(), configuredFormat = frame.pixelFormat,
+                            pixelSizeUm = info?.pixelSizeUm,
+                            focalLengthMm = focalLengthMm ?: prefs.getFloat("plate_focal_length_mm", 0f).takeIf { it > 0f }, binning = bin,
+                            exposureStartedAt = java.time.Instant.ofEpochMilli(frame.timestamp)
+                                .minusNanos((exposure.toDouble() * 1000).toLong()))
+                        currentCoroutineContext().ensureActive()
+                        FileLogger.i("PolarCapture", "Captured file=${file.absolutePath} bytes=${file.length()} frame=${frame.width}x${frame.height} timestamp=${frame.timestamp}")
+                        file
+                    } catch (failure: Throwable) { file.delete(); throw failure }
+                } finally {
+                    if (useFullFrame && cam.currentRoi != previousRoi &&
+                        cameraManager.activeCamera === cam) {
+                        cam.setRoi(previousRoi)
+                        _roi.value = cam.currentRoi
+                    }
+                }
             } finally { pointingCaptureOwned.set(false) }
         }
     }
