@@ -31,6 +31,62 @@ class StackAutoStretchTest {
         assertArrayEquals(saved,raw.pixels,0f)
     }
 
+    @Test fun versionThreeRaisesTheNaturalBackgroundAndPreservesWeakStructure() {
+        val raw=darkScene()
+        val natural=StackProcessingParameters.preset(ProcessingPreset.NATURAL)
+            .copy(background=BackgroundParameters(enabled=false))
+        val legacy=StackAutoStretch.estimate(raw,natural.copy(displayVersion=2))!!
+        val current=StackAutoStretch.estimate(raw,natural)!!
+        val legacySky=StackPostProcessor.process(raw,legacy).image.pixels[20*256+20]
+        val currentSky=StackPostProcessor.process(raw,current).image.pixels[20*256+20]
+        val currentNebula=StackPostProcessor.process(raw,current).image.pixels[64*256+128]
+        println("MULTISCALE sky $legacySky -> $currentSky; nebula=$currentNebula")
+        assertEquals(3,current.displayVersion)
+        assertTrue("v3 background $currentSky should exceed legacy $legacySky",currentSky>legacySky+.08f)
+        assertTrue("v3 background $currentSky should stay in the adaptive midtone range",currentSky in .18f.. .55f)
+        assertTrue(currentNebula>currentSky+.15f)
+        assertTrue(currentNebula<.995f)
+    }
+
+    @Test fun versionThreeGridAndPreviewLutStayBounded() {
+        val raw=LinearImage(4096,2048,1,FloatArray(4096*2048) { p ->
+            val x=p%4096; val y=p/4096
+            (.002+.00001*x+.000015*y+.004*exp(-((x-2048.0).pow(2)+(y-1024.0).pow(2))/180000)).toFloat()
+        })
+        val recipe=StackAutoStretch.estimate(raw,StackProcessingParameters.preset(ProcessingPreset.NATURAL)
+            .copy(background=BackgroundParameters(enabled=false)))!!
+        val prepared=StackPostProcessor.prepare(raw,recipe)
+        assertTrue(prepared.multiscaleGridSize in 1..320*320)
+    }
+
+    @Test fun versionThreeNoiseGateDoesNotAmplifyFlatGrain() {
+        val random=java.util.Random(813)
+        val flat=LinearImage(512,256,1,FloatArray(512*256) {
+            (.03+random.nextGaussian()*.0008).toFloat()
+        })
+        val requested=StackProcessingParameters.preset(ProcessingPreset.NATURAL)
+            .copy(background=BackgroundParameters(enabled=false))
+        val legacyRecipe=StackAutoStretch.estimate(flat,requested.copy(displayVersion=2))!!
+        val recipe=StackAutoStretch.estimate(flat,requested)!!
+        val legacy=StackPostProcessor.process(flat,legacyRecipe).image.pixels
+        val output=StackPostProcessor.process(flat,recipe).image.pixels
+        fun spread(values:FloatArray):Double {
+            val mean=values.average()
+            return kotlin.math.sqrt(values.sumOf { (it-mean)*(it-mean) }/values.size)
+        }
+        println("NOISE spread raw=${spread(flat.pixels)} legacy=${spread(legacy)} v3=${spread(output)}")
+        assertTrue(spread(output)<spread(legacy)*1.15)
+
+        val structured=flat.deepCopy()
+        for(y in 80 until 176) for(x in 192 until 320) {
+            structured.pixels[y*512+x]=structured.pixels[y*512+x]+.002f
+        }
+        val rendered=StackPostProcessor.process(structured,recipe).image.pixels
+        val inside=rendered.slice(100*512+220..100*512+300).average()
+        val outside=rendered.slice(100*512+20..100*512+100).average()
+        assertTrue("Weak structure must remain above flat grain",inside>outside+.02)
+    }
+
     @Test fun sparseHotPixelsDoNotDictateTheRangeAndUncoveredBordersAreIgnored() {
         val raw=darkScene();val base=StackProcessingParameters()
         val normal=StackAutoStretch.estimate(raw,base)!!

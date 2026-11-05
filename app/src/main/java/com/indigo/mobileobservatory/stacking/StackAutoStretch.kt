@@ -58,12 +58,15 @@ object StackAutoStretch {
         val normalizedMedian = ((median - black) / (white - black)).coerceIn(0.0, 1.0)
         val curved = asinh(curve * normalizedMedian) / asinh(curve)
         val x = if (current.displayVersion >= 2) compressHighlights(curved,current.highlightCompression) else curved
-        // Invert the midtone transfer after the selected shoulder for a moderate background.
-        val target = .12
+        // Version 3 uses a multiscale display path and keeps the background near the
+        // PixInsight-style midtone range instead of the legacy dark 0.12 target.
+        val target = if (current.displayVersion >= 3) .30 else .12
         val midtone = (x * (1 - target) / (x + target - 2 * x * target)).coerceIn(.01, .99)
+        val multiscaleWhite = if (current.displayVersion >= 3)
+            min(1.0, white + spread * .32) else white
         return current.copy(
             preset = if (current.preset == ProcessingPreset.RAW) ProcessingPreset.NATURAL else current.preset,
-            blackPoint = black, whitePoint = white, midtone = midtone,
+            blackPoint = black, whitePoint = multiscaleWhite, midtone = midtone,
             curve = curve, brightness = 1.0, stretchEnabled = true
         )
     }

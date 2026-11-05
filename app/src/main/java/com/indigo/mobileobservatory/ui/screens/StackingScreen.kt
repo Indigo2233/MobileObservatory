@@ -20,7 +20,11 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -41,6 +45,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.recording.SerEndianConvention
@@ -262,19 +267,13 @@ fun StackingScreen(viewModel: CameraViewModel, mode: StackMode, onBack: () -> Un
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)) { controls() }
             if (compact) {
-                Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton(onClick = coordinator::toggleLiveDisplay) { Text(stringResource(if (showStack) R.string.stack_single else R.string.stack_accumulated)) }
-                    Text(stackLivePhase(live.phase), Modifier.weight(1f).align(Alignment.CenterVertically))
-                    if (live.phase == LiveStackPhase.RUNNING) Button(onClick = { coordinator.live.pause() }) { Text(stringResource(R.string.stack_pause)) }
-                    else if (live.phase == LiveStackPhase.PAUSED) Button(onClick = viewModel::startLiveStack) { Text(stringResource(R.string.stack_resume)) }
-                }
+                LiveStackDock(viewModel, live, showStack)
             }
         }) { children, constraints ->
             val w = constraints.maxWidth; val h = constraints.maxHeight
             if (compact) {
                 val bar = children[2].measure(Constraints(minWidth = w, maxWidth = w, maxHeight = h))
                 val picture = children[0].measure(Constraints.fixed(w, (h-bar.height).coerceAtLeast(0)))
-                // Keep the settings subtree alive without measuring/placing it over the sky.
                 layout(w,h) { picture.placeRelative(0,0); bar.placeRelative(0,picture.height) }
             } else if (w >= 720.dp.roundToPx()) {
                 val controlsWidth = 340.dp.roundToPx().coerceAtMost(w)
@@ -325,72 +324,145 @@ private fun LiveStackControls(vm: CameraViewModel, state: LiveStackState, showSt
     val recording by vm.isRecording.collectAsStateWithPageLifecycle()
     val recordedFrames by vm.recordingFrameCount.collectAsStateWithPageLifecycle()
     var details by rememberSaveable { mutableStateOf(false) }
-    Text(stringResource(if (target == StackTarget.PLANETARY) R.string.stack_live_planetary_intro else R.string.stack_eaa_intro), style = MaterialTheme.typography.bodySmall)
-    if (state.phase == LiveStackPhase.EMPTY || state.phase == LiveStackPhase.PAUSED) {
-        Text(readiness?.let { stackMessage(it) } ?: stringResource(R.string.stack_eaa_ready),
-            color = if (readiness == null) MaterialTheme.colorScheme.primary
-                else if (readiness in setOf("processing_size", "memory_budget")) MaterialTheme.colorScheme.error
-                else MaterialTheme.colorScheme.tertiary)
-        suggestedBin?.let { bin ->
-            OutlinedButton(onClick = vm::useRecommendedLiveStackBin, enabled = !recording && !task.busy) {
-                Text(stringResource(R.string.stack_use_hardware_bin, bin))
+    val blocked = readiness != null
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = if (state.phase == LiveStackPhase.EMPTY) stackLivePhase(state.phase)
+                        else stringResource(R.string.stack_eaa_summary, state.accepted, state.exposureSeconds),
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = when {
+                        readiness != null -> stackMessage(readiness!!)
+                        state.phase == LiveStackPhase.RUNNING -> stackLivePhase(state.phase)
+                        else -> stringResource(R.string.stack_eaa_ready)
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (blocked) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
+            if (recording) Text(
+                stringResource(R.string.stack_recording_parallel, recordedFrames),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
-        suggestedRoi?.let { roi ->
-            OutlinedButton(onClick = vm::useRecommendedLiveStackRoi, enabled = !recording && !task.busy) {
-                Text(stringResource(R.string.stack_use_roi, roi.width, roi.height))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+            when (state.phase) {
+                LiveStackPhase.EMPTY -> Button(onClick = vm::startLiveStack, enabled = !blocked && !calibration.busy,
+                    modifier = Modifier.weight(1.35f), contentPadding = PaddingValues(horizontal = 12.dp)) {
+                    Icon(Icons.Default.PlayArrow, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp))
+                    Text(stringResource(R.string.stack_start), maxLines = 1)
+                }
+                LiveStackPhase.RUNNING -> Button(onClick = { c.live.pause() },
+                    modifier = Modifier.weight(1.35f), contentPadding = PaddingValues(horizontal = 12.dp)) {
+                    Icon(Icons.Default.Pause, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp))
+                    Text(stringResource(R.string.stack_pause), maxLines = 1)
+                }
+                LiveStackPhase.PAUSED -> Button(onClick = vm::startLiveStack, enabled = !blocked,
+                    modifier = Modifier.weight(1.35f), contentPadding = PaddingValues(horizontal = 12.dp)) {
+                    Icon(Icons.Default.PlayArrow, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp))
+                    Text(stringResource(R.string.stack_resume), maxLines = 1)
+                }
+                else -> Unit
             }
+            if (state.phase != LiveStackPhase.EMPTY) OutlinedButton(onClick = c::resetLive,
+                modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 10.dp)) {
+                Text(stringResource(R.string.stack_reset), maxLines = 1)
+            }
+            FilterChip(selected = !showStack, onClick = { if (showStack) c.toggleLiveDisplay() },
+                label = { Text(stringResource(R.string.stack_single), maxLines = 1, overflow = TextOverflow.Ellipsis) })
+            FilterChip(selected = showStack, onClick = { if (!showStack) c.toggleLiveDisplay() },
+                label = { Text(stringResource(R.string.stack_accumulated), maxLines = 1, overflow = TextOverflow.Ellipsis) })
         }
-        when (readiness) {
-            "disable_auto_exposure" -> OutlinedButton(onClick = { vm.setAutoExposureMode(AutoExposureMode.OFF) }) { Text(stringResource(R.string.stack_disable_ae)) }
-            "capture_paused" -> OutlinedButton(onClick = vm::resumeCaptureForStacking) { Text(stringResource(R.string.stack_resume_capture)) }
+        TextButton(onClick = { details = !details }, modifier = Modifier.align(Alignment.End)) {
+            Text(stringResource(R.string.stack_quality_details))
+            Icon(if (details) Icons.Default.ExpandLess else Icons.Default.ExpandMore, null, Modifier.size(18.dp))
         }
     }
-    OutlinedButton(onClick = { roiPlanner = true }, modifier = Modifier.fillMaxWidth().testTag("stack-roi-open")) {
-        Text(stringResource(R.string.stack_roi_title))
-    }
-    TextButton(onClick = onCamera) { Text(stringResource(R.string.stack_camera_settings)) }
-    if ((state.key?.format ?: captureFormat)?.isBayer == true) {
-        DemosaicSelector(algorithm, enabled = state.phase == LiveStackPhase.EMPTY && !task.busy && !calibration.busy && !rendering,
-            requiresResetConfirmation = c.hasResult(StackMode.PLANETARY) || task.histogram.isNotEmpty(), onSelect = c::setDemosaicAlgorithm)
-        if (state.phase != LiveStackPhase.EMPTY)
-            Text(stringResource(R.string.stack_debayer_live_locked), style = MaterialTheme.typography.bodySmall)
-    }
-    if (task.busy || c.hasResult(StackMode.PLANETARY)) {
-        Text(stackMessage("finish_offline_first"), color = MaterialTheme.colorScheme.tertiary)
-        TextButton(onClick = { c.open(StackMode.PLANETARY) }) { Text(stringResource(R.string.stack_offline_title)) }
-    }
-    Text(stackLivePhase(state.phase), style = MaterialTheme.typography.titleSmall)
-    Text(stringResource(R.string.stack_eaa_summary, state.accepted, state.exposureSeconds), style = MaterialTheme.typography.titleMedium)
-    if (recording) Text(stringResource(R.string.stack_recording_parallel, recordedFrames), color = MaterialTheme.colorScheme.primary)
-    TextButton(onClick = { details = !details }) { Text(stringResource(R.string.stack_quality_details)) }
     if (details) {
-    Text(if (target == StackTarget.DEEP_SKY) stringResource(R.string.stack_live_stats, state.received, state.accepted, state.rejected, state.dropped,
-        state.exposureSeconds, state.stars, state.rmsPixels, state.rotationDegrees)
-        else stringResource(R.string.stack_live_planetary_stats, state.received, state.accepted, state.rejected, state.dropped),
-        style = MaterialTheme.typography.bodyMedium)
-    Text(stringResource(R.string.stack_perf, state.processingMs, state.javaPeakBytes / 1024 / 1024, state.nativePeakBytes / 1024 / 1024),
-        style = MaterialTheme.typography.bodySmall)
-    }
-    if (state.reason.isNotEmpty()) Text(stackMessage(state.reason), color = MaterialTheme.colorScheme.tertiary)
-    diagnostic?.takeIf { !it.startable && (readiness == "memory_budget" || readiness == "input_budget") }?.let {
-        Text(stringResource(R.string.stack_live_budget_detail, it.workingBytes / 1048576,
-            it.budgetBytes / 1048576), style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        when (state.phase) {
-            LiveStackPhase.EMPTY -> Button(onClick = vm::startLiveStack, enabled = readiness == null && !calibration.busy, modifier = Modifier.weight(1f)) { Text(stringResource(R.string.stack_start)) }
-            LiveStackPhase.RUNNING -> Button(onClick = { c.live.pause() }, modifier = Modifier.weight(1f)) { Text(stringResource(R.string.stack_pause)) }
-            LiveStackPhase.PAUSED -> Button(onClick = vm::startLiveStack, enabled = readiness == null, modifier = Modifier.weight(1f)) { Text(stringResource(R.string.stack_resume)) }
-            else -> Unit
+        Column(Modifier.fillMaxWidth().heightIn(max = 360.dp).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(stringResource(if (target == StackTarget.PLANETARY) R.string.stack_live_planetary_intro else R.string.stack_eaa_intro),
+                style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            if (state.phase == LiveStackPhase.EMPTY || state.phase == LiveStackPhase.PAUSED) {
+                suggestedBin?.let { bin -> OutlinedButton(onClick = vm::useRecommendedLiveStackBin,
+                    enabled = !recording && !task.busy) { Text(stringResource(R.string.stack_use_hardware_bin, bin)) } }
+                suggestedRoi?.let { roi -> OutlinedButton(onClick = vm::useRecommendedLiveStackRoi,
+                    enabled = !recording && !task.busy) { Text(stringResource(R.string.stack_use_roi, roi.width, roi.height)) } }
+                when (readiness) {
+                    "disable_auto_exposure" -> OutlinedButton(onClick = { vm.setAutoExposureMode(AutoExposureMode.OFF) }) {
+                        Text(stringResource(R.string.stack_disable_ae))
+                    }
+                    "capture_paused" -> OutlinedButton(onClick = vm::resumeCaptureForStacking) {
+                        Text(stringResource(R.string.stack_resume_capture))
+                    }
+                }
+            }
+            OutlinedButton(onClick = { roiPlanner = true }, modifier = Modifier.fillMaxWidth().testTag("stack-roi-open")) {
+                Text(stringResource(R.string.stack_roi_title))
+            }
+            TextButton(onClick = onCamera) { Text(stringResource(R.string.stack_camera_settings)) }
+            if ((state.key?.format ?: captureFormat)?.isBayer == true) {
+                DemosaicSelector(algorithm, enabled = state.phase == LiveStackPhase.EMPTY && !task.busy && !calibration.busy && !rendering,
+                    requiresResetConfirmation = c.hasResult(StackMode.PLANETARY) || task.histogram.isNotEmpty(), onSelect = c::setDemosaicAlgorithm)
+                if (state.phase != LiveStackPhase.EMPTY)
+                    Text(stringResource(R.string.stack_debayer_live_locked), style = MaterialTheme.typography.bodySmall)
+            }
+            if (task.busy || c.hasResult(StackMode.PLANETARY)) {
+                Text(stackMessage("finish_offline_first"), color = MaterialTheme.colorScheme.tertiary)
+                TextButton(onClick = { c.open(StackMode.PLANETARY) }) { Text(stringResource(R.string.stack_offline_title)) }
+            }
+            Text(if (target == StackTarget.DEEP_SKY) stringResource(R.string.stack_live_stats, state.received, state.accepted,
+                state.rejected, state.dropped, state.exposureSeconds, state.stars, state.rmsPixels, state.rotationDegrees)
+                else stringResource(R.string.stack_live_planetary_stats, state.received, state.accepted, state.rejected, state.dropped),
+                style = MaterialTheme.typography.bodyMedium)
+            Text(stringResource(R.string.stack_perf, state.processingMs, state.javaPeakBytes / 1048576,
+                state.nativePeakBytes / 1048576), style = MaterialTheme.typography.bodySmall)
+            if (state.reason.isNotEmpty()) Text(stackMessage(state.reason), color = MaterialTheme.colorScheme.tertiary)
+            diagnostic?.takeIf { !it.startable && (readiness == "memory_budget" || readiness == "input_budget") }?.let {
+                Text(stringResource(R.string.stack_live_budget_detail, it.workingBytes / 1048576,
+                    it.budgetBytes / 1048576), style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (state.phase == LiveStackPhase.RESET_REQUIRED && state.reason != "REFERENCE_RESTART_REQUIRED")
+                Text(stringResource(R.string.stack_reset_required))
         }
-        if (state.phase != LiveStackPhase.EMPTY) OutlinedButton(onClick = c::resetLive, modifier = Modifier.weight(1f)) { Text(stringResource(R.string.stack_reset)) }
     }
-    if (state.phase == LiveStackPhase.RESET_REQUIRED && state.reason != "REFERENCE_RESTART_REQUIRED") Text(stringResource(R.string.stack_reset_required))
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        FilterChip(selected = !showStack, onClick = { if (showStack) c.toggleLiveDisplay() }, label = { Text(stringResource(R.string.stack_single)) })
-        FilterChip(selected = showStack, onClick = { if (!showStack) c.toggleLiveDisplay() }, label = { Text(stringResource(R.string.stack_accumulated)) })
+}
+
+/** Compact observing-only dock. It keeps the stack running while exposing only the
+ * controls needed from the full-screen work area. */
+@Composable
+private fun LiveStackDock(vm: CameraViewModel, state: LiveStackState, showStack: Boolean) {
+    val c = vm.stacking
+    Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        FilterChip(selected = !showStack, onClick = { if (showStack) c.toggleLiveDisplay() },
+            label = { Text(stringResource(R.string.stack_single), maxLines = 1) })
+        FilterChip(selected = showStack, onClick = { if (!showStack) c.toggleLiveDisplay() },
+            label = { Text(stringResource(R.string.stack_accumulated), maxLines = 1) })
+        Text(
+            text = if (state.phase == LiveStackPhase.EMPTY) stackLivePhase(state.phase)
+                else stringResource(R.string.stack_eaa_summary, state.accepted, state.exposureSeconds),
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        if (state.phase == LiveStackPhase.RUNNING) Button(onClick = { c.live.pause() }) {
+            Icon(Icons.Default.Pause, null, Modifier.size(18.dp))
+        } else if (state.phase == LiveStackPhase.PAUSED) Button(onClick = vm::startLiveStack) {
+            Icon(Icons.Default.PlayArrow, null, Modifier.size(18.dp))
+        }
     }
 }
 

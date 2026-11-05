@@ -13,7 +13,7 @@ data class StackProcessingParameters(
     val saturation: Double = 1.0, val background: BackgroundParameters = BackgroundParameters(),
     val stretchEnabled: Boolean = true, val whiteBalanceEnabled: Boolean = true,
     val saturationEnabled: Boolean = true,
-    val displayVersion: Int = 2
+    val displayVersion: Int = 3
 ) {
     companion object {
         fun preset(preset: ProcessingPreset): StackProcessingParameters = when(preset) {
@@ -22,6 +22,39 @@ data class StackProcessingParameters(
             ProcessingPreset.INTENSE -> StackProcessingParameters(preset,midtone = .25,curve = 80.0,localContrast = .15,highlightCompression = .65,autoWhiteBalance = true)
         }
     }
+}
+
+/**
+ * Bounded display model for the version 3 multiscale stretch. The grid stores coarse
+ * background and structure planes at a fixed ceiling independent of sensor resolution.
+ * Rendering samples the model bilinearly and never allocates a full-resolution pyramid.
+ */
+internal class StackMultiscaleModel(
+    val width: Int,
+    val height: Int,
+    val background: FloatArray,
+    val structure: FloatArray,
+    val noise: Double
+) {
+    init {
+        require(width > 0 && height > 0)
+        require(background.size == width * height && structure.size == width * height)
+        require(noise.isFinite() && noise >= 0.0)
+    }
+
+    private fun sample(plane: FloatArray, x: Double, y: Double): Double {
+        val gx = (x * (width - 1)).coerceIn(0.0, (width - 1).toDouble())
+        val gy = (y * (height - 1)).coerceIn(0.0, (height - 1).toDouble())
+        val x0 = gx.toInt(); val y0 = gy.toInt()
+        val x1 = (x0 + 1).coerceAtMost(width - 1); val y1 = (y0 + 1).coerceAtMost(height - 1)
+        val fx = gx - x0; val fy = gy - y0
+        val top = plane[y0 * width + x0] + (plane[y0 * width + x1] - plane[y0 * width + x0]) * fx
+        val bottom = plane[y1 * width + x0] + (plane[y1 * width + x1] - plane[y1 * width + x0]) * fx
+        return top + (bottom - top) * fy
+    }
+
+    fun backgroundAt(x: Double, y: Double): Double = sample(background,x,y)
+    fun structureAt(x: Double, y: Double): Double = sample(structure,x,y)
 }
 
 /** Immutable source + small model + optional full-resolution filter planes. Float export and
@@ -36,7 +69,8 @@ class PreparedStack internal constructor(
     private val detailBlur: FloatArray?,
     private val contrastBlur: FloatArray?,
     private val noise: Double,
-    private val started: Long
+    private val started: Long,
+    private val multiscale: StackMultiscaleModel? = null
 ): StackProcessingResult {
     val width: Int get() = source.image.width
     val height: Int get() = source.image.height
@@ -49,8 +83,11 @@ class PreparedStack internal constructor(
     private val range = parameters.whitePoint-parameters.blackPoint
     private val curveNorm = if (parameters.curve > 0) asinh(parameters.curve) else 1.0
     private val saturation = if (parameters.saturationEnabled) parameters.saturation else 1.0
+    private val multiscaleRangeX = max(1, width - 1).toDouble()
+    private val multiscaleRangeY = max(1, height - 1).toDouble()
     @Volatile private var previewToneLut: FloatArray? = null
     internal val previewToneLutAllocated: Boolean get() = previewToneLut != null
+    internal val multiscaleGridSize: Int get() = multiscale?.let { it.width * it.height } ?: 0
 
     /** Write one native-coordinate row, optionally sampling every [xStep] pixels. */
     fun writeRow(y: Int,output: FloatArray,xStep: Int = 1) {
@@ -105,7 +142,10 @@ class PreparedStack internal constructor(
             val detail = value-contrastBlur[p]
             value += sign(detail)*max(0.0,abs(detail)-noise*1.5)*parameters.localContrast/(1+8*max(value,0.0))
         }
-        val mapped = if (toneLut == null) mapToneExact(value) else mapTonePreview(value,toneLut)
+        val displayValue = if (multiscale != null && parameters.displayVersion >= 3) {
+            multiscaleRemap(value, p, multiscale)
+        } else value
+        val mapped = if (toneLut == null) mapToneExact(displayValue) else mapTonePreview(displayValue,toneLut)
         if (channels == 1) output[out] = mapped.toFloat()
         else {
             val colorScale = if (original > 1e-10) mapped/original else 0.0
@@ -123,6 +163,26 @@ class PreparedStack internal constructor(
         }
     }
 
+    /**
+     * MAS-like multiscale transfer: normalize against a local low-frequency pedestal,
+     * lift the background around a stable midtone, and add noise-gated detail after
+     * the nonlinear curve. The low-resolution model bounds memory and remains smooth.
+     */
+    private fun multiscaleRemap(value: Double, p: Int, model: StackMultiscaleModel): Double {
+        val x = (p % width) / multiscaleRangeX
+        val y = (p / width) / multiscaleRangeY
+        val background = model.backgroundAt(x, y)
+        val midscale = model.structureAt(x, y)
+        val coarse = background - midscale
+        val fine = value - background
+        val gate = max(model.noise * 3.5, range * .001)
+        val excess = max(0.0, abs(fine) - gate)
+        val gatedFine = sign(fine) * excess * excess / (excess + gate)
+        val midGain = if (parameters.preset == ProcessingPreset.NATURAL) 1.25 else 1.65
+        val fineGain = if (parameters.preset == ProcessingPreset.NATURAL) .55 else .85
+        return coarse + midscale * midGain + gatedFine * fineGain
+    }
+
     private fun mapToneExact(value: Double): Double {
         var mapped = value.coerceIn(0.0,1.0)
         if (parameters.stretchEnabled) {
@@ -135,7 +195,9 @@ class PreparedStack internal constructor(
 
     private fun mapNormalizedToneExact(normalized: Double): Double {
         var mapped = if (parameters.curve > 0) asinh(parameters.curve*normalized)/curveNorm else normalized
-        if (parameters.displayVersion >= 2) mapped = compressHighlights(mapped,parameters.highlightCompression)
+        val displayShoulder = if (parameters.displayVersion >= 3)
+            max(parameters.highlightCompression,.58) else parameters.highlightCompression
+        if (parameters.displayVersion >= 2) mapped = compressHighlights(mapped,displayShoulder)
         val m = parameters.midtone
         mapped = if (mapped <= 0 || mapped >= 1) mapped else ((m-1)*mapped)/((2*m-1)*mapped-m)
         mapped = 1.0-(1.0-mapped).pow(parameters.brightness)
@@ -214,7 +276,7 @@ object StackPostProcessor {
         require(parameters.midtone in .01.. .99 && parameters.curve in 0.0..200.0 && parameters.brightness in .05..8.0)
         require(parameters.sharpening in 0.0..2.0 && parameters.localContrast in 0.0..1.0 && parameters.highlightCompression in 0.0..1.0)
         require(parameters.redBalance in .25..4.0 && parameters.blueBalance in .25..4.0 && parameters.saturation in 0.0..2.0)
-        require(parameters.displayVersion in 1..2) { "Unsupported display processing version" }
+        require(parameters.displayVersion in 1..3) { "Unsupported display processing version" }
         if (cancelled()) throw CancellationException("Processing cancelled")
         if (parameters.preset == ProcessingPreset.RAW) return PreparedStack(BackgroundPixels(linear,null),parameters,
             null,doubleArrayOf(1.0,1.0,1.0),null,null,null,0.0,start)
@@ -239,7 +301,73 @@ object StackPostProcessor {
             for (p in 0 until count - 1 step stride) if (p % linear.width != linear.width-1) noiseSamples += abs(luma[p+1]-luma[p]).toDouble()
             noise = StarRegistration.median(noiseSamples)/.9538726
         }
-        return PreparedStack(source,parameters,bg,gains,luma,detailBlur,contrastBlur,noise,start)
+        val multiscale = if (parameters.displayVersion >= 3 && parameters.stretchEnabled)
+            buildMultiscale(source,gains,cancelled) else null
+        return PreparedStack(source,parameters,bg,gains,luma,detailBlur,contrastBlur,noise,start,multiscale)
+    }
+
+    /** Bounded low-resolution background plus midscale structure. The full-resolution image is
+     * only sampled on this grid, so live rendering cost does not scale with sensor resolution. */
+    private fun buildMultiscale(
+        source: BackgroundPixels,
+        gains: DoubleArray,
+        cancelled: () -> Boolean
+    ): StackMultiscaleModel? {
+        val image = source.image
+        val longest = max(image.width, image.height)
+        val width = max(24, image.width * 320 / longest)
+        val height = max(24, image.height * 320 / longest)
+        val count = width * height
+        val luminance = FloatArray(count)
+        val valid = BooleanArray(count)
+        for (gy in 0 until height) {
+            if (gy % 16 == 0 && cancelled()) throw CancellationException("Multiscale stretch cancelled")
+            for (gx in 0 until width) {
+                val sx = ((gx + .5) * image.width / width).toInt().coerceIn(0, image.width - 1)
+                val sy = ((gy + .5) * image.height / height).toInt().coerceIn(0, image.height - 1)
+                val p = sy * image.width + sx
+                val value = balancedLuminance(source, gains, p)
+                if (value.isFinite()) {
+                    luminance[gy * width + gx] = value.toFloat()
+                    valid[gy * width + gx] = true
+                }
+            }
+        }
+        if (valid.count { it } < max(16, count / 2)) return null
+        val background = FloatArray(count)
+        val radius = 3
+        for (gy in 0 until height) for (gx in 0 until width) {
+            val values = ArrayList<Double>((radius * 2 + 1) * (radius * 2 + 1))
+            for (oy in -radius..radius) for (ox in -radius..radius) {
+                val x = (gx + ox).coerceIn(0, width - 1)
+                val y = (gy + oy).coerceIn(0, height - 1)
+                if (valid[y * width + x]) values += luminance[y * width + x].toDouble()
+            }
+            background[gy * width + gx] = if (values.isEmpty()) 0f else
+                StarRegistration.median(values).toFloat()
+        }
+        // A second median pass separates broad background from the midscale structure.
+        val structure = FloatArray(count)
+        for (gy in 0 until height) for (gx in 0 until width) {
+            val values = ArrayList<Double>(9)
+            for (oy in -1..1) for (ox in -1..1) {
+                val x = (gx + ox).coerceIn(0, width - 1)
+                val y = (gy + oy).coerceIn(0, height - 1)
+                values += background[y * width + x].toDouble()
+            }
+            structure[gy * width + gx] = (background[gy * width + gx] - StarRegistration.median(values).toFloat()).toFloat()
+        }
+        val samples = ArrayList<Double>(count / 4)
+        for (gy in 1 until height - 1 step 2) for (gx in 1 until width - 1 step 2) {
+            val center = luminance[gy * width + gx].toDouble()
+            val left = luminance[gy * width + gx - 1].toDouble()
+            val right = luminance[gy * width + gx + 1].toDouble()
+            val up = luminance[(gy - 1) * width + gx].toDouble()
+            val down = luminance[(gy + 1) * width + gx].toDouble()
+            samples += (abs(center - left) + abs(center - right) + abs(center - up) + abs(center - down)) / 4.0
+        }
+        val noise = StarRegistration.median(samples) / .9538726
+        return StackMultiscaleModel(width,height,background,structure,noise)
     }
 
     internal fun balancedLuminance(source: BackgroundPixels,gains: DoubleArray,p: Int): Double =

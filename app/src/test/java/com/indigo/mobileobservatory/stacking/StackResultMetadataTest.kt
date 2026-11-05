@@ -31,9 +31,16 @@ class StackResultMetadataTest {
         val legacy=StackResultMetadata.parameters(recipe())
         legacy.remove("displayVersion")
         assertEquals(recipe().copy(displayVersion=1),StackResultMetadata.parseParameters(legacy))
-        legacy.put("displayVersion",3)
+        legacy.put("displayVersion",4)
         try { StackResultMetadata.parseParameters(legacy);fail("Unsupported display version accepted") }
         catch (expected:IllegalArgumentException) { assertTrue(expected.message!!.contains("version")) }
+    }
+
+    @Test fun versionThreeRecipeRoundTripsAndReplaysMultiscalePixels() {
+        val original=recipe().copy(displayVersion=3)
+        val serialized=StackResultMetadata.parameters(original)
+        assertEquals(original,StackResultMetadata.parseParameters(serialized))
+        assertEquals(3,serialized.getInt("displayVersion"))
     }
 
     @Test fun reloadedRecipeReproducesActualProcessedPixelsAndBackgroundModel() {

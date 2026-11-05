@@ -95,10 +95,11 @@ class StackingUsabilityInstrumentedTest {
             else StackingScreen(vm, StackMode.LIVE, onBack = {}, onCamera = { cameraReached = true })
         } }
 
-        compose.onNodeWithText(app.getString(R.string.stack_eaa_intro)).performScrollTo().assertIsDisplayed()
         compose.onNodeWithText(app.getString(R.string.stack_reason_camera)).performScrollTo().assertIsDisplayed()
         compose.onNodeWithText(app.getString(R.string.stack_start)).performScrollTo().assertIsNotEnabled()
         assertEquals(LiveStackPhase.EMPTY, vm.stacking.live.state.value.phase)
+        compose.onNodeWithText(app.getString(R.string.stack_quality_details)).performScrollTo().performClick()
+        compose.onNodeWithText(app.getString(R.string.stack_eaa_intro)).performScrollTo().assertIsDisplayed()
         compose.onNodeWithText(app.getString(R.string.stack_camera_settings)).performScrollTo().assertIsEnabled().performClick()
         compose.onNodeWithText("camera-settings-destination-reached").assertIsDisplayed()
     }

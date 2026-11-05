@@ -20,8 +20,8 @@ class StackFitsPreviewTest {
             assertEquals(ProcessingPreset.NATURAL, preview.parameters.preset)
             assertFalse(preview.restoredRecipe)
             assertEquals(0f, preview.image.pixels.first(), 0f)
-            // The default display shoulder reserves highlight headroom at sensor white.
-            assertEquals(.85f, preview.image.pixels.last(), 1e-6f)
+            // Version 3's multiscale shoulder reserves headroom while preserving ordering.
+            assertTrue(preview.image.pixels.last() in .65f.. .95f)
             for (i in 1 until preview.image.pixels.size) assertTrue(preview.image.pixels[i] > preview.image.pixels[i - 1])
             assertTrue(preview.image.pixels[3] > .01f)
             assertArrayEquals(source.pixels, StackFitsReader.read(file).pixels, 0f)

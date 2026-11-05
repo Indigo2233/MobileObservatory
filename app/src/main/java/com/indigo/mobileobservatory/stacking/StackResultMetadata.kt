@@ -43,7 +43,7 @@ object StackResultMetadata {
             whiteBalanceEnabled = json.optBoolean("whiteBalanceEnabled", true),
             saturationEnabled = json.optBoolean("saturationEnabled", true),
             displayVersion = json.optInt("displayVersion", 1).also {
-                require(it in 1..2) { "Unsupported display processing version" }
+                require(it in 1..3) { "Unsupported display processing version" }
             },
             background = BackgroundParameters(background.getBoolean("enabled"), background.getDouble("strength"),
                 background.getInt("gridSize"), List(masks.length()) { index -> masks.getJSONArray(index).let {
