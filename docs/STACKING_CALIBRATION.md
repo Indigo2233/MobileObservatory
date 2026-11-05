@@ -76,11 +76,19 @@ demosaicing or software binning. Unsupported/ambiguous CFA geometry is rejected.
 
 ## Calibration mathematics and compatibility
 
-Master creation uses a streaming arithmetic mean with Double accumulation and
-Float32 storage. Memory does not grow with the number of frames. This is not a
+Master creation uses a streaming arithmetic mean with one Float32 accumulator and
+one decoded frame. Memory does not grow with the number of frames. This is not a
 sigma-clipped or median master combiner: transient defects in the calibration
 recording can enter the mean. There is no dark exposure scaling, dark optimization,
 dedicated dark-flat workflow or bad-pixel interpolation in this implementation.
+
+Full-frame flats no longer require a second full-resolution Double accumulator.
+The estimated build budget accounts for two decoded frames and their native
+byte copies, which may overlap while the next frame is read, the accumulator
+that becomes the output master, and a fixed 4 MiB headroom. The optional bias is
+owned by CalibrationSelection and counted there rather than twice. This removes
+the prior rejection when bias and dark masters were already resident without
+understating the per-frame decode buffers.
 
 For each sensor sample, the applied operation is:
 
@@ -114,6 +122,9 @@ valid context after draining the recording worker and checking that the capture
 settings remained unchanged. An interrupted recording keeps its invalid marker.
 The file remains busy in the library until that sidecar finalization is complete.
 
+Raw SER/PSER recording compares the sensor acquisition fields, including exposure,
+gain, offset, ROI, hardware bin and readout. Display/software bin and the chosen
+stack target are excluded because they do not alter the recorded sensor samples.
 Recording capture checks also track temperature against the initial known value:
 a drift greater than 2 degrees Celsius, or loss of a previously known reading,
 invalidates the context. Legacy adapters expose zero before a valid temperature

@@ -60,9 +60,11 @@ class LiveStackAdmissionTest {
 
     @Test fun oversizedMasterBuildRejectsBeforeReadingOrAllocatingPixels() {
         var reads = 0
+        val geometry = CalibrationGeometry(3536, 3536, "MONO", 16)
         val failure = assertThrows(IllegalArgumentException::class.java) {
-            CalibrationBuilder.build(CalibrationType.BIAS, CalibrationGeometry(3536, 3536, "MONO", 16),
-                CalibrationCapture(), 1, { reads++; error("Unexpected source read") }, allowUnknownCapture = true)
+            CalibrationBuilder.build(CalibrationType.BIAS, geometry,
+                CalibrationCapture(), 1, { reads++; error("Unexpected source read") }, allowUnknownCapture = true,
+                memoryBudgetBytes = CalibrationBuilder.estimatedBuildBytes(geometry) - 1)
         }
         assertEquals("memory_budget", failure.message)
         assertEquals(0, reads)

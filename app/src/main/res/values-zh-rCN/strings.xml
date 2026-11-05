@@ -169,6 +169,9 @@
     <string name="capture_target_mercury">水星</string>
     <string name="capture_target_moon">月球</string>
     <string name="capture_target_sun">太阳</string>
+    <string name="capture_target_bias">偏置场</string>
+    <string name="capture_target_dark">暗场</string>
+    <string name="capture_target_flat">平场</string>
     <string name="limit_label">限制:</string>
     <string name="no_limit">无限制</string>
     <string name="frames_header">帧数</string>
@@ -198,6 +201,7 @@
     <string name="delete_file">删除文件</string>
     <string name="move_to_trash">将 \"%s\" 移入回收站？</string>
     <string name="delete">删除</string>
+    <string name="rename">重命名</string>
     <string name="restore_all">全部恢复</string>
     <string name="empty_trash">清空回收站</string>
     <string name="restore">恢复</string>

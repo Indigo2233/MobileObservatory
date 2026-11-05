@@ -58,6 +58,7 @@ import com.indigo.mobileobservatory.media.MediaImageEditViewModel
 import com.indigo.mobileobservatory.media.MediaEditRecipe
 import com.indigo.mobileobservatory.media.MediaEditRecipeStore
 import com.indigo.mobileobservatory.media.MediaLineage
+import com.indigo.mobileobservatory.media.MediaRename
 import com.indigo.mobileobservatory.media.MediaTrash
 import com.indigo.mobileobservatory.media.shareMediaFiles
 import com.indigo.mobileobservatory.media.MediaGroup
@@ -321,6 +322,10 @@ fun PlayerScreen(
                         selectedFile = null
                         showFilePicker = true
                     }
+                },
+                onRename = { renamed ->
+                    refreshTrigger++
+                    selectedFile = MediaLibrary.describe(renamed)
                 }
             )
             }
@@ -359,12 +364,48 @@ private fun FilePickerView(
     var showTrash by rememberSaveable { mutableStateOf(false) }
     BackHandler(enabled = showTrash) { showTrash = false }
     var fileToDelete by remember { mutableStateOf<VideoFileInfo?>(null) }
+    var fileToRename by remember { mutableStateOf<VideoFileInfo?>(null) }
+    var renameText by remember { mutableStateOf("") }
+    var renameError by remember { mutableStateOf<String?>(null) }
     var refreshTrigger by remember { mutableIntStateOf(0) }
     var grouped by rememberSaveable { mutableStateOf(true) }
     var selecting by rememberSaveable { mutableStateOf(false) }
     var selectedPaths by rememberSaveable { mutableStateOf(emptyList<String>()) }
     var mediaGroups by remember { mutableStateOf(emptyList<MediaGroup>()) }
+    val recipeStore = remember(context) { MediaEditRecipeStore(File(context.filesDir, "image-recipes")) }
+    val scope = rememberCoroutineScope()
     BackHandler(enabled = selecting && !showTrash) { selectedPaths = emptyList(); selecting = false }
+
+    fun requestRename(info: VideoFileInfo) {
+        fileToRename = info
+        renameText = info.file.nameWithoutExtension
+        renameError = null
+    }
+
+    fun commitRename() {
+        val info = fileToRename ?: return
+        val indexed = mediaGroups.flatMap { it.members }
+        val name = renameText
+        scope.launch(Dispatchers.IO) {
+            val result = runCatching {
+                MediaRename.rename(info.file, name, indexed, onRewritten = { recipeStore.refresh(it) })
+                    .also { recipeStore.rename(info.file, it) }
+            }
+            withContext(Dispatchers.Main) {
+                result.onSuccess {
+                refreshTrigger++
+                fileToRename = null
+                renameError = null
+                }.onFailure { failure ->
+                    renameError = context.getString(when (failure.message) {
+                        "name_empty", "name_invalid", "name_too_long", "name_exists" ->
+                            R.string.media_rename_invalid
+                        else -> R.string.media_rename_failed
+                    })
+                }
+            }
+        }
+    }
     
     val trashDir = remember(recordingsDir) {
         recordingsDir?.let { File(it, ".trash").also { d -> d.mkdirs() } }
@@ -411,6 +452,34 @@ private fun FilePickerView(
             },
             dismissButton = {
                 TextButton(onClick = { fileToDelete = null }) { Text(stringResource(R.string.cancel)) }
+            }
+        )
+    }
+    if (fileToRename != null) {
+        AlertDialog(
+            onDismissRequest = { fileToRename = null; renameError = null },
+            title = { Text(stringResource(R.string.media_rename_title)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = renameText,
+                        onValueChange = { renameText = it; renameError = null },
+                        label = { Text(stringResource(R.string.media_rename_label)) },
+                        singleLine = true,
+                        isError = renameError != null
+                    )
+                    renameError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+                    Text(stringResource(R.string.media_rename_hint, fileToRename?.file?.extension?.uppercase().orEmpty()),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = ::commitRename, enabled = renameText.isNotBlank()) {
+                    Text(stringResource(R.string.rename))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { fileToRename = null; renameError = null }) { Text(stringResource(R.string.cancel)) }
             }
         )
     }
@@ -682,6 +751,10 @@ private fun FilePickerView(
                                     onCheckedChange = { checked -> selectedPaths = if (checked) (selectedPaths + info.file.absolutePath).distinct()
                                         else selectedPaths - info.file.absolutePath })
                                 else {
+                                    if (info.file.isFile) IconButton(onClick = { requestRename(info) },
+                                        modifier = Modifier.testTag("media-rename-${info.name}")) {
+                                        Icon(Icons.Default.Edit, stringResource(R.string.rename), modifier = Modifier.size(20.dp))
+                                    }
                                     if (info.file.isFile) IconButton(onClick = {
                                         if (!shareMediaFiles(context, listOf(info.file)))
                                             Toast.makeText(context, R.string.media_share_failed, Toast.LENGTH_LONG).show()
@@ -726,6 +799,7 @@ private fun PlaybackView(
     onSolve: () -> Unit = {},
     onStackFile: ((File) -> Unit)? = null,
     onDelete: () -> Unit = {},
+    onRename: (File) -> Unit = {},
     onNavigateUp: (() -> Unit)? = null,
     onImageExported: () -> Unit = {},
     onViewExported: (File) -> Unit = {}
@@ -745,6 +819,7 @@ private fun PlaybackView(
             onBack = onNavigateUp ?: onBack,
             onSolve = onSolve,
             onDelete = onDelete,
+            onRename = onRename,
             externalUp = onNavigateUp != null,
             onExported = onImageExported,
             onViewExported = onViewExported
@@ -1099,6 +1174,7 @@ private fun ImageViewScreen(
     onBack: () -> Unit,
     onSolve: () -> Unit,
     onDelete: () -> Unit,
+    onRename: (File) -> Unit = {},
     externalUp: Boolean = false,
     onExported: () -> Unit = {},
     onViewExported: (File) -> Unit = {}
@@ -1110,6 +1186,10 @@ private fun ImageViewScreen(
     var resultMetadata by remember(fileInfo) { mutableStateOf("") }
     var showMetadata by remember(fileInfo) { mutableStateOf(false) }
     var showLp750Help by remember(fileInfo) { mutableStateOf(false) }
+    var indexedMedia by remember(fileInfo, recordingsDir, capturesDir) { mutableStateOf(emptyList<VideoFileInfo>()) }
+    var fileToRename by remember { mutableStateOf<File?>(null) }
+    var renameText by remember { mutableStateOf("") }
+    var renameError by remember { mutableStateOf<String?>(null) }
     var fitsCache by remember(fileInfo) { mutableStateOf<FitsViewCache?>(null) }
     var colorSource by remember(fileInfo) { mutableStateOf(true) }
     var editing by rememberSaveable(fileInfo.file.absolutePath) { mutableStateOf(false) }
@@ -1216,6 +1296,57 @@ private fun ImageViewScreen(
                 TextButton(onClick = { showLp750Help = false }) {
                     Text(stringResource(R.string.close))
                 }
+            }
+        )
+    }
+
+    fileToRename?.let { original ->
+        AlertDialog(
+            onDismissRequest = { fileToRename = null; renameError = null },
+            title = { Text(stringResource(R.string.media_rename_title)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = renameText,
+                        onValueChange = { renameText = it; renameError = null },
+                        label = { Text(stringResource(R.string.media_rename_label)) },
+                        singleLine = true,
+                        isError = renameError != null
+                    )
+                    renameError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+                    Text(stringResource(R.string.media_rename_hint, original.extension.uppercase()),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = {
+                TextButton(enabled = renameText.isNotBlank(), onClick = {
+                    val name = renameText
+                    scope.launch(Dispatchers.IO) {
+                        val result = runCatching {
+                            val indexed = indexedMedia.ifEmpty {
+                                MediaLibrary.list(recordingsDir, capturesDir, MediaCategory.RECENT, excludeFile)
+                            }
+                            MediaRename.rename(original, name, indexed, onRewritten = { recipeStore.refresh(it) })
+                                .also { recipeStore.rename(original, it) }
+                        }
+                        withContext(Dispatchers.Main) {
+                            result.onSuccess { renamed ->
+                                fileToRename = null
+                                renameError = null
+                                onRename(renamed)
+                            }.onFailure { failure ->
+                                renameError = context.getString(when (failure.message) {
+                                    "name_empty", "name_invalid", "name_too_long", "name_exists" ->
+                                        R.string.media_rename_invalid
+                                    else -> R.string.media_rename_failed
+                                })
+                            }
+                        }
+                    }
+                }) { Text(stringResource(R.string.rename)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { fileToRename = null; renameError = null }) { Text(stringResource(R.string.cancel)) }
             }
         )
     }
@@ -1342,6 +1473,7 @@ private fun ImageViewScreen(
             val (restored, linkedLinear) = withContext(Dispatchers.IO) {
                 val opened = firstFitsIn(fileInfo.file) ?: fileInfo.file
                 val indexed = MediaLibrary.list(recordingsDir, capturesDir, MediaCategory.RECENT, excludeFile)
+                withContext(Dispatchers.Main) { indexedMedia = indexed }
                 val exportedRecipe = MediaEditRecipe.parse(MediaLineage.metadata(opened))
                 val original = exportedRecipe?.let { MediaLineage.recipeSource(it, indexed) }
                 val source = original ?: opened
@@ -1469,6 +1601,10 @@ private fun ImageViewScreen(
                 }
             }
             if (!editing) {
+                IconButton(onClick = { fileToRename = fileInfo.file; renameText = fileInfo.file.nameWithoutExtension; renameError = null },
+                    enabled = fileInfo.file.isFile && !exporting) {
+                    Icon(Icons.Default.Edit, stringResource(R.string.rename), tint = ObservatoryTheme.colors.onImage)
+                }
                 IconButton(onClick = { leaveImage(onDelete) }, enabled = !exporting) {
                     Icon(Icons.Default.Delete, stringResource(R.string.delete), tint = Color(0xFFFF6B6B))
                 }

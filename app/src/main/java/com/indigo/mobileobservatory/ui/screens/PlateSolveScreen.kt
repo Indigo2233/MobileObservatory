@@ -216,7 +216,7 @@ fun PlateSolveScreen(
                     userFocalLengthMm = focal?.toDouble(),
                     userPixelSizeUm = scalePixel,
                     catalogHeightPx = fallbackHeight
-                )?.coerceIn(0.2, 6.0)
+                )
                 if (fov == null) {
                     result = PlateSolveResult(false, context.getString(R.string.plate_solve_need_optics))
                     return@launch
@@ -235,7 +235,7 @@ fun PlateSolveScreen(
                         )
                     )
                 } else {
-                    PlateSolveResult(false, "ASTAP requires a confirmed external focal length of at least 200 mm.")
+                    PlateSolveResult(false, context.getString(R.string.plate_solve_need_optics))
                 }
             } catch (cancelled: CancellationException) {
                 result = PlateSolveResult(false, context.getString(R.string.stopped))

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="media_rename_title">重命名拍摄文件</string>
+    <string name="media_rename_label">文件名</string>
+    <string name="media_rename_hint">扩展名 .%1$s 保持不变；拍摄参数和相关文件会同步更新。</string>
+    <string name="media_rename_invalid">文件名不能为空，不能包含 \\ / : * ? \" &lt; &gt; | ，也不能与现有文件同名。</string>
+    <string name="media_rename_failed">无法重命名拍摄文件。请关闭正在使用它的应用后重试。</string>
+</resources>

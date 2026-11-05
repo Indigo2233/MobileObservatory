@@ -128,7 +128,12 @@ internal fun CalibrationPanel(vm: CameraViewModel, onDismiss: () -> Unit, onCame
                             else -> R.string.stack_cal_record_steps
                         }))
                         if (guideStep == 2) {
-                            OutlinedButton(onClick = { vm.setRecordFormat("SER"); onDismiss(); onCamera() },
+                            OutlinedButton(onClick = {
+                                vm.setRecordFormat("SER")
+                                vm.setTargetName(type.name)
+                                onDismiss()
+                                onCamera()
+                            },
                                 enabled = !recording && !state.locked && !state.busy, modifier = Modifier.fillMaxWidth()) {
                                 Text(stringResource(R.string.stack_cal_go_camera))
                             }

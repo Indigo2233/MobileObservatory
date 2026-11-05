@@ -326,9 +326,12 @@ class LiveStackSessionTest {
         for (algorithm in DemosaicAlgorithm.values()) {
             val selected = key.copy(demosaicAlgorithm = algorithm)
             assertEquals(key.rawRecordingKey(), selected.rawRecordingKey())
+            assertEquals(key.rawCaptureKey(), selected.copy(softwareBin = 4, target = StackTarget.PLANETARY).rawCaptureKey())
             assertNotEquals(selected.rawRecordingKey(), selected.copy(gain = key.gain + 1).rawRecordingKey())
             assertNotEquals(selected.rawRecordingKey(), selected.copy(roi = Roi(1, 0, 2, 2)).rawRecordingKey())
             assertNotEquals(selected.rawRecordingKey(), selected.copy(format = PixelFormat.BAYER_RG16).rawRecordingKey())
+            assertNotEquals(selected.rawCaptureKey(), selected.copy(gain = key.gain + 1).rawCaptureKey())
+            assertNotEquals(selected.rawCaptureKey(), selected.copy(hardwareBin = 2).rawCaptureKey())
         }
     }
 

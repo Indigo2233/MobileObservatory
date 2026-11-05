@@ -116,7 +116,9 @@ class CalibrationTest {
         assertEquals(listOf(0L, 1L, 2L), order); assertEquals(listOf(1L, 2L, 3L), progress)
         assertArrayEquals(FloatArray(8) { .2f }, mean.imageCopy().pixels, 2e-8f)
         assertEquals(.1f, frames[0].pixels[0], 0f)
-        assertEquals(CalibrationBuilder.estimatedBuildBytes(geometry) + geometry.sampleCount * 4L, CalibrationBuilder.estimatedBuildBytes(geometry, true))
+        assertEquals(2L * (geometry.sampleCount * 6L) + geometry.sampleCount * 4L + 4L * 1024 * 1024,
+            CalibrationBuilder.estimatedBuildBytes(geometry))
+        assertEquals(CalibrationBuilder.estimatedBuildBytes(geometry), CalibrationBuilder.estimatedBuildBytes(geometry, true))
         var reads = 0
         try {
             CalibrationBuilder.build(CalibrationType.BIAS, geometry, capture, 100, { reads++; frames[0] },

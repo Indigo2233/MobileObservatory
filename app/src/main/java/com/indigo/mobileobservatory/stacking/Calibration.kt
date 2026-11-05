@@ -278,10 +278,18 @@ class CalibrationSelection(
     )
 }
 
-/** Streaming double-precision mean: memory does not grow with the number of frames. */
+/** Streaming arithmetic mean: one float accumulator and the decoded frame, independent of
+ * frame count. Flat normalization reuses the accumulator after the mean pass. */
 object CalibrationBuilder {
-    fun estimatedBuildBytes(geometry: CalibrationGeometry, withBias: Boolean = false): Long =
-        geometry.sampleCount * (16L + if (withBias) 4L else 0L) + geometry.width.toLong() * geometry.height * 8L + 4L * 1024 * 1024
+    /** Two decoded frames and their native byte copies may overlap while the next frame is
+     * decoded, plus the mean accumulator, which becomes the output master. The optional bias
+     * is owned by CalibrationSelection and counted there. */
+    fun estimatedBuildBytes(geometry: CalibrationGeometry, @Suppress("UNUSED_PARAMETER") withBias: Boolean = false): Long {
+        val frame = geometry.sampleCount * 4L
+        val rawBytes = geometry.sampleCount * 2L
+        val accumulator = geometry.sampleCount * 4L
+        return 2L * (frame + rawBytes) + accumulator + 4L * 1024 * 1024
+    }
 
     fun build(type: CalibrationType, geometry: CalibrationGeometry, capture: CalibrationCapture,
               frameCount: Long, readFrame: (Long) -> LinearImage, name: String = "", sourceIdentity: String = "",
@@ -295,39 +303,48 @@ object CalibrationBuilder {
         require(allowUnknownCapture || captureIssues(type, capture, capture).second.isEmpty()) { "calibration_unknown_settings" }
         if (bias != null) CalibrationSelection(bias = bias, allowUnknownCapture = allowUnknownCapture).validate(geometry, capture)
         cancelCheck()
-        val mean = DoubleArray(geometry.sampleCount)
+        val output = FloatArray(geometry.sampleCount)
         for (frame in 0 until frameCount) {
             cancelCheck()
             val image = readFrame(frame)
             geometry.check(image)
-            for (i in mean.indices) {
-                if (i % 16384 == 0) cancelCheck()
-                val value = image.pixels[i]
+            val divisor = (frame + 1).toDouble()
+            for (index in output.indices) {
+                if (index % 16384 == 0) cancelCheck()
+                val value = image.pixels[index]
                 require(value.isFinite() && value in 0f..1f) { "calibration_invalid_source" }
                 if (type == CalibrationType.FLAT) require(value > 0f && value < 1f) { "calibration_clipped_flat" }
-                mean[i] += (value.toDouble() - mean[i]) / (frame + 1).toDouble()
+                output[index] = (output[index] + (value - output[index]) / divisor).toFloat()
             }
             progress(frame + 1, frameCount)
         }
         if (type == CalibrationType.FLAT) {
-            val sums = DoubleArray(if (geometry.isBayer) 4 else geometry.channels)
-            val counts = IntArray(sums.size)
-            for (i in mean.indices) {
-                if (i % 16384 == 0) cancelCheck()
-                mean[i] -= bias?.sample(i)?.toDouble() ?: 0.0
-                require(mean[i].isFinite() && mean[i] > 1e-6) { "calibration_invalid_flat_response" }
-                val group = geometry.group(i); sums[group] += mean[i]; counts[group]++
+            val groupCount = if (geometry.isBayer) 4 else geometry.channels
+            val sums = DoubleArray(groupCount)
+            val counts = LongArray(groupCount)
+            for (index in output.indices) {
+                if (index % 16384 == 0) cancelCheck()
+                val corrected = output[index].toDouble() - (bias?.sample(index)?.toDouble() ?: 0.0)
+                require(corrected.isFinite() && corrected > 1e-6) { "calibration_invalid_flat_response" }
+                val group = geometry.group(index)
+                sums[group] += corrected
+                counts[group]++
+                output[index] = corrected.toFloat()
             }
-            for (g in sums.indices) { require(counts[g] > 0); sums[g] /= counts[g].toDouble() }
-            for (i in mean.indices) {
-                if (i % 16384 == 0) cancelCheck()
-                mean[i] /= sums[geometry.group(i)]
-                require(mean[i].isFinite() && mean[i] > 1e-6) { "calibration_invalid_flat_response" }
+            for (group in 0 until groupCount) {
+                require(counts[group] > 0) { "calibration_invalid_flat_response" }
+                sums[group] /= counts[group].toDouble()
+            }
+            for (index in output.indices) {
+                if (index % 16384 == 0) cancelCheck()
+                val normalized = output[index].toDouble() / sums[geometry.group(index)]
+                require(normalized.isFinite() && normalized > 1e-6) { "calibration_invalid_flat_response" }
+                output[index] = normalized.toFloat()
             }
         }
         cancelCheck()
         val descriptor = CalibrationDescriptor(UUID.randomUUID().toString(), name, type, geometry, capture,
             sourceIdentity, frameCount, System.currentTimeMillis(), bias?.descriptor?.id)
-        return CalibrationMaster(descriptor, FloatArray(mean.size) { mean[it].toFloat() })
+        return CalibrationMaster(descriptor, output)
     }
 }

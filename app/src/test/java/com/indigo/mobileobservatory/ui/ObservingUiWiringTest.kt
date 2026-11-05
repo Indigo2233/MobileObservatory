@@ -605,6 +605,19 @@ class ObservingUiWiringTest {
     }
 
     @Test
+    fun imageViewerRenameReusesTheRecentLibraryIndex() {
+        val player = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/PlayerScreen.kt"
+        )
+        assertTrue(player.contains("indexedMedia"))
+        assertTrue(player.contains("MediaLibrary.list(recordingsDir, capturesDir, MediaCategory.RECENT, excludeFile)"))
+        assertTrue(player.contains("MediaRename.rename(original, name, indexed"))
+        // File-system work stays off the main thread, and directories cannot be renamed.
+        assertTrue(player.contains("Dispatchers.IO"))
+        assertTrue(player.contains("enabled = fileInfo.file.isFile && !exporting"))
+    }
+
+    @Test
     fun liveStackingIsOwnedByTheToolsSectionAndTheCapturePreviewStaysCameraOnly() {
         val tools = read(
             "src/main/java/com/indigo/mobileobservatory/ui/components/CameraPreviewTools.kt"

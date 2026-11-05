@@ -34,6 +34,9 @@ data class StackSessionKey(
 ) {
     /** Raw SER capture is independent of the subsequent CFA interpolation choice. */
     fun rawRecordingKey(): StackSessionKey = copy(demosaicAlgorithm = DemosaicAlgorithm.BILINEAR, target = StackTarget.DEEP_SKY)
+
+    /** Software binning is applied after the raw frame is written and cannot alter its bytes. */
+    fun rawCaptureKey(): StackSessionKey = rawRecordingKey().copy(softwareBin = 1)
 }
 
 enum class LiveStackPhase { EMPTY, RUNNING, PAUSING, PAUSED, RESET_REQUIRED, FAILED, CLOSED }

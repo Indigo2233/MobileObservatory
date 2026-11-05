@@ -30,6 +30,21 @@ class MediaAlbumWorkflowTest {
         assertEquals(80, history.past.size)
     }
 
+    @Test fun renamingSourceKeepsItsSavedRecipeLoadable() = directory { root ->
+        val source = File(root, "source.fit").apply { writeText("source") }
+        val renamed = File(root, "M42 flat.fit")
+        val prepared = prepared(source)
+        val settings = MediaImageEditSettings(gamma = 1.45f)
+        val store = MediaEditRecipeStore(File(root, "recipes"))
+        store.save(prepared, settings)
+
+        assertTrue(source.renameTo(renamed))
+        store.rename(source, renamed)
+
+        assertEquals(settings, store.load(renamed)!!.settings)
+        assertNull(store.load(source))
+    }
+
     @Test fun recipesPreserveNumericalDomainAndRejectUnsafeParameters() = directory { root ->
         val source = File(root, "source.fit").apply { writeText("source") }
         val prepared = prepared(source)
@@ -149,15 +164,17 @@ class MediaAlbumWorkflowTest {
         val image = File(captures, "FITS/edited.fit").apply { parentFile!!.mkdirs(); writeText("pixels") }
         val sidecar = MediaLineage.sidecar(image).apply { writeText("recipe") }
         val solveLog = com.indigo.mobileobservatory.astrometry.SolveFailureArchive.logFor(image).apply { writeText("solver log") }
+        val captureContext = File(captures, "FITS/edited.fit.capture.json").apply { parentFile!!.mkdirs(); writeText("capture") }
         val trash = File(root, "recordings/.trash")
         assertTrue(MediaTrash.move(image, trash))
-        assertFalse(image.exists()); assertFalse(sidecar.exists()); assertFalse(solveLog.exists())
+        assertFalse(image.exists()); assertFalse(sidecar.exists()); assertFalse(solveLog.exists()); assertFalse(captureContext.exists())
         val deleted = File(trash, image.name)
         assertTrue(MediaLineage.sidecar(deleted).exists())
         assertTrue(com.indigo.mobileobservatory.astrometry.SolveFailureArchive.logFor(deleted).exists())
         assertTrue(MediaTrash.restore(deleted, File(root, "wrong-folder"), listOf(captures)))
         assertEquals("pixels", image.readText()); assertEquals("recipe", sidecar.readText())
         assertEquals("solver log", solveLog.readText())
+        assertEquals("capture", captureContext.readText())
         assertTrue(trash.listFiles()!!.isEmpty())
         assertTrue(MediaTrash.move(image, trash))
         image.writeText("new-image")

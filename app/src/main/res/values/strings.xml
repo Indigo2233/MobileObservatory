@@ -171,6 +171,9 @@
     <string name="capture_target_mercury">Mercury</string>
     <string name="capture_target_moon">Moon</string>
     <string name="capture_target_sun">Sun</string>
+    <string name="capture_target_bias">Bias frame</string>
+    <string name="capture_target_dark">Dark frame</string>
+    <string name="capture_target_flat">Flat frame</string>
     <string name="limit_label">Limit:</string>
     <string name="no_limit">No Limit</string>
     <string name="frames_header">Frames</string>
@@ -200,6 +203,7 @@
     <string name="delete_file">Delete File</string>
     <string name="move_to_trash">Move \"%s\" to trash?</string>
     <string name="delete">Delete</string>
+    <string name="rename">Rename</string>
     <string name="restore_all">Restore All</string>
     <string name="empty_trash">Empty Trash</string>
     <string name="restore">Restore</string>

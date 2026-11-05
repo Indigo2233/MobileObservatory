@@ -21,4 +21,15 @@ class CaptureTargetNamesTest {
         assertEquals(CaptureTargetNames.DEFAULT, CaptureTargetNames.canonical("  "))
         assertEquals("M42 · Orion Nebula", CaptureTargetNames.canonical(" M42 · Orion Nebula "))
     }
+
+    @Test
+    fun `calibration target codes are valid generated capture names`() {
+        assertEquals("BIAS", CaptureTargetNames.calibrationCode("bias"))
+        assertEquals("DARK", CaptureTargetNames.calibrationCode("Dark"))
+        assertEquals("FLAT", CaptureTargetNames.calibrationCode("FLAT"))
+        assertEquals(null, CaptureTargetNames.calibrationCode("Jupiter"))
+        CaptureTargetNames.calibrationTargets.forEach {
+            assertEquals(it, CaptureTargetNames.canonical(it))
+        }
+    }
 }

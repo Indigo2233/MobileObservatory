@@ -173,7 +173,7 @@ private fun RecordLimitSelector(
 private fun TargetSelector(targetName: String, onTargetNameChange: (String) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     val normalizedTarget = CaptureTargetNames.canonical(targetName)
-    val targets = CaptureTargetNames.solarSystemTargets
+    val targets = CaptureTargetNames.solarSystemTargets + CaptureTargetNames.calibrationTargets
     val choices = if (normalizedTarget !in targets) listOf(normalizedTarget) + targets else targets
     Box {
         OutlinedButton(
@@ -197,6 +197,9 @@ private fun TargetSelector(targetName: String, onTargetNameChange: (String) -> U
 
 @Composable
 private fun targetDisplayName(code: String): String = when (code) {
+    "BIAS" -> stringResource(R.string.capture_target_bias)
+    "DARK" -> stringResource(R.string.capture_target_dark)
+    "FLAT" -> stringResource(R.string.capture_target_flat)
     "Jupiter" -> stringResource(R.string.capture_target_jupiter)
     "Saturn" -> stringResource(R.string.capture_target_saturn)
     "Mars" -> stringResource(R.string.capture_target_mars)

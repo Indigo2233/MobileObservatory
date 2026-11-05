@@ -7,7 +7,8 @@ import org.json.JSONObject
 
 /** Keeps recipes with their image and remembers the exact app-owned restoration location. */
 object MediaTrash {
-    private fun sidecars(file: File) = listOf(MediaLineage.sidecar(file), SolveFailureArchive.logFor(file))
+    private fun captureSidecar(file: File) = File(file.parentFile, "${file.name}.capture.json")
+    private fun sidecars(file: File) = listOf(MediaLineage.sidecar(file), SolveFailureArchive.logFor(file), captureSidecar(file))
 
     private fun marker(file: File): File {
         val key = MessageDigest.getInstance("SHA-256").digest(file.name.toByteArray()).joinToString("") { "%02x".format(it.toInt() and 255) }

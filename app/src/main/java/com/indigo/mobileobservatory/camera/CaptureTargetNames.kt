@@ -5,6 +5,9 @@ object CaptureTargetNames {
     const val DEFAULT = "Jupiter"
 
     val solarSystemTargets = listOf("Jupiter", "Saturn", "Mars", "Venus", "Mercury", "Moon", "Sun")
+    val calibrationTargets = listOf("BIAS", "DARK", "FLAT")
+
+    fun calibrationCode(type: String): String? = calibrationTargets.firstOrNull { it.equals(type, ignoreCase = true) }
 
     fun canonical(value: String): String {
         val trimmed = value.trim()

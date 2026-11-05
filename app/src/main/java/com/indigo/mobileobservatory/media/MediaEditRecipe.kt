@@ -55,6 +55,50 @@ class MediaEditRecipeStore(private val directory: File) {
         val digest = MessageDigest.getInstance("SHA-256").digest(source.canonicalPath.toByteArray())
         return File(directory, digest.joinToString("") { "%02x".format(it.toInt() and 255) } + ".json")
     }
+    /** Keep a saved recipe attached when the source file is renamed. */
+    fun rename(source: File, destination: File) {
+        val previous = file(source)
+        val target = file(destination)
+        if (!previous.isFile || target.exists()) return
+        val json = runCatching { JSONObject(previous.readText(Charsets.UTF_8)) }.getOrNull() ?: return
+        val fingerprint = json.optString("sourceFingerprint")
+        if (!fingerprint.startsWith(source.absolutePath)) return
+        val temporary = File(directory, ".${target.name}.partial")
+        try {
+            // Use the renamed file's current attributes: a FITS metadata rewrite changes
+            // length and mtime, so the old fingerprint tail is already stale here.
+            json.put("sourceFingerprint", MediaImageEditing.fingerprint(destination))
+            FileOutputStream(temporary).use { output ->
+                output.write(json.toString(2).toByteArray(Charsets.UTF_8))
+                output.fd.sync()
+            }
+            Files.move(temporary.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE)
+            previous.delete()
+        } finally {
+            temporary.delete()
+        }
+    }
+
+    /** Recompute a saved recipe's fingerprint after its source content changed in place. */
+    fun refresh(source: File) {
+        val target = file(source)
+        if (!target.isFile) return
+        val json = runCatching { JSONObject(target.readText(Charsets.UTF_8)) }.getOrNull() ?: return
+        val current = MediaImageEditing.fingerprint(source)
+        if (json.optString("sourceFingerprint") == current) return
+        json.put("sourceFingerprint", current)
+        val temporary = File(directory, ".${target.name}.partial")
+        try {
+            FileOutputStream(temporary).use { output ->
+                output.write(json.toString(2).toByteArray(Charsets.UTF_8))
+                output.fd.sync()
+            }
+            Files.move(temporary.toPath(), target.toPath(),
+                StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+        } finally {
+            temporary.delete()
+        }
+    }
     fun load(source: File): MediaEditRecipe? = runCatching {
         val saved = file(source)
         if (!saved.isFile || saved.length() > 64 * 1024) return null

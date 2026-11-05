@@ -84,7 +84,8 @@ class StackRoiPlannerTest {
         assertEquals(1, reads); assertEquals(.25f, master.sample(w * h - 1))
         val failure = assertThrows(IllegalArgumentException::class.java) {
             CalibrationBuilder.build(CalibrationType.BIAS, geometry, CalibrationCapture(), 1,
-                { error("Must reject before reading") }, allowUnknownCapture = true, memoryBudgetBytes = 64L shl 20)
+                { error("Must reject before reading") }, allowUnknownCapture = true,
+                memoryBudgetBytes = CalibrationBuilder.estimatedBuildBytes(geometry) - 1)
         }
         assertEquals("memory_budget", failure.message)
     }

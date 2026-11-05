@@ -2696,7 +2696,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 // SER/PSER retain sensor samples and geometry. Copy before display binning
                 // can combine CFA colors or recycle the SDK-owned input buffer.
                 if (_isRecording.value && !isSimulationCamera(cam) && rawRecordingLayout != null) {
-                    if (scienceKey?.rawRecordingKey() != recordingCaptureKey || scienceKey == null) recordingCaptureChanged = true
+                    if (scienceKey?.rawCaptureKey() != recordingCaptureKey || scienceKey == null) recordingCaptureChanged = true
                     val initialTemperature = recordingCaptureTemperature
                     val temperature = calibrationTemperature()
                     if (initialTemperature != null && (temperature == null || kotlin.math.abs(temperature - initialTemperature) > 2.0)) recordingCaptureChanged = true
@@ -4071,7 +4071,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val fmt = _recordFormat.value
             val rawFormat = CameraCfaLayout.effectiveFormat(cam.currentPixelFormat, _cameraCfa.value)
             val rawRecording = fmt == RecordFormat.SER || fmt == RecordFormat.PSER
-            val captureKey = if (rawRecording) currentStackKey()?.rawRecordingKey() else null
+            val captureKey = if (rawRecording) currentStackKey()?.rawCaptureKey() else null
             val geometry = stackFrameGeometry
             val rawTraits = if (rawRecording) (cameraCfaTraits(cam, _cameraCfa.value)
                 ?: error(app.getString(R.string.stack_reason_layout))).copy(
@@ -4212,7 +4212,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private fun finishRecordingResources(outcome: RecordingWriteOutcome) {
         val recordedFile = currentRecordingFile
         val captureKey = recordingCaptureKey
-        if (recordedFile != null && (captureKey != null || recordingCaptureChanged)) {
+        if (recordedFile != null && recordedFile.extension.lowercase() in setOf("ser", "pser")) {
             runCatching {
                 if (!outcome.succeeded)
                     CalibrationRecordingContext.invalidate(recordedFile, outcome.failure ?: "recording_failed")

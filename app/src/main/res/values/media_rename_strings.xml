@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="media_rename_title">Rename capture</string>
+    <string name="media_rename_label">File name</string>
+    <string name="media_rename_hint">The .%1$s extension is kept. Capture settings and related files follow the new name.</string>
+    <string name="media_rename_invalid">Use a non-empty name without \\ / : * ? \" &lt; &gt; or | , and choose a name that does not already exist.</string>
+    <string name="media_rename_failed">The capture could not be renamed. Close any app using it, then retry.</string>
+</resources>

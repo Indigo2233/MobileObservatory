@@ -9,9 +9,11 @@ class PlateSolveRoutingTest {
             assertEquals(PlateSolveEngine.PHONE_WIDE_FIELD, PlateSolveRouting.select(PlateSolveInputKind.PHONE_BUILT_IN, it))
         }
     }
-    @Test fun externalAstapBoundaryIsTwoHundredMillimetres() {
-        assertEquals(PlateSolveEngine.PARAMETERS_REQUIRED, PlateSolveRouting.select(PlateSolveInputKind.EXTERNAL_CAMERA, 199.9))
+    @Test fun externalCamerasUseAstapWheneverOpticsAreKnown() {
+        assertEquals(PlateSolveEngine.ASTAP, PlateSolveRouting.select(PlateSolveInputKind.EXTERNAL_CAMERA, 24.0))
+        assertEquals(PlateSolveEngine.ASTAP, PlateSolveRouting.select(PlateSolveInputKind.EXTERNAL_CAMERA, 199.9))
         assertEquals(PlateSolveEngine.ASTAP, PlateSolveRouting.select(PlateSolveInputKind.EXTERNAL_CAMERA, 200.0))
         assertEquals(PlateSolveEngine.PARAMETERS_REQUIRED, PlateSolveRouting.select(PlateSolveInputKind.EXTERNAL_CAMERA, null))
+        assertEquals(PlateSolveEngine.PARAMETERS_REQUIRED, PlateSolveRouting.select(PlateSolveInputKind.EXTERNAL_CAMERA, 0.0))
     }
 }
