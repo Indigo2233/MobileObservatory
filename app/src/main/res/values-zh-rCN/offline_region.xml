@@ -5,6 +5,11 @@
     <string name="stack_offline_use_bin">使用 Bin %1$d×，保留视野</string>
     <string name="stack_offline_use_roi">或裁切至 %1$d×%2$d</string>
     <string name="stack_offline_memory">当前范围超出处理预算，可增大处理 Bin 或缩小选区。</string>
+    <string name="stack_offline_memory_title">超出处理预算</string>
+    <string name="stack_offline_exact_range">精确范围</string>
+    <string name="stack_offline_hide_exact_range">收起精确范围</string>
+    <string name="stack_decode_settings">解码设置</string>
+    <string name="stack_decode_hide_settings">收起解码设置</string>
     <string name="stack_offline_drag_hint">拖动选择叠加范围，框外像素不进入叠加。</string>
     <string name="stack_offline_stale_result">当前显示的叠加结果对应上一次的选区或处理 Bin。重新分析后按现设置叠加；已保存的结果仍可导出。</string>
     <string name="stack_heap_budget">应用堆上限 %1$d MiB · 叠加预算上限 %2$.1f MiB。启动前会核对当前堆占用并保留内存回收余量。</string>

@@ -200,6 +200,36 @@ class CalibrationCoordinatorInstrumentedTest {
         }
     }
 
+    @Test fun missingCaptureFromRecordingCreatesUnverifiedMasterWithoutBlocking() = runBlocking {
+        val folder = File(app.cacheDir, "calibration-unverified-${System.nanoTime()}").apply { mkdirs() }
+        val masters = File(folder, "library-${System.nanoTime()}")
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        val c = StackingCoordinator(app, scope, calibrationDirectory = masters)
+        try {
+            val source = recording(folder, "external-no-sidecar.ser", 3) { 1024 }
+            await { c.calibration.state.value.initialized && !c.calibration.state.value.busy }
+            main { c.calibration.createMaster(CalibrationType.BIAS, source) }
+            await { !c.calibration.state.value.busy && c.calibration.state.value.masters.size == 1 }
+            val descriptor = c.calibration.state.value.masters.single()
+            assertEquals("calibration_master_created_unverified", c.calibration.state.value.message)
+            assertTrue(descriptor.id in c.calibration.state.value.confirmedIds)
+            assertNull(descriptor.capture.camera)
+            main { c.calibration.selectMaster(CalibrationType.BIAS, descriptor.id) }
+            await { !c.calibration.state.value.busy &&
+                c.calibration.state.value.selectedIds[CalibrationType.BIAS] == descriptor.id }
+            assertTrue(c.calibration.snapshot().allowUnknownCapture)
+            main { c.calibration.selectMaster(CalibrationType.BIAS, null) }
+            await { !c.calibration.state.value.busy && c.calibration.state.value.selectedIds.isEmpty() }
+            main { c.calibration.selectMaster(CalibrationType.BIAS, descriptor.id) }
+            await { !c.calibration.state.value.busy &&
+                c.calibration.state.value.selectedIds[CalibrationType.BIAS] == descriptor.id }
+            assertTrue(c.calibration.snapshot().allowUnknownCapture)
+        } finally {
+            main { c.close() }; scope.cancel(); folder.deleteRecursively()
+            app.getSharedPreferences("stack-calibration-selection-${masters.name}", 0).edit().clear().commit()
+        }
+    }
+
     @Test fun multipleMissingPersistedMastersCanBeDisabledWithoutLoadingEither() = runBlocking {
         val directory = File(app.cacheDir, "missing-masters-${System.nanoTime()}")
         val preferences = app.getSharedPreferences("stack-calibration-selection-${directory.name}", 0)

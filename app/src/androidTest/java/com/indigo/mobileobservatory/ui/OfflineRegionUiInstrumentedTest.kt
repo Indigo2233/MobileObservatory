@@ -23,6 +23,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
+import java.io.RandomAccessFile
 
 @RunWith(AndroidJUnit4::class)
 class OfflineRegionUiInstrumentedTest {
@@ -56,7 +57,7 @@ class OfflineRegionUiInstrumentedTest {
             evidence(app, "full-size-budget")
             compose.onNodeWithTag("offline-bin-suggested").performScrollTo().performClick()
             compose.onNodeWithTag("offline-analyze").performScrollTo().assertIsEnabled()
-            compose.onNodeWithTag("offline-budget").performScrollTo().assertTextContains("964×545", substring = true)
+            compose.onNodeWithText("964×545", substring = true).assertExists()
             evidence(app, "full-field-bin4")
             compose.onNodeWithTag("offline-bin-1").performScrollTo().performClick()
             compose.onNodeWithTag("offline-roi-suggested").performScrollTo().performClick()
@@ -70,6 +71,39 @@ class OfflineRegionUiInstrumentedTest {
             prefs.edit().putBoolean("update_auto_check", autoCheck).commit()
         }
     }
+
+    @Test fun unknownCfaFailureKeepsCfaRecoveryVisible() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val app = instrumentation.targetContext.applicationContext as Application
+        val dir = File(app.cacheDir, "offline-cfa-recovery-${System.nanoTime()}").apply { mkdirs() }
+        val file = OfflineRegionInstrumentedTest.recording(dir, false)
+        RandomAccessFile(file, "rw").use {
+            it.seek(18)
+            it.writeInt(Integer.reverseBytes(7))
+        }
+        val store = ViewModelStore()
+        lateinit var vm: CameraViewModel
+        try {
+            instrumentation.runOnMainSync {
+                vm = ViewModelProvider(store, ViewModelProvider.AndroidViewModelFactory(app))[CameraViewModel::class.java]
+                vm.stacking.open(StackMode.PLANETARY)
+            }
+            compose.setContent { MobileObservatoryTheme { Surface(Modifier.fillMaxSize()) {
+                StackingScreen(vm, StackMode.PLANETARY, onBack = {})
+            } } }
+            compose.waitUntil(5000) { vm.stacking.calibration.state.value.initialized }
+            compose.runOnIdle { vm.stacking.loadFile(file) }
+            compose.waitUntil(15_000) {
+                !vm.stacking.hasPlanetaryWork() && vm.stacking.task.value.phase == StackTaskPhase.FAILED
+            }
+            assertEquals("cfa_unknown_header", vm.stacking.task.value.message)
+            compose.onNodeWithTag("offline-cfa-recovery").performScrollTo().assertIsDisplayed()
+        } finally {
+            instrumentation.runOnMainSync { store.clear() }
+            dir.deleteRecursively()
+        }
+    }
+
     private fun evidence(app: Application, name: String) {
         compose.waitForIdle()
         val bitmap = compose.onRoot().captureToImage().asAndroidBitmap()

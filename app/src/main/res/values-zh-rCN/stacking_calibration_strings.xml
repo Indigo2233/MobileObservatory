@@ -44,6 +44,7 @@
     <string name="stack_cal_library_empty">还没有主校准帧。可先拍摄，或从已有录像制作。</string>
     <string name="stack_cal_from_recording">从我的录像制作</string>
     <string name="stack_cal_import_ser">导入外部 SER / PSER</string>
+    <string name="stack_cal_unverified_hint">录像没有拍摄信息时会按未验证参数创建，请自行核对与目标帧一致。</string>
     <string name="stack_cal_unknown">缺少拍摄信息。核对设置并勾选确认后，重新选择主校准帧或录像。</string>
     <string name="stack_cal_mismatch">校准帧与素材不匹配，请检查相机设置、尺寸、色阵、曝光和滤镜。</string>
     <string name="stack_cal_invalid_flat">平场过暗、过曝或存在无效像素。请调整均匀光源与曝光后重拍。</string>
@@ -51,6 +52,7 @@
     <string name="stack_cal_changed">录像中途改变过拍摄设置。请关闭自动曝光、固定设置后重新录制。</string>
     <string name="stack_cal_unavailable">已选主校准帧无法读取，请在校准中重新选择，或设为不使用。</string>
     <string name="stack_cal_created">主校准帧已保存，请在下方选择后用于下一次叠加。</string>
+    <string name="stack_cal_created_unverified">主校准帧已按未验证参数保存。请自行确认它与目标帧一致。</string>
     <string name="stack_cal_clear_all">停用全部校准</string>
     <string name="stack_dbe_loupe">选点放大 · 点击微调</string>
     <string name="stack_dbe_add">添加点</string>

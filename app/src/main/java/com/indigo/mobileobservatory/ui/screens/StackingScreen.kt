@@ -52,6 +52,8 @@ import com.indigo.mobileobservatory.recording.SerEndianConvention
 import com.indigo.mobileobservatory.recording.MediaLibrary
 import com.indigo.mobileobservatory.camera.AutoExposureMode
 import com.indigo.mobileobservatory.stacking.*
+import com.indigo.mobileobservatory.ui.components.NoticeTone
+import com.indigo.mobileobservatory.ui.components.ObservatoryNotice
 import com.indigo.mobileobservatory.ui.viewmodel.CameraViewModel
 import kotlin.math.*
 import kotlinx.coroutines.Dispatchers
@@ -483,6 +485,7 @@ private fun OfflineStackControls(c: StackingCoordinator, task: StackingTaskState
     var roiH by rememberSaveable(source?.identity) { mutableStateOf(source?.height?.toString().orEmpty()) }
     var local by rememberSaveable { mutableStateOf(true) }
     var softwareBin by rememberSaveable(source?.identity) { mutableIntStateOf(1) }
+    var exactRange by rememberSaveable(source?.identity) { mutableStateOf(false) }
     var percent by rememberSaveable { mutableStateOf("25") }
     var count by rememberSaveable { mutableStateOf("") }
     var analyzedConfig by rememberSaveable { mutableStateOf("") }
@@ -501,10 +504,15 @@ private fun OfflineStackControls(c: StackingCoordinator, task: StackingTaskState
         Text(stackMessage("reset_live_first"), color = MaterialTheme.colorScheme.tertiary)
         TextButton(onClick = { c.open(StackMode.LIVE) }) { Text(stringResource(R.string.stack_eaa_title)) }
     }
-    if (source?.canOverrideCfa != false) SerCfaSelector(interpretation,
-        enabled = !task.busy && !calibration.busy && !rendering && live.phase == LiveStackPhase.EMPTY,
-        requiresResetConfirmation = task.histogram.isNotEmpty() || c.hasResult(StackMode.PLANETARY),
-        onSelect = c::setSerCfaInterpretation)
+    if (source == null && task.message.substringBefore(':') == "cfa_unknown_header") {
+        Column(Modifier.testTag("offline-cfa-recovery")) {
+            Text(stringResource(R.string.stack_decode_settings), style = MaterialTheme.typography.titleSmall)
+            SerCfaSelector(interpretation,
+                enabled = !task.busy && !calibration.busy && !rendering && live.phase == LiveStackPhase.EMPTY,
+                requiresResetConfirmation = false,
+                onSelect = c::setSerCfaInterpretation)
+        }
+    }
     Button(onClick = onBrowse, enabled = !task.busy, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.stack_local_files)) }
     OutlinedButton(onClick = onChoose, enabled = !task.busy, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.stack_import_other)) }
     if (source == null) Text(stringResource(R.string.stack_library_hint), style = MaterialTheme.typography.bodySmall)
@@ -515,12 +523,19 @@ private fun OfflineStackControls(c: StackingCoordinator, task: StackingTaskState
         val layoutLabel = if (effectiveLayout == "MONO") stringResource(R.string.stack_cfa_mono) else effectiveLayout
         Text(if (source.canOverrideCfa) stringResource(R.string.stack_cfa_detected, layoutLabel)
             else stringResource(R.string.stack_cfa_rgb), style = MaterialTheme.typography.bodySmall)
-        if (source.isBayer) DemosaicSelector(algorithm,
-            enabled = !task.busy && !calibration.busy && !rendering && live.phase == LiveStackPhase.EMPTY,
-            requiresResetConfirmation = task.histogram.isNotEmpty() || c.hasResult(StackMode.PLANETARY), onSelect = c::setDemosaicAlgorithm)
-        var decodeExpanded by remember { mutableStateOf(false) }
-        TextButton(onClick = { decodeExpanded = !decodeExpanded }) { Text(stringResource(R.string.stack_endian)) }
+        var decodeExpanded by rememberSaveable(source.identity) { mutableStateOf(false) }
+        TextButton(onClick = { decodeExpanded = !decodeExpanded }) {
+            Text(stringResource(if (decodeExpanded) R.string.stack_decode_hide_settings else R.string.stack_decode_settings))
+        }
         if (decodeExpanded) {
+            if (source.canOverrideCfa) SerCfaSelector(interpretation,
+                enabled = !task.busy && !calibration.busy && !rendering && live.phase == LiveStackPhase.EMPTY,
+                requiresResetConfirmation = task.histogram.isNotEmpty() || c.hasResult(StackMode.PLANETARY),
+                onSelect = c::setSerCfaInterpretation)
+            if (source.isBayer) DemosaicSelector(algorithm,
+                enabled = !task.busy && !calibration.busy && !rendering && live.phase == LiveStackPhase.EMPTY,
+                requiresResetConfirmation = task.histogram.isNotEmpty() || c.hasResult(StackMode.PLANETARY),
+                onSelect = c::setDemosaicAlgorithm)
             Text(stringResource(R.string.stack_cfa_effective, layoutLabel, source.headerColorId),
                 style = MaterialTheme.typography.bodySmall)
             Text(stringResource(R.string.stack_decode_hint), style = MaterialTheme.typography.bodySmall)
@@ -546,32 +561,61 @@ private fun OfflineStackControls(c: StackingCoordinator, task: StackingTaskState
                 onClick = { softwareBin = value }, modifier = Modifier.testTag("offline-bin-$value"), label = { Text("$value×") }) }
         }
         if (plan != null) {
-            Text(stringResource(R.string.stack_offline_estimate, plan.width, plan.height,
-                plan.workingBytes / 1048576.0, c.memoryBudgetBytes / 1048576.0),
-                color = if (issue == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-                modifier = Modifier.testTag("offline-budget"), style = MaterialTheme.typography.bodySmall)
-            if (issue != null) {
-                Text(stackMessage(issue), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                val suggestedBin = (1..4).firstOrNull { it > softwareBin && plan.copy(softwareBin = it).issue(c.memoryBudgetBytes) == null }
-                if (suggestedBin != null) OutlinedButton(onClick = { softwareBin = suggestedBin }, enabled = !task.busy,
-                    modifier = Modifier.testTag("offline-bin-suggested")) { Text(stringResource(R.string.stack_offline_use_bin, suggestedBin)) }
+            if (issue == null) {
+                Text(stringResource(R.string.stack_offline_estimate, plan.width, plan.height,
+                    plan.workingBytes / 1048576.0, c.memoryBudgetBytes / 1048576.0),
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.testTag("offline-budget"), style = MaterialTheme.typography.bodySmall)
+            } else {
+                val suggestedBin = (1..4).firstOrNull {
+                    it > softwareBin && plan.copy(softwareBin = it).issue(c.memoryBudgetBytes) == null
+                }
                 val suggested = plan.suggested(c.memoryBudgetBytes)
-                if (suggested != null) TextButton(enabled = !task.busy, modifier = Modifier.testTag("offline-roi-suggested"), onClick = {
-                    roiX = suggested.left.toString(); roiY = suggested.top.toString(); roiW = suggested.width.toString(); roiH = suggested.height.toString()
-                }) { Text(stringResource(R.string.stack_offline_use_roi, suggested.width, suggested.height)) }
+                ObservatoryNotice(
+                    title = stringResource(R.string.stack_offline_memory_title),
+                    body = stringResource(R.string.stack_offline_estimate, plan.width, plan.height,
+                        plan.workingBytes / 1048576.0, c.memoryBudgetBytes / 1048576.0),
+                    tone = NoticeTone.ERROR,
+                    modifier = Modifier.testTag("offline-budget"),
+                    primaryAction = if (suggestedBin != null) {
+                        @Composable {
+                            Button(onClick = { softwareBin = suggestedBin }, enabled = !task.busy,
+                                modifier = Modifier.testTag("offline-bin-suggested")) {
+                                Text(stringResource(R.string.stack_offline_use_bin, suggestedBin))
+                            }
+                        }
+                    } else null,
+                    secondaryAction = if (suggested != null) {
+                        @Composable {
+                            TextButton(enabled = !task.busy,
+                                modifier = Modifier.testTag("offline-roi-suggested"),
+                                onClick = {
+                                    roiX = suggested.left.toString(); roiY = suggested.top.toString()
+                                    roiW = suggested.width.toString(); roiH = suggested.height.toString()
+                                }) {
+                                Text(stringResource(R.string.stack_offline_use_roi, suggested.width, suggested.height))
+                            }
+                        }
+                    } else null
+                )
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            NumberField(roiX, { roiX = it }, R.string.stack_roi_x, Modifier.weight(1f), !task.busy)
-            NumberField(roiY, { roiY = it }, R.string.stack_roi_y, Modifier.weight(1f), !task.busy)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { roiX = "0"; roiY = "0"; roiW = source.width.toString(); roiH = source.height.toString() }, enabled = !task.busy) { Text(stringResource(R.string.stack_full_frame)) }
+            OutlinedButton(onClick = onDrawRoi, enabled = !task.busy && sourcePreview != null) { Text(stringResource(R.string.stack_draw_roi)) }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            NumberField(roiW, { roiW = it }, R.string.stack_roi_w, Modifier.weight(1f), !task.busy)
-            NumberField(roiH, { roiH = it }, R.string.stack_roi_h, Modifier.weight(1f), !task.busy)
+        TextButton(onClick = { exactRange = !exactRange }) {
+            Text(stringResource(if (exactRange) R.string.stack_offline_hide_exact_range else R.string.stack_offline_exact_range))
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextButton(onClick = { roiX = "0"; roiY = "0"; roiW = source.width.toString(); roiH = source.height.toString() }, enabled = !task.busy) { Text(stringResource(R.string.stack_full_frame)) }
-            TextButton(onClick = onDrawRoi, enabled = !task.busy && sourcePreview != null) { Text(stringResource(R.string.stack_draw_roi)) }
+        if (exactRange) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                NumberField(roiX, { roiX = it }, R.string.stack_roi_x, Modifier.weight(1f), !task.busy)
+                NumberField(roiY, { roiY = it }, R.string.stack_roi_y, Modifier.weight(1f), !task.busy)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                NumberField(roiW, { roiW = it }, R.string.stack_roi_w, Modifier.weight(1f), !task.busy)
+                NumberField(roiH, { roiH = it }, R.string.stack_roi_h, Modifier.weight(1f), !task.busy)
+            }
         }
         if (target == StackTarget.PLANETARY) {
         SwitchLine(R.string.stack_local_alignment, local, !task.busy) { local = it }
@@ -876,6 +920,7 @@ internal fun stackMessage(code: String): String {
         "calibration_selection_unavailable", "calibration_master_missing", "calibration_read_failed",
         "calibration_corrupt_master", "calibration_truncated_master", "calibration_invalid_master" -> R.string.stack_cal_unavailable
         "calibration_master_created" -> R.string.stack_cal_created
+        "calibration_master_created_unverified" -> R.string.stack_cal_created_unverified
         "calibration_master_in_use" -> R.string.stack_cal_in_use
         "memory_budget", "input_budget", "MEMORY_BUDGET" -> R.string.stack_reason_memory
         "offline_memory_budget" -> R.string.stack_offline_memory

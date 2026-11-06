@@ -12,12 +12,15 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.stacking.*
+import com.indigo.mobileobservatory.ui.components.NoticeTone
+import com.indigo.mobileobservatory.ui.components.ObservatoryNotice
 import com.indigo.mobileobservatory.ui.viewmodel.CameraViewModel
 
 @Composable
@@ -90,7 +93,11 @@ internal fun CalibrationPanel(vm: CameraViewModel, onDismiss: () -> Unit, onCame
                         } else LinearProgressIndicator(Modifier.fillMaxWidth())
                         TextButton(onClick = library::cancel) { Text(stringResource(R.string.cancel)) }
                     }
-                    if (state.message.isNotEmpty()) Text(stackMessage(state.message), color = MaterialTheme.colorScheme.tertiary)
+                    if (state.message.isNotEmpty()) ObservatoryNotice(
+                        title = stringResource(R.string.stack_cal_title),
+                        body = stackMessage(state.message),
+                        tone = calibrationMessageTone(state.message)
+                    )
                     if (state.locked) {
                         Text(stringResource(R.string.stack_cal_locked), style = MaterialTheme.typography.bodySmall)
                         OutlinedButton(onClick = { resetConfirmation = true }, enabled = !state.busy && !task.busy) {
@@ -170,7 +177,13 @@ internal fun CalibrationPanel(vm: CameraViewModel, onDismiss: () -> Unit, onCame
                         if (state.masters.none { it.type == type }) Text(stringResource(R.string.stack_cal_library_empty), style = MaterialTheme.typography.bodySmall)
                         Text(stringResource(R.string.stack_cfa_master), style = MaterialTheme.typography.labelMedium)
                         SerCfaSelector(masterCfa, enabled = !state.locked && !state.busy, onSelect = { masterCfa = it })
-                        Button(onClick = { browse = true }, enabled = !state.locked && !state.busy, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.stack_cal_from_recording)) }
+                        Button(onClick = { browse = true }, enabled = !state.locked && !state.busy,
+                            modifier = Modifier.fillMaxWidth().testTag("calibration-create-from-recording")) {
+                            Text(stringResource(R.string.stack_cal_from_recording))
+                        }
+                        Text(stringResource(R.string.stack_cal_unverified_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
                         TextButton(onClick = { picker.launch(arrayOf("*/*")) }, enabled = !state.locked && !state.busy) { Text(stringResource(R.string.stack_cal_import_ser)) }
                     }
                 }
@@ -178,6 +191,14 @@ internal fun CalibrationPanel(vm: CameraViewModel, onDismiss: () -> Unit, onCame
         }
     }
 }
+
+private fun calibrationMessageTone(message: String): NoticeTone =
+    when (message.substringBefore(':')) {
+        "calibration_master_created", "calibration_busy", "calibration_cancelled" -> NoticeTone.INFO
+        "calibration_master_created_unverified", "calibration_reset_required",
+        "calibration_unknown_settings" -> NoticeTone.WARNING
+        else -> NoticeTone.ERROR
+    }
 
 @Composable
 internal fun calibrationTypeLabel(type: CalibrationType) = stringResource(when (type) {

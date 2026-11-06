@@ -116,7 +116,10 @@ class CalibrationCoordinator(
     fun selectMaster(type: CalibrationType, id: String?, confirmMatchingSettings: Boolean = false) = change {
         val old = _state.value
         val ids = old.selectedIds.toMutableMap().apply { if (id == null) remove(type) else put(type, id) }
-        val confirmed = old.confirmedIds.filterTo(mutableSetOf()) { it in ids.values }
+        // Confirmation describes the master metadata, not only the current selection.
+        // Keep earlier acknowledgements so an unverified master does not become unusable
+        // after the user temporarily selects None or another master.
+        val confirmed = old.confirmedIds.toMutableSet()
         if (id != null && confirmMatchingSettings) confirmed += id
         val next = loadSelection(ids, confirmed) { ensureActive() }
         ensureActive()
@@ -150,7 +153,9 @@ class CalibrationCoordinator(
         check(id !in _state.value.selectedIds.values) { "calibration_master_in_use" }
         ensureActive()
         library.delete(id)
-        _state.update { it.copy(masters = library.list(), message = "") }
+        val confirmed = _state.value.confirmedIds - id
+        preferences.edit().putStringSet("confirmed", confirmed).apply()
+        _state.update { it.copy(masters = library.list(), confirmedIds = confirmed, message = "") }
     }
 
     fun createMaster(type: CalibrationType, file: File, confirmMatchingSettings: Boolean = false,
@@ -193,13 +198,14 @@ class CalibrationCoordinator(
     private suspend fun CoroutineScope.create(type: CalibrationType, file: File, name: String, confirmed: Boolean,
         cfaInterpretation: SerCfaInterpretation) {
         check(!isSourceBusy(file)) { "recording_active" }
-        val identity = sourceIdentity(file) { ensureActive() }
         SERReader(file, endian(), cfaInterpretation).use { reader ->
             reader.sampleAlignment = alignment()
             check(reader.open()) { reader.lastError ?: "invalid_source" }
             val header = checkNotNull(reader.header)
             val geometry = CalibrationGeometry.from(header.width, header.height, reader.sensorFormat, reader.sensorTraits)
             val capture = recordingCapture(file)
+            val unverified = unknownCaptureFields(type, capture).isNotEmpty()
+            val identity = sourceIdentity(file) { ensureActive() }
             val bias = if (type == CalibrationType.FLAT) selection.bias else null
             require(geometry.width.toLong() * geometry.height <= LinearImage.MAX_PIXELS &&
                 CalibrationBuilder.estimatedBuildBytes(geometry, bias != null) + selection.memoryBytes <= memoryBudgetBytes) { "memory_budget" }
@@ -208,7 +214,8 @@ class CalibrationCoordinator(
                     ensureActive()
                     reader.readSensorFrame(index.toInt(), maxPixels = LinearImage.MAX_PIXELS) ?: error(reader.lastError ?: "read_failed")
                 }, name = name, sourceIdentity = cfaInterpretation.decodingIdentity(identity,
-                    reader.endianConvention.name, reader.sampleAlignment.name, "SENSOR"), bias = bias, allowUnknownCapture = confirmed,
+                    reader.endianConvention.name, reader.sampleAlignment.name, "SENSOR"), bias = bias,
+                allowUnknownCapture = confirmed || unverified,
                 cancelCheck = { ensureActive() }, progress = { done, total ->
                     _state.update { it.copy(completed = done, total = total) }
                 }, memoryBudgetBytes = memoryBudgetBytes - selection.memoryBytes)
@@ -216,7 +223,10 @@ class CalibrationCoordinator(
             val saved = library.save(master) { ensureActive() }
             try {
                 ensureActive()
-                _state.update { it.copy(masters = library.list(), message = "calibration_master_created") }
+                val confirmedIds = if (unverified) _state.value.confirmedIds + saved.id else _state.value.confirmedIds
+                if (unverified) preferences.edit().putStringSet("confirmed", confirmedIds).apply()
+                _state.update { it.copy(masters = library.list(), confirmedIds = confirmedIds,
+                    message = if (unverified) "calibration_master_created_unverified" else "calibration_master_created") }
             } catch (failure: Throwable) { library.delete(saved.id); throw failure }
         }
     }

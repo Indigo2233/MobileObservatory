@@ -107,6 +107,16 @@ class CalibrationTest {
         assertTrue(selected.metadata().getValue("calibration").contains("sensor_before_demosaic"))
     }
 
+    @Test fun missingCaptureFieldsListEveryRequiredMetadataField() {
+        assertEquals(
+            setOf("camera", "gain", "roiX", "roiY", "hardwareBin", "readout"),
+            unknownCaptureFields(CalibrationType.BIAS, CalibrationCapture()).toSet()
+        )
+        assertTrue(unknownCaptureFields(CalibrationType.DARK, CalibrationCapture())
+            .containsAll(setOf("exposureUs", "temperatureC")))
+        assertTrue(unknownCaptureFields(CalibrationType.FLAT, CalibrationCapture()).contains("filter"))
+    }
+
     @Test fun streamingMeanReadsInOrderDoesNotMutateInputsAndCancels() {
         val frames = listOf(image(FloatArray(8) { .1f }), image(FloatArray(8) { .2f }), image(FloatArray(8) { .3f }))
         val order = mutableListOf<Long>(); val progress = mutableListOf<Long>()

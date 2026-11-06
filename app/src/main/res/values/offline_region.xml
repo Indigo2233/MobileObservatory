@@ -5,6 +5,11 @@
     <string name="stack_offline_use_bin">Use Bin %1$d×, keep the field</string>
     <string name="stack_offline_use_roi">Or crop to %1$d×%2$d</string>
     <string name="stack_offline_memory">This region exceeds the processing budget. Increase processing Bin or select a smaller region.</string>
+    <string name="stack_offline_memory_title">Processing budget exceeded</string>
+    <string name="stack_offline_exact_range">Exact range</string>
+    <string name="stack_offline_hide_exact_range">Hide exact range</string>
+    <string name="stack_decode_settings">Decode settings</string>
+    <string name="stack_decode_hide_settings">Hide decode settings</string>
     <string name="stack_offline_drag_hint">Drag to select the stacking region. Pixels outside it are excluded.</string>
     <string name="stack_offline_stale_result">The displayed result belongs to the previous region or Bin. Analyze again to stack the current settings; the saved result is still exportable.</string>
     <string name="stack_heap_budget">App heap limit %1$d MiB · stacking ceiling %2$.1f MiB. Admission also accounts for current heap use and garbage-collection headroom.</string>

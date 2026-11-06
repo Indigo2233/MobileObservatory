@@ -184,4 +184,5 @@ class StackingCalibrationUiTest {
             image.recycle()
         }
     }
+
 }

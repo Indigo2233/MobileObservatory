@@ -115,6 +115,9 @@ private fun captureIssues(type: CalibrationType, master: CalibrationCapture, lig
     return mismatch to unknown
 }
 
+internal fun unknownCaptureFields(type: CalibrationType, capture: CalibrationCapture): List<String> =
+    captureIssues(type, capture, capture).second.distinct()
+
 /** Optional immutable snapshot. Flat masters already contain a bias-corrected (when provided),
  * parity/channel-normalized response. Dark masters contain bias: subtract dark OR bias, never both.
  * Calibration precedes debayer, matching https://siril.readthedocs.io/en/stable/preprocessing/calibration.html . */
