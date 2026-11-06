@@ -19,7 +19,8 @@ class StackConcurrencyTest {
         override fun add(image:LinearImage,exposureSeconds:Double,cancelled:()->Boolean):LiveFrameOutcome {
             count++;return LiveFrameOutcome(true,8,0.0,0.0)
         }
-        override fun snapshot(state:LiveStackState)=LiveStackSnapshot(LinearImage(2,2,1,FloatArray(4){.25f}),FloatArray(4){count.toFloat()},state)
+        override fun snapshot(state:LiveStackState)=LiveStackSnapshot(LinearImage(2,2,1,FloatArray(4){.25f}),
+            DensePixelWeights(FloatArray(4){count.toFloat()}),state)
     }
 
     @Test fun continuouslyReplenishedLiveQueueYieldsToAnExportOrPauseJob()= runTest {

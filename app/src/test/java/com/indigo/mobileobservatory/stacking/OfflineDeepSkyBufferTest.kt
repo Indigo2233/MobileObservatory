@@ -74,7 +74,7 @@ class OfflineDeepSkyBufferTest {
             val actual = OfflineDeepSkyStacker().stack(source, progress = { _, _, s -> progress += comparable(s) })
             val owned = OfflineDeepSkyStacker().stack(Source(originals))
             assertArrayEquals(expected.image.pixels, actual.image.pixels, 0f)
-            assertArrayEquals(expected.weights, actual.weights, 0f)
+            assertArrayEquals(expected.weights.toFloatArray(), actual.weights.toFloatArray(), 0f)
             assertArrayEquals(owned.image.pixels, actual.image.pixels, 0f)
             assertEquals(expectedProgress, progress)
             assertEquals(comparable(expected.stats), comparable(actual.stats.stack))
@@ -87,11 +87,11 @@ class OfflineDeepSkyBufferTest {
             assertEquals(1, source.buffers.size)
             assertNotSame(source.buffers.single(), actual.image.pixels)
             val saved = actual.image.pixels.copyOf()
-            val weights = actual.weights.copyOf()
+            val weights = actual.weights.toFloatArray()
             source.buffers.single().fill(Float.NaN)
             OfflineDeepSkyStacker().stack(source)
             assertArrayEquals(saved, actual.image.pixels, 0f)
-            assertArrayEquals(weights, actual.weights, 0f)
+            assertArrayEquals(weights, actual.weights.toFloatArray(), 0f)
             originals.zip(frames(channels)).forEach { (a, b) -> assertArrayEquals(a.pixels, b.pixels, 0f) }
         }
     }
@@ -103,11 +103,11 @@ class OfflineDeepSkyBufferTest {
         val copied = engine.snapshot()!!
         val result = engine.takeResult()!!
         assertArrayEquals(copied.image.pixels, result.image.pixels, 0f)
-        assertArrayEquals(copied.weights, result.weights, 0f)
+        assertArrayEquals(copied.weights.toFloatArray(), result.weights.toFloatArray(), 0f)
         assertNull(engine.snapshot())
         assertNull(engine.takeResult())
         assertEquals(DeepSkyStats(), engine.stats)
-        result.image.pixels[0] = -7f; result.weights[0] = 99f
+        result.image.pixels[0] = -7f
         engine.reset()
         assertTrue(engine.add(image, 3.0).accepted)
         val next = engine.takeResult()!!
@@ -116,7 +116,7 @@ class OfflineDeepSkyBufferTest {
         assertEquals(1f, copied.weights[0], 0f)
         assertEquals(1f, next.weights[0], 0f)
         assertEquals(-7f, result.image.pixels[0], 0f)
-        assertEquals(99f, result.weights[0], 0f)
+        assertEquals(1, result.weights.countAt(0))
         assertThrows(IllegalStateException::class.java) { DeepSkyStacker().takeResult() }
     }
 
@@ -139,7 +139,7 @@ class OfflineDeepSkyBufferTest {
             if (whenToCancel == "before") assertEquals(0, source.reads)
             val result = OfflineDeepSkyStacker().stack(source)
             assertArrayEquals(expected.image.pixels, result.image.pixels, 0f)
-            assertArrayEquals(expected.weights, result.weights, 0f)
+            assertArrayEquals(expected.weights.toFloatArray(), result.weights.toFloatArray(), 0f)
         }
     }
 
@@ -166,14 +166,13 @@ class OfflineDeepSkyBufferTest {
             assertEquals(decoded.exportBytes + masters, calibrated.exportBytes)
             assertEquals(maxOf(calibrated.stackingBytes, calibrated.previewBytes, calibrated.exportBytes), calibrated.peakBytes)
             if (channels == 1) assertTrue(base.peakBytes > base.stackingBytes)
-            else assertEquals(base.stackingBytes, base.peakBytes)
         }
         val full = OfflineRegionPlan(3856, 2180, PixelFormat.BAYER_RG16, PixelRoi(0, 0, 3856, 2180),
             DemosaicAlgorithm.DDFAPD, StackTarget.DEEP_SKY)
-        assertTrue(full.workingBytes < 331L shl 20)
+        assertTrue(full.workingBytes < (301L shl 20))
         assertNull(full.issue(StackMemoryBudget.forHeap(512L shl 20)))
         assertNull(full.copy(softwareBin = 2).issue(StackMemoryBudget.forHeap(256L shl 20)))
-        assertTrue(full.copy(softwareBin = 2).workingBytes < 93L shl 20)
+        assertTrue(full.copy(softwareBin = 2).workingBytes < (83L shl 20))
         val crop = full.suggested(StackMemoryBudget.forHeap(256L shl 20))!!
         assertNull(full.copy(region = crop).issue(StackMemoryBudget.forHeap(256L shl 20)))
     }
@@ -184,11 +183,11 @@ class OfflineDeepSkyBufferTest {
         val decoder = 3L shl 20; val masters = 16L shl 20
         val estimate = OfflineDeepSkyMemory.estimate(width, height, 1, true, decoder, masters)
         assertThrows(IllegalArgumentException::class.java) {
-            OfflineDeepSkyStacker().stack(source, DeepSkyConfig(memoryBudgetBytes = estimate.peakBytes - 1),
+            OfflineDeepSkyStacker().stack(source, DeepSkyConfig(memoryBudgetBytes = estimate.stackingBytes - 1),
                 decoderWorkingBytes = decoder, retainedCalibrationBytes = masters)
         }
         assertEquals(0, source.reads)
-        val result = OfflineDeepSkyStacker().stack(source, DeepSkyConfig(memoryBudgetBytes = estimate.peakBytes),
+        val result = OfflineDeepSkyStacker().stack(source, DeepSkyConfig(memoryBudgetBytes = estimate.stackingBytes),
             progress = { _, _, stats -> assertEquals(estimate.peakBytes, stats.estimatedWorkingBytes) },
             decoderWorkingBytes = decoder, retainedCalibrationBytes = masters)
         assertEquals(estimate.peakBytes, result.stats.stack.estimatedWorkingBytes)

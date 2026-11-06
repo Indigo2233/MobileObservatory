@@ -151,7 +151,7 @@ class PlanetarySearchRegressionTest {
     }
 
     /** The accumulation the per-input finiteness test implemented, kept here as the oracle. */
-    private fun referenceAccumulate(image: LinearImage, sums: DoubleArray, weights: FloatArray, warp: PlanetaryWarp) {
+    private fun referenceAccumulate(image: LinearImage, sums: DoubleArray, weights: CoverageBuffer, warp: PlanetaryWarp) {
         val w = image.width; val h = image.height; val channels = image.channels
         for (y in 0 until h) for (x in 0 until w) {
             val sx = x + warp.offset(warp.dx, x, y); val sy = y + warp.offset(warp.dy, x, y)
@@ -171,7 +171,7 @@ class PlanetarySearchRegressionTest {
             for (channel in 0 until channels)
                 sums[p * channels + channel] += (image.pixels[a + channel] * (1 - fx) + image.pixels[b + channel] * fx) * (1 - fy) +
                     (image.pixels[c + channel] * (1 - fx) + image.pixels[d + channel] * fx) * fy
-            weights[p]++
+            weights.increment(p)
         }
     }
 
@@ -192,13 +192,14 @@ class PlanetarySearchRegressionTest {
                     copy
                 } else image
                 val expectedSums = DoubleArray(width * height * channels)
-                val expectedWeights = FloatArray(width * height)
+                val expectedWeights = CoverageBuffer(ShortArray(width * height))
                 referenceAccumulate(subject, expectedSums, expectedWeights, warp)
                 val sums = DoubleArray(width * height * channels)
-                val weights = FloatArray(width * height)
+                val weights = CoverageBuffer(ShortArray(width * height))
                 PlanetaryStacker().accumulate(subject, sums, weights, warp) {}
                 assertArrayEquals("channels=$channels poisoned=$poisoned sums", expectedSums, sums, 0.0)
-                assertArrayEquals("channels=$channels poisoned=$poisoned weights", expectedWeights, weights, 0f)
+                assertArrayEquals("channels=$channels poisoned=$poisoned weights",
+                    expectedWeights.freezeSnapshot().toFloatArray(), weights.freezeSnapshot().toFloatArray(), 0f)
             }
         }
     }

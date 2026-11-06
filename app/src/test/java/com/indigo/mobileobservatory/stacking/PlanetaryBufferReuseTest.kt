@@ -71,7 +71,7 @@ class PlanetaryBufferReuseTest {
                             val expected = stacker.stack(owned, expectedAnalysis, selection)
                             val actual = stacker.stack(buffered, actualAnalysis, selection)
                             assertArrayEquals(expected.image.pixels, actual.image.pixels, 0f)
-                            assertArrayEquals(expected.weights, actual.weights, 0f)
+                            assertArrayEquals(expected.weights.toFloatArray(), actual.weights.toFloatArray(), 0f)
                             assertEquals(expected.stats.copy(elapsedMillis = 0, estimatedPeakBytes = 0),
                                 actual.stats.copy(elapsedMillis = 0, estimatedPeakBytes = 0))
                             assertEquals(0, buffered.ownedReads)

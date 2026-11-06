@@ -100,7 +100,8 @@ class LiveStackSessionTest {
         override fun snapshot(state: LiveStackState): LiveStackSnapshot? {
             if (exposures.isEmpty()) return null
             snapshotCopies++
-            return LiveStackSnapshot(LinearImage(2, 2, 1, FloatArray(4) { mean }), FloatArray(4) { exposures.size.toFloat() }, state)
+            return LiveStackSnapshot(LinearImage(2, 2, 1, FloatArray(4) { mean }),
+                DensePixelWeights(FloatArray(4) { exposures.size.toFloat() }), state)
         }
     }
 
@@ -166,7 +167,7 @@ class LiveStackSessionTest {
             session.pause(); runCurrent()
             assertEquals(LiveStackPhase.PAUSED, session.state.value.phase)
             assertEquals(96f / 255, session.latestSnapshot!!.image.pixels[0], 1e-6f)
-            assertTrue(session.latestSnapshot!!.weights.all { it == 2f })
+            assertTrue(session.latestSnapshot!!.weights.toFloatArray().all { it == 2f })
         } finally { session.close(); runCurrent() }
     }
 
@@ -271,7 +272,7 @@ class LiveStackSessionTest {
                 assertEquals(generation, session.state.value.generation)
                 assertEquals(1, engines)
                 assertEquals(128f / 255, session.latestSnapshot!!.image.pixels[0], 1e-6f)
-                assertTrue(session.latestSnapshot!!.weights.all { it == 2f })
+                assertTrue(session.latestSnapshot!!.weights.toFloatArray().all { it == 2f })
             } finally { session.close(); runCurrent() }
         }
     }

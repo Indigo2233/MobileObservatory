@@ -72,6 +72,7 @@ class DeepSkyAlgorithmsTest {
         assertTrue(snapshot.weights[0]>=1)
         val independent=snapshot.image.pixels.copyOf(); stack.add(field(noise=.004,seed=23),2.5)
         assertArrayEquals(independent,snapshot.image.pixels,0f)
+        assertTrue(snapshot.weights.maximum >= 18)
     }
 
     @Test fun invalidWarpEdgesHaveReducedWeightInsteadOfBlackSamples() {

@@ -99,7 +99,7 @@ class OfflineRegionInstrumentedTest {
             assertEquals("2", metadata["softwareBin"])
             val memory = JSONObject(metadata["memoryEstimate"]!!)
             assertEquals(plan.workingBytes, memory.getLong("peakBytes"))
-            assertEquals("transferred_accumulation", memory.getString("resultOwnership"))
+            assertEquals("copied_from_native_accumulator", memory.getString("resultOwnership"))
             assertEquals(maxOf(memory.getLong("stackingBytes"), memory.getLong("previewBytes"),
                 memory.getLong("exportBytes")), memory.getLong("peakBytes"))
         }

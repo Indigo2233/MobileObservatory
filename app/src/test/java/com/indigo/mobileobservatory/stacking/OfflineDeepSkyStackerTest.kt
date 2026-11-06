@@ -51,7 +51,7 @@ class OfflineDeepSkyStackerTest {
         val source = Source(images, exposures)
         val actual = OfflineDeepSkyStacker().stack(source)
         assertArrayEquals(expected.image.pixels, actual.image.pixels, 0f)
-        assertArrayEquals(expected.weights, actual.weights, 0f)
+        assertArrayEquals(expected.weights.toFloatArray(), actual.weights.toFloatArray(), 0f)
         assertEquals(3, actual.stats.stack.accepted)
         assertEquals(9.0, actual.stats.stack.exposureSeconds, 0.0)
         assertEquals(0L, actual.stats.referenceFrame)
@@ -101,6 +101,6 @@ class OfflineDeepSkyStackerTest {
         val result = OfflineDeepSkyStacker().stack(Source(listOf(rgb, rgb.deepCopy()), listOf(1.0, 1.0)))
         assertEquals(3, result.image.channels)
         assertArrayEquals(rgb.pixels, result.image.pixels, 1e-6f)
-        assertTrue(result.weights.all { it == 2f })
+        assertTrue(result.weights.toFloatArray().all { it == 2f })
     }
 }

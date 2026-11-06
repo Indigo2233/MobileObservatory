@@ -28,7 +28,8 @@ class StackEditorRestoreInstrumentedTest {
         instrumentation.runOnMainSync {
             vm = ViewModelProvider(store, ViewModelProvider.AndroidViewModelFactory(app))[CameraViewModel::class.java]
             // Display fixture only: no synthetic observation or calibration is saved.
-            val product = StackProduct(LinearImage(32, 32, 1, FloatArray(1024) { .1f }), FloatArray(1024) { 1f }, emptyMap())
+            val product = StackProduct(LinearImage(32, 32, 1, FloatArray(1024) { .1f }),
+                DensePixelWeights(FloatArray(1024) { 1f }), emptyMap())
             vm.stacking.javaClass.getDeclaredField("liveProduct").apply { isAccessible = true }.set(vm.stacking, product)
             vm.stacking.open(StackMode.LIVE)
         }

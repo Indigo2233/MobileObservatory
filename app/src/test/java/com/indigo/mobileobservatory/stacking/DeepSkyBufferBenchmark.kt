@@ -77,7 +77,7 @@ object DeepSkyBufferBenchmark {
             check(result.stats.accepted.toLong() == count)
             return "mode=$mode ${w}x$h RGB frames=$count allocatedBytes=$bytes elapsedMs=$ms " +
                 "sampledJvmUsedBytes=$sampledUsed outputBytes=${result.image.pixels.size * 4L} " +
-                "pixelSum=${result.image.pixels.sumOf { it.toDouble() }} weightSum=${result.weights.sumOf { it.toDouble() }} " +
+                "pixelSum=${result.image.pixels.sumOf { it.toDouble() }} weightSum=${result.weights.toFloatArray().sumOf { it.toDouble() }} " +
                 "estimatedEngineBytes=${OfflineDeepSkyMemory.estimate(w, h, 3, mode == "buffered").peakBytes}"
         }
         run(192, 160, 3)

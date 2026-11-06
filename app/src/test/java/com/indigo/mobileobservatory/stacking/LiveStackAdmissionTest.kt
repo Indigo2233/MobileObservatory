@@ -58,6 +58,19 @@ class LiveStackAdmissionTest {
         assertNull(LiveStackAdmission.issue(key(1024, 576).copy(pixelTraits = traits), 128L shl 20))
     }
 
+    @Test fun compactColourInputStillChargesTheJavaAccumulator() {
+        val input = key(3856, 2180).copy(softwareBin = 2)
+        assertTrue(LiveFrameDecoder.usesCompactInput(input))
+        val plan = LiveFrameDecoder.plan(input)
+        val pixels = plan.width.toLong() * plan.height
+        val floatPlan = DeepSkyStacker.estimateWorkingBytes(plan.width, plan.height, plan.channels,
+            LiveStackMemory.PREVIEW_MAX_SIDE, pixels * plan.channels * 4, nativeAccumulator = true)
+        val compactPlan = DeepSkyStacker.estimateWorkingBytes(plan.width, plan.height, plan.channels,
+            LiveStackMemory.PREVIEW_MAX_SIDE, LiveFrameDecoder.outputStorageBytes(input), nativeAccumulator = false)
+        assertTrue(compactPlan - floatPlan > 20L shl 20)
+        assertNull(LiveStackAdmission.issue(input, LiveStackAdmission.workingBytes(input, 0, false)))
+    }
+
     @Test fun oversizedMasterBuildRejectsBeforeReadingOrAllocatingPixels() {
         var reads = 0
         val geometry = CalibrationGeometry(3536, 3536, "MONO", 16)

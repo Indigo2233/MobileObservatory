@@ -31,6 +31,32 @@ class Live585MemoryInstrumentedTest {
 
     @Test fun fullResolutionColourCanStackExportAndResume() = runBlocking { live(1) }
 
+    @Test fun fullResolutionDeepSkyMemoryEstimateLeavesHeapHeadroom() = runBlocking {
+        workspace("deep-sky-memory-estimate") { coordinator, directory, _, measurement ->
+            val source = OfflineRegionInstrumentedTest.recording(directory, stars = true, frames = 1)
+            main {
+                coordinator.open(StackMode.PLANETARY)
+                assertTrue(coordinator.setTarget(StackMode.PLANETARY, StackTarget.DEEP_SKY))
+                coordinator.loadFile(source)
+            }
+            phase(coordinator, StackTaskPhase.READY)
+            val full = coordinator.offlinePlan(softwareBin = 1)!!
+            val memory = OfflineDeepSkyMemory.estimate(3856, 2180, 3, reusableInput = true,
+                decoderWorkingBytes = full.overheadBytes - full.calibrationBytes,
+                retainedCalibrationBytes = full.calibrationBytes)
+            assertEquals(memory.peakBytes, full.workingBytes)
+            assertTrue("stacking=${memory.stackingBytes} budget=${coordinator.memoryBudgetBytes}",
+                memory.stackingBytes < coordinator.memoryBudgetBytes)
+            assertTrue(memory.accumulatorBytes > 0)
+            measurement.put("estimate", JSONObject().apply {
+                put("stackingBytes", memory.stackingBytes)
+                put("accumulatorBytes", memory.accumulatorBytes)
+                put("previewBytes", memory.previewBytes)
+                put("exportBytes", memory.exportBytes)
+            })
+        }
+    }
+
     @Test fun fullSensorRgb48SoftwareBin2CanStackExportAndResume() = runBlocking { live(2, PixelFormat.RGB48) }
 
     @Test fun fullResolutionOfflineColourCanStackAndExportWithBothFilters() = runBlocking {
@@ -119,7 +145,7 @@ class Live585MemoryInstrumentedTest {
             FitsHeaderParser.read(file)
             val start = file.filePointer
             val grid = StackPreviewGrid(width, height, LiveStackMemory.PREVIEW_MAX_SIDE)
-            for (p in preview.weights.indices step 199) for (channel in 0..2) {
+            for (p in 0 until preview.weights.size step 199) for (channel in 0..2) {
                 file.seek(start + (channel.toLong() * width * height + grid.sourcePixel(p)) * 4)
                 assertEquals(preview.image.pixels[p * 3 + channel], file.readFloat(), 1e-6f)
             }

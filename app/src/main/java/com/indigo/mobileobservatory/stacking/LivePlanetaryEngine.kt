@@ -18,7 +18,7 @@ class LivePlanetaryEngine(
 ) : LiveStackEngine {
     private var width = 0; private var height = 0; private var channels = 0
     private var sums = DoubleArray(0)
-    private var weights = FloatArray(0)
+    private var weights: CoverageBuffer? = null
     private var sourcePlane = FloatArray(0)
     private var reference: PlanetaryRegistration? = null
     private var bootstrapBest: LinearImage? = null
@@ -117,7 +117,7 @@ class LivePlanetaryEngine(
                 val selected = checkNotNull(bootstrapBest)
                 registration = PlanetaryRegistration(selected, roi, options, ::checkCancelled)
                 sums = DoubleArray(image.pixels.size)
-                weights = FloatArray(image.pixelCount)
+                weights = CoverageBuffer(ShortArray(image.pixelCount))
                 sourcePlane = FloatArray(image.pixelCount)
                 reference = registration
                 referenceFrame = bootstrapBestFrame
@@ -150,7 +150,7 @@ class LivePlanetaryEngine(
                 return reject(PlanetaryRejection.EDGE_MISMATCH.name)
             }
             improvedEdgeFailures = 0
-            accumulator.accumulate(image, sums, weights, warp, ::checkCancelled)
+            accumulator.accumulate(image, sums, checkNotNull(weights), warp, ::checkCancelled)
             // Only a full multipoint result is fed forward; a global or fallback frame means
             // the distortion field itself moved and the previous per-point guesses are stale.
             if (alignment.mode == PlanetaryRegistrationMode.MULTIPOINT)
@@ -175,7 +175,7 @@ class LivePlanetaryEngine(
         reference = null
         bootstrapBest = null; bootstrapBestQuality = -1.0; bootstrapBestFrame = 0
         bootstrapValidFrames = 0; improvedEdgeFailures = 0; referenceRestartRequired = false
-        sums = DoubleArray(0); weights = FloatArray(0); sourcePlane = FloatArray(0)
+        sums = DoubleArray(0); weights = null; sourcePlane = FloatArray(0)
         warpWorkspace.clear()
         hint.clear()
         width = 0; height = 0; channels = 0
@@ -189,32 +189,36 @@ class LivePlanetaryEngine(
     override fun snapshot(state: LiveStackState): LiveStackSnapshot? {
         if (accepted == 0L) return null
         val output = FloatArray(sums.size)
-        for (p in weights.indices) {
-            val count = weights[p]
+        val counts = checkNotNull(weights)
+        for (p in 0 until counts.values.size) {
+            val count = counts[p]
             if (count <= 0) continue
             for (channel in 0 until channels) output[p * channels + channel] = (sums[p * channels + channel] / count).toFloat()
         }
-        return LiveStackSnapshot(LinearImage(width, height, channels, output), weights.copyOf(), state, snapshotDetails())
+        return LiveStackSnapshot(LinearImage(width, height, channels, output), counts.freezeSnapshot(), state, snapshotDetails())
     }
 
     override fun previewSnapshot(state: LiveStackState, maxSide: Int): LiveStackSnapshot? {
         if (accepted == 0L) return null
         val grid = StackPreviewGrid(width, height, maxSide)
-        val coverage = FloatArray(grid.width * grid.height) { weights[grid.sourcePixel(it)] }
+        val counts = checkNotNull(weights)
+        val coverage = IntArray(grid.width * grid.height) { counts[grid.sourcePixel(it)] }
         val output = FloatArray(coverage.size * channels) { i ->
             val p = i / channels
             if (coverage[p] > 0) (sums[grid.sourcePixel(p) * channels + i % channels] / coverage[p]).toFloat() else 0f
         }
-        return LiveStackSnapshot(LinearImage(grid.width, grid.height, channels, output), coverage, state, snapshotDetails())
+        return LiveStackSnapshot(LinearImage(grid.width, grid.height, channels, output),
+            PixelCoverage.fromInts(coverage), state, snapshotDetails())
     }
 
     override fun exportSnapshot(state: LiveStackState): LiveStackSnapshot? {
         if (accepted == 0L) return null
+        val counts = checkNotNull(weights)
         val output = FloatArray(sums.size) { i ->
-            val count = weights[i / channels]
+            val count = counts[i / channels]
             if (count > 0) (sums[i] / count).toFloat() else 0f
         }
-        return LiveStackSnapshot(LinearImage(width, height, channels, output), weights, state, snapshotDetails())
+        return LiveStackSnapshot(LinearImage(width, height, channels, output), counts.freezeSnapshot(), state, snapshotDetails())
     }
 
     override fun snapshotDetails(): Map<String, Any> = mapOf(

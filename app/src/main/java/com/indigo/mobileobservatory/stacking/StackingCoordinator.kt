@@ -48,7 +48,7 @@ data class StackingTaskState(
         StackTaskPhase.REGISTERING, StackTaskPhase.STACKING, StackTaskPhase.PROCESSING, StackTaskPhase.EXPORTING)
 }
 
-data class StackProduct(val image: LinearImage, val weights: FloatArray, val metadata: Map<String, String>)
+data class StackProduct(val image: LinearImage, val weights: PixelWeights, val metadata: Map<String, String>)
 
 /**
  * ViewModel-owned science workspace. A single CPU worker serializes analysis and accumulation;
@@ -706,9 +706,11 @@ class StackingCoordinator(
                 "demosaicScratchBytes" to source.demosaicScratchBytes.toString(),
                 "qualitySelection" to "all_frames_passing_star_field_and_registration_checks",
                 "memoryEstimate" to JSONObject().apply {
-                    put("stackingBytes", memory.stackingBytes); put("previewBytes", memory.previewBytes)
+                    put("stackingBytes", memory.stackingBytes); put("accumulatorBytes", memory.accumulatorBytes)
+                    put("previewBytes", memory.previewBytes)
                     put("exportBytes", memory.exportBytes); put("peakBytes", memory.peakBytes)
-                    put("inputOwnership", "reused_caller_buffer"); put("resultOwnership", "transferred_accumulation")
+                    put("inputOwnership", "reused_caller_buffer")
+                    put("resultOwnership", "copied_from_native_accumulator")
                 }.toString(),
                 "registration" to JSONObject().apply {
                     put("referenceFrame", stats.referenceFrame); put("referencePolicy", "first_accepted_star_field")
@@ -718,7 +720,8 @@ class StackingCoordinator(
                     put("stars", stats.stack.stars); put("rejectedPixelSamples", stats.stack.rejectedPixelSamples)
                     put("elapsedMillis", stats.elapsedMillis); put("estimatedWorkingBytes", stats.stack.estimatedWorkingBytes)
                 }.toString(),
-                "rejectionLimit" to DeepSkyStacker.REJECTION_LIMITATION
+                "rejectionLimit" to DeepSkyStacker.REJECTION_LIMITATION,
+                "frameLimit" to DeepSkyStacker.FRAME_LIMITATION
             )
             meta.putAll(source.calibrationMetadata())
             synchronized(stateLock) {
@@ -795,8 +798,9 @@ class StackingCoordinator(
                     "comparisonRecipes" to JSONObject(allRecipes + (effective.preset.name to StackResultMetadata.parameters(effective))).toString(),
                     "width" to snapshot.image.width.toString(), "height" to snapshot.image.height.toString(),
                     "channels" to snapshot.image.channels.toString(), "pixelScale" to "normalized_linear_0_to_1",
-                    "weightMin" to (snapshot.weights.minOrNull() ?: 0f).toString(),
-                    "weightMax" to (snapshot.weights.maxOrNull() ?: 0f).toString()
+                    "weightMin" to snapshot.weights.minimum.toString(),
+                    "weightMax" to snapshot.weights.maximum.toString(),
+                    "weightEncoding" to snapshot.weights.encoding
                 )
                 // Publish the linear source last, after the display image and recipe are complete.
                 StackExportTransaction(listOf(recipe, png, fits)).use { output ->

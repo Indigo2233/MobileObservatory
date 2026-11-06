@@ -37,7 +37,7 @@ class LiveBoundedSnapshotTest {
         assertEquals(240, full.image.height)
         assertArrayEquals(image.pixels, full.image.pixels, 0f)
         assertSame(full.image.pixels, engine.exportSnapshot(state)!!.image.pixels)
-        for (p in preview.weights.indices) {
+        for (p in 0 until preview.weights.size) {
             val source = p / 80 * 4 * 320 + p % 80 * 4
             for (c in 0..2) assertEquals(full.image.pixels[source * 3 + c], preview.image.pixels[p * 3 + c], 0f)
         }
@@ -59,11 +59,12 @@ class LiveBoundedSnapshotTest {
                 LiveFrameOutcome(true, 6, 0.0, 0.0)
             override fun snapshot(state: LiveStackState): LiveStackSnapshot {
                 fullSnapshots++
-                return LiveStackSnapshot(image, FloatArray(4) { 1f }, state)
+                return LiveStackSnapshot(image, DensePixelWeights(FloatArray(4) { 1f }), state)
             }
             override fun previewSnapshot(state: LiveStackState, maxSide: Int): LiveStackSnapshot {
                 previews++
-                return LiveStackSnapshot(LinearImage(1, 1, 1, floatArrayOf(.25f)), floatArrayOf(1f), state)
+                return LiveStackSnapshot(LinearImage(1, 1, 1, floatArrayOf(.25f)),
+                    DensePixelWeights(floatArrayOf(1f)), state)
             }
         }
         val session = LiveStackSession(this, { engine }, { _, _ -> image }, {},
@@ -79,7 +80,7 @@ class LiveBoundedSnapshotTest {
             assertThrows(IllegalStateException::class.java) {
                 session.withExportSnapshot(session.state.value.generation) {
                     assertEquals(2, it.image.width)
-                    assertTrue(releases > beforeExport)
+        assertTrue(releases > beforeExport)
                     session.offer(frame(2), key)
                     error("export cancelled")
                 }

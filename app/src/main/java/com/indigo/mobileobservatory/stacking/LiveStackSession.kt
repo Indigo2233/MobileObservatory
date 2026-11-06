@@ -65,7 +65,7 @@ data class LiveStackState(
  * serialized export callback and must never escape it. */
 data class LiveStackSnapshot(
     val image: LinearImage,
-    val weights: FloatArray,
+    val weights: PixelWeights,
     val state: LiveStackState,
     val details: Map<String, Any> = emptyMap()
 )

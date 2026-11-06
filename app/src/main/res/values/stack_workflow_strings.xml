@@ -6,6 +6,7 @@
     <string name="stack_target_changed">The stack type changed. Start a new session.</string>
     <string name="stack_deep_sky_no_frames">No frame passed star-field alignment. Check focus, exposure and visible stars.</string>
     <string name="stack_deep_sky_frame_limit">This recording has too many frames for deep-sky processing. Choose a shorter recording.</string>
+    <string name="stack_frame_limit">This stack reached the 65,535-frame limit. Reset the session to continue.</string>
     <string name="stack_offline_title">Post stacking</string>
     <string name="stack_target_planetary">Planetary</string>
     <string name="stack_target_deep_sky">Deep sky</string>

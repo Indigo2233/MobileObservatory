@@ -6,6 +6,7 @@
     <string name="stack_target_changed">叠加类型已切换，请开始新会话。</string>
     <string name="stack_deep_sky_no_frames">没有帧通过星场配准，请检查对焦、曝光及可见星点。</string>
     <string name="stack_deep_sky_frame_limit">这段录像的帧数超过深空处理范围，请选择较短录像。</string>
+    <string name="stack_frame_limit">本次叠加已达到 65,535 帧上限，请重置会话后继续。</string>
     <string name="stack_offline_title">后期叠加</string>
     <string name="stack_target_planetary">行星</string>
     <string name="stack_target_deep_sky">深空</string>

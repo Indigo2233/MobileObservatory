@@ -9,7 +9,7 @@ data class OfflineDeepSkyStats(
     val elapsedMillis: Long
 )
 
-data class OfflineDeepSkyResult(val image: LinearImage, val weights: FloatArray, val stats: OfflineDeepSkyStats)
+data class OfflineDeepSkyResult(val image: LinearImage, val weights: PixelWeights, val stats: OfflineDeepSkyStats)
 
 /**
  * Sequential star-field registration and online temporal rejection, using exactly the same
@@ -31,12 +31,12 @@ class OfflineDeepSkyStacker {
         val buffered = source as? BufferedPlanetaryFrameSource
         val memory = OfflineDeepSkyMemory.estimate(source.width, source.height, source.channels, buffered != null,
             decoderWorkingBytes, retainedCalibrationBytes)
-        require(memory.peakBytes <= config.memoryBudgetBytes) { "memory_budget" }
+        require(memory.stackingBytes <= config.memoryBudgetBytes) { "memory_budget" }
         checkCancelled()
         val start = System.nanoTime()
         val algorithm = DeepSkyStacker(config, livePreviewOverlap = false, reusableOfflineInput = buffered != null)
         try {
-            val input = if (buffered != null) FloatArray(source.width * source.height * source.channels) else null
+            var input = if (buffered != null) FloatArray(source.width * source.height * source.channels) else null
             val rejected = linkedMapOf<DeepSkyRejection, Long>()
             var reference = -1L
             var unknown = 0L
@@ -57,8 +57,11 @@ class OfflineDeepSkyStacker {
                 } else outcome.reason?.let { rejected[it] = (rejected[it] ?: 0L) + 1L }
                 index++
                 progress(index, source.frameCount, outcome.stats.copy(estimatedWorkingBytes = memory.peakBytes))
+                if (!outcome.accepted && outcome.reason == DeepSkyRejection.FRAME_LIMIT)
+                    error("deep_sky_frame_count")
             }
             checkCancelled()
+            input = null
             val snapshot = algorithm.takeResult() ?: error("deep_sky_no_accepted_frames")
             checkCancelled()
             return OfflineDeepSkyResult(snapshot.image, snapshot.weights,
@@ -68,8 +71,7 @@ class OfflineDeepSkyStacker {
     }
 
     companion object {
-        // Float coverage counts remain exact for every accepted frame and Int statistics
-        // cannot overflow. A recording of arbitrary duration never allocates a frame list.
-        const val MAX_FRAMES = 10_000_000L
+        // UInt16 coverage keeps every count exact. Longer recordings fail before reading a frame.
+        const val MAX_FRAMES = DeepSkyStacker.MAX_STACK_FRAMES.toLong()
     }
 }

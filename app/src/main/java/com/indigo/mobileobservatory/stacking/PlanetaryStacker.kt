@@ -95,7 +95,7 @@ data class PlanetaryStackStats(
     val estimatedPeakBytes: Long,
     val cpuWorkers: Int = 1
 )
-data class PlanetaryStackResult(val image: LinearImage, val weights: FloatArray, val stats: PlanetaryStackStats)
+data class PlanetaryStackResult(val image: LinearImage, val weights: PixelWeights, val stats: PlanetaryStackStats)
 
 /**
  * Sequential, bounded-memory, cancellable two-pass lucky-imaging stacker. Run off the main thread.
@@ -107,24 +107,24 @@ data class PlanetaryStackResult(val image: LinearImage, val weights: FloatArray,
 class PlanetaryStacker {
     companion object {
         const val MAX_PIXELS = LinearImage.MAX_PIXELS
-        const val MAX_SELECTED_FRAMES = 10_000_000L // Exact integer per-pixel counts in Float.
+        const val MAX_SELECTED_FRAMES = DeepSkyStacker.MAX_STACK_FRAMES.toLong()
         /** Includes decode scratch, two input images, two gray planes, double sums, weights, output + preview/post scratch. */
         fun estimatedPeakBytes(width: Int, height: Int, channels: Int, boundedDecode: Boolean = false,
                                reusableInput: Boolean = false): Long =
             if (reusableInput) {
                 require(boundedDecode)
-                // One caller-owned Float input becomes the result. Double sums, coverage and
-                // two gray planes stay resident. Reserve the largest reusable dx/dy mesh plus
+                // One caller-owned Float input becomes the result. Double sums, UInt16 coverage
+                // and two gray planes stay resident. Reserve the largest reusable dx/dy mesh plus
                 // 8 MiB for quality/index/metadata; decoder/calibration tiles are added separately.
                 val meshColumns = (width.toLong() + 3) / 4 + 1
                 val meshRows = (height.toLong() + 3) / 4 + 1
-                width.toLong() * height * (channels * 12L + 12L) + meshColumns * meshRows * 8 + 8L * 1024 * 1024
+                width.toLong() * height * (channels * 12L + 11L) + meshColumns * meshRows * 8 + 8L * 1024 * 1024
             } else if (boundedDecode) {
                 // Reference + old/new input + result (4 Float channel images), Double sums,
                 // reference/current reusable gray planes and Float coverage. Post-processing
                 // runs after this worker returns; its lower live set fits the same reserve.
-                width.toLong() * height * (channels * 24L + 12L) + 8L * 1024 * 1024
-            } else Math.multiplyExact(Math.multiplyExact(width.toLong(), height.toLong()), channels * 32L + 24L) + 2L * 1024 * 1024
+                width.toLong() * height * (channels * 24L + 11L) + 8L * 1024 * 1024
+            } else Math.multiplyExact(Math.multiplyExact(width.toLong(), height.toLong()), channels * 32L + 23L) + 2L * 1024 * 1024
     }
 
     fun analyze(source: PlanetaryFrameSource, options: PlanetaryOptions = PlanetaryOptions(), cacheDirectory: File,
@@ -203,7 +203,7 @@ class PlanetaryStacker {
             }
         val framePixels = buffered?.let { FloatArray(source.width * source.height * source.channels) }
         val sums = DoubleArray(source.width * source.height * source.channels)
-        val weights = FloatArray(source.width * source.height)
+        val weights = CoverageBuffer(ShortArray(source.width * source.height))
         var grayScratch: FloatArray? = null
         val warpWorkspace = PlanetaryWarp.Workspace()
         val hint = if (options.localAlignment) LocalShiftHint() else null
@@ -271,7 +271,7 @@ class PlanetaryStacker {
             }
         }
         control.progress(PlanetaryProgress(PlanetaryPhase.COMPLETE, selected, selected))
-        return PlanetaryStackResult(LinearImage(source.width, source.height, source.channels, output), weights,
+        return PlanetaryStackResult(LinearImage(source.width, source.height, source.channels, output), weights.take(),
             PlanetaryStackStats(source.frameCount, analysis.validFrames, selected, accepted, analysis.referenceFrame, registration.points.size,
                 modes, reasons, totalCorrelation / accepted, exposure, unknownExposure, (System.nanoTime() - start) / 1_000_000, analysis.estimatedPeakBytes))
     }
@@ -294,7 +294,7 @@ class PlanetaryStacker {
             image.pixels.size.toLong() == source.width.toLong() * source.height * channels) { "Recording frame dimensions changed or data are truncated" }
     }
 
-    internal fun accumulate(image: LinearImage, sums: DoubleArray, weights: FloatArray, warp: PlanetaryWarp, checkCancelled: () -> Unit) {
+    internal fun accumulate(image: LinearImage, sums: DoubleArray, weights: CoverageBuffer, warp: PlanetaryWarp, checkCancelled: () -> Unit) {
         val width = image.width; val height = image.height; val channels = image.channels
         val pixels = image.pixels
         val table = warp.offsets
@@ -327,7 +327,7 @@ class PlanetaryStacker {
                         (pixels[c] * oneMinusFx + pixels[d] * fx) * fy
                     if (!value.isFinite()) continue
                     sums[p] += value
-                    weights[p] += 1f
+                    weights.increment(p)
                 } else {
                     val first = (pixels[a] * oneMinusFx + pixels[b] * fx) * oneMinusFy +
                         (pixels[c] * oneMinusFx + pixels[d] * fx) * fy
@@ -339,7 +339,7 @@ class PlanetaryStacker {
                         (pixels[c + 2] * oneMinusFx + pixels[d + 2] * fx) * fy
                     if (!third.isFinite()) continue
                     sums[p * 3] += first; sums[p * 3 + 1] += second; sums[p * 3 + 2] += third
-                    weights[p] += 1f
+                    weights.increment(p)
                 }
             }
         }

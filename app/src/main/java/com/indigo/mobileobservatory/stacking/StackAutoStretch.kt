@@ -20,7 +20,7 @@ object StackAutoStretch {
     fun estimate(
         linear: LinearImage,
         current: StackProcessingParameters,
-        weights: FloatArray? = null,
+        weights: PixelWeights? = null,
         backgroundCache: BackgroundModelCache? = null,
         cancelled: () -> Boolean = { false }
     ): StackProcessingParameters? {

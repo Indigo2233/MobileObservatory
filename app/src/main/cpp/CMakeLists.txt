@@ -40,3 +40,6 @@ endif()
 # USB fd helper used by ZWO (and optionally other USB open paths).
 add_library(usb_helper_jni SHARED usb_helper_jni.cpp)
 target_link_libraries(usb_helper_jni log dl)
+
+# Deep-sky accumulation uses native Float32 buffers while preserving exact frame counts.
+add_library(stack_accumulator_jni SHARED stack_accumulator_jni.cpp)

@@ -31,7 +31,9 @@ class RawCaptureFanoutIntegrationTest {
                 accepted = image.deepCopy()
                 return LiveFrameOutcome(true, 12, .01, 0.0)
             }
-            override fun snapshot(state: LiveStackState) = accepted?.let { LiveStackSnapshot(it.deepCopy(), FloatArray(4) { 1f }, state) }
+            override fun snapshot(state: LiveStackState) = accepted?.let {
+                LiveStackSnapshot(it.deepCopy(), DensePixelWeights(FloatArray(4) { 1f }), state)
+            }
         }
         val session = LiveStackSession(this, { engine }, { frame, sessionKey -> LinearPixelDecoder.decode(frame, sessionKey.pixelTraits) }, {})
         val recycled = AtomicInteger()

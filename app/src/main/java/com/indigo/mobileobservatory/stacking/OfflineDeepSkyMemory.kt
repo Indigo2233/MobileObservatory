@@ -5,7 +5,8 @@ package com.indigo.mobileobservatory.stacking
 internal data class OfflineDeepSkyMemory(
     val stackingBytes: Long,
     val previewBytes: Long,
-    val exportBytes: Long
+    val exportBytes: Long,
+    val accumulatorBytes: Long = 0
 ) {
     val peakBytes: Long get() = maxOf(stackingBytes, previewBytes, exportBytes)
 
@@ -21,11 +22,15 @@ internal data class OfflineDeepSkyMemory(
             val pixels = width.toLong() * height
             fun planes(bytesPerPixel: Long) = Math.multiplyExact(pixels, bytesPerPixel)
             val shared = Math.addExact(retainedCalibrationBytes, HEADROOM)
-            // Float mean/M2, coverage and one caller-owned input. Generic sources may overlap
-            // old/new owned reads. Finalization transfers mean/coverage, with no snapshot copy.
+            // The input frame remains a Java allocation. Mean and M2 live in native Float32
+            // storage while coverage uses UInt16. The Java renderer also needs bounded output;
+            // native storage is reported separately from Java heap admission.
+            val accumulator = planes(channels * 8L + 2L)
+            // Finalization copies the native mean and UInt16 coverage into one Java image plus
+            // a compact count buffer. The input buffer is released before this copy.
+            val result = planes(channels * 4L + 2L)
             val stacking = Math.addExact(Math.addExact(shared, decoderWorkingBytes),
-                planes(channels * (if (reusableInput) 12L else 16L) + 4))
-            val result = planes(channels * 4L + 4)
+                maxOf(planes(if (reusableInput) 4L else 8L), result))
             // Worst supported recipe: luma, detail blur, contrast blur and a separable-blur
             // temporary during preparation; only three planes survive into Bitmap rendering.
             // An old preview can have a different aspect ratio, so reserve its maximum size.
@@ -40,7 +45,7 @@ internal data class OfflineDeepSkyMemory(
             // The previous bounded preview and one Float/ARGB row remain while exporting.
             val export = shared + result + maxOf(planes(16), planes(12) + planes(4)) +
                 PREVIEW_BITMAP_BYTES + width * (channels * 4L + 4)
-            return OfflineDeepSkyMemory(stacking, preview, export)
+            return OfflineDeepSkyMemory(stacking, preview, export, accumulator)
         }
     }
 }

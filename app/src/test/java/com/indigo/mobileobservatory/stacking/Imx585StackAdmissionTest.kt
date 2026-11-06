@@ -69,10 +69,10 @@ class Imx585StackAdmissionTest {
         assertEquals(width.toLong() * height * 3 * 4 - packedBytes, floatEngine - compactEngine)
         assertEquals(49_152L, LiveFrameDecoder.compactScratchBytes(input))
         val working = LiveStackAdmission.workingBytes(input, 0, false)
-        assertTrue(working < 130_239_056L)
+        assertTrue(working < 160L shl 20)
         assertNull(LiveStackAdmission.issue(input, working))
         assertEquals("memory_budget", LiveStackAdmission.issue(input, working - 1))
-        val exportMinimum = width.toLong() * height * 44 +
+        val exportMinimum = width.toLong() * height * 14 +
             StackPreviewGrid.workingBytes(width, height, 3, LiveStackMemory.PREVIEW_MAX_SIDE) + LiveStackMemory.HEADROOM
         assertTrue(working >= exportMinimum)
     }

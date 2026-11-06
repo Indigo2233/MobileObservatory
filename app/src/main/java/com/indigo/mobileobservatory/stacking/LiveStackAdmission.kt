@@ -7,7 +7,8 @@ internal object LiveStackAdmission {
             key.width < key.softwareBin || key.height < key.softwareBin) return "processing_size"
         val pixels = key.width.toLong() * key.height
         // Native samples still need valid geometry and a bounded owned byte packet; only
-        // calibration/demosaic scratch is tiled before RGB binning.
+        // calibration/demosaic scratch is tiled before RGB binning. Deep-sky accumulators
+        // keep Float32 mean/M2 outside the Java heap and UInt16 frame counts.
         if (pixels > LinearImage.MAX_PIXELS) return "processing_size"
         if (pixels * key.format.bytesPerPixel > LiveStackSession.MAX_INPUT_BYTES) return "input_budget"
         if (key.format.isBayer && key.hardwareBin % 2 == 0 && !key.pixelTraits.bayerPatternAtOutput) return "bayer_hardware_bin"

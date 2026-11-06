@@ -923,6 +923,7 @@ internal fun stackMessage(code: String): String {
         "calibration_master_created_unverified" -> R.string.stack_cal_created_unverified
         "calibration_master_in_use" -> R.string.stack_cal_in_use
         "memory_budget", "input_budget", "MEMORY_BUDGET" -> R.string.stack_reason_memory
+        "FRAME_LIMIT" -> R.string.stack_frame_limit
         "offline_memory_budget" -> R.string.stack_offline_memory
         "processing_size", "PIXEL_BUDGET" -> R.string.stack_reason_processing_size
         "calibration_dimensions" -> R.string.stack_reason_invalid_dimensions

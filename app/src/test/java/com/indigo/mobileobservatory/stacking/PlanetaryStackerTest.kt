@@ -218,7 +218,7 @@ class PlanetaryStackerTest {
                 assertEquals(1L, best.stats.selectedFrames)
                 assertEquals(1L, best.stats.stackedFrames)
                 assertArrayEquals(original.pixels, best.image.pixels, 0f)
-                assertTrue(best.weights.all { it == 1f })
+                assertTrue(best.weights.toFloatArray().all { it == 1f })
                 val custom = stacker.stack(source, analysis, PlanetarySelection(count = 2))
                 assertEquals(2L, custom.stats.stackedFrames)
                 assertEquals(.02, custom.stats.effectiveExposureSeconds, 1e-9)
@@ -237,9 +237,9 @@ class PlanetaryStackerTest {
             stacker.analyze(source, PlanetaryOptions(localAlignment = false, maxGlobalShift = 12), directory).use { analysis ->
                 val result = stacker.stack(source, analysis, PlanetarySelection(percent = 100.0))
                 assertEquals(2L, result.stats.stackedFrames)
-                assertTrue(result.weights.any { it == 1f })
-                assertTrue(result.weights.any { it == 2f })
-                for (i in result.weights.indices) if (result.weights[i] == 1f) assertEquals(.012, result.image.pixels[i].toDouble(), .001)
+                assertTrue(result.weights.toFloatArray().any { it == 1f })
+                assertTrue(result.weights.toFloatArray().any { it == 2f })
+                for (i in 0 until result.weights.size) if (result.weights[i] == 1f) assertEquals(.012, result.image.pixels[i].toDouble(), .001)
                 assertEquals(2L, result.stats.framesWithUnknownExposure)
                 assertEquals(0.0, result.stats.effectiveExposureSeconds, 0.0)
             }

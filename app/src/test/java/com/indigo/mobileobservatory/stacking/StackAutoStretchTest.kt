@@ -98,7 +98,7 @@ class StackAutoStretchTest {
         val covered=LinearImage(raw.width,raw.height*2,1,FloatArray(raw.pixels.size*2))
         raw.pixels.copyInto(covered.pixels,raw.pixels.size)
         val weights=FloatArray(covered.pixelCount) { if(it>=raw.pixelCount) 1f else 0f }
-        val weighted=StackAutoStretch.estimate(covered,base,weights)!!
+        val weighted=StackAutoStretch.estimate(covered,base,DensePixelWeights(weights))!!
         assertEquals(normal.whitePoint,weighted.whitePoint,.00015)
         assertEquals(normal.midtone,weighted.midtone,.03)
     }
@@ -110,7 +110,8 @@ class StackAutoStretchTest {
         assertNull(StackAutoStretch.estimate(flat,StackProcessingParameters()))
         val invalid=darkScene().also { it.pixels[1]=Float.NaN }
         assertNull(StackAutoStretch.estimate(invalid,StackProcessingParameters()))
-        assertNull(StackAutoStretch.estimate(darkScene(),StackProcessingParameters(),FloatArray(256*128)))
+        assertNull(StackAutoStretch.estimate(darkScene(),StackProcessingParameters(),
+            DensePixelWeights(FloatArray(256*128))))
     }
 
     @Test fun ordinarySerializedRecipeReplaysPixelsAndPreservesIndependentEdits() {

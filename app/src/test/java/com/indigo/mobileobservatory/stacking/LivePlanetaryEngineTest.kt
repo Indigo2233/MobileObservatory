@@ -70,7 +70,7 @@ class LivePlanetaryEngineTest {
         val rawError = mse(truth, truth.copy(pixels = unregistered))
         assertTrue("Registered MSE=$correctedError; raw MSE=$rawError", correctedError < rawError * .15)
         assertEquals(offsets.size.toFloat(), snapshot.weights[64 * width + 80], 0f)
-        assertTrue(snapshot.weights.any { it < offsets.size })
+        assertTrue(snapshot.weights.toFloatArray().any { it < offsets.size })
         assertEquals(.05, snapshot.details["effectiveExposureSeconds"] as Double, 1e-12)
         assertEquals(false, snapshot.details["rotationEstimated"])
     }
@@ -105,7 +105,7 @@ class LivePlanetaryEngineTest {
         assertEquals("QUALITY_THRESHOLD", outcome.reason)
         val after = engine.snapshot(state(8))!!
         assertArrayEquals(before.image.pixels, after.image.pixels, 0f)
-        assertArrayEquals(before.weights, after.weights, 0f)
+        assertArrayEquals(before.weights.toFloatArray(), after.weights.toFloatArray(), 0f)
         assertEquals(8, after.details["qualityWindowSamples"])
         assertEquals(9L, after.details["qualityValidFrames"])
         assertEquals(8L, after.details["engineAcceptedFrames"])
@@ -145,7 +145,7 @@ class LivePlanetaryEngineTest {
             assertTrue("blur=$passes: $outcome", outcome.accepted)
             val result = engine.snapshot(state(1))!!
             assertArrayEquals(truth.pixels, result.image.pixels, 1e-6f)
-            assertTrue(result.weights.all { it == 1f })
+            assertTrue(result.weights.toFloatArray().all { it == 1f })
             assertEquals(2L, result.details["referenceInputFrame"])
             assertEquals(3, result.details["referenceWarmupFrames"])
             assertEquals(2, result.details["referenceWarmupDiscardedFrames"])
@@ -176,7 +176,7 @@ class LivePlanetaryEngineTest {
         assertEquals("REFERENCE_RESTART_REQUIRED", outcome.reason)
         val after = engine.snapshot(state(1))!!
         assertArrayEquals(before.image.pixels, after.image.pixels, 0f)
-        assertArrayEquals(before.weights, after.weights, 0f)
+        assertArrayEquals(before.weights.toFloatArray(), after.weights.toFloatArray(), 0f)
         assertEquals(before.details["referenceInputFrame"], after.details["referenceInputFrame"])
         assertEquals(1L, after.details["engineAcceptedFrames"])
         assertEquals(.01, after.details["effectiveExposureSeconds"] as Double, 0.0)
@@ -199,7 +199,7 @@ class LivePlanetaryEngineTest {
             assertFalse(outcome.toString(), outcome.accepted)
             assertEquals(reason, outcome.reason)
         }
-        assertArrayEquals(before.weights, engine.snapshot(state(1))!!.weights, 0f)
+        assertArrayEquals(before.weights.toFloatArray(), engine.snapshot(state(1))!!.weights.toFloatArray(), 0f)
         assertArrayEquals(before.image.pixels, engine.snapshot(state(1))!!.image.pixels, 0f)
     }
 
@@ -208,12 +208,12 @@ class LivePlanetaryEngineTest {
         val firstInput = frame(channels = 3)
         assertTrue(engine.add(firstInput, .01) { false }.accepted)
         val first = engine.snapshot(state(1, 7))!!
-        val ownedPixels = first.image.pixels.copyOf(); val ownedWeights = first.weights.copyOf()
+        val ownedPixels = first.image.pixels.copyOf(); val ownedWeights = first.weights.toFloatArray()
         firstInput.pixels.fill(0f)
         assertTrue(engine.add(frame(1.371, -.731, channels = 3), .02) { false }.accepted)
         val next = engine.snapshot(state(2, 7))!!
         assertArrayEquals(ownedPixels, first.image.pixels, 0f)
-        assertArrayEquals(ownedWeights, first.weights, 0f)
+        assertArrayEquals(ownedWeights, first.weights.toFloatArray(), 0f)
         assertEquals(1L, first.state.imageVersion); assertEquals(2L, next.state.imageVersion)
         assertEquals(7L, next.state.generation)
         assertEquals(.03, next.details["effectiveExposureSeconds"] as Double, 1e-12)
@@ -230,7 +230,7 @@ class LivePlanetaryEngineTest {
         val engine = LivePlanetaryEngine(budget, global, 100.0, referenceWarmupFrames = 1)
         engine.add(frame(), .01) { false }
         val before = engine.snapshot(state(1))!!
-        val pixels = before.image.pixels.copyOf(); val weights = before.weights.copyOf()
+        val pixels = before.image.pixels.copyOf(); val weights = before.weights.toFloatArray()
         var checks = 0
         try {
             engine.add(frame(.7, -.4), .01) { ++checks > totalChecks - height / 2 }
@@ -238,7 +238,7 @@ class LivePlanetaryEngineTest {
         } catch (_: CancellationException) { }
         assertNull(engine.snapshot(state(1)))
         assertArrayEquals(pixels, before.image.pixels, 0f)
-        assertArrayEquals(weights, before.weights, 0f)
+        assertArrayEquals(weights, before.weights.toFloatArray(), 0f)
         assertTrue(engine.add(frame(), .01) { false }.accepted)
         assertEquals(1L, engine.snapshot(state(1))!!.details["engineAcceptedFrames"])
     }

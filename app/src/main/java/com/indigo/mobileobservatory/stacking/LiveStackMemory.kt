@@ -14,15 +14,20 @@ internal object LiveStackMemory {
         val raw = key.width.toLong() * key.height * key.format.bytesPerPixel * MAX_IN_FLIGHT_FRAMES
         val engine = if (key.target == StackTarget.PLANETARY)
             LivePlanetaryEngine.estimateWorkingBytes(plan.width, plan.height, channels, PREVIEW_MAX_SIDE)
-        else DeepSkyStacker.estimateWorkingBytes(plan.width, plan.height, channels, PREVIEW_MAX_SIDE,
-            LiveFrameDecoder.outputStorageBytes(key))
+        else {
+            val inputBytes = LiveFrameDecoder.outputStorageBytes(key)
+            val nativeAccumulator = !LiveFrameDecoder.usesCompactInput(key)
+            DeepSkyStacker.estimateWorkingBytes(plan.width, plan.height, channels, PREVIEW_MAX_SIDE,
+                inputBytes, nativeAccumulator)
+        }
         val stacking = engine + raw + plan.overheadBytes + LiveFrameDecoder.compactScratchBytes(key)
         val preview = StackPreviewGrid.workingBytes(plan.width, plan.height, channels, PREVIEW_MAX_SIDE)
-        // Deep-sky export borrows mean/coverage. Planetary export normalizes Double sums into
+        // Deep-sky export copies mean/coverage from native storage. Planetary export normalizes Double sums into
         // one Float RGB result, while retaining its registration and accumulation workspaces.
         val retainedEngine = if (key.target == StackTarget.PLANETARY)
             pixels * (channels * 8L + 12) + LivePlanetaryEngine.meshBytes(plan.width, plan.height)
-        else pixels * (channels * 8L + 4)
+        else if (!LiveFrameDecoder.usesCompactInput(key)) pixels * (channels * 4L + 2L)
+        else pixels * (channels * 8L + 2L)
         val exportImage = if (key.target == StackTarget.PLANETARY) pixels * channels * 4L else 0L
         val export = retainedEngine + exportImage + pixels * 16 + calibrationBytes + preview + HEADROOM
         return maxOf(stacking, export)
