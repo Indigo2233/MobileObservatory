@@ -4,7 +4,9 @@ param(
     [switch]$Release,
     [switch]$ShowSequence,
     [switch]$HideSequence,
-    [switch]$EmulatorTest
+    [switch]$EmulatorTest,
+    [switch]$SkipLint,
+    [string]$BuildId
 )
 
 $ErrorActionPreference = "Stop"
@@ -23,6 +25,7 @@ $sequenceEnabled = $ShowSequence.IsPresent -or $EmulatorTest.IsPresent
 $buildType = if ($Release) { "release" } else { "debug" }
 $gradleTask = if ($Release) { "assembleRelease" } else { "assembleDebug" }
 $apk = Join-Path $root "app\build\outputs\apk\$buildType\app-$buildType.apk"
+$rotationApk = Join-Path $root "app\build\outputs\apk\$buildType\app-$buildType-rotation-signed.apk"
 $apkMetadata = Join-Path $root "app\build\outputs\apk\$buildType\output-metadata.json"
 $apkOut = if ($EmulatorTest) {
     Join-Path $root "bin\Installer\IndigoObservatory_emulator_test.apk"
@@ -95,13 +98,24 @@ try {
     $sourceBranch = (& git -C $root branch --show-current).Trim()
     if ([string]::IsNullOrWhiteSpace($sourceBranch)) { $sourceBranch = "detached" }
     $branchLabel = $sourceBranch -replace '[^A-Za-z0-9._-]', '-'
-    $buildIdentity = "{0}-{1}-{2}" -f $branchLabel, $commit.Substring(0, 12), [DateTimeOffset]::Now.ToString("yyyyMMdd-HHmmsszzz")
+    # Keep the default build id stable for unchanged sources so Kotlin and dex tasks
+    # stay up to date. Pass -BuildId when a unique package identity is required.
+    $buildIdentity = if (-not [string]::IsNullOrWhiteSpace($BuildId)) {
+        $BuildId
+    } else {
+        $dirty = (& git -C $root status --porcelain --untracked-files=no).Trim()
+        $dirtySuffix = if ($dirty) { "-dirty" } else { "" }
+        "{0}-{1}{2}" -f $branchLabel, $commit.Substring(0, 12), $dirtySuffix
+    }
 
     $gradleArgs = @()
     if ($Clean) {
         $gradleArgs += "clean"
     }
     $gradleArgs += $gradleTask
+    if ($SkipLint) {
+        $gradleArgs += @('-x', 'lintVitalRelease')
+    }
     if ($NonCommercial) {
         $gradleArgs += "-PstellariumNonCommercial=true"
     }
@@ -138,6 +152,7 @@ try {
     $signingCertificateSha256 = ""
     $legacySigningCertificateSha256 = ""
     $signingRotationMinSdkVersion = ""
+    $artifactApk = $apk
     if ($Release) {
         $androidSdkRoot = Get-AndroidSdkRoot
         $apkSigner = Get-ChildItem -Path (Join-Path $androidSdkRoot "build-tools") `
@@ -150,8 +165,9 @@ try {
         }
 
         $rotationMinSdkVersion = 28
+        Copy-Item -LiteralPath $apk -Destination $rotationApk -Force
         & "$root\scripts\Sign-RotatedRelease.ps1" `
-            -ApkPath $apk `
+            -ApkPath $rotationApk `
             -ApkSignerPath $apkSigner.FullName `
             -RotationMinSdkVersion $rotationMinSdkVersion
         if ($LASTEXITCODE -ne 0) {
@@ -159,12 +175,12 @@ try {
         }
 
         $signatureReport = & $apkSigner.FullName verify --print-certs `
-            --min-sdk-version 28 --max-sdk-version 32 $apk 2>&1
+            --min-sdk-version 28 --max-sdk-version 32 $rotationApk 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "Release APK signature verification failed for Android 9+: $signatureReport"
         }
         $legacySignatureReport = & $apkSigner.FullName verify --print-certs `
-            --min-sdk-version 26 --max-sdk-version 27 $apk 2>&1
+            --min-sdk-version 26 --max-sdk-version 27 $rotationApk 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "Release APK signature verification failed for Android 8: $legacySignatureReport"
         }
@@ -192,12 +208,16 @@ try {
         if ($signingCertificateSha256 -ne $expectedSigningDigest) {
             throw "Android 9+ signer does not match the maintainer certificate."
         }
+        $artifactApk = $rotationApk
         $signingRotationMinSdkVersion = [string]$rotationMinSdkVersion
     }
 
+    if (-not (Test-ValidApkArchive -Path $artifactApk)) {
+        throw "Build artifact is not a valid APK archive: $artifactApk"
+    }
     New-Item -ItemType Directory -Path (Split-Path $apkOut) -Force | Out-Null
-    Copy-Item -LiteralPath $apk -Destination $apkOut -Force
-    Copy-Item -LiteralPath $apk -Destination $versionedApkOut -Force
+    Copy-Item -LiteralPath $artifactApk -Destination $apkOut -Force
+    Copy-Item -LiteralPath $artifactApk -Destination $versionedApkOut -Force
     if (-not (Test-ValidApkArchive -Path $apkOut)) {
         throw "Copied APK failed archive validation: $apkOut"
     }

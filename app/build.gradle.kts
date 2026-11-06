@@ -1,31 +1,64 @@
 import java.io.File
+import org.gradle.api.DefaultTask
+import org.gradle.api.GradleException
+import org.gradle.api.provider.ListProperty
+import org.gradle.api.provider.Property
+import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.TaskAction
 
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
 
+abstract class VerifyReleaseSigning : DefaultTask() {
+    @get:Input
+    abstract val missingProperties: ListProperty<String>
+
+    @get:Input
+    abstract val storeFilePath: Property<String>
+
+    @get:Input
+    abstract val keyAlias: Property<String>
+
+    @TaskAction
+    fun verify() {
+        val missing = missingProperties.get()
+        if (missing.isNotEmpty()) {
+            throw GradleException("Release signing requires: ${missing.joinToString()}")
+        }
+
+        val store = storeFilePath.get().takeIf { it.isNotBlank() }?.let(::File)
+        if (store == null || !store.isFile) {
+            throw GradleException("Release keystore does not exist: $store")
+        }
+        if (store.name.equals("debug.keystore", ignoreCase = true) ||
+            keyAlias.get().equals("androiddebugkey", ignoreCase = true)
+        ) {
+            throw GradleException("Release builds cannot use the Android debug signing identity.")
+        }
+    }
+}
+
 // Exercise the same upstream PPEC core in host JVM tests as in the Android JNI library.
 val phd2HostDirectory = layout.buildDirectory.dir("phd2-host")
 val phd2WindowsHost = System.getProperty("os.name").startsWith("Windows")
 val phd2HostLibrary = phd2HostDirectory.map { it.file(if (phd2WindowsHost) "phd2_guiding.dll" else "libphd2_guiding.so") }
+val phd2Jni = File(System.getProperty("java.home"), "include")
+val phd2NativeRoot = file("src/main/cpp")
+val phd2HostFlags = mutableListOf("g++", "-std=c++11", "-O1", "-DNDEBUG", "-DEIGEN_MPL2_ONLY", "-DEIGEN_DONT_PARALLELIZE", "-shared")
+if (phd2WindowsHost) phd2HostFlags += listOf("-static-libgcc", "-static-libstdc++", "-static") else phd2HostFlags += "-fPIC"
+phd2HostFlags += listOf("-I${phd2Jni.absolutePath}", "-I${File(phd2Jni, if (phd2WindowsHost) "win32" else "linux").absolutePath}",
+    "-I${File(phd2NativeRoot, "phd2/eigen").absolutePath}", "-I${File(phd2NativeRoot, "phd2/src").absolutePath}",
+    "-I${File(phd2NativeRoot, "phd2/tools").absolutePath}")
+phd2HostFlags += listOf("phd2_guiding_jni.cpp", "phd2/src/gaussian_process_guider.cpp", "phd2/src/gaussian_process.cpp",
+    "phd2/src/covariance_functions.cpp", "phd2/src/zfilterfactory.cpp", "phd2/tools/math_tools.cpp").map { File(phd2NativeRoot, it).absolutePath }
+phd2HostFlags += listOf("-o", phd2HostLibrary.get().asFile.absolutePath)
+phd2HostDirectory.get().asFile.mkdirs()
 val buildPhd2Host by tasks.registering(Exec::class) {
     inputs.files(fileTree("src/main/cpp/phd2"), file("src/main/cpp/phd2_guiding_jni.cpp"))
     outputs.file(phd2HostLibrary)
-    doFirst {
-        phd2HostDirectory.get().asFile.mkdirs()
-        val jni = File(System.getProperty("java.home"), "include")
-        val nativeRoot = file("src/main/cpp")
-        val flags = mutableListOf("g++", "-std=c++11", "-O1", "-DNDEBUG", "-DEIGEN_MPL2_ONLY", "-DEIGEN_DONT_PARALLELIZE", "-shared")
-        if (phd2WindowsHost) flags += listOf("-static-libgcc", "-static-libstdc++", "-static") else flags += "-fPIC"
-        flags += listOf("-I${jni.absolutePath}", "-I${File(jni, if (phd2WindowsHost) "win32" else "linux").absolutePath}",
-            "-I${File(nativeRoot, "phd2/eigen").absolutePath}", "-I${File(nativeRoot, "phd2/src").absolutePath}",
-            "-I${File(nativeRoot, "phd2/tools").absolutePath}")
-        flags += listOf("phd2_guiding_jni.cpp", "phd2/src/gaussian_process_guider.cpp", "phd2/src/gaussian_process.cpp",
-            "phd2/src/covariance_functions.cpp", "phd2/src/zfilterfactory.cpp", "phd2/tools/math_tools.cpp").map { File(nativeRoot, it).absolutePath }
-        flags += listOf("-o", phd2HostLibrary.get().asFile.absolutePath)
-        commandLine(flags)
-    }
+    commandLine(phd2HostFlags)
 }
 tasks.withType<Test>().configureEach {
     dependsOn(buildPhd2Host)
@@ -74,6 +107,9 @@ val releaseSigningValues = listOf(
     "ANDROID_RELEASE_KEY_PASSWORD" to releaseKeyPassword
 )
 val releaseSigningConfigured = releaseSigningValues.all { it.second != null }
+val releaseSigningMissing = releaseSigningValues.filter { it.second == null }.map { it.first }
+val releaseStorePath = releaseStoreFile?.let { File(it).absolutePath }
+val releaseKeyAliasValue = releaseKeyAlias
 
 android {
     namespace = "com.indigo.mobileobservatory"
@@ -191,24 +227,12 @@ android {
     }
 }
 
-val verifyReleaseSigning = tasks.register("verifyReleaseSigning") {
+val verifyReleaseSigning = tasks.register<VerifyReleaseSigning>("verifyReleaseSigning") {
     group = "verification"
     description = "Rejects unsigned or debug-signed release builds."
-    doLast {
-        val missing = releaseSigningValues.filter { it.second == null }.map { it.first }
-        if (missing.isNotEmpty()) {
-            throw GradleException("Release signing requires: ${missing.joinToString()}")
-        }
-        val store = file(releaseStoreFile!!)
-        if (!store.isFile) {
-            throw GradleException("Release keystore does not exist: $store")
-        }
-        if (store.name.equals("debug.keystore", ignoreCase = true) ||
-            releaseKeyAlias.equals("androiddebugkey", ignoreCase = true)
-        ) {
-            throw GradleException("Release builds cannot use the Android debug signing identity.")
-        }
-    }
+    missingProperties.set(releaseSigningMissing)
+    storeFilePath.set(releaseStorePath ?: "")
+    keyAlias.set(releaseKeyAliasValue ?: "")
 }
 
 tasks.matching { it.name == "preReleaseBuild" }.configureEach {
