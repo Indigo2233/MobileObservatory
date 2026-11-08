@@ -43,7 +43,7 @@ class MainActivity : ComponentActivity() {
         FileLogger.i(
             "App",
             "Indigo Observatory ${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE}) " +
-                "buildId=${BuildConfig.SOURCE_BUILD_ID} " +
+                "buildId=${getString(R.string.source_build_id)} " +
                 "pid=${android.os.Process.myPid()} action=${intent?.action} " +
                 "restored=${savedInstanceState != null}"
         )

@@ -220,7 +220,7 @@ private fun DiagnosticsSettingsPage() = SettingsPage {
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )
     Text(
-        stringResource(R.string.build_identity, BuildConfig.SOURCE_BUILD_ID),
+        stringResource(R.string.build_identity, stringResource(R.string.source_build_id)),
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )

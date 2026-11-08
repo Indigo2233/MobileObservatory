@@ -1,7 +1,7 @@
 package com.indigo.mobileobservatory.polar
 
 import android.content.Context
-import com.indigo.mobileobservatory.BuildConfig
+import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.astrometry.SolveFailureArchive
 import com.indigo.mobileobservatory.util.FileLogger
 import kotlinx.coroutines.CancellationException
@@ -17,7 +17,7 @@ internal suspend fun retainSolveFailure(context: Context, task: String, index: I
         try {
             val directory = checkNotNull(context.getExternalFilesDir("captures")) { "Capture storage unavailable" }
             val diagnostics = buildString {
-                appendLine("buildId=${BuildConfig.SOURCE_BUILD_ID}")
+                appendLine("buildId=${context.getString(R.string.source_build_id)}")
                 appendLine("task=$task point=${index + 1} phase=${sample.phase} failedPhase=${sample.failedPhase}")
                 appendLine("source=${file.absolutePath} bytes=${file.length()} capturedAt=${sample.capturedAt}")
                 appendLine("reason=${sample.failure.orEmpty()} elapsedMs=${sample.result?.elapsedMs}")

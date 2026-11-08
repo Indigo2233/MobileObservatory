@@ -127,13 +127,13 @@ android {
         buildConfigField("boolean", "STELLARIUM_ENABLED", stellariumNonCommercial.toString())
         buildConfigField("boolean", "SEQUENCE_ENABLED", sequenceEnabled.toString())
         buildConfigField("boolean", "EMULATOR_TEST", emulatorTest.toString())
-        buildConfigField("String", "SOURCE_BUILD_ID", buildConfigString(observatoryBuildId))
         buildConfigField("String", "UPDATE_MANIFEST_URL", buildConfigString(updateManifestUrl))
         buildConfigField(
             "String",
             "UPDATE_MANIFEST_FALLBACK_URL",
             buildConfigString(updateManifestFallbackUrl)
         )
+        resValue("string", "source_build_id", observatoryBuildId)
 
         ndk {
             abiFilters += if (emulatorTest) {

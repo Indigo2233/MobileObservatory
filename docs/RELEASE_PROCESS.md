@@ -124,9 +124,11 @@ The build produces:
 The default identity contains the branch and commit, with `-dirty` appended when
 tracked files have uncommitted changes. This keeps repeated local builds
 incremental. Pass `-BuildId <value>` when a unique package identity is required.
-The application records `BuildConfig.SOURCE_BUILD_ID` at startup and displays it
-under Settings / About. The same value is written as `buildIdentity` in the build
-information file, alongside the build timestamp. Direct Gradle builds can pass
+The application records the generated `R.string.source_build_id` value at startup
+and displays it under Settings / About. The same value is written as
+`buildIdentity` in the build information file, alongside the build timestamp.
+Keeping this frequently changing value in a resource lets identity-only rebuilds
+skip Kotlin compilation. Direct Gradle builds can pass
 `-PobservatoryBuildId=...`; otherwise they identify themselves as `development`.
 For local iteration, pass `-SkipLint` to omit `lintVitalRelease`; run the full
 release build before publication or validation.
