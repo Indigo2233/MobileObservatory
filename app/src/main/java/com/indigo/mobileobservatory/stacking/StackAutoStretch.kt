@@ -8,10 +8,12 @@ import kotlin.math.min
 /** A bounded display-only estimate. The returned ordinary recipe completely defines the result. */
 object StackAutoStretch {
     private const val MAX_SAMPLES = 16_384
+    private const val SHADOWS_CLIP_SIGMA = 2.8
+    private const val TARGET_BACKGROUND = 0.25
 
     /**
-     * Samples display-corrected linear luminance, excluding uncovered pixels. The outer 0.5% tails do
-     * not set the range, so sparse hot pixels/saturated stars cannot suppress a dark target.
+     * Samples display-corrected linear luminance, excluding uncovered pixels. Robust tails and MAD
+     * statistics keep sparse hot pixels and saturated stars from suppressing a dark target.
      * No image-sized scratch or data mutation; constant/invalid input has no useful estimate.
      * WB, saturation, background and detail controls survive unchanged. Statistics use the
      * same corrected and balanced linear samples as rendering. Explicit use from RAW
@@ -44,26 +46,32 @@ object StackAutoStretch {
         if (valid < 32 || invalid > 0) return null
         samples.sort(0, valid)
         fun percentile(fraction: Double): Double = samples[((valid - 1) * fraction).toInt()]
-        val low = percentile(.005)
         val median = percentile(.5)
-        val high = percentile(.995)
-        val spread = high - low
-        if (spread <= max(1e-7, kotlin.math.abs(median) * 1e-6) || high <= 0.0 || low >= 1.0) return null
+        val deviations = DoubleArray(valid)
+        for (i in 0 until valid) deviations[i] = kotlin.math.abs(samples[i] - median)
+        deviations.sort()
+        val sigma = 1.4826 * deviations[valid / 2]
+        val lowTail = percentile(.001)
+        val high = percentile(.999)
+        val spread = high - lowTail
+        if (spread <= max(1e-7, kotlin.math.abs(median) * 1e-6) || high <= 0.0 || lowTail >= 1.0) return null
 
-        // This robust white sets the display knee. The shoulder retains brighter signal.
-        val black = max(0.0, low - spread * .05).coerceAtMost(.99)
-        val white = min(1.0, max(high + spread * .25, black + .001))
+        // Siril's documented autostretch reference uses -2.8 sigma from the main histogram
+        // peak. MAD makes that peak insensitive to nebula and sparse stars.
+        val black = max(lowTail, median - SHADOWS_CLIP_SIGMA * sigma).coerceIn(0.0, .99)
+        val white = max(high + max(sigma * .5, spread * .04), black + .001)
         if (white <= black || median <= black || median >= white) return null
-        val curve = 4.0
+        val normalizedSpan = (high - lowTail) / max(1e-9, median - black)
+        val curve = (3.5 + (2.5 / max(1.0, normalizedSpan))).coerceIn(3.5, 6.0)
         val normalizedMedian = ((median - black) / (white - black)).coerceIn(0.0, 1.0)
         val curved = asinh(curve * normalizedMedian) / asinh(curve)
         val x = if (current.displayVersion >= 2) compressHighlights(curved,current.highlightCompression) else curved
-        // Version 3 uses a multiscale display path and keeps the background near the
-        // PixInsight-style midtone range instead of the legacy dark 0.12 target.
-        val target = if (current.displayVersion >= 3) .30 else .12
+        // Use Siril's default target background for the current multiscale renderer and retain
+        // the darker legacy target for replay compatibility.
+        val target = if (current.displayVersion >= 3) TARGET_BACKGROUND else .12
         val midtone = (x * (1 - target) / (x + target - 2 * x * target)).coerceIn(.01, .99)
         val multiscaleWhite = if (current.displayVersion >= 3)
-            min(1.0, white + spread * .32) else white
+            white + max(sigma * 4.0, spread * .18) else white
         return current.copy(
             preset = if (current.preset == ProcessingPreset.RAW) ProcessingPreset.NATURAL else current.preset,
             blackPoint = black, whitePoint = multiscaleWhite, midtone = midtone,

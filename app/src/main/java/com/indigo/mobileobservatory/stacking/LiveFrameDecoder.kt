@@ -32,7 +32,7 @@ internal class LiveFrameDecoder {
         require(!frame.pixelFormat.isBayer || traits.bayerPatternAtOutput || traits.binning % 2 == 1) {
             "bayer_hardware_bin"
         }
-        val plan = plan(key, calibration.memoryBytes, calibration.enabled)
+        val plan = plan(key, calibration.heapBytes, calibration.enabled)
         require(plan.width > 0 && plan.height > 0 &&
             frame.width.toLong() * frame.height <= LinearImage.MAX_PIXELS) { "processing_size" }
         require(frame.data.size.toLong() >= frame.width.toLong() * frame.height * frame.bytesPerPixel) {

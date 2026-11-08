@@ -69,7 +69,7 @@ class LiveCompactInputTest {
             CalibrationDescriptor(type.name, "", type, geometry, CalibrationCapture(), "fixture", 1, 0),
             FloatArray(input.width * input.height * 3) { value })
         val calibration = CalibrationSelection(bias = master(CalibrationType.BIAS, .1f),
-            flat = master(CalibrationType.FLAT, .05f), allowUnknownCapture = true)
+            flat = master(CalibrationType.FLAT, .05f))
         val decoder = LiveFrameDecoder()
         try {
             val expected = decoder.decode(input, settings, calibration, CalibrationCapture())

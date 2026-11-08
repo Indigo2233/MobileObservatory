@@ -96,12 +96,12 @@ class SerCfaCoordinatorInstrumentedTest {
     @Test fun unknownRawHeaderCanBeRecoveredAndMastersMatchTheEffectiveMosaic() = runBlocking {
         workspace { c, folder, cleanup ->
             val bias = recording(folder, "bias.ser", bias = true)
-            main { c.calibration.createMaster(CalibrationType.BIAS, bias, true, SerCfaInterpretation.RGGB) }
+            main { c.calibration.createMaster(CalibrationType.BIAS, bias, SerCfaInterpretation.RGGB) }
             await { !c.calibration.state.value.busy && c.calibration.state.value.masters.isNotEmpty() }
             val master = c.calibration.state.value.masters.single()
             assertEquals("RGGB", master.geometry.layout)
             assertTrue(master.sourceIdentity.contains("cfa:RGGB"))
-            main { c.calibration.selectMaster(CalibrationType.BIAS, master.id, true) }
+            main { c.calibration.selectMaster(CalibrationType.BIAS, master.id) }
             await { !c.calibration.state.value.busy }
             val file = recording(folder, "missing-pattern.ser")
             RandomAccessFile(file, "rw").use { it.seek(18); it.writeInt(Integer.reverseBytes(7)) }

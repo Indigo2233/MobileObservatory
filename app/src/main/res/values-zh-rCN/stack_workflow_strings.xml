@@ -15,7 +15,9 @@
     <string name="stack_change_target_confirm">重置并切换</string>
     <string name="stack_deep_sky_steps">选择 SER/PSER 录像，按星场配准并叠加。校准帧可选。</string>
     <string name="stack_deep_sky_start">配准并叠加深空</string>
+    <string name="stack_selecting_reference">正在评估参考帧质量…</string>
     <string name="stack_deep_sky_stats">接受 %1$d 帧 · 拒收 %2$d 帧 · 已知曝光 %3$.1f 秒</string>
+    <string name="stack_deep_sky_reference">参考帧 %1$d · %2$d 颗星 · 圆度 %3$.2f · 预扫描配准成功率 %4$.1f%%</string>
     <string name="stack_live_planetary_intro">居中并对焦行星，逐帧筛选、配准和叠加；如需整段录像排名选优，可使用后期叠加。</string>
     <string name="stack_live_planetary_stats">收到 %1$d 帧 · 接受 %2$d 帧 · 拒收 %3$d 帧 · 队列丢弃 %4$d 帧</string>
 </resources>

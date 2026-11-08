@@ -310,17 +310,19 @@ class StackingCoordinator(
 
     fun liveInputIssue(key: StackSessionKey): String? {
         val calibrationBytes = calibration.memoryBytes
-        LiveStackAdmission.issue(key, memoryBudgetBytes, calibrationBytes, calibrationBytes > 0)?.let { return it }
-        val working = LiveStackAdmission.workingBytes(key, calibrationBytes, calibrationBytes > 0)
-        return LiveStackAdmission.issue(key, liveInputBudget(calibrationBytes, working), calibrationBytes, calibrationBytes > 0)
+        val calibrated = calibration.enabled
+        LiveStackAdmission.issue(key, memoryBudgetBytes, calibrationBytes, calibrated)?.let { return it }
+        val working = LiveStackAdmission.workingBytes(key, calibrationBytes, calibrated)
+        return LiveStackAdmission.issue(key, liveInputBudget(calibrationBytes, working), calibrationBytes, calibrated)
     }
 
     fun liveInputBudgetSnapshot(key: StackSessionKey): LiveInputDiagnostic {
         val calibrationBytes = calibration.memoryBytes
-        val working = LiveStackAdmission.workingBytes(key, calibrationBytes, calibrationBytes > 0)
+        val calibrated = calibration.enabled
+        val working = LiveStackAdmission.workingBytes(key, calibrationBytes, calibrated)
         val budget = liveInputBudget(calibrationBytes, working)
         return LiveInputDiagnostic(
-            issue = LiveStackAdmission.issue(key, budget, calibrationBytes, calibrationBytes > 0).orEmpty(),
+            issue = LiveStackAdmission.issue(key, budget, calibrationBytes, calibrated).orEmpty(),
             input = key,
             budgetBytes = budget,
             workingBytes = working,
@@ -343,7 +345,7 @@ class StackingCoordinator(
         FileLogger.i("Stacking", "Live requested input=${key.width}x${key.height} format=${key.format} " +
             "hardwareBin=${key.hardwareBin} softwareBin=${key.softwareBin} target=${key.target} " +
             "demosaic=${key.demosaicAlgorithm} budget=$liveMemoryBudgetBytes ceiling=$memoryBudgetBytes " +
-            "calibrationBytes=${calibration.memoryBytes}")
+            "calibrationBytes=${calibration.memoryBytes} nativeCalibrationBytes=${calibration.nativeBytes}")
         // Button recomposition can lag a rapid second tap; starting is idempotent here.
         if (live.state.value.phase != LiveStackPhase.EMPTY) return
         if (key.target != _liveTarget.value) { report("stack_target_changed"); return }
@@ -356,8 +358,8 @@ class StackingCoordinator(
         val selectedCalibration = try { calibration.snapshot() } catch (error: Exception) {
             report(error.message ?: "calibration_failed"); return
         }
-        val available = liveInputBudget(selectedCalibration.memoryBytes)
-        LiveStackAdmission.issue(key, available, selectedCalibration.memoryBytes, selectedCalibration.enabled)?.let {
+        val available = liveInputBudget(selectedCalibration.heapBytes)
+        LiveStackAdmission.issue(key, available, selectedCalibration.heapBytes, selectedCalibration.enabled)?.let {
             FileLogger.i("Stacking", "Live heap admission available=$available ceiling=$memoryBudgetBytes")
             report(it)
             return
@@ -368,7 +370,7 @@ class StackingCoordinator(
         val capture = liveCapture(key)
         try { selectedCalibration.validate(geometry, capture) }
         catch (error: Exception) { report(error.message ?: "calibration_settings_mismatch"); return }
-        val decoderBytes = LiveFrameDecoder.overheadBytes(key, selectedCalibration.memoryBytes, selectedCalibration.enabled) +
+        val decoderBytes = LiveFrameDecoder.overheadBytes(key, selectedCalibration.heapBytes, selectedCalibration.enabled) +
             key.width.toLong() * key.height * key.format.bytesPerPixel * LiveStackMemory.MAX_IN_FLIGHT_FRAMES
         activateModeLocked(StackMode.LIVE)
         liveCalibration = selectedCalibration
@@ -674,16 +676,18 @@ class StackingCoordinator(
         _task.update { it.copy(histogram = emptyList(), qualityFrames = 0, referenceFrame = 0, stats = null, deepSkyStats = null) }
         source(file, roi, softwareBin).use { source ->
             checkBudget(source)
+            val referenceSampleCount = OfflineDeepSkyStacker.referenceIndices(source.frameCount).size
             val result = OfflineDeepSkyStacker().stack(source,
                 DeepSkyConfig(memoryBudgetBytes = memoryBudgetBytes),
                 checkCancelled = { ensureActive() },
                 progress = { completed, total, stats ->
                     ensureActive()
                     _task.update { it.copy(phase = StackTaskPhase.STACKING, completed = completed, total = total,
-                        qualityFrames = stats.accepted.toLong()) }
+                        qualityFrames = stats.accepted.toLong(),
+                        message = if (completed <= referenceSampleCount) "stack_selecting_reference" else "") }
                     recordMemory()
-                }, decoderWorkingBytes = source.processingOverheadBytes - source.calibration.memoryBytes,
-                retainedCalibrationBytes = source.calibration.memoryBytes)
+                }, decoderWorkingBytes = source.processingOverheadBytes - source.calibration.heapBytes,
+                retainedCalibrationBytes = source.calibration.heapBytes)
             ensureActive()
             check(identity(file) == source.info.identity) { "source_changed" }
             val stats = result.stats
@@ -713,7 +717,20 @@ class StackingCoordinator(
                     put("resultOwnership", "copied_from_native_accumulator")
                 }.toString(),
                 "registration" to JSONObject().apply {
-                    put("referenceFrame", stats.referenceFrame); put("referencePolicy", "first_accepted_star_field")
+                    put("referenceFrame", stats.referenceFrame)
+                    put("referencePolicy", "quality_and_registration_stability_preselection")
+                    stats.referenceQuality?.let { quality ->
+                        put("candidateFrames", OfflineDeepSkyStacker.referenceIndices(stats.inputFrames).size)
+                        put("score", quality.score)
+                        put("stars", quality.starCount)
+                        put("medianElongation", quality.elongation)
+                        put("background", quality.background)
+                        put("noise", quality.noise)
+                        put("relativeStarFlux", quality.relativeStarFlux)
+                        put("registrationSuccess", quality.registrationSuccess)
+                        put("registrationRmsPx", quality.registrationRmsPx)
+                        put("comparedFrames", quality.comparedFrames)
+                    }
                     put("inputFrames", stats.inputFrames); put("acceptedFrames", stats.stack.accepted)
                     put("rejectedFrames", stats.stack.rejected); put("rejections", JSONObject(stats.rejectionCounts.mapKeys { it.key.name }))
                     put("registrationRmsPx", stats.stack.registrationRmsPx); put("rotationDegrees", stats.stack.rotationDegrees)
@@ -1004,7 +1021,7 @@ class StackingCoordinator(
         FileLogger.i("Stacking", "Offline input=${source.info.width}x${source.info.height} region=${source.plan.region} " +
             "bin=${source.plan.softwareBin} output=${source.width}x${source.height} estimate=${source.plan.workingBytes} " +
             "budget=$memoryBudgetBytes heapLimit=$heapLimitBytes target=${source.plan.target}")
-        val available = availableBudget(source.calibration.memoryBytes, source.plan.workingBytes)
+        val available = availableBudget(source.calibration.heapBytes, source.plan.workingBytes)
         FileLogger.i("Stacking", "Offline heap admission available=$available ceiling=$memoryBudgetBytes")
         source.plan.issue(available)?.let { error(it) }
     }
@@ -1014,7 +1031,7 @@ class StackingCoordinator(
         return runCatching { OfflineRegionPlan(info.width, info.height,
             _serCfaInterpretation.value.sensorFormat(info.headerColorId, info.bits),
             region ?: PixelRoi(0, 0, info.width, info.height), _demosaicAlgorithm.value, _offlineTarget.value,
-            softwareBin, calibration.memoryBytes, calibration.memoryBytes > 0) }.getOrNull()
+            softwareBin, calibration.memoryBytes, calibration.enabled) }.getOrNull()
     }
 
     private fun CoroutineScope.control() = PlanetaryControl(checkCancelled = { ensureActive() }, progress = { progress ->
@@ -1060,7 +1077,7 @@ class StackingCoordinator(
                 geometry = CalibrationGeometry.from(header.width, header.height, reader.sensorFormat, reader.sensorTraits)
                 plan = OfflineRegionPlan(header.width, header.height, reader.sensorFormat,
                     region ?: PixelRoi(0, 0, header.width, header.height), algorithm, target, softwareBin,
-                    calibration.memoryBytes, calibration.enabled)
+                    calibration.heapBytes, calibration.enabled)
                 val fileIdentity = identity(file)
                 info = StackSourceInfo(file, header.width, header.height,
                     if (reader.sensorFormat.isMono) 1 else 3, header.pixelDepth, header.frameCount.toLong(), fileIdentity,
@@ -1113,14 +1130,15 @@ class StackingCoordinator(
             is Collection<*> -> JSONArray(value).toString()
             else -> value.toString()
         } } + liveCalibration.metadata() + mapOf(
-            "calibrationMemoryBytes" to liveCalibration.memoryBytes.toString(),
+            "calibrationHeapBytes" to liveCalibration.heapBytes.toString(),
+            "calibrationNativeBytes" to liveCalibration.nativeBytes.toString(),
             "calibrationUnknownSettings" to JSONArray(liveCalibrationWarnings).toString(),
             "demosaicAlgorithm" to (s.key?.takeIf { it.format.isBayer }?.demosaicAlgorithm?.name ?: "NONE"),
             "demosaicScratchBytes" to (s.key?.let { LiveFrameDecoder.plan(it).demosaicScratchBytes } ?: 0).toString(),
             "decoderWorkingBytes" to liveDecoderBytes.toString(),
             "decodedInputBytes" to (s.key?.let(LiveFrameDecoder::outputStorageBytes) ?: 0).toString(),
             "estimatedWorkingBytes" to (s.key?.let {
-                LiveStackAdmission.workingBytes(it, liveCalibration.memoryBytes, liveCalibration.enabled)
+                LiveStackAdmission.workingBytes(it, liveCalibration.heapBytes, liveCalibration.enabled)
             } ?: 0).toString(),
             "processingDomain" to "native_tiles_calibrate_demosaic_then_bin",
             "previewMaxSide" to LiveStackMemory.PREVIEW_MAX_SIDE.toString(),

@@ -6,7 +6,8 @@ data class OfflineDeepSkyStats(
     val referenceFrame: Long,
     val unknownExposureFrames: Long,
     val rejectionCounts: Map<DeepSkyRejection, Long>,
-    val elapsedMillis: Long
+    val elapsedMillis: Long,
+    val referenceQuality: DeepSkyReferenceQuality? = null
 )
 
 data class OfflineDeepSkyResult(val image: LinearImage, val weights: PixelWeights, val stats: OfflineDeepSkyStats)
@@ -34,29 +35,49 @@ class OfflineDeepSkyStacker {
         require(memory.stackingBytes <= config.memoryBudgetBytes) { "memory_budget" }
         checkCancelled()
         val start = System.nanoTime()
+        val referenceIndices = referenceIndices(source.frameCount)
         val algorithm = DeepSkyStacker(config, livePreviewOverlap = false, reusableOfflineInput = buffered != null)
+        val referenceWorkspace = StarRegistration.Workspace()
         try {
             var input = if (buffered != null) FloatArray(source.width * source.height * source.channels) else null
-            val rejected = linkedMapOf<DeepSkyRejection, Long>()
-            var reference = -1L
-            var unknown = 0L
-            var index = 0L
-            while (index < source.frameCount) {
-                checkCancelled()
+            fun readFrame(index: Long): LinearImage {
                 val image = if (buffered == null) source.readFrame(index) else
                     buffered.readFrameInto(index, checkNotNull(input)).also {
                         require(it.pixels === input) { "source_buffer_changed" }
                     }
+                require(image.width == source.width && image.height == source.height && image.channels == source.channels) {
+                    "source_geometry_changed"
+                }
+                return image
+            }
+            val referenceSamples = referenceIndices.mapIndexed { completed, index ->
                 checkCancelled()
-                require(image.width == source.width && image.height == source.height && image.channels == source.channels) { "source_geometry_changed" }
+                val image = readFrame(index)
+                val field = StarRegistration.detect(image, workspace = referenceWorkspace) {
+                    checkCancelled()
+                    false
+                }
+                progress(completed + 1L, referenceIndices.size + source.frameCount,
+                    DeepSkyStats(received = completed + 1, estimatedWorkingBytes = memory.peakBytes))
+                DeepSkyReferenceSample(index, field)
+            }
+            val reference = DeepSkyReferenceSelector.choose(referenceSamples, config)
+                ?: error("deep_sky_no_accepted_frames")
+            algorithm.primeReference(reference.field, source.width, source.height, source.channels)
+            val rejected = linkedMapOf<DeepSkyRejection, Long>()
+            var unknown = 0L
+            var index = 0L
+            while (index < source.frameCount) {
+                checkCancelled()
+                val image = readFrame(index)
                 val exposure = source.exposureSeconds(index)
                 val outcome = algorithm.add(image, exposure) { checkCancelled(); false }
                 if (outcome.accepted) {
-                    if (reference < 0) reference = index
                     if (exposure == 0.0) unknown++
                 } else outcome.reason?.let { rejected[it] = (rejected[it] ?: 0L) + 1L }
                 index++
-                progress(index, source.frameCount, outcome.stats.copy(estimatedWorkingBytes = memory.peakBytes))
+                progress(referenceIndices.size + index, referenceIndices.size + source.frameCount,
+                    outcome.stats.copy(estimatedWorkingBytes = memory.peakBytes))
                 if (!outcome.accepted && outcome.reason == DeepSkyRejection.FRAME_LIMIT)
                     error("deep_sky_frame_count")
             }
@@ -65,13 +86,27 @@ class OfflineDeepSkyStacker {
             val snapshot = algorithm.takeResult() ?: error("deep_sky_no_accepted_frames")
             checkCancelled()
             return OfflineDeepSkyResult(snapshot.image, snapshot.weights,
-                OfflineDeepSkyStats(snapshot.stats.copy(estimatedWorkingBytes = memory.peakBytes), source.frameCount, reference, unknown, rejected.toMap(),
-                    (System.nanoTime() - start) / 1_000_000))
-        } finally { algorithm.reset() }
+                OfflineDeepSkyStats(snapshot.stats.copy(estimatedWorkingBytes = memory.peakBytes),
+                    source.frameCount, reference.frame, unknown, rejected.toMap(),
+                    (System.nanoTime() - start) / 1_000_000, reference))
+        } finally {
+            referenceWorkspace.release()
+            algorithm.reset()
+        }
     }
 
     companion object {
         // UInt16 coverage keeps every count exact. Longer recordings fail before reading a frame.
         const val MAX_FRAMES = DeepSkyStacker.MAX_STACK_FRAMES.toLong()
+        const val MAX_REFERENCE_SAMPLES = 256
+
+        internal fun referenceIndices(frameCount: Long): List<Long> {
+            require(frameCount > 0)
+            val count = minOf(frameCount, MAX_REFERENCE_SAMPLES.toLong()).toInt()
+            if (count == 1) return listOf(0L)
+            return List(count) { index ->
+                index.toLong() * (frameCount - 1L) / (count - 1L)
+            }.distinct()
+        }
     }
 }

@@ -43,7 +43,7 @@ class SerRegionDecoderTest {
                     CalibrationCapture(), "test", 1, 0), FloatArray(319 * 303) { i ->
                     if (type == CalibrationType.BIAS) .01f + i % 319 * .00001f else .9f + i % 303 * .001f
                 })
-                val calibration = CalibrationSelection(bias = master(CalibrationType.BIAS), flat = master(CalibrationType.FLAT), allowUnknownCapture = true)
+                val calibration = CalibrationSelection(bias = master(CalibrationType.BIAS), flat = master(CalibrationType.FLAT))
                 val full = calibration.apply(reader.readSensorFrame(0)!!, geometry, CalibrationCapture())
                 for (algorithm in DemosaicAlgorithm.entries) {
                     val expectedFull = LinearPixelDecoder.demosaicSensor(full, format, reader.sensorTraits, algorithm)

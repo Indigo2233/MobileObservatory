@@ -4,6 +4,8 @@ import org.json.JSONObject
 import java.io.*
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.nio.channels.FileChannel
+import java.nio.file.StandardOpenOption
 import java.security.DigestInputStream
 import java.security.DigestOutputStream
 import java.security.MessageDigest
@@ -105,21 +107,43 @@ class CalibrationLibrary(private val directory: File) {
             require(descriptor.geometry.width.toLong() * descriptor.geometry.height <= LinearImage.MAX_PIXELS &&
                 descriptor.geometry.sampleCount * 4L <= maxBytes) { "memory_budget" }
             cancelCheck()
-            val samples = FloatArray(descriptor.geometry.sampleCount)
             val bytes = ByteArray(64 * 1024)
-            val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN)
             var index = 0
-            while (index < samples.size) {
+            while (index < descriptor.geometry.sampleCount) {
                 cancelCheck()
-                val count = minOf(bytes.size / 4, samples.size - index)
-                input.readFully(bytes, 0, count * 4); buffer.rewind()
-                repeat(count) { samples[index++] = buffer.float }
+                val count = minOf(bytes.size / 4, descriptor.geometry.sampleCount - index)
+                input.readFully(bytes, 0, count * 4)
+                index += count
             }
             val checksum = digest.digest(); hashing.on(false)
             val expected = ByteArray(32); input.readFully(expected)
             require(MessageDigest.isEqual(checksum, expected) && input.read() == -1) { "calibration_corrupt_master" }
             cancelCheck()
-            return CalibrationMaster(descriptor, samples)
+            val payloadOffset = source.length() -
+                descriptor.geometry.sampleCount * 4L - 32L
+            require(payloadOffset in 0..Int.MAX_VALUE.toLong()) { "calibration_truncated_master" }
+            val payloadBytes = descriptor.geometry.sampleCount * 4L
+            require(payloadBytes <= Int.MAX_VALUE) { "calibration_truncated_master" }
+            val androidRuntime = System.getProperty("java.vm.name").orEmpty().contains("Dalvik", ignoreCase = true)
+            if (androidRuntime) {
+                FileChannel.open(source.toPath(), StandardOpenOption.READ).use { channel ->
+                    val mapped = channel.map(FileChannel.MapMode.READ_ONLY, 0L, channel.size())
+                        .order(ByteOrder.BIG_ENDIAN)
+                    mapped.position(payloadOffset.toInt())
+                    val payload = mapped.slice().order(ByteOrder.BIG_ENDIAN)
+                    return CalibrationMaster.native(descriptor, payload)
+                }
+            }
+            val native = ByteBuffer.allocateDirect(payloadBytes.toInt()).order(ByteOrder.BIG_ENDIAN)
+            FileChannel.open(source.toPath(), StandardOpenOption.READ).use { channel ->
+                channel.position(payloadOffset)
+                while (native.hasRemaining()) {
+                    cancelCheck()
+                    if (channel.read(native) < 0) error("calibration_truncated_master")
+                }
+            }
+            native.rewind()
+            return CalibrationMaster.native(descriptor, native)
         }
     }
 

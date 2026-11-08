@@ -61,11 +61,16 @@ class CalibrationTest {
     }
 
     @Test fun rejectsClippedNonfiniteAndNonpositiveFlatResponse() {
-        for (bad in listOf(0f, 1f)) rejects("clipped_flat") {
-            master(CalibrationType.FLAT, FloatArray(8) { if (it == 3) bad else .5f })
+        for (bad in listOf(0f, 1f)) {
+            val g = CalibrationGeometry(16, 16, "MONO", 16)
+            val flat = master(CalibrationType.FLAT, FloatArray(256) { if (it == 3) bad else .5f }, g)
+            assertEquals(1f, flat.imageCopy().pixels[3], 1e-4f)
         }
         for (bad in listOf(Float.NaN, Float.POSITIVE_INFINITY, -.1f, 1.01f)) rejects("invalid_source") {
             master(CalibrationType.FLAT, FloatArray(8) { if (it == 3) bad else .5f })
+        }
+        rejects("clipped_flat") {
+            master(CalibrationType.FLAT, FloatArray(8) { if (it == 3) 0f else .5f })
         }
         val bias = master(CalibrationType.BIAS, FloatArray(8) { .6f })
         for (response in listOf(.5f, .6f)) rejects("invalid_flat_response") {
@@ -74,9 +79,37 @@ class CalibrationTest {
         rejects("uncalibrated sensor means") { master(CalibrationType.DARK, FloatArray(8) { .7f }, bias = bias) }
     }
 
+    @Test fun sparseFlatDefectsAreRepairedFromTheSameCfaGroupWithoutChangingImageSize() {
+        val g = CalibrationGeometry(16, 16, "RGGB", 16)
+        val frame = FloatArray(256) { .25f + .01f * g.group(it) }
+        frame[5] = 0f
+        val flat = master(CalibrationType.FLAT, frame, g)
+        val result = flat.imageCopy().pixels
+        assertEquals(256, result.size)
+        for (index in result.indices) {
+            assertTrue("index=$index value=${result[index]}", result[index].isFinite() && result[index] > 0f)
+            assertEquals(1.0, result[index].toDouble(), .08)
+        }
+    }
+
+    @Test fun isolatedPerFrameClippingUsesOnlyItsValidSamplesInTheStreamingMean() {
+        val g = CalibrationGeometry(16, 16, "MONO", 16)
+        val frames = listOf(
+            FloatArray(256) { if (it == 17) 0f else .20f },
+            FloatArray(256) { if (it == 31) 1f else .40f }
+        )
+        val flat = CalibrationBuilder.build(CalibrationType.FLAT, g, capture, 2, { frames[it.toInt()].let {
+            LinearImage(g.width, g.height, 1, it.copyOf())
+        } })
+        val image = flat.imageCopy().pixels
+        assertTrue(image[17] != 0f && image[17].isFinite())
+        assertTrue(image[31] != 0f && image[31].isFinite())
+        assertTrue(image.all { it.isFinite() && it > 0f })
+    }
+
     @Test fun knownMismatchCannotBeOverriddenAndDarkExposureIsNeverScaled() {
         val dark = master(CalibrationType.DARK, FloatArray(8) { .1f })
-        val selected = CalibrationSelection(dark = dark, allowUnknownCapture = true)
+        val selected = CalibrationSelection(dark = dark)
         for (different in listOf(capture.copy(camera = "other"), capture.copy(gain = 101.0), capture.copy(offset = 13.0),
             capture.copy(roiX = 1), capture.copy(roiY = 1), capture.copy(hardwareBin = 2), capture.copy(readout = "other"),
             capture.copy(exposureUs = 2_000_000.0), capture.copy(temperatureC = -7.99))) {
@@ -91,16 +124,15 @@ class CalibrationTest {
         CalibrationSelection(bias = bias).validate(geometry, capture.copy(exposureUs = 2_000_000.0))
         val flat = master(CalibrationType.FLAT, FloatArray(8) { .5f })
         CalibrationSelection(flat = flat).validate(geometry, capture.copy(exposureUs = 2_000_000.0))
-        rejects("settings_mismatch") { CalibrationSelection(flat = flat, allowUnknownCapture = true).validate(geometry, capture.copy(filter = "R")) }
+        rejects("settings_mismatch") { CalibrationSelection(flat = flat).validate(geometry, capture.copy(filter = "R")) }
     }
 
-    @Test fun unknownCaptureRequiresExplicitConfirmationButEmptySelectionAlwaysWorks() {
+    @Test fun missingCaptureInfoNeverBlocksCalibrationOrStacking() {
         val unknown = CalibrationCapture()
         CalibrationSelection().validate(geometry, unknown)
-        rejects("unknown_settings") { CalibrationBuilder.build(CalibrationType.BIAS, geometry, unknown, 1, { image(FloatArray(8)) }) }
-        val master = CalibrationBuilder.build(CalibrationType.DARK, geometry, unknown, 1, { image(FloatArray(8) { .1f }) }, allowUnknownCapture = true)
-        rejects("unknown_settings") { CalibrationSelection(dark = master).validate(geometry, capture) }
-        val selected = CalibrationSelection(dark = master, allowUnknownCapture = true)
+        CalibrationBuilder.build(CalibrationType.BIAS, geometry, unknown, 1, { image(FloatArray(8)) })
+        val master = CalibrationBuilder.build(CalibrationType.DARK, geometry, unknown, 1, { image(FloatArray(8) { .1f }) })
+        val selected = CalibrationSelection(dark = master)
         selected.validate(geometry, capture)
         assertTrue(selected.unknownWarnings(geometry, capture).contains("DARK:exposureUs"))
         assertTrue(selected.unknownWarnings(geometry, capture).contains("DARK:temperatureC"))
@@ -129,6 +161,9 @@ class CalibrationTest {
         assertEquals(2L * (geometry.sampleCount * 6L) + geometry.sampleCount * 4L + 4L * 1024 * 1024,
             CalibrationBuilder.estimatedBuildBytes(geometry))
         assertEquals(CalibrationBuilder.estimatedBuildBytes(geometry), CalibrationBuilder.estimatedBuildBytes(geometry, true))
+        assertEquals(geometry.sampleCount * 2L,
+            CalibrationBuilder.estimatedBuildBytes(geometry, withSampleCounts = true) -
+                CalibrationBuilder.estimatedBuildBytes(geometry))
         var reads = 0
         try {
             CalibrationBuilder.build(CalibrationType.BIAS, geometry, capture, 100, { reads++; frames[0] },

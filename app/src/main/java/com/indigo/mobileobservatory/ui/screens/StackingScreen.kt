@@ -666,6 +666,11 @@ private fun OfflineStackControls(c: StackingCoordinator, task: StackingTaskState
             task.deepSkyStats?.let { stats ->
                 Text(stringResource(R.string.stack_deep_sky_stats, stats.stack.accepted, stats.stack.rejected,
                     stats.stack.exposureSeconds), style = MaterialTheme.typography.titleSmall)
+                stats.referenceQuality?.let { quality ->
+                    Text(stringResource(R.string.stack_deep_sky_reference, stats.referenceFrame + 1,
+                        quality.starCount, quality.elongation, quality.registrationSuccess * 100.0),
+                        style = MaterialTheme.typography.bodySmall)
+                }
                 if (stats.unknownExposureFrames > 0) Text(stringResource(R.string.stack_unknown_exposure,
                     stats.unknownExposureFrames), style = MaterialTheme.typography.bodySmall)
                 if (stats.rejectionCounts.isNotEmpty()) Text(stringResource(R.string.stack_rejections,
@@ -903,11 +908,11 @@ internal fun stackMessage(code: String): String {
         "stack_target_changed" -> R.string.stack_target_changed
         "deep_sky_no_accepted_frames" -> R.string.stack_deep_sky_no_frames
         "deep_sky_frame_count" -> R.string.stack_deep_sky_frame_limit
+        "stack_selecting_reference" -> R.string.stack_selecting_reference
         "source_geometry_changed" -> R.string.stack_reason_source
         "calibration_busy" -> R.string.stack_cal_working
         "calibration_cancelled" -> R.string.stack_phase_cancelled
         "calibration_reset_required" -> R.string.stack_cal_locked
-        "calibration_unknown_settings" -> R.string.stack_cal_unknown
         "calibration_settings_mismatch", "calibration_geometry_mismatch", "calibration_type_mismatch" -> R.string.stack_cal_mismatch
         "calibration_clipped_flat", "calibration_invalid_flat_response" -> R.string.stack_cal_invalid_flat
         "calibration_ser_required", "calibration_source_format" -> R.string.stack_cal_ser_required
@@ -920,7 +925,6 @@ internal fun stackMessage(code: String): String {
         "calibration_selection_unavailable", "calibration_master_missing", "calibration_read_failed",
         "calibration_corrupt_master", "calibration_truncated_master", "calibration_invalid_master" -> R.string.stack_cal_unavailable
         "calibration_master_created" -> R.string.stack_cal_created
-        "calibration_master_created_unverified" -> R.string.stack_cal_created_unverified
         "calibration_master_in_use" -> R.string.stack_cal_in_use
         "memory_budget", "input_budget", "MEMORY_BUDGET" -> R.string.stack_reason_memory
         "FRAME_LIMIT" -> R.string.stack_frame_limit

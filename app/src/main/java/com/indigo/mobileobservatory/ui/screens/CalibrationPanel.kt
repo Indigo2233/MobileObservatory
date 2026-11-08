@@ -43,21 +43,20 @@ internal fun CalibrationPanel(vm: CameraViewModel, onDismiss: () -> Unit, onCame
     var typeName by rememberSaveable { mutableStateOf<String?>(null) }
     val type = typeName?.let(CalibrationType::valueOf)
     var guideStep by rememberSaveable { mutableIntStateOf(-1) }
-    var confirmMatching by rememberSaveable { mutableStateOf(false) }
     var masterCfa by rememberSaveable { mutableStateOf(SerCfaInterpretation.AUTO) }
     var browse by rememberSaveable { mutableStateOf(false) }
+    var selectionMenu by rememberSaveable { mutableStateOf<String?>(null) }
     var resetConfirmation by remember { mutableStateOf(false) }
     var deleteId by remember { mutableStateOf<String?>(null) }
     val latestType by rememberUpdatedState(type)
-    val latestConfirmed by rememberUpdatedState(confirmMatching)
     val latestCfa by rememberUpdatedState(masterCfa)
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         val category = latestType
-        if (uri != null && category != null) library.importMaster(category, uri, latestConfirmed, latestCfa)
+        if (uri != null && category != null) library.importMaster(category, uri, latestCfa)
     }
     if (browse && type != null) {
         AppRecordingPicker(vm, onDismiss = { browse = false },
-            onSelect = { file -> browse = false; library.createMaster(type, file, confirmMatching, masterCfa) },
+            onSelect = { file -> browse = false; library.createMaster(type, file, masterCfa) },
             onCamera = { browse = false; onDismiss(); onCamera() })
         return
     }
@@ -108,10 +107,41 @@ internal fun CalibrationPanel(vm: CameraViewModel, onDismiss: () -> Unit, onCame
                         Text(stringResource(R.string.stack_cal_optional), style = MaterialTheme.typography.bodySmall)
                         CalibrationType.values().forEach { category ->
                             val selected = state.masters.firstOrNull { it.id == state.selectedIds[category] }
-                            OutlinedButton(onClick = { typeName = category.name; guideStep = -1; library.clearMessage() }, modifier = Modifier.fillMaxWidth()) {
-                                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    Text(calibrationTypeLabel(category), style = MaterialTheme.typography.titleSmall)
-                                    Text(selected?.name ?: stringResource(R.string.stack_cal_none), style = MaterialTheme.typography.bodySmall)
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                OutlinedButton(onClick = { typeName = category.name; guideStep = -1; library.clearMessage() },
+                                    modifier = Modifier.weight(1f)) {
+                                    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        Text(calibrationTypeLabel(category), style = MaterialTheme.typography.titleSmall)
+                                        Text(selected?.name ?: stringResource(R.string.stack_cal_none), style = MaterialTheme.typography.bodySmall)
+                                    }
+                                }
+                                Box {
+                                    TextButton(
+                                        onClick = { selectionMenu = category.name },
+                                        enabled = !state.locked && !state.busy &&
+                                            (state.masters.any { it.type == category } || selected != null)
+                                    ) { Text(stringResource(R.string.stack_cal_select)) }
+                                    DropdownMenu(
+                                        expanded = selectionMenu == category.name,
+                                        onDismissRequest = { selectionMenu = null }
+                                    ) {
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(R.string.stack_cal_use_none)) },
+                                            onClick = {
+                                                library.selectMaster(category, null)
+                                                selectionMenu = null
+                                            }
+                                        )
+                                        state.masters.filter { it.type == category }.forEach { master ->
+                                            DropdownMenuItem(
+                                                text = { Text(master.name) },
+                                                onClick = {
+                                                    library.selectMaster(category, master.id)
+                                                    selectionMenu = null
+                                                }
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -154,16 +184,12 @@ internal fun CalibrationPanel(vm: CameraViewModel, onDismiss: () -> Unit, onCame
                         }
                     } else {
                         OutlinedButton(onClick = { guideStep = 0 }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.stack_cal_guide)) }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Checkbox(checked = confirmMatching, onCheckedChange = { confirmMatching = it }, enabled = !state.busy)
-                            Text(stringResource(R.string.stack_cal_confirm), style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-                        }
                         TextButton(onClick = { library.selectMaster(type, null) }, enabled = !state.locked && !state.busy) {
                             Text(stringResource(R.string.stack_cal_use_none))
                         }
                         state.masters.filter { it.type == type }.forEach { master ->
                             val selected = state.selectedIds[type] == master.id
-                            OutlinedButton(onClick = { library.selectMaster(type, master.id, confirmMatching) },
+                            OutlinedButton(onClick = { library.selectMaster(type, master.id) },
                                 enabled = !state.locked && !state.busy, modifier = Modifier.fillMaxWidth()) {
                                 Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                     Text(if (selected) stringResource(R.string.stack_cal_selected, master.name) else master.name)
@@ -181,9 +207,6 @@ internal fun CalibrationPanel(vm: CameraViewModel, onDismiss: () -> Unit, onCame
                             modifier = Modifier.fillMaxWidth().testTag("calibration-create-from-recording")) {
                             Text(stringResource(R.string.stack_cal_from_recording))
                         }
-                        Text(stringResource(R.string.stack_cal_unverified_hint),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
                         TextButton(onClick = { picker.launch(arrayOf("*/*")) }, enabled = !state.locked && !state.busy) { Text(stringResource(R.string.stack_cal_import_ser)) }
                     }
                 }
@@ -195,8 +218,7 @@ internal fun CalibrationPanel(vm: CameraViewModel, onDismiss: () -> Unit, onCame
 private fun calibrationMessageTone(message: String): NoticeTone =
     when (message.substringBefore(':')) {
         "calibration_master_created", "calibration_busy", "calibration_cancelled" -> NoticeTone.INFO
-        "calibration_master_created_unverified", "calibration_reset_required",
-        "calibration_unknown_settings" -> NoticeTone.WARNING
+        "calibration_reset_required" -> NoticeTone.WARNING
         else -> NoticeTone.ERROR
     }
 

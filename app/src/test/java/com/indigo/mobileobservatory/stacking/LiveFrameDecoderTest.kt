@@ -44,7 +44,7 @@ class LiveFrameDecoderTest {
                         if (type == CalibrationType.BIAS) .002f + p % 149 * .000001f else .9f + p % 137 * .001f
                     })
                 val calibration = CalibrationSelection(bias = master(CalibrationType.BIAS),
-                    flat = master(CalibrationType.FLAT), allowUnknownCapture = true)
+                    flat = master(CalibrationType.FLAT))
                 val sensor = LinearPixelDecoder.decodeSensor(input, traits)
                 val calibrated = calibration.apply(sensor, geometry, CalibrationCapture())
                 for (algorithm in DemosaicAlgorithm.entries) {

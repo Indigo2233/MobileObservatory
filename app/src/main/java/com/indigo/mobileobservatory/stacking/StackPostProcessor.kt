@@ -197,11 +197,13 @@ class PreparedStack internal constructor(
         var mapped = if (parameters.curve > 0) asinh(parameters.curve*normalized)/curveNorm else normalized
         val displayShoulder = if (parameters.displayVersion >= 3)
             max(parameters.highlightCompression,.58) else parameters.highlightCompression
-        if (parameters.displayVersion >= 2) mapped = compressHighlights(mapped,displayShoulder)
+        if (parameters.displayVersion == 2) mapped = compressHighlights(mapped,displayShoulder)
         val m = parameters.midtone
         mapped = if (mapped <= 0 || mapped >= 1) mapped else ((m-1)*mapped)/((2*m-1)*mapped-m)
-        mapped = 1.0-(1.0-mapped).pow(parameters.brightness)
-        if (parameters.displayVersion >= 2) return mapped
+        mapped = if (mapped <= 0 || mapped >= 1) mapped
+            else 1.0-(1.0-mapped).pow(parameters.brightness)
+        if (parameters.displayVersion >= 3) return compressHighlights(mapped, displayShoulder)
+        if (parameters.displayVersion == 2) return mapped
         val shoulder = parameters.highlightCompression
         return (1-shoulder)*mapped+shoulder*(1-exp(-2*mapped))/(1-exp(-2.0))
     }

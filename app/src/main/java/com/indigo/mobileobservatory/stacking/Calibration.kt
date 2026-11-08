@@ -2,6 +2,7 @@ package com.indigo.mobileobservatory.stacking
 
 import com.indigo.mobileobservatory.camera.PixelFormat
 import org.json.JSONObject
+import java.nio.ByteBuffer
 import java.util.UUID
 import kotlin.math.abs
 
@@ -75,17 +76,64 @@ data class CalibrationDescriptor(
     }
 }
 
-/** Masters cannot expose mutable retained pixels. Library/builder transfer exclusive ownership. */
-class CalibrationMaster internal constructor(val descriptor: CalibrationDescriptor, private val samples: FloatArray) {
+internal interface CalibrationSamples {
+    val size: Int
+    val heapBytes: Long
+    val nativeBytes: Long
+    fun get(index: Int): Float
+    fun copy(): FloatArray
+}
+
+private class HeapCalibrationSamples(private val values: FloatArray) : CalibrationSamples {
+    override val size: Int get() = values.size
+    override val heapBytes: Long get() = values.size * 4L
+    override val nativeBytes: Long get() = 0L
+    override fun get(index: Int): Float = values[index]
+    override fun copy(): FloatArray = values.copyOf()
+}
+
+private class NativeCalibrationSamples(
+    private val buffer: ByteBuffer,
+    private val offset: Int,
+    override val size: Int
+) : CalibrationSamples {
+    override val heapBytes: Long get() = 0L
+    override val nativeBytes: Long get() = size * 4L
+    override fun get(index: Int): Float = buffer.getFloat(offset + index * 4)
+    override fun copy(): FloatArray = FloatArray(size) { get(it) }
+}
+
+/** Masters cannot expose mutable retained pixels. Library masters use read-only mapped Float32
+ * samples, so selecting calibration does not consume the Java heap used by the stack engines. */
+class CalibrationMaster internal constructor(
+    val descriptor: CalibrationDescriptor,
+    private val samples: CalibrationSamples
+) {
+    internal constructor(descriptor: CalibrationDescriptor, samples: FloatArray) :
+        this(descriptor, HeapCalibrationSamples(samples))
+
     init {
         require(samples.size == descriptor.geometry.sampleCount) { "calibration_buffer" }
-        require(samples.all { it.isFinite() && if (descriptor.type == CalibrationType.FLAT) it > 1e-6f else it in 0f..1f }) {
+        require((0 until samples.size).all {
+            val value = samples.get(it)
+            value.isFinite() && if (descriptor.type == CalibrationType.FLAT) value > 1e-6f else value in 0f..1f
+        }) {
             "calibration_invalid_master"
         }
     }
+    /** Logical Float32 payload size, including read-only mapped file data. */
     val memoryBytes: Long get() = samples.size * 4L
-    internal fun sample(index: Int): Float = samples[index]
-    fun imageCopy(): LinearImage = descriptor.geometry.let { LinearImage(it.width, it.height, it.channels, samples.copyOf()) }
+    val heapBytes: Long get() = samples.heapBytes
+    val nativeBytes: Long get() = samples.nativeBytes
+    internal fun sample(index: Int): Float = samples.get(index)
+    fun imageCopy(): LinearImage = descriptor.geometry.let {
+        LinearImage(it.width, it.height, it.channels, samples.copy())
+    }
+
+    companion object {
+        internal fun native(descriptor: CalibrationDescriptor, buffer: ByteBuffer) =
+            CalibrationMaster(descriptor, NativeCalibrationSamples(buffer, 0, descriptor.geometry.sampleCount))
+    }
 }
 
 /** Compares only science-relevant fields. Bias exposure and flat exposure need not equal lights;
@@ -122,8 +170,7 @@ internal fun unknownCaptureFields(type: CalibrationType, capture: CalibrationCap
  * parity/channel-normalized response. Dark masters contain bias: subtract dark OR bias, never both.
  * Calibration precedes debayer, matching https://siril.readthedocs.io/en/stable/preprocessing/calibration.html . */
 class CalibrationSelection(
-    val bias: CalibrationMaster? = null, val dark: CalibrationMaster? = null, val flat: CalibrationMaster? = null,
-    val allowUnknownCapture: Boolean = false
+    val bias: CalibrationMaster? = null, val dark: CalibrationMaster? = null, val flat: CalibrationMaster? = null
 ) {
     /** Worker-owned calibrated sensor output for the live synchronous pipeline. */
     class Workspace {
@@ -151,7 +198,8 @@ class CalibrationSelection(
         require(flat == null || flat.descriptor.type == CalibrationType.FLAT)
     }
     val enabled: Boolean get() = bias != null || dark != null || flat != null
-    val memoryBytes: Long get() = listOfNotNull(bias, dark, flat).sumOf { it.memoryBytes }
+    val heapBytes: Long get() = listOfNotNull(bias, dark, flat).sumOf { it.heapBytes }
+    val nativeBytes: Long get() = listOfNotNull(bias, dark, flat).sumOf { it.nativeBytes }
     fun unknownWarnings(geometry: CalibrationGeometry, capture: CalibrationCapture): List<String> =
         listOfNotNull(bias, dark, flat).flatMap { master ->
             require(master.descriptor.geometry == geometry) { "calibration_geometry_mismatch" }
@@ -161,9 +209,8 @@ class CalibrationSelection(
     fun validate(geometry: CalibrationGeometry, capture: CalibrationCapture) {
         for (master in listOfNotNull(bias, dark, flat)) {
             require(master.descriptor.geometry == geometry) { "calibration_geometry_mismatch" }
-            val (mismatch, unknown) = captureIssues(master.descriptor.type, master.descriptor.capture, capture)
+            val (mismatch, _) = captureIssues(master.descriptor.type, master.descriptor.capture, capture)
             require(mismatch.isEmpty()) { "calibration_settings_mismatch: ${master.descriptor.type} ${mismatch.joinToString()}" }
-            require(allowUnknownCapture || unknown.isEmpty()) { "calibration_unknown_settings: ${unknown.joinToString()}" }
         }
     }
 
@@ -273,7 +320,6 @@ class CalibrationSelection(
             put("schema", 1); put("domain", "sensor_before_demosaic")
             put("darkContainsBias", true); put("darkExposureScaling", false)
             put("darkTemperatureToleranceC", 2.0)
-            put("allowUnknownCapture", allowUnknownCapture)
             put("subtraction", (dark ?: bias)?.descriptor?.id ?: JSONObject.NULL)
             for ((name, master) in listOf("bias" to bias, "dark" to dark, "flat" to flat))
                 put(name, master?.let { CalibrationJson.descriptor(it.descriptor) } ?: JSONObject.NULL)
@@ -284,40 +330,61 @@ class CalibrationSelection(
 /** Streaming arithmetic mean: one float accumulator and the decoded frame, independent of
  * frame count. Flat normalization reuses the accumulator after the mean pass. */
 object CalibrationBuilder {
+    private const val MAX_FLAT_CLIPPED_FRACTION = .01
+    private const val MAX_FLAT_INVALID_FRACTION = .01
+
     /** Two decoded frames and their native byte copies may overlap while the next frame is
      * decoded, plus the mean accumulator, which becomes the output master. The optional bias
      * is owned by CalibrationSelection and counted there. */
-    fun estimatedBuildBytes(geometry: CalibrationGeometry, @Suppress("UNUSED_PARAMETER") withBias: Boolean = false): Long {
+    fun estimatedBuildBytes(geometry: CalibrationGeometry, @Suppress("UNUSED_PARAMETER") withBias: Boolean = false,
+                            withSampleCounts: Boolean = false): Long {
         val frame = geometry.sampleCount * 4L
         val rawBytes = geometry.sampleCount * 2L
         val accumulator = geometry.sampleCount * 4L
-        return 2L * (frame + rawBytes) + accumulator + 4L * 1024 * 1024
+        val sampleCounts = if (withSampleCounts) geometry.sampleCount * 2L else 0L
+        return 2L * (frame + rawBytes) + accumulator + sampleCounts + 4L * 1024 * 1024
     }
 
     fun build(type: CalibrationType, geometry: CalibrationGeometry, capture: CalibrationCapture,
               frameCount: Long, readFrame: (Long) -> LinearImage, name: String = "", sourceIdentity: String = "",
-              bias: CalibrationMaster? = null, allowUnknownCapture: Boolean = false,
+              bias: CalibrationMaster? = null,
               memoryBudgetBytes: Long = 256L * 1024 * 1024,
               cancelCheck: () -> Unit = {}, progress: (Long, Long) -> Unit = { _, _ -> }): CalibrationMaster {
         require(geometry.width.toLong() * geometry.height <= LinearImage.MAX_PIXELS &&
-            estimatedBuildBytes(geometry, bias != null) <= memoryBudgetBytes) { "memory_budget" }
+            estimatedBuildBytes(geometry, bias != null, type == CalibrationType.FLAT) <= memoryBudgetBytes) { "memory_budget" }
         require(frameCount in 1..10_000_000L) { "calibration_frame_count" }
+        require(type != CalibrationType.FLAT || frameCount <= 65_535L) { "calibration_frame_count" }
         require(type == CalibrationType.FLAT || bias == null) { "Dark and bias masters are uncalibrated sensor means" }
-        require(allowUnknownCapture || captureIssues(type, capture, capture).second.isEmpty()) { "calibration_unknown_settings" }
-        if (bias != null) CalibrationSelection(bias = bias, allowUnknownCapture = allowUnknownCapture).validate(geometry, capture)
+        if (bias != null) CalibrationSelection(bias = bias).validate(geometry, capture)
         cancelCheck()
         val output = FloatArray(geometry.sampleCount)
+        val flatSamples = if (type == CalibrationType.FLAT) ShortArray(geometry.sampleCount) else null
         for (frame in 0 until frameCount) {
             cancelCheck()
             val image = readFrame(frame)
             geometry.check(image)
             val divisor = (frame + 1).toDouble()
+            var clipped = 0
             for (index in output.indices) {
                 if (index % 16384 == 0) cancelCheck()
                 val value = image.pixels[index]
                 require(value.isFinite() && value in 0f..1f) { "calibration_invalid_source" }
-                if (type == CalibrationType.FLAT) require(value > 0f && value < 1f) { "calibration_clipped_flat" }
-                output[index] = (output[index] + (value - output[index]) / divisor).toFloat()
+                if (flatSamples != null) {
+                    if (value == 0f || value == 1f) {
+                        clipped++
+                        continue
+                    }
+                    val count = flatSamples[index].toInt() and 0xffff
+                    check(count < 65_535) { "calibration_frame_count" }
+                    val next = count + 1
+                    output[index] += (value - output[index]) / next
+                    flatSamples[index] = next.toShort()
+                } else {
+                    output[index] = (output[index] + (value - output[index]) / divisor).toFloat()
+                }
+            }
+            require(clipped.toDouble() <= geometry.sampleCount * MAX_FLAT_CLIPPED_FRACTION) {
+                "calibration_clipped_flat"
             }
             progress(frame + 1, frameCount)
         }
@@ -325,14 +392,24 @@ object CalibrationBuilder {
             val groupCount = if (geometry.isBayer) 4 else geometry.channels
             val sums = DoubleArray(groupCount)
             val counts = LongArray(groupCount)
+            val valid = BooleanArray(output.size)
+            var invalid = 0
             for (index in output.indices) {
                 if (index % 16384 == 0) cancelCheck()
                 val corrected = output[index].toDouble() - (bias?.sample(index)?.toDouble() ?: 0.0)
-                require(corrected.isFinite() && corrected > 1e-6) { "calibration_invalid_flat_response" }
+                val usable = flatSamples!![index].toInt() and 0xffff != 0 && corrected.isFinite() && corrected > 1e-6
+                if (!usable) {
+                    invalid++
+                    continue
+                }
+                valid[index] = true
                 val group = geometry.group(index)
                 sums[group] += corrected
                 counts[group]++
                 output[index] = corrected.toFloat()
+            }
+            require(invalid.toDouble() <= geometry.sampleCount * MAX_FLAT_INVALID_FRACTION) {
+                "calibration_invalid_flat_response"
             }
             for (group in 0 until groupCount) {
                 require(counts[group] > 0) { "calibration_invalid_flat_response" }
@@ -340,14 +417,48 @@ object CalibrationBuilder {
             }
             for (index in output.indices) {
                 if (index % 16384 == 0) cancelCheck()
-                val normalized = output[index].toDouble() / sums[geometry.group(index)]
-                require(normalized.isFinite() && normalized > 1e-6) { "calibration_invalid_flat_response" }
-                output[index] = normalized.toFloat()
+                if (valid[index]) output[index] =
+                    (output[index].toDouble() / sums[geometry.group(index)]).toFloat()
+                else output[index] = Float.NaN
+            }
+            // A few dead or hot pixels are common. Repair them only from valid samples of the
+            // same CFA/colour group, and only when the unusable area stays below the safety cap.
+            for (index in output.indices) if (!valid[index]) {
+                if (index % 16384 == 0) cancelCheck()
+                val repaired = sameGroupNeighborMedian(geometry, output, valid, index)
+                    ?: error("calibration_invalid_flat_response")
+                require(repaired.isFinite() && repaired > 1e-6f) { "calibration_invalid_flat_response" }
+                output[index] = repaired
             }
         }
         cancelCheck()
         val descriptor = CalibrationDescriptor(UUID.randomUUID().toString(), name, type, geometry, capture,
             sourceIdentity, frameCount, System.currentTimeMillis(), bias?.descriptor?.id)
         return CalibrationMaster(descriptor, output)
+    }
+
+    private fun sameGroupNeighborMedian(geometry: CalibrationGeometry, normalized: FloatArray,
+                                        valid: BooleanArray, index: Int): Float? {
+        val channels = geometry.channels
+        val pixel = index / channels
+        val channel = index % channels
+        val x = pixel % geometry.width
+        val y = pixel / geometry.width
+        val group = geometry.group(index)
+        val values = FloatArray(24)
+        var count = 0
+        for (dy in -2..2) for (dx in -2..2) {
+            if (dx == 0 && dy == 0) continue
+            val nx = x + dx
+            val ny = y + dy
+            if (nx !in 0 until geometry.width || ny !in 0 until geometry.height) continue
+            val candidate = (ny * geometry.width + nx) * channels + channel
+            if (geometry.group(candidate) != group || !valid[candidate]) continue
+            values[count++] = normalized[candidate]
+        }
+        if (count == 0) return null
+        values.sort(0, count)
+        return if (count % 2 == 1) values[count / 2]
+        else (values[count / 2 - 1] + values[count / 2]) / 2f
     }
 }

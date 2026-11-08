@@ -76,7 +76,7 @@ class LiveStackAdmissionTest {
         val geometry = CalibrationGeometry(3536, 3536, "MONO", 16)
         val failure = assertThrows(IllegalArgumentException::class.java) {
             CalibrationBuilder.build(CalibrationType.BIAS, geometry,
-                CalibrationCapture(), 1, { reads++; error("Unexpected source read") }, allowUnknownCapture = true,
+                CalibrationCapture(), 1, { reads++; error("Unexpected source read") },
                 memoryBudgetBytes = CalibrationBuilder.estimatedBuildBytes(geometry) - 1)
         }
         assertEquals("memory_budget", failure.message)

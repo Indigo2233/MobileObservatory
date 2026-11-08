@@ -17,7 +17,6 @@ import java.util.UUID
 data class CalibrationLibraryState(
     val masters: List<CalibrationDescriptor> = emptyList(),
     val selectedIds: Map<CalibrationType, String> = emptyMap(),
-    val confirmedIds: Set<String> = emptySet(),
     val busy: Boolean = false,
     val completed: Long = 0,
     val total: Long = 0,
@@ -46,9 +45,8 @@ class CalibrationCoordinator(
     private val restoredIds = CalibrationType.values().mapNotNull { type ->
         preferences.getString(type.name, null)?.let { type to it }
     }.toMap()
-    private val restoredConfirmed = preferences.getStringSet("confirmed", emptySet()).orEmpty().toSet()
-    private val _state = MutableStateFlow(CalibrationLibraryState(selectedIds = restoredIds,
-        confirmedIds = restoredConfirmed, busy = restoredIds.isNotEmpty()))
+    private val _state = MutableStateFlow(CalibrationLibraryState(
+        selectedIds = restoredIds, busy = restoredIds.isNotEmpty()))
     val state = _state.asStateFlow()
     @Volatile private var selection = CalibrationSelection()
     private var job: Job? = null
@@ -58,7 +56,7 @@ class CalibrationCoordinator(
         val initial = scope.launch(start = CoroutineStart.LAZY) {
             try {
                 val entries = library.list()
-                val loaded = loadSelection(restoredIds, restoredConfirmed) { ensureActive() }
+                val loaded = loadSelection(restoredIds) { ensureActive() }
                 synchronized(monitor) {
                     if (!closed) {
                         selection = loaded
@@ -100,7 +98,9 @@ class CalibrationCoordinator(
         selection
     }
 
-    val memoryBytes: Long get() = selection.memoryBytes
+    val memoryBytes: Long get() = selection.heapBytes
+    val nativeBytes: Long get() = selection.nativeBytes
+    val enabled: Boolean get() = selection.enabled
 
     fun updateLock() = synchronized(monitor) {
         if (!closed) _state.update { it.copy(locked = lockReason() != null) }
@@ -113,15 +113,10 @@ class CalibrationCoordinator(
         _state.update { it.copy(masters = entries) }
     }
 
-    fun selectMaster(type: CalibrationType, id: String?, confirmMatchingSettings: Boolean = false) = change {
+    fun selectMaster(type: CalibrationType, id: String?) = change {
         val old = _state.value
         val ids = old.selectedIds.toMutableMap().apply { if (id == null) remove(type) else put(type, id) }
-        // Confirmation describes the master metadata, not only the current selection.
-        // Keep earlier acknowledgements so an unverified master does not become unusable
-        // after the user temporarily selects None or another master.
-        val confirmed = old.confirmedIds.toMutableSet()
-        if (id != null && confirmMatchingSettings) confirmed += id
-        val next = loadSelection(ids, confirmed) { ensureActive() }
+        val next = loadSelection(ids) { ensureActive() }
         ensureActive()
         synchronized(monitor) {
             check(!closed) { "calibration_closed" }
@@ -130,9 +125,8 @@ class CalibrationCoordinator(
                 CalibrationType.values().forEach { category ->
                     ids[category]?.let { putString(category.name, it) } ?: remove(category.name)
                 }
-                putStringSet("confirmed", confirmed)
             }.apply()
-            _state.update { it.copy(selectedIds = ids, confirmedIds = confirmed, message = "") }
+            _state.update { it.copy(selectedIds = ids, message = "") }
         }
     }
 
@@ -142,9 +136,8 @@ class CalibrationCoordinator(
             selection = CalibrationSelection()
             preferences.edit().apply {
                 CalibrationType.values().forEach { remove(it.name) }
-                remove("confirmed")
             }.apply()
-            _state.update { it.copy(selectedIds = emptyMap(), confirmedIds = emptySet(), message = "") }
+            _state.update { it.copy(selectedIds = emptyMap(), message = "") }
         }
     }
 
@@ -153,18 +146,16 @@ class CalibrationCoordinator(
         check(id !in _state.value.selectedIds.values) { "calibration_master_in_use" }
         ensureActive()
         library.delete(id)
-        val confirmed = _state.value.confirmedIds - id
-        preferences.edit().putStringSet("confirmed", confirmed).apply()
-        _state.update { it.copy(masters = library.list(), confirmedIds = confirmed, message = "") }
+        _state.update { it.copy(masters = library.list(), message = "") }
     }
 
-    fun createMaster(type: CalibrationType, file: File, confirmMatchingSettings: Boolean = false,
+    fun createMaster(type: CalibrationType, file: File,
         cfaInterpretation: SerCfaInterpretation = SerCfaInterpretation.AUTO) = change {
-        create(type, file, file.name, confirmMatchingSettings, cfaInterpretation)
+        create(type, file, file.name, cfaInterpretation)
     }
 
     /** External recordings are temporary inputs, never misleading new entries in My recordings. */
-    fun importMaster(type: CalibrationType, uri: Uri, confirmMatchingSettings: Boolean = false,
+    fun importMaster(type: CalibrationType, uri: Uri,
         cfaInterpretation: SerCfaInterpretation = SerCfaInterpretation.AUTO) = change {
         var name = "import.ser"
         var size = -1L
@@ -191,11 +182,11 @@ class CalibrationCoordinator(
                     }
                 }
             } ?: error("source_unreadable")
-            create(type, temporary, name, confirmMatchingSettings, cfaInterpretation)
+            create(type, temporary, name, cfaInterpretation)
         } finally { temporary.delete() }
     }
 
-    private suspend fun CoroutineScope.create(type: CalibrationType, file: File, name: String, confirmed: Boolean,
+    private suspend fun CoroutineScope.create(type: CalibrationType, file: File, name: String,
         cfaInterpretation: SerCfaInterpretation) {
         check(!isSourceBusy(file)) { "recording_active" }
         SERReader(file, endian(), cfaInterpretation).use { reader ->
@@ -204,51 +195,49 @@ class CalibrationCoordinator(
             val header = checkNotNull(reader.header)
             val geometry = CalibrationGeometry.from(header.width, header.height, reader.sensorFormat, reader.sensorTraits)
             val capture = recordingCapture(file)
-            val unverified = unknownCaptureFields(type, capture).isNotEmpty()
             val identity = sourceIdentity(file) { ensureActive() }
             val bias = if (type == CalibrationType.FLAT) selection.bias else null
             require(geometry.width.toLong() * geometry.height <= LinearImage.MAX_PIXELS &&
-                CalibrationBuilder.estimatedBuildBytes(geometry, bias != null) + selection.memoryBytes <= memoryBudgetBytes) { "memory_budget" }
+                CalibrationBuilder.estimatedBuildBytes(geometry, bias != null, type == CalibrationType.FLAT) +
+                    selection.heapBytes <= memoryBudgetBytes) { "memory_budget" }
             val master = CalibrationBuilder.build(type, geometry, capture, header.frameCount.toLong(),
                 readFrame = { index ->
                     ensureActive()
                     reader.readSensorFrame(index.toInt(), maxPixels = LinearImage.MAX_PIXELS) ?: error(reader.lastError ?: "read_failed")
                 }, name = name, sourceIdentity = cfaInterpretation.decodingIdentity(identity,
                     reader.endianConvention.name, reader.sampleAlignment.name, "SENSOR"), bias = bias,
-                allowUnknownCapture = confirmed || unverified,
                 cancelCheck = { ensureActive() }, progress = { done, total ->
                     _state.update { it.copy(completed = done, total = total) }
-                }, memoryBudgetBytes = memoryBudgetBytes - selection.memoryBytes)
+                }, memoryBudgetBytes = memoryBudgetBytes - selection.heapBytes)
             check(sourceIdentity(file) { ensureActive() } == identity) { "source_changed" }
             val saved = library.save(master) { ensureActive() }
             try {
                 ensureActive()
-                val confirmedIds = if (unverified) _state.value.confirmedIds + saved.id else _state.value.confirmedIds
-                if (unverified) preferences.edit().putStringSet("confirmed", confirmedIds).apply()
-                _state.update { it.copy(masters = library.list(), confirmedIds = confirmedIds,
-                    message = if (unverified) "calibration_master_created_unverified" else "calibration_master_created") }
+                _state.update { it.copy(masters = library.list(), message = "calibration_master_created") }
             } catch (failure: Throwable) { library.delete(saved.id); throw failure }
         }
     }
 
-    private fun loadSelection(ids: Map<CalibrationType, String>, confirmed: Set<String>, checkCancelled: () -> Unit): CalibrationSelection {
+    private fun loadSelection(ids: Map<CalibrationType, String>, checkCancelled: () -> Unit): CalibrationSelection {
         val descriptors = library.list().associateBy { it.id }
         val previous = selection
         val reusable = listOfNotNull(previous.bias, previous.dark, previous.flat).associateBy { it.descriptor.id }
-        val bytes = ids.map { (type, id) ->
+        val payloadBytes = ids.map { (type, id) ->
             val descriptor = descriptors[id] ?: error("calibration_master_missing")
             check(descriptor.type == type) { "calibration_type_mismatch" }
-            if (id in reusable) 0L else descriptor.geometry.sampleCount * 4L
+            descriptor.geometry.sampleCount * 4L
         }.sum()
         // During a selection change, old immutable masters remain reachable until the worker
         // commits. Include both selections rather than relying on prompt garbage collection.
-        require(bytes + previous.memoryBytes <= memoryBudgetBytes) { "memory_budget" }
-        var remaining = memoryBudgetBytes - previous.memoryBytes
+        require(previous.heapBytes <= memoryBudgetBytes) { "memory_budget" }
+        require(payloadBytes <= memoryBudgetBytes) { "memory_budget" }
+        var remainingPayload = memoryBudgetBytes
         fun load(type: CalibrationType) = ids[type]?.let {
-            reusable[it] ?: library.load(it, maxBytes = remaining, cancelCheck = checkCancelled).also { master -> remaining -= master.memoryBytes }
+            val master = reusable[it] ?: library.load(it, maxBytes = remainingPayload, cancelCheck = checkCancelled)
+            remainingPayload -= master.memoryBytes
+            master
         }
-        return CalibrationSelection(load(CalibrationType.BIAS), load(CalibrationType.DARK), load(CalibrationType.FLAT),
-            allowUnknownCapture = ids.isNotEmpty() && ids.values.all { it in confirmed })
+        return CalibrationSelection(load(CalibrationType.BIAS), load(CalibrationType.DARK), load(CalibrationType.FLAT))
     }
 
     private fun change(requiresUnlocked: Boolean = true, action: suspend CoroutineScope.() -> Unit): Unit = synchronized(monitor) {

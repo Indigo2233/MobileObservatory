@@ -33,6 +33,9 @@ class CalibrationStorageTest {
         val loaded = library.load(descriptor.id)
         rejects("memory_budget") { library.load(descriptor.id, maxBytes = original.memoryBytes - 1) }
         assertEquals(original.memoryBytes, library.load(descriptor.id, maxBytes = original.memoryBytes).memoryBytes)
+        assertEquals(0L, loaded.heapBytes)
+        assertEquals(original.memoryBytes, loaded.nativeBytes)
+        assertEquals(original.memoryBytes, loaded.heapBytes + loaded.nativeBytes)
         assertEquals(descriptor, loaded.descriptor)
         assertEquals(capture, loaded.descriptor.capture)
         assertArrayEquals(original.imageCopy().pixels, loaded.imageCopy().pixels, 0f)

@@ -24,7 +24,7 @@ class StackDisplayHighlightsTest {
             fun level(x: Int, y: Int) = result.pixels[(y * image.width + x) * 3]
             val core = level(128, 64); val inner = level(130, 64)
             val sky = level(20, 20); val disk = level(150, 64)
-            println("GALAXY $preset sky=$sky disk=$disk core=$core inner=$inner white=${recipe.whitePoint}")
+            println("GALAXY $preset sky=$sky disk=$disk core=$core inner=$inner recipe=$recipe")
             assertTrue("Unclipped core must retain display headroom: $preset $core", core < .985f)
             assertTrue("Core structure must survive quantized display",
                 (core * 255 + .5f).toInt() > (inner * 255 + .5f).toInt())

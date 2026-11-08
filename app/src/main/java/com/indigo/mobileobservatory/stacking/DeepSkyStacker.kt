@@ -36,6 +36,20 @@ class DeepSkyStacker(private val config: DeepSkyConfig = DeepSkyConfig(), privat
         stats = DeepSkyStats()
     }
 
+    /** Offline preselection fixes the reference before the accumulation pass. */
+    internal fun primeReference(referenceField: StarField, imageWidth: Int, imageHeight: Int, imageChannels: Int) {
+        check(reference == null && stats.received == 0 && stats.accepted == 0) { "reference_already_initialized" }
+        require(imageWidth > 0 && imageHeight > 0 && imageChannels in listOf(1, 3))
+        width = imageWidth; height = imageHeight; channels = imageChannels
+        native = NativeStackAccumulator.create(width, height, channels)
+        if (native == null) {
+            mean = FloatArray(Math.multiplyExact(width * height, channels))
+            m2 = FloatArray(Math.multiplyExact(width * height, channels))
+            weights = CoverageBuffer(ShortArray(width * height))
+        }
+        reference = referenceField
+    }
+
     fun add(image: LinearSamples, exposureSeconds: Double, cancelled: () -> Boolean = { false }): DeepSkyFrameResult {
         val start = System.nanoTime()
         stats = stats.copy(received = stats.received + 1)

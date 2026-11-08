@@ -65,24 +65,28 @@ class OfflineDeepSkyBufferTest {
         for (channels in listOf(1, 3)) {
             val originals = frames(channels)
             val source = BufferedSource(originals)
-            val copying = DeepSkyStacker()
+            val progress = mutableListOf<DeepSkyStats>()
+            val actual = OfflineDeepSkyStacker().stack(source, progress = { _, _, s -> progress += comparable(s) })
+            val owned = OfflineDeepSkyStacker().stack(Source(originals))
+            val referenceField = StarRegistration.detect(originals[actual.stats.referenceFrame.toInt()])
+            val copying = DeepSkyStacker().apply {
+                primeReference(referenceField, width, height, channels)
+            }
             val expectedProgress = originals.mapIndexed { index, image ->
                 comparable(copying.add(image, source.exposureSeconds(index.toLong())).stats)
             }
             val expected = copying.snapshot()!!
-            val progress = mutableListOf<DeepSkyStats>()
-            val actual = OfflineDeepSkyStacker().stack(source, progress = { _, _, s -> progress += comparable(s) })
-            val owned = OfflineDeepSkyStacker().stack(Source(originals))
             assertArrayEquals(expected.image.pixels, actual.image.pixels, 0f)
             assertArrayEquals(expected.weights.toFloatArray(), actual.weights.toFloatArray(), 0f)
             assertArrayEquals(owned.image.pixels, actual.image.pixels, 0f)
-            assertEquals(expectedProgress, progress)
+            assertEquals(expectedProgress, progress.takeLast(originals.size))
             assertEquals(comparable(expected.stats), comparable(actual.stats.stack))
             assertTrue(actual.stats.stack.rejectedPixelSamples > 0)
-            assertEquals(1L, actual.stats.referenceFrame)
+            assertTrue(actual.stats.referenceFrame > 0)
+            assertTrue(actual.stats.referenceQuality!!.registrationSuccess > .5)
             assertEquals(1L, actual.stats.unknownExposureFrames)
             assertEquals(mapOf(DeepSkyRejection.TOO_FEW_STARS to 1L), actual.stats.rejectionCounts)
-            assertEquals(originals.size, source.reads)
+            assertEquals(originals.size * 2, source.reads)
             assertEquals(0, source.ownedReads)
             assertEquals(1, source.buffers.size)
             assertNotSame(source.buffers.single(), actual.image.pixels)

@@ -38,12 +38,14 @@ class StackAutoStretchTest {
         val legacy=StackAutoStretch.estimate(raw,natural.copy(displayVersion=2))!!
         val current=StackAutoStretch.estimate(raw,natural)!!
         val legacySky=StackPostProcessor.process(raw,legacy).image.pixels[20*256+20]
-        val currentSky=StackPostProcessor.process(raw,current).image.pixels[20*256+20]
-        val currentNebula=StackPostProcessor.process(raw,current).image.pixels[64*256+128]
-        println("MULTISCALE sky $legacySky -> $currentSky; nebula=$currentNebula")
+        val currentPixels=StackPostProcessor.process(raw,current).image.pixels
+        val currentSky=currentPixels[20*256+20]
+        val currentNebula=currentPixels[64*256+128]
+        val skyMedian=currentPixels.take(30*256).sorted()[(30*256)/2]
+        println("MULTISCALE sky $legacySky -> median=$skyMedian point=$currentSky; nebula=$currentNebula; recipe=$current")
         assertEquals(3,current.displayVersion)
         assertTrue("v3 background $currentSky should exceed legacy $legacySky",currentSky>legacySky+.08f)
-        assertTrue("v3 background $currentSky should stay in the adaptive midtone range",currentSky in .18f.. .55f)
+        assertTrue("v3 background median $skyMedian should stay near the adaptive midtone target",skyMedian in .18f.. .4f)
         assertTrue(currentNebula>currentSky+.15f)
         assertTrue(currentNebula<.995f)
     }

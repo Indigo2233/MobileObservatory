@@ -15,7 +15,9 @@
     <string name="stack_change_target_confirm">Reset and switch</string>
     <string name="stack_deep_sky_steps">Choose a SER/PSER recording, align the star field and stack. Calibration frames are optional.</string>
     <string name="stack_deep_sky_start">Align and stack deep sky</string>
+    <string name="stack_selecting_reference">Evaluating reference-frame quality…</string>
     <string name="stack_deep_sky_stats">%1$d accepted · %2$d rejected · %3$.1f s known exposure</string>
+    <string name="stack_deep_sky_reference">Reference frame %1$d · %2$d stars · roundness %3$.2f · preselection registration success %4$.1f%%</string>
     <string name="stack_live_planetary_intro">Center and focus the planet. Incoming frames are checked for quality, aligned and stacked; post stacking can rank a complete recording.</string>
     <string name="stack_live_planetary_stats">Received %1$d · accepted %2$d · rejected %3$d · dropped %4$d</string>
 </resources>

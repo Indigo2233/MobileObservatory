@@ -49,11 +49,11 @@ class CalibrationSensorInputTest {
             val biasPixels = FloatArray(16) { .1f + it * .001f }
             val capture = CalibrationCapture()
             fun master(type: CalibrationType, pixels: FloatArray, bias: CalibrationMaster? = null) = CalibrationBuilder.build(type,
-                geometry, capture, 1, { LinearImage(4, 4, 1, pixels) }, bias = bias, allowUnknownCapture = true)
+                geometry, capture, 1, { LinearImage(4, 4, 1, pixels) }, bias = bias)
             val bias = master(CalibrationType.BIAS, biasPixels)
             val flat = master(CalibrationType.FLAT, FloatArray(16) { biasPixels[it] + .4f * response[it] }, bias)
             val light = LinearImage(4, 4, 1, FloatArray(16) { biasPixels[it] + colors[color(it)] * response[it] })
-            val calibrated = CalibrationSelection(bias = bias, flat = flat, allowUnknownCapture = true).apply(light, geometry, capture)
+            val calibrated = CalibrationSelection(bias = bias, flat = flat).apply(light, geometry, capture)
             val rgb = LinearPixelDecoder.demosaicSensor(calibrated, format, traits)
             for (i in rgb.pixels.indices) assertEquals("$format/$ox/$oy/$i", colors[i % 3], rgb.pixels[i], 8e-8f)
             // A multiply varying flat cannot safely be divided after interpolation.
@@ -81,7 +81,7 @@ class CalibrationSensorInputTest {
                     assertEquals(1, reader.readSensorFrame(0)!!.channels)
                     assertEquals(3, reader.readLinearFrame(0)!!.channels)
                     val master = CalibrationBuilder.build(CalibrationType.BIAS, geometry, CalibrationCapture(), 3,
-                        { reader.readSensorFrame(it.toInt())!! }, allowUnknownCapture = true)
+                        { reader.readSensorFrame(it.toInt())!! })
                     for (i in 0 until 16) assertEquals((1001 + i) / 4095f, master.imageCopy().pixels[i], 3e-8f)
                 }
             } finally { file.delete() }

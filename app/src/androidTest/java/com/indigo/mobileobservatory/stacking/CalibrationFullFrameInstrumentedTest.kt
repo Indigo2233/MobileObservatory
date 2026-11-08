@@ -17,7 +17,7 @@ class CalibrationFullFrameInstrumentedTest {
         val residentBias = geometry.sampleCount * 4L
         val residentDark = geometry.sampleCount * 4L
         val available = budget - residentBias - residentDark
-        val estimate = CalibrationBuilder.estimatedBuildBytes(geometry)
+        val estimate = CalibrationBuilder.estimatedBuildBytes(geometry, withSampleCounts = true)
 
         assertTrue("heap=$heapLimit budget=$budget available=$available estimate=$estimate",
             available >= estimate)

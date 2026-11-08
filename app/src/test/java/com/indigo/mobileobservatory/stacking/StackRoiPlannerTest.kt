@@ -79,12 +79,12 @@ class StackRoiPlannerTest {
         val geometry = CalibrationGeometry(w, h, "MONO", 8)
         var reads = 0
         val master = CalibrationBuilder.build(CalibrationType.BIAS, geometry, CalibrationCapture(), 1,
-            { reads++; LinearImage(w, h, 1, FloatArray(w * h) { .25f }) }, allowUnknownCapture = true,
+            { reads++; LinearImage(w, h, 1, FloatArray(w * h) { .25f }) },
             memoryBudgetBytes = 128L shl 20)
         assertEquals(1, reads); assertEquals(.25f, master.sample(w * h - 1))
         val failure = assertThrows(IllegalArgumentException::class.java) {
             CalibrationBuilder.build(CalibrationType.BIAS, geometry, CalibrationCapture(), 1,
-                { error("Must reject before reading") }, allowUnknownCapture = true,
+                { error("Must reject before reading") },
                 memoryBudgetBytes = CalibrationBuilder.estimatedBuildBytes(geometry) - 1)
         }
         assertEquals("memory_budget", failure.message)

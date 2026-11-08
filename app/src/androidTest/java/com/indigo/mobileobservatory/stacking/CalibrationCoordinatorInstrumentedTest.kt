@@ -56,7 +56,8 @@ class CalibrationCoordinatorInstrumentedTest {
             c = StackingCoordinator(app, scope, calibrationDirectory = masters)
             await { c.calibration.state.value.initialized && !c.calibration.state.value.busy }
             assertEquals(descriptor.id, c.calibration.state.value.selectedIds[CalibrationType.BIAS])
-            assertEquals(128L * 96 * 4, c.calibration.memoryBytes)
+            assertEquals(0L, c.calibration.memoryBytes)
+            assertEquals(128L * 96 * 4, c.calibration.nativeBytes)
             main { c.calibration.deleteMaster(descriptor.id) }
             await { !c.calibration.state.value.busy }
             assertEquals("calibration_master_in_use", c.calibration.state.value.message)
@@ -128,7 +129,7 @@ class CalibrationCoordinatorInstrumentedTest {
             main { c.calibration.createMaster(CalibrationType.BIAS, bias) }
             await { !c.calibration.state.value.busy && c.calibration.state.value.masters.size == 1 }
             val id = c.calibration.state.value.masters.single().id
-            main { c.calibration.selectMaster(CalibrationType.BIAS, id, true) }
+            main { c.calibration.selectMaster(CalibrationType.BIAS, id) }
             await { !c.calibration.state.value.busy && c.calibration.state.value.selectedIds.isNotEmpty() }
             main { c.startLive(liveKey.copy(gain = 99f)) }
             assertEquals(LiveStackPhase.EMPTY, c.live.state.value.phase)
@@ -156,7 +157,7 @@ class CalibrationCoordinatorInstrumentedTest {
             assertEquals(liveKey.demosaicAlgorithm.name, metadata["demosaicAlgorithm"])
             assertEquals(liveKey.demosaicAlgorithm.name,
                 JSONObject(exports.single { it.extension == "json" }.readText()).getString("demosaicAlgorithm"))
-            assertEquals(LinearPixelDecoder.demosaicExtraBytes(128, 128, liveKey.format, liveKey.demosaicAlgorithm).toString(),
+            assertEquals(LiveFrameDecoder.plan(liveKey).demosaicScratchBytes.toString(),
                 metadata["demosaicScratchBytes"])
             main { c.calibration.selectMaster(CalibrationType.BIAS, null) }
             assertEquals("calibration_reset_required", c.calibration.state.value.message)
@@ -178,19 +179,19 @@ class CalibrationCoordinatorInstrumentedTest {
             val source = recording(folder, "unfinished-master-input.ser", 800) { 1024 }
             val original = hash(source)
             await { c.calibration.state.value.initialized }
-            main { c.calibration.createMaster(CalibrationType.BIAS, source, true); c.calibration.cancel() }
+            main { c.calibration.createMaster(CalibrationType.BIAS, source); c.calibration.cancel() }
             await { !c.calibration.state.value.busy }
             assertTrue(c.calibration.state.value.masters.isEmpty())
             assertTrue(masters.listFiles().orEmpty().none { it.extension == "icm" || it.name.endsWith(".partial") })
             assertArrayEquals(original, hash(source))
             busySource.set(true)
-            main { c.calibration.createMaster(CalibrationType.BIAS, source, true) }
+            main { c.calibration.createMaster(CalibrationType.BIAS, source) }
             await { !c.calibration.state.value.busy }
             assertEquals("recording_active", c.calibration.state.value.message)
             busySource.set(false)
             CalibrationRecordingContext.writeForRecording(source, key)
             CalibrationRecordingContext.invalidate(source, "gain changed during recording")
-            main { c.calibration.createMaster(CalibrationType.BIAS, source, true) }
+            main { c.calibration.createMaster(CalibrationType.BIAS, source) }
             await { !c.calibration.state.value.busy }
             assertEquals("calibration_capture_changed", c.calibration.state.value.message)
             assertTrue(c.calibration.state.value.masters.isEmpty())
@@ -200,8 +201,8 @@ class CalibrationCoordinatorInstrumentedTest {
         }
     }
 
-    @Test fun missingCaptureFromRecordingCreatesUnverifiedMasterWithoutBlocking() = runBlocking {
-        val folder = File(app.cacheDir, "calibration-unverified-${System.nanoTime()}").apply { mkdirs() }
+    @Test fun missingCaptureFromRecordingCreatesAndUsesMasterWithoutConfirmation() = runBlocking {
+        val folder = File(app.cacheDir, "calibration-unknown-${System.nanoTime()}").apply { mkdirs() }
         val masters = File(folder, "library-${System.nanoTime()}")
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
         val c = StackingCoordinator(app, scope, calibrationDirectory = masters)
@@ -211,19 +212,18 @@ class CalibrationCoordinatorInstrumentedTest {
             main { c.calibration.createMaster(CalibrationType.BIAS, source) }
             await { !c.calibration.state.value.busy && c.calibration.state.value.masters.size == 1 }
             val descriptor = c.calibration.state.value.masters.single()
-            assertEquals("calibration_master_created_unverified", c.calibration.state.value.message)
-            assertTrue(descriptor.id in c.calibration.state.value.confirmedIds)
+            assertEquals("calibration_master_created", c.calibration.state.value.message)
             assertNull(descriptor.capture.camera)
             main { c.calibration.selectMaster(CalibrationType.BIAS, descriptor.id) }
             await { !c.calibration.state.value.busy &&
                 c.calibration.state.value.selectedIds[CalibrationType.BIAS] == descriptor.id }
-            assertTrue(c.calibration.snapshot().allowUnknownCapture)
+            assertTrue(c.calibration.snapshot().enabled)
             main { c.calibration.selectMaster(CalibrationType.BIAS, null) }
             await { !c.calibration.state.value.busy && c.calibration.state.value.selectedIds.isEmpty() }
             main { c.calibration.selectMaster(CalibrationType.BIAS, descriptor.id) }
             await { !c.calibration.state.value.busy &&
                 c.calibration.state.value.selectedIds[CalibrationType.BIAS] == descriptor.id }
-            assertTrue(c.calibration.snapshot().allowUnknownCapture)
+            assertTrue(c.calibration.snapshot().enabled)
         } finally {
             main { c.close() }; scope.cancel(); folder.deleteRecursively()
             app.getSharedPreferences("stack-calibration-selection-${masters.name}", 0).edit().clear().commit()
