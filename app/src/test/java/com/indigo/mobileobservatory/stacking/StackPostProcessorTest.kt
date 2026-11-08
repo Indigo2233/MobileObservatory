@@ -32,9 +32,9 @@ class StackPostProcessorTest {
         val image=LinearImage(16,16,1,FloatArray(256) { p -> .1f + if(p%16 in 5..10 && p/16 in 5..10) .2f else 0f })
         val base=StackProcessingParameters.preset(ProcessingPreset.INTENSE).copy(stretchEnabled=false,
             sharpening=1.0,localContrast=.2,background=BackgroundParameters(enabled=false))
-        assertArrayEquals(StackPostProcessor.process(image,base.copy(blackPoint=0.0,whitePoint=1.0,midtone=.5,
-            curve=0.0,brightness=1.0,highlightCompression=0.0,stretchEnabled=true)).image.pixels,
-            StackPostProcessor.process(image,base).image.pixels,1e-7f)
+        val withoutDetail=base.copy(sharpening=0.0,localContrast=0.0)
+        assertArrayEquals(image.pixels,StackPostProcessor.process(image,withoutDetail).image.pixels,0f)
+        assertFalse(StackPostProcessor.process(image,base).image.pixels.contentEquals(image.pixels))
     }
 
     @Test fun maskedQuadraticGradientPreservesWeakNebulaAndSmoothEdges() {
