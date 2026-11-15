@@ -85,6 +85,16 @@ class PtpContainerTest {
 class PtpSessionTest {
 
     @Test
+    fun `transaction IDs start at zero and reset for each session`() {
+        val ids = PtpTransactionCounter()
+
+        assertEquals(0, ids.next())
+        assertEquals(1, ids.next())
+        ids.reset()
+        assertEquals(0, ids.next())
+    }
+
+    @Test
     fun `open session reads device info and ISO desc`() {
         val info = PtpDeviceInfo(
             standardVersion = 100,
@@ -157,6 +167,20 @@ class PtpSessionTest {
         val session = PtpSession(wire)
         assertEquals("D5100", session.open().model)
     }
+
+    @Test
+    fun `failed open session does not close an unowned session`() {
+        val wire = RecordingPtpWire(
+            emptyInfo(),
+            openResponse = PtpConstants.RC_SESSION_NOT_OPEN
+        )
+
+        val error = runCatching { PtpSession(wire).open() }.exceptionOrNull()
+
+        assertTrue(error is PtpException)
+        assertEquals(listOf(PtpConstants.OC_OPEN_SESSION), wire.codes)
+        assertFalse(wire.codes.contains(PtpConstants.OC_CLOSE_SESSION))
+    }
 }
 
 class DslrUsbTest {
@@ -221,23 +245,24 @@ class PtpHelpersTest {
         assertEquals(null, NikonLiveView.detect(emptyInfo().copy(manufacturer = "Canon")))
     }
 
-    private fun emptyInfo() = PtpDeviceInfo(
-        standardVersion = 100,
-        vendorExtensionId = 0,
-        vendorExtensionVersion = 0,
-        vendorExtensionDesc = "",
-        functionalMode = 0,
-        operations = emptyList(),
-        events = emptyList(),
-        properties = emptyList(),
-        captureFormats = emptyList(),
-        imageFormats = emptyList(),
-        manufacturer = "",
-        model = "",
-        deviceVersion = "",
-        serialNumber = ""
-    )
 }
+
+private fun emptyInfo() = PtpDeviceInfo(
+    standardVersion = 100,
+    vendorExtensionId = 0,
+    vendorExtensionVersion = 0,
+    vendorExtensionDesc = "",
+    functionalMode = 0,
+    operations = emptyList(),
+    events = emptyList(),
+    properties = emptyList(),
+    captureFormats = emptyList(),
+    imageFormats = emptyList(),
+    manufacturer = "",
+    model = "",
+    deviceVersion = "",
+    serialNumber = ""
+)
 
 class PtpSessionWriteTest {
 

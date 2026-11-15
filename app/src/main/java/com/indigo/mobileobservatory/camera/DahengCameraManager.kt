@@ -1259,8 +1259,10 @@ class DahengCameraManager(
                     Log.i(TAG, "Nikon PTP connected: ${info.name}")
                 } else {
                     abandonReservation()
+                    val detail = camera.openFailure
                     _connectionState.value = ConnectionState.Error(
-                        "Nikon PTP OpenSession/GetDeviceInfo failed. Check USB mode is MTP/PTP."
+                        detail?.let { "Nikon PTP connection failed: $it" }
+                            ?: "Nikon PTP connection failed. Check USB mode is MTP/PTP."
                     )
                 }
             } catch (e: Throwable) {

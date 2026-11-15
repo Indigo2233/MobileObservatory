@@ -16,6 +16,8 @@ data class PtpResult(
 }
 
 interface PtpWire {
+    fun beginSession() = Unit
+
     fun transact(code: Int, params: LongArray = longArrayOf(), dataOut: ByteArray? = null): PtpResult
 }
 
@@ -27,31 +29,39 @@ class PtpSession(
 ) {
     var deviceInfo: PtpDeviceInfo? = null
         private set
+    var isSessionOpen: Boolean = false
+        private set
 
     fun open(): PtpDeviceInfo {
+        wire.beginSession()
         val opened = wire.transact(PtpConstants.OC_OPEN_SESSION, longArrayOf(sessionId))
-        if (!opened.ok && opened.responseCode != PtpConstants.RC_SESSION_NOT_OPEN) {
-            // Some bodies return SessionAlreadyOpen; still try GetDeviceInfo.
-            if (opened.responseCode != PtpConstants.RC_SESSION_ALREADY_OPEN) {
-                throw PtpException(
-                    "OpenSession failed: 0x${opened.responseCode.toString(16)}",
-                    opened.responseCode
-                )
-            }
+        if (!opened.ok && opened.responseCode != PtpConstants.RC_SESSION_ALREADY_OPEN) {
+            throw PtpException(
+                "OpenSession failed: 0x${opened.responseCode.toString(16)}",
+                opened.responseCode
+            )
         }
+        isSessionOpen = true
         val infoResult = wire.transact(PtpConstants.OC_GET_DEVICE_INFO)
         if (!infoResult.ok) {
+            close()
             throw PtpException(
                 "GetDeviceInfo failed: 0x${infoResult.responseCode.toString(16)}",
                 infoResult.responseCode
             )
         }
-        return PtpDeviceInfo.parse(infoResult.data).also { deviceInfo = it }
+        return try {
+            PtpDeviceInfo.parse(infoResult.data).also { deviceInfo = it }
+        } catch (error: Throwable) {
+            close()
+            throw error
+        }
     }
 
     fun close() {
         runCatching { wire.transact(PtpConstants.OC_CLOSE_SESSION) }
         deviceInfo = null
+        isSessionOpen = false
     }
 
     fun getPropertyDesc(propertyCode: Int): PtpPropertyDesc {

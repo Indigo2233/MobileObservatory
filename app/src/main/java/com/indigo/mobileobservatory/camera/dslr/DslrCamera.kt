@@ -64,6 +64,8 @@ class DslrCamera : Camera, CameraStillCaptureCapable {
         private set
     override var hwExposureMaxUs: Float = 30_000_000f
         private set
+    internal var openFailure: String? = null
+        private set
     override var longExposureEnabled: Boolean = false
     override val supportsHostRoi: Boolean = false
     override val recordsLiveViewAsScience: Boolean = false
@@ -72,15 +74,21 @@ class DslrCamera : Camera, CameraStillCaptureCapable {
 
     fun open(usbDevice: UsbDevice, usbConnection: UsbDeviceConnection): Boolean {
         close()
-        val endpoints = DslrUsb.findPtpInterface(usbDevice) ?: return false
+        openFailure = null
+        val endpoints = DslrUsb.findPtpInterface(usbDevice)
+        if (endpoints == null) {
+            openFailure = "No PTP still-image interface found."
+            usbConnection.close()
+            return false
+        }
         return try {
             val ptp = PtpTransport(usbConnection, endpoints)
-            ptp.claim()
-            val ptpSession = PtpSession(ptp)
-            val info = ptpSession.open()
             connection = usbConnection
             transport = ptp
+            ptp.claim()
+            val ptpSession = PtpSession(ptp)
             session = ptpSession
+            val info = ptpSession.open()
             deviceInfo = info
             liveViewOps = NikonLiveView.detect(info)
             cameraInfo = CameraInfo(
@@ -96,6 +104,10 @@ class DslrCamera : Camera, CameraStillCaptureCapable {
             true
         } catch (error: Throwable) {
             FileLogger.e(TAG, "PTP open failed: ${error.message}", error)
+            openFailure = describeOpenFailure(error)
+            session?.takeIf { it.isSessionOpen }?.let { openSession ->
+                runCatching { openSession.close() }
+            }
             releaseQuietly()
             false
         }
@@ -380,6 +392,19 @@ class DslrCamera : Camera, CameraStillCaptureCapable {
         isoDesc = null
         shutterDesc = null
         liveViewOps = null
+    }
+
+    private fun describeOpenFailure(error: Throwable): String {
+        val message = error.message?.takeIf { it.isNotBlank() } ?: error.javaClass.simpleName
+        return when ((error as? PtpException)?.responseCode) {
+            PtpConstants.RC_INVALID_TRANSACTION_ID ->
+                "$message. Restart the camera, then reconnect USB."
+            PtpConstants.RC_SESSION_ALREADY_OPEN ->
+                "$message. Close other camera applications, then reconnect USB."
+            PtpConstants.RC_DEVICE_BUSY ->
+                "$message. Wait for the camera to become idle, or reconnect USB."
+            else -> message
+        }
     }
 
     private fun formatCodes(codes: List<Int>): String =

@@ -15,6 +15,14 @@ data class PtpEndpoints(
     val interruptIn: UsbEndpoint?
 )
 
+internal class PtpTransactionCounter(private var nextValue: Int = 0) {
+    fun next(): Int = nextValue++
+
+    fun reset() {
+        nextValue = 0
+    }
+}
+
 object DslrUsb {
     private const val TAG = "DslrUsb"
 
@@ -75,7 +83,7 @@ class PtpTransport(
     private val timeoutMs: Int = 5_000
 ) : PtpWire {
     private val lock = Any()
-    private var nextTransactionId = 1
+    private val transactionIds = PtpTransactionCounter()
 
     fun claim() {
         if (!connection.claimInterface(endpoints.usbInterface, true)) {
@@ -87,12 +95,16 @@ class PtpTransport(
         runCatching { connection.releaseInterface(endpoints.usbInterface) }
     }
 
+    override fun beginSession() {
+        transactionIds.reset()
+    }
+
     override fun transact(code: Int, params: LongArray, dataOut: ByteArray?): PtpResult =
         transact(code, params, dataOut, timeoutMs)
 
     fun transact(code: Int, params: LongArray, dataOut: ByteArray?, timeoutMs: Int): PtpResult {
         synchronized(lock) {
-            val transactionId = nextTransactionId++
+            val transactionId = transactionIds.next()
             writeFully(PtpContainer.command(code, transactionId, params).toBytes(), timeoutMs)
             if (dataOut != null) {
                 writeFully(PtpContainer.data(code, transactionId, dataOut).toBytes(), timeoutMs)
