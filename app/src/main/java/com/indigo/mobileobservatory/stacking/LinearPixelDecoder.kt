@@ -319,6 +319,8 @@ object LinearPixelDecoder {
         }
         val out = destination ?: FloatArray(w * h * 3)
         require(out.size == w * h * 3) { "Invalid demosaic destination" }
+        if (NativeDemosaic.bilinear(src, w, h, redX, redY, out, cancelCheck))
+            return LinearImage(w, h, 3, out)
         for (y in 0 until h) for (x in 0 until w) {
             if (x == 0) cancelCheck()
             val own = color(x, y)

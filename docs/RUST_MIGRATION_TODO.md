@@ -64,31 +64,43 @@ cargo install cargo-ndk --locked
   - 行星搜索、完整叠加、缓冲复用和 SER/PSER 端到端测试通过。
   - APK 包含 `libplanetary_stack_jni.so`，5 个 JNI 导出符号已核对。
 
-### RUST-03：去马赛克
+### RUST-03：双线性与 VNG 去马赛克
+
+- 状态：已完成（2026-11-16）。
+- 范围：`NativeDemosaic` 的双线性与 VNG 像素循环及 `CopyBack` 输出。
+- Kotlin 保留 CFA 相位解析、非 Bayer 直通、预算计算和原生不可用时的回退实现。
+- 验收：
+  - Rust 常量色、全部 CFA、边缘、非有限输入和取消测试通过。
+  - 官方 OpenCV 4.10 VNG fixture、仿射、旋转、16 位和极弱信号测试通过。
+  - DDFAPD 与解码器回归测试通过。
+  - APK 包含 `libdemosaic_jni.so`，bilinear/VNG JNI 符号已核对。
+
+### RUST-04：DDFAPD 去马赛克
 
 - 状态：待开始。
-- 范围：双线性、VNG、DDFAPD 的像素循环。
-- 验收：参考实现逐像素误差、取消、工作区复用和内存上限通过。
+- 范围：`DdfapdDemosaicer` 的方向决策、镜像边界和三个阶段 refinement。
+- 约束：保留 `Workspace` 的并发占用、借出输出和跨调用复用契约。
+- 验收：Menon 独立参考 fixture、工作区复用、取消和内存上限测试通过。
 
-### RUST-04：校准与星点检测
+### RUST-05：校准与星点检测
 
 - 状态：待开始。
 - 范围：BIAS/DARK/FLAT 应用、星点质心、HFR、刚体配准。
 - 验收：现有校准和 `DeepSkyAlgorithmsTest` 通过。
 
-### RUST-05：FITS、SER、PSER 编解码
+### RUST-06：FITS、SER、PSER 编解码
 
 - 状态：待开始。
 - 范围：头解析、像素解码、行带编码和校验。
 - 验收：真实文件回放、字节级兼容、损坏输入和取消测试通过。
 
-### RUST-06：领域状态机
+### RUST-07：领域状态机
 
 - 状态：待开始。
 - 范围：序列运行时、赤道仪协议解析、配件协议解析、指向计算。
 - 验收：协议回放、并发、取消和错误恢复测试通过。
 
-### RUST-07：PHD2 数值核心评估
+### RUST-08：PHD2 数值核心评估
 
 - 状态：待开始。
 - 范围：仅评估是否从上游 C++ 迁移。

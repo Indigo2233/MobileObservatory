@@ -120,6 +120,8 @@ object VngDemosaicer {
         }
         val dst = destination ?: FloatArray(src.size * 3)
         require(dst.size.toLong() == src.size.toLong() * 3) { "Invalid demosaic destination" }
+        if (NativeDemosaic.vng(src, width, height, redX, redY, dst, cancelCheck))
+            return LinearImage(width, height, 3, dst)
         // Complete same-colour neighbours at image edges, never parity-changing clamping.
         for (y in 0 until height) {
             cancelCheck()

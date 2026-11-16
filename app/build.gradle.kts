@@ -80,8 +80,10 @@ val observatoryBuildId =
 
 val rustStackAccumulatorDirectory = file("src/main/rust/stack_accumulator")
 val rustPlanetaryStackDirectory = file("src/main/rust/planetary_stack")
+val rustDemosaicDirectory = file("src/main/rust/demosaic")
 val rustStackJniLibsDirectory = layout.buildDirectory.dir("rustJniLibs/stack")
 val rustPlanetaryJniLibsDirectory = layout.buildDirectory.dir("rustJniLibs/planetary")
+val rustDemosaicJniLibsDirectory = layout.buildDirectory.dir("rustJniLibs/demosaic")
 val rustTargets = if (emulatorTest) listOf("x86", "x86_64") else listOf("arm64-v8a")
 val rustStackHostTargetDirectory = layout.buildDirectory.dir("rust-host-target/stack")
 val rustStackHostLibraryDirectory = rustStackHostTargetDirectory.map { it.dir("debug") }
@@ -92,6 +94,11 @@ val rustPlanetaryHostTargetDirectory = layout.buildDirectory.dir("rust-host-targ
 val rustPlanetaryHostLibraryDirectory = rustPlanetaryHostTargetDirectory.map { it.dir("debug") }
 val rustPlanetaryHostLibrary = rustPlanetaryHostLibraryDirectory.map {
     it.file(if (phd2WindowsHost) "planetary_stack_jni.dll" else "libplanetary_stack_jni.so")
+}
+val rustDemosaicHostTargetDirectory = layout.buildDirectory.dir("rust-host-target/demosaic")
+val rustDemosaicHostLibraryDirectory = rustDemosaicHostTargetDirectory.map { it.dir("debug") }
+val rustDemosaicHostLibrary = rustDemosaicHostLibraryDirectory.map {
+    it.file(if (phd2WindowsHost) "demosaic_jni.dll" else "libdemosaic_jni.so")
 }
 
 val buildRustStackAccumulator by tasks.registering(Exec::class) {
@@ -148,6 +155,33 @@ val buildRustPlanetaryStack by tasks.registering(Exec::class) {
     )
 }
 
+val buildRustDemosaic by tasks.registering(Exec::class) {
+    group = "build"
+    description = "Builds the Rust Bayer demosaic core for the selected Android ABI."
+    workingDir(rustDemosaicDirectory)
+    inputs.files(
+        fileTree(rustDemosaicDirectory) {
+            exclude("target/**")
+        }
+    )
+    inputs.property("rustTargets", rustTargets)
+    outputs.dir(rustDemosaicJniLibsDirectory)
+    commandLine(
+        buildList {
+            add("cargo")
+            add("ndk")
+            rustTargets.forEach {
+                add("-t")
+                add(it)
+            }
+            add("-o")
+            add(rustDemosaicJniLibsDirectory.get().asFile.absolutePath)
+            add("build")
+            add("--release")
+        }
+    )
+}
+
 val buildRustStackAccumulatorHost by tasks.registering(Exec::class) {
     group = "verification"
     description = "Builds the Rust deep-sky accumulator for host JVM tests."
@@ -176,10 +210,24 @@ val buildRustPlanetaryStackHost by tasks.registering(Exec::class) {
     commandLine("cargo", "build", "--manifest-path", file("src/main/rust/planetary_stack/Cargo.toml").absolutePath)
 }
 
+val buildRustDemosaicHost by tasks.registering(Exec::class) {
+    group = "verification"
+    description = "Builds the Rust Bayer demosaic core for host JVM tests."
+    workingDir(rustDemosaicDirectory)
+    inputs.files(
+        fileTree(rustDemosaicDirectory) {
+            exclude("target/**")
+        }
+    )
+    outputs.file(rustDemosaicHostLibrary)
+    environment("CARGO_TARGET_DIR", rustDemosaicHostTargetDirectory.get().asFile.absolutePath)
+    commandLine("cargo", "build", "--manifest-path", file("src/main/rust/demosaic/Cargo.toml").absolutePath)
+}
+
 val buildRustNativeLibraries by tasks.registering {
     group = "build"
     description = "Builds all Rust native libraries for Android."
-    dependsOn(buildRustStackAccumulator, buildRustPlanetaryStack)
+    dependsOn(buildRustStackAccumulator, buildRustPlanetaryStack, buildRustDemosaic)
 }
 
 tasks.matching { it.name == "preBuild" || it.name.endsWith("JniLibFolders") }.configureEach {
@@ -189,7 +237,7 @@ tasks.matching { it.name == "preBuild" || it.name.endsWith("JniLibFolders") }.co
 val buildRustHostLibraries by tasks.registering {
     group = "verification"
     description = "Builds all Rust native libraries for host JVM tests."
-    dependsOn(buildRustStackAccumulatorHost, buildRustPlanetaryStackHost)
+    dependsOn(buildRustStackAccumulatorHost, buildRustPlanetaryStackHost, buildRustDemosaicHost)
 }
 
 tasks.withType<Test>().configureEach {
@@ -199,6 +247,7 @@ tasks.withType<Test>().configureEach {
         listOf(
             rustStackHostLibraryDirectory.get().asFile.absolutePath,
             rustPlanetaryHostLibraryDirectory.get().asFile.absolutePath,
+            rustDemosaicHostLibraryDirectory.get().asFile.absolutePath,
             phd2HostDirectory.get().asFile.absolutePath
         ).joinToString(File.pathSeparator)
     )
@@ -349,6 +398,7 @@ android {
         getByName("main") {
             jniLibs.srcDir(rustStackJniLibsDirectory)
             jniLibs.srcDir(rustPlanetaryJniLibsDirectory)
+            jniLibs.srcDir(rustDemosaicJniLibsDirectory)
             if (stellariumNonCommercial) {
                 assets.srcDir("src/stellarium/assets")
             }
