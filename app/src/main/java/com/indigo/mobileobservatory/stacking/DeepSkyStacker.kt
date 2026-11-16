@@ -51,6 +51,7 @@ class DeepSkyStacker(private val config: DeepSkyConfig = DeepSkyConfig(), privat
     }
 
     fun add(image: LinearSamples, exposureSeconds: Double, cancelled: () -> Boolean = { false }): DeepSkyFrameResult {
+        native?.releaseBorrowedExport()
         val start = System.nanoTime()
         stats = stats.copy(received = stats.received + 1)
         fun reject(reason: DeepSkyRejection): DeepSkyFrameResult {

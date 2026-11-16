@@ -44,6 +44,10 @@ internal class NativeStackAccumulator private constructor(
         return DeepSkyAccumulatorResult(output, PixelCoverage.pack(counts))
     }
 
+    fun releaseBorrowedExport() {
+        borrowedPixels = null
+    }
+
     /** Copies one contiguous output band, optionally including M2 and UInt16 coverage. */
     fun readRows(firstRow: Int, rows: Int, mean: FloatArray, m2: FloatArray?, coverage: ShortArray) {
         require(firstRow >= 0 && rows > 0 && firstRow + rows <= height)
@@ -59,7 +63,7 @@ internal class NativeStackAccumulator private constructor(
             StackAccumulatorNative.release(handle)
             handle = 0L
         }
-        borrowedPixels = null
+        releaseBorrowedExport()
     }
 
     companion object {

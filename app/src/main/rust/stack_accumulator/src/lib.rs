@@ -6,6 +6,16 @@ const COVERAGE_LIMIT: jint = -2;
 const CANCELLED: jint = -3;
 const INVALID: jint = -1;
 
+fn checked_row_range(first_row: jint, row_count: jint, height: usize) -> Option<(usize, usize)> {
+    let first_row = usize::try_from(first_row).ok()?;
+    let row_count = usize::try_from(row_count).ok()?;
+    if row_count == 0 {
+        return None;
+    }
+    let end = first_row.checked_add(row_count)?;
+    (end <= height).then_some((first_row, row_count))
+}
+
 struct Accumulator {
     width: usize,
     height: usize,
@@ -250,16 +260,29 @@ pub extern "system" fn Java_com_indigo_mobileobservatory_stacking_StackAccumulat
     let cancelled_raw = cancelled.as_raw();
     let is_cancelled_raw = is_cancelled.into_raw();
     let call_boolean_method = unsafe { (**native_env).CallBooleanMethodA };
+    let exception_check = unsafe { (**native_env).ExceptionCheck };
+    let exception_clear = unsafe { (**native_env).ExceptionClear };
     let mut cancel = || match call_boolean_method {
         Some(call) => unsafe {
-            call(
+            let result = call(
                 native_env,
                 cancelled_raw,
                 is_cancelled_raw,
                 std::ptr::null(),
-            ) != 0
+            );
+            if exception_check
+                .map(|check| check(native_env) != 0)
+                .unwrap_or(true)
+            {
+                if let Some(clear) = exception_clear {
+                    clear(native_env);
+                }
+                true
+            } else {
+                result != 0
+            }
         },
-        None => false,
+        None => true,
     };
 
     accumulator.accumulate(
@@ -289,16 +312,20 @@ pub extern "system" fn Java_com_indigo_mobileobservatory_stacking_StackAccumulat
     let Some(accumulator) = accumulator_from_handle(handle) else {
         return INVALID as jlong;
     };
-    if first_row < 0
-        || row_count <= 0
-        || first_row as usize + row_count as usize > accumulator.height
-    {
+    let Some((first_row, row_count)) = checked_row_range(first_row, row_count, accumulator.height)
+    else {
         return INVALID as jlong;
-    }
+    };
 
-    let row_samples = accumulator.width * accumulator.channels;
-    let samples = row_samples * row_count as usize;
-    let pixels = accumulator.width * row_count as usize;
+    let Some(row_samples) = accumulator.width.checked_mul(accumulator.channels) else {
+        return INVALID as jlong;
+    };
+    let Some(samples) = row_samples.checked_mul(row_count) else {
+        return INVALID as jlong;
+    };
+    let Some(pixels) = accumulator.width.checked_mul(row_count) else {
+        return INVALID as jlong;
+    };
     let mean_len = match env.get_array_length(&mean_array) {
         Ok(len) if len >= 0 => len as usize,
         _ => return INVALID as jlong,
@@ -315,7 +342,15 @@ pub extern "system" fn Java_com_indigo_mobileobservatory_stacking_StackAccumulat
         Ok(values) => values,
         Err(_) => return INVALID as jlong,
     };
-    let offset = first_row as usize * row_samples;
+    let Some(offset) = first_row.checked_mul(row_samples) else {
+        return INVALID as jlong;
+    };
+    let Some(sample_end) = offset.checked_add(samples) else {
+        return INVALID as jlong;
+    };
+    if sample_end > accumulator.mean.len() {
+        return INVALID as jlong;
+    }
     mean[..samples].copy_from_slice(&accumulator.mean[offset..offset + samples]);
     drop(mean);
 
@@ -327,7 +362,7 @@ pub extern "system" fn Java_com_indigo_mobileobservatory_stacking_StackAccumulat
         if m2_len < samples {
             return INVALID as jlong;
         }
-        if accumulator.m2.len() < offset + samples {
+        if sample_end > accumulator.m2.len() {
             return INVALID as jlong;
         }
         let mut m2 = match unsafe { env.get_array_elements(&m2_array, ReleaseMode::CopyBack) } {
@@ -343,7 +378,15 @@ pub extern "system" fn Java_com_indigo_mobileobservatory_stacking_StackAccumulat
             Ok(values) => values,
             Err(_) => return INVALID as jlong,
         };
-    let pixel_offset = first_row as usize * accumulator.width;
+    let Some(pixel_offset) = first_row.checked_mul(accumulator.width) else {
+        return INVALID as jlong;
+    };
+    let Some(pixel_end) = pixel_offset.checked_add(pixels) else {
+        return INVALID as jlong;
+    };
+    if pixel_end > accumulator.coverage.len() {
+        return INVALID as jlong;
+    }
     for i in 0..pixels {
         coverage[i] = accumulator.coverage[pixel_offset + i] as jshort;
     }
@@ -377,7 +420,7 @@ pub extern "system" fn Java_com_indigo_mobileobservatory_stacking_StackAccumulat
 
 #[cfg(test)]
 mod tests {
-    use super::Accumulator;
+    use super::{checked_row_range, Accumulator};
 
     #[test]
     fn accumulates_identity_warp_and_tracks_coverage() {
@@ -420,5 +463,14 @@ mod tests {
             accumulator.accumulate(&[1.0_f32], 1.0, 0.0, 0.0, 0.0, 5.0, 0.0, 5, || false),
             -1
         );
+    }
+
+    #[test]
+    fn row_range_rejects_negative_empty_and_out_of_bounds_values() {
+        assert_eq!(checked_row_range(-1, 1, 10), None);
+        assert_eq!(checked_row_range(0, 0, 10), None);
+        assert_eq!(checked_row_range(9, 2, 10), None);
+        assert_eq!(checked_row_range(i32::MAX, i32::MAX, 10), None);
+        assert_eq!(checked_row_range(2, 3, 10), Some((2, 3)));
     }
 }
