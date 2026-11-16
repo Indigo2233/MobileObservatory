@@ -132,6 +132,7 @@ impl Accumulator {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[inline(never)]
 fn accumulate_channels<const CHANNELS: usize>(
     width: usize,
     height: usize,
@@ -161,6 +162,8 @@ fn accumulate_channels<const CHANNELS: usize>(
     let coverage_ptr = coverage.as_mut_ptr();
     let mut rejected_pixels: jint = 0;
     let mut sampled = [0.0_f32; CHANNELS];
+    let max_x = width as f64 - 1.0;
+    let max_y = height as f64 - 1.0;
 
     // SAFETY: `new` and `accumulate` validated the backing lengths. Coordinates are clamped
     // before conversion to pixel indices, every channel is compile-time checked against
@@ -170,21 +173,32 @@ fn accumulate_channels<const CHANNELS: usize>(
             if y % 128 == 0 && cancelled() {
                 return CANCELLED;
             }
+            let upper_row = y.saturating_sub(1) * width;
+            let middle_row = y * width;
+            let lower_row = (y + 1).min(height - 1) * width;
             for x in 0..width {
                 let sx = cosine * (x as f64 - dx) + sine * (y as f64 - dy);
                 let sy = -sine * (x as f64 - dx) + cosine * (y as f64 - dy);
-                if sx < -1e-7
-                    || sy < -1e-7
-                    || sx > width as f64 - 1.0 + 1e-7
-                    || sy > height as f64 - 1.0 + 1e-7
-                {
+                if sx < -1e-7 || sy < -1e-7 || sx > max_x + 1e-7 || sy > max_y + 1e-7 {
                     continue;
                 }
 
-                let fx = sx.clamp(0.0, width as f64 - 1.0);
-                let fy = sy.clamp(0.0, height as f64 - 1.0);
-                let ix = fx.floor() as usize;
-                let iy = fy.floor() as usize;
+                let fx = if sx < 0.0 {
+                    0.0
+                } else if sx > max_x {
+                    max_x
+                } else {
+                    sx
+                };
+                let fy = if sy < 0.0 {
+                    0.0
+                } else if sy > max_y {
+                    max_y
+                } else {
+                    sy
+                };
+                let ix = fx as usize;
+                let iy = fy as usize;
                 let ix1 = (ix + 1).min(width - 1);
                 let iy1 = (iy + 1).min(height - 1);
                 let ax = fx - ix as f64;
@@ -196,9 +210,6 @@ fn accumulate_channels<const CHANNELS: usize>(
                 }
 
                 let needs_temporal_check = weight >= warmup_samples;
-                let upper_row = y.saturating_sub(1) * width;
-                let middle_row = y * width;
-                let lower_row = (y + 1).min(height - 1) * width;
                 let left_column = x.saturating_sub(1);
                 let right_column = (x + 1).min(width - 1);
                 let mut reject = false;
