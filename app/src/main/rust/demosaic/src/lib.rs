@@ -1,4 +1,4 @@
-use jni::objects::{JClass, JFloatArray, JObject, ReleaseMode};
+use jni::objects::{JByteArray, JClass, JDoubleArray, JFloatArray, JObject, ReleaseMode};
 use jni::sys::jint;
 use jni::JNIEnv;
 
@@ -426,6 +426,379 @@ fn vng(
     }
 }
 
+fn mirror(mut index: isize, size: usize) -> usize {
+    if index >= 0 && index < size as isize {
+        return index as usize;
+    }
+    let period = 2 * (size as isize - 1);
+    index %= period;
+    if index < 0 {
+        index += period;
+    }
+    if index < size as isize {
+        index as usize
+    } else {
+        (period - index) as usize
+    }
+}
+
+fn sample(src: &[f32], width: usize, height: usize, x: isize, y: isize) -> f64 {
+    src[mirror(y, height) * width + mirror(x, width)] as f64
+}
+
+fn neighbour(x: usize, y: usize, dx: isize, dy: isize, width: usize, height: usize) -> usize {
+    mirror(y as isize + dy, height) * width + mirror(x as isize + dx, width)
+}
+
+fn zero(values: &[f64], width: usize, height: usize, x: isize, y: isize) -> f64 {
+    if x >= 0 && y >= 0 && x < width as isize && y < height as isize {
+        values[y as usize * width + x as usize]
+    } else {
+        0.0
+    }
+}
+
+fn difference(rgb: &[f32], pixel: usize, a: usize, b: usize) -> f64 {
+    rgb[pixel * 3 + a] as f64 - rgb[pixel * 3 + b] as f64
+}
+
+fn horizontal_cost(values: &[f64], width: usize, height: usize, x: usize, y: usize) -> f64 {
+    let x = x as isize;
+    let y = y as isize;
+    zero(values, width, height, x, y + 2)
+        + zero(values, width, height, x - 2, y + 2)
+        + zero(values, width, height, x - 1, y + 1)
+        + 3.0 * zero(values, width, height, x, y)
+        + 3.0 * zero(values, width, height, x - 2, y)
+        + zero(values, width, height, x - 1, y - 1)
+        + zero(values, width, height, x, y - 2)
+        + zero(values, width, height, x - 2, y - 2)
+}
+
+fn vertical_cost(values: &[f64], width: usize, height: usize, x: usize, y: usize) -> f64 {
+    let x = x as isize;
+    let y = y as isize;
+    zero(values, width, height, x + 2, y)
+        + zero(values, width, height, x + 2, y - 2)
+        + zero(values, width, height, x + 1, y - 1)
+        + 3.0 * zero(values, width, height, x, y)
+        + 3.0 * zero(values, width, height, x, y - 2)
+        + zero(values, width, height, x - 1, y - 1)
+        + zero(values, width, height, x - 2, y)
+        + zero(values, width, height, x - 2, y - 2)
+}
+
+fn freeze_differences(
+    rgb: &[f32],
+    red_green: &mut [f64],
+    blue_green: &mut [f64],
+    width: usize,
+    height: usize,
+    cancel: &mut dyn FnMut() -> bool,
+) -> bool {
+    for y in 0..height {
+        if cancel() {
+            return false;
+        }
+        for x in 0..width {
+            let p = y * width + x;
+            red_green[p] = difference(rgb, p, 0, 1);
+            blue_green[p] = difference(rgb, p, 2, 1);
+        }
+    }
+    true
+}
+
+#[allow(clippy::too_many_arguments)]
+fn ddfapd(
+    src: &[f32],
+    rgb: &mut [f32],
+    horizontal: &mut [f64],
+    vertical: &mut [f64],
+    delta_h: &mut [f64],
+    delta_v: &mut [f64],
+    direction: &mut [i8],
+    width: usize,
+    height: usize,
+    red_x: usize,
+    red_y: usize,
+    mut cancel: impl FnMut() -> bool,
+) -> jint {
+    if width < 2 || height < 2 || red_x > 1 || red_y > 1 {
+        return INVALID;
+    }
+    let Some(pixels) = width.checked_mul(height) else {
+        return INVALID;
+    };
+    let Some(output_len) = pixels.checked_mul(3) else {
+        return INVALID;
+    };
+    if src.len() < pixels
+        || rgb.len() < output_len
+        || horizontal.len() < pixels
+        || vertical.len() < pixels
+        || delta_h.len() < pixels
+        || delta_v.len() < pixels
+        || direction.len() < pixels
+    {
+        return INVALID;
+    }
+
+    for y in 0..height {
+        if cancel() {
+            return CANCELLED;
+        }
+        for x in 0..width {
+            let p = y * width + x;
+            let value = src[p];
+            if !value.is_finite() {
+                return NONFINITE_INPUT;
+            }
+            let own = colour(x, y, red_x, red_y);
+            rgb[p * 3 + own] = value;
+            if own == 1 {
+                horizontal[p] = 0.0;
+                vertical[p] = 0.0;
+                continue;
+            }
+            let value = value as f64;
+            let gh = 0.5
+                * (sample(src, width, height, x as isize - 1, y as isize)
+                    + sample(src, width, height, x as isize + 1, y as isize))
+                + 0.5 * value
+                - 0.25
+                    * (sample(src, width, height, x as isize - 2, y as isize)
+                        + sample(src, width, height, x as isize + 2, y as isize));
+            let gv = 0.5
+                * (sample(src, width, height, x as isize, y as isize - 1)
+                    + sample(src, width, height, x as isize, y as isize + 1))
+                + 0.5 * value
+                - 0.25
+                    * (sample(src, width, height, x as isize, y as isize - 2)
+                        + sample(src, width, height, x as isize, y as isize + 2));
+            horizontal[p] = value - gh;
+            vertical[p] = value - gv;
+        }
+    }
+
+    for y in 0..height {
+        if cancel() {
+            return CANCELLED;
+        }
+        for x in 0..width {
+            let p = y * width + x;
+            delta_h[p] =
+                (horizontal[p] - horizontal[y * width + mirror(x as isize + 2, width)]).abs();
+            delta_v[p] = (vertical[p] - vertical[mirror(y as isize + 2, height) * width + x]).abs();
+        }
+    }
+
+    for y in 0..height {
+        if cancel() {
+            return CANCELLED;
+        }
+        for x in 0..width {
+            let p = y * width + x;
+            let choose_horizontal = horizontal_cost(delta_h, width, height, x, y)
+                <= vertical_cost(delta_v, width, height, x, y);
+            direction[p] = i8::from(choose_horizontal);
+            if colour(x, y, red_x, red_y) != 1 {
+                rgb[p * 3 + 1] = (src[p] as f64
+                    - if choose_horizontal {
+                        horizontal[p]
+                    } else {
+                        vertical[p]
+                    }) as f32;
+            }
+        }
+    }
+
+    for y in 0..height {
+        if cancel() {
+            return CANCELLED;
+        }
+        for x in 0..width {
+            if colour(x, y, red_x, red_y) != 1 {
+                continue;
+            }
+            let p = y * width + x;
+            let red_horizontal = y & 1 == red_y;
+            let r0 = neighbour(
+                x,
+                y,
+                if red_horizontal { -1 } else { 0 },
+                if red_horizontal { 0 } else { -1 },
+                width,
+                height,
+            );
+            let r1 = neighbour(
+                x,
+                y,
+                if red_horizontal { 1 } else { 0 },
+                if red_horizontal { 0 } else { 1 },
+                width,
+                height,
+            );
+            let b0 = neighbour(
+                x,
+                y,
+                if red_horizontal { 0 } else { -1 },
+                if red_horizontal { -1 } else { 0 },
+                width,
+                height,
+            );
+            let b1 = neighbour(
+                x,
+                y,
+                if red_horizontal { 0 } else { 1 },
+                if red_horizontal { 1 } else { 0 },
+                width,
+                height,
+            );
+            let green = rgb[p * 3 + 1] as f64;
+            rgb[p * 3] =
+                (green + 0.5 * (difference(rgb, r0, 0, 1) + difference(rgb, r1, 0, 1))) as f32;
+            rgb[p * 3 + 2] =
+                (green + 0.5 * (difference(rgb, b0, 2, 1) + difference(rgb, b1, 2, 1))) as f32;
+        }
+    }
+
+    for y in 0..height {
+        if cancel() {
+            return CANCELLED;
+        }
+        for x in 0..width {
+            let own = colour(x, y, red_x, red_y);
+            if own == 1 {
+                continue;
+            }
+            let p = y * width + x;
+            let horizontal_direction = direction[p] == 1;
+            let dx = isize::from(horizontal_direction);
+            let dy = 1 - dx;
+            let a = neighbour(x, y, -dx, -dy, width, height);
+            let b = neighbour(x, y, dx, dy, width, height);
+            let missing = 2 - own;
+            rgb[p * 3 + missing] = (rgb[p * 3 + own] as f64
+                + 0.5 * (difference(rgb, a, missing, own) + difference(rgb, b, missing, own)))
+                as f32;
+        }
+    }
+
+    if !freeze_differences(rgb, horizontal, vertical, width, height, &mut cancel) {
+        return CANCELLED;
+    }
+    for y in 0..height {
+        if cancel() {
+            return CANCELLED;
+        }
+        for x in 0..width {
+            let own = colour(x, y, red_x, red_y);
+            if own == 1 {
+                continue;
+            }
+            let p = y * width + x;
+            let horizontal_direction = direction[p] == 1;
+            let dx = isize::from(horizontal_direction);
+            let dy = 1 - dx;
+            let a = neighbour(x, y, -dx, -dy, width, height);
+            let b = neighbour(x, y, dx, dy, width, height);
+            let chroma: &[f64] = if own == 0 { &*horizontal } else { &*vertical };
+            rgb[p * 3 + 1] =
+                (rgb[p * 3 + own] as f64 - (chroma[a] + chroma[p] + chroma[b]) / 3.0) as f32;
+        }
+    }
+
+    if !freeze_differences(rgb, horizontal, vertical, width, height, &mut cancel) {
+        return CANCELLED;
+    }
+    for y in 0..height {
+        if cancel() {
+            return CANCELLED;
+        }
+        for x in 0..width {
+            if colour(x, y, red_x, red_y) != 1 {
+                continue;
+            }
+            let p = y * width + x;
+            let red_horizontal = y & 1 == red_y;
+            let r0 = neighbour(
+                x,
+                y,
+                if red_horizontal { -1 } else { 0 },
+                if red_horizontal { 0 } else { -1 },
+                width,
+                height,
+            );
+            let r1 = neighbour(
+                x,
+                y,
+                if red_horizontal { 1 } else { 0 },
+                if red_horizontal { 0 } else { 1 },
+                width,
+                height,
+            );
+            let b0 = neighbour(
+                x,
+                y,
+                if red_horizontal { 0 } else { -1 },
+                if red_horizontal { -1 } else { 0 },
+                width,
+                height,
+            );
+            let b1 = neighbour(
+                x,
+                y,
+                if red_horizontal { 0 } else { 1 },
+                if red_horizontal { 1 } else { 0 },
+                width,
+                height,
+            );
+            let green = rgb[p * 3 + 1] as f64;
+            rgb[p * 3] = (green + 0.5 * (horizontal[r0] + horizontal[r1])) as f32;
+            rgb[p * 3 + 2] = (green + 0.5 * (vertical[b0] + vertical[b1])) as f32;
+        }
+    }
+
+    for y in 0..height {
+        if cancel() {
+            return CANCELLED;
+        }
+        for x in 0..width {
+            let p = y * width + x;
+            horizontal[p] = difference(rgb, p, 0, 2);
+        }
+    }
+    for y in 0..height {
+        if cancel() {
+            return CANCELLED;
+        }
+        for x in 0..width {
+            let own = colour(x, y, red_x, red_y);
+            if own == 1 {
+                continue;
+            }
+            let p = y * width + x;
+            let horizontal_direction = direction[p] == 1;
+            let dx = isize::from(horizontal_direction);
+            let dy = 1 - dx;
+            let a = neighbour(x, y, -dx, -dy, width, height);
+            let b = neighbour(x, y, dx, dy, width, height);
+            let chroma = (horizontal[a] + horizontal[p] + horizontal[b]) / 3.0;
+            if own == 2 {
+                rgb[p * 3] = (rgb[p * 3 + 2] as f64 + chroma) as f32;
+            } else {
+                rgb[p * 3 + 2] = (rgb[p * 3] as f64 - chroma) as f32;
+            }
+        }
+    }
+    if cancel() {
+        CANCELLED
+    } else {
+        0
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn invoke_demosaic(
     env: &mut JNIEnv,
@@ -515,9 +888,106 @@ pub extern "system" fn Java_com_indigo_mobileobservatory_stacking_NativeDemosaic
     )
 }
 
+#[allow(clippy::too_many_arguments)]
+#[no_mangle]
+pub extern "system" fn Java_com_indigo_mobileobservatory_stacking_NativeDdfapdBridge_demosaic(
+    mut env: JNIEnv,
+    _class: JClass,
+    src_array: JFloatArray,
+    dst_array: JFloatArray,
+    horizontal_array: JDoubleArray,
+    vertical_array: JDoubleArray,
+    delta_h_array: JDoubleArray,
+    delta_v_array: JDoubleArray,
+    direction_array: JByteArray,
+    width: jint,
+    height: jint,
+    red_x: jint,
+    red_y: jint,
+    cancelled: JObject,
+) -> jint {
+    if width < 2 || height < 2 || !(0..=1).contains(&red_x) || !(0..=1).contains(&red_y) {
+        return INVALID;
+    }
+    let src = match unsafe { env.get_array_elements(&src_array, ReleaseMode::NoCopyBack) } {
+        Ok(values) => values,
+        Err(_) => return INVALID,
+    };
+    let mut dst = match unsafe { env.get_array_elements(&dst_array, ReleaseMode::CopyBack) } {
+        Ok(values) => values,
+        Err(_) => return INVALID,
+    };
+    let mut horizontal =
+        match unsafe { env.get_array_elements(&horizontal_array, ReleaseMode::CopyBack) } {
+            Ok(values) => values,
+            Err(_) => return INVALID,
+        };
+    let mut vertical =
+        match unsafe { env.get_array_elements(&vertical_array, ReleaseMode::CopyBack) } {
+            Ok(values) => values,
+            Err(_) => return INVALID,
+        };
+    let mut delta_h = match unsafe { env.get_array_elements(&delta_h_array, ReleaseMode::CopyBack) }
+    {
+        Ok(values) => values,
+        Err(_) => return INVALID,
+    };
+    let mut delta_v = match unsafe { env.get_array_elements(&delta_v_array, ReleaseMode::CopyBack) }
+    {
+        Ok(values) => values,
+        Err(_) => return INVALID,
+    };
+    let mut direction =
+        match unsafe { env.get_array_elements(&direction_array, ReleaseMode::CopyBack) } {
+            Ok(values) => values,
+            Err(_) => return INVALID,
+        };
+    let cancel_class = match env.get_object_class(&cancelled) {
+        Ok(class) => class,
+        Err(_) => return INVALID,
+    };
+    let method = match env.get_method_id(&cancel_class, "isCancelled", "()Z") {
+        Ok(method) => method,
+        Err(_) => return INVALID,
+    };
+    let mut cancel = cancellation_callback(&env, &cancelled, method);
+    let pixels = match (width as usize).checked_mul(height as usize) {
+        Some(value) => value,
+        None => return INVALID,
+    };
+    let output_len = match pixels.checked_mul(3) {
+        Some(value) => value,
+        None => return INVALID,
+    };
+    if src.len() < pixels
+        || dst.len() < output_len
+        || horizontal.len() < pixels
+        || vertical.len() < pixels
+        || delta_h.len() < pixels
+        || delta_v.len() < pixels
+        || direction.len() < pixels
+    {
+        return INVALID;
+    }
+    ddfapd(
+        &src,
+        &mut dst,
+        &mut horizontal,
+        &mut vertical,
+        &mut delta_h,
+        &mut delta_v,
+        &mut direction,
+        width as usize,
+        height as usize,
+        red_x as usize,
+        red_y as usize,
+        &mut cancel,
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{bilinear, vng};
+    use super::{bilinear, ddfapd, vng};
 
     #[test]
     fn bilinear_preserves_native_samples_and_constant_colour() {
@@ -609,6 +1079,60 @@ mod tests {
                 let mut dst = vec![0.0; src.len() * 3];
                 assert_eq!(vng(&src, &mut dst, width, height, 0, 0, || false), 0);
                 for p in 0..src.len() {
+                    for channel in 0..3 {
+                        assert!((dst[p * 3 + channel] - levels[channel]).abs() < 1e-7);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ddfapd_reconstructs_constant_colour_for_all_phases() {
+        let width = 9_usize;
+        let height = 7_usize;
+        let pixels = width * height;
+        let levels = [-0.125_f32, 0.25, 1.5];
+        for red_x in 0..=1 {
+            for red_y in 0..=1 {
+                let src = (0..pixels)
+                    .map(|p| {
+                        let x = p % width;
+                        let y = p / width;
+                        let own = if x & 1 == red_x && y & 1 == red_y {
+                            0
+                        } else if x & 1 != red_x && y & 1 != red_y {
+                            2
+                        } else {
+                            1
+                        };
+                        levels[own]
+                    })
+                    .collect::<Vec<_>>();
+                let mut dst = vec![0.0; pixels * 3];
+                let mut horizontal = vec![0.0; pixels];
+                let mut vertical = vec![0.0; pixels];
+                let mut delta_h = vec![0.0; pixels];
+                let mut delta_v = vec![0.0; pixels];
+                let mut direction = vec![0_i8; pixels];
+                assert_eq!(
+                    ddfapd(
+                        &src,
+                        &mut dst,
+                        &mut horizontal,
+                        &mut vertical,
+                        &mut delta_h,
+                        &mut delta_v,
+                        &mut direction,
+                        width,
+                        height,
+                        red_x,
+                        red_y,
+                        || false
+                    ),
+                    0
+                );
+                for p in 0..pixels {
                     for channel in 0..3 {
                         assert!((dst[p * 3 + channel] - levels[channel]).abs() < 1e-7);
                     }

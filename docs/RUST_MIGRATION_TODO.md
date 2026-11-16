@@ -77,10 +77,14 @@ cargo install cargo-ndk --locked
 
 ### RUST-04：DDFAPD 去马赛克
 
-- 状态：待开始。
+- 状态：已完成（2026-11-16）。
 - 范围：`DdfapdDemosaicer` 的方向决策、镜像边界和三个阶段 refinement。
-- 约束：保留 `Workspace` 的并发占用、借出输出和跨调用复用契约。
-- 验收：Menon 独立参考 fixture、工作区复用、取消和内存上限测试通过。
+- 实现保留 Kotlin `Workspace` 的四块 Double scratch、方向字节面、并发占用和借出输出契约；Rust 直接写入这些连续缓冲区。
+- 验收：
+  - Menon 独立参考 fixture、全部 CFA、小图像/奇数尺寸/HDR 边界通过。
+  - 工作区复用、缓存容量、借出输出、取消、无效样本和并发占用测试通过。
+  - Rust 常量色与取消测试通过。
+  - APK 包含 `libdemosaic_jni.so`，DDFAPD JNI 符号已核对。
 
 ### RUST-05：校准与星点检测
 

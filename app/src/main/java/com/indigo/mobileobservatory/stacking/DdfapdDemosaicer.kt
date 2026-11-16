@@ -147,6 +147,7 @@ object DdfapdDemosaicer {
         val deltaH = buffers.deltaH
         val deltaV = buffers.deltaV
         val direction = buffers.direction // 1 = horizontal, including equal-cost ties.
+        if (NativeDdfapd.demosaic(src, buffers, rgb, width, height, redX, redY, cancelCheck)) return
 
         // Five-tap green interpolation h0 + h1, then C = R-G or B-G.
         // Green samples have zero chroma in the decision planes, as in the paper/reference.
