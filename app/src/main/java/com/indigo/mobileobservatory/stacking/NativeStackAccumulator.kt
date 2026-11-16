@@ -7,11 +7,15 @@ internal class NativeStackAccumulator private constructor(
     val height: Int,
     val channels: Int
 ) : AutoCloseable {
+    private var borrowedPixels: FloatArray? = null
 
     /** Returns the number of rejected pixels, or throws if the native pass failed. */
     fun accumulate(image: LinearImage, transform: RigidTransform, config: DeepSkyConfig,
                    noiseFloor: Double, cancelled: StackCancelCheck): Int {
         require(image.width == width && image.height == height && image.channels == channels)
+        // Borrowed exports live only for the serialized callback. Drop the retained view
+        // before starting another admitted frame so it cannot inflate the live working set.
+        borrowedPixels = null
         val rejected = StackAccumulatorNative.accumulate(handle, image.pixels, width, height, channels,
             transform.cosine, transform.sine, transform.dx, transform.dy,
             config.sigmaThreshold, noiseFloor, config.warmupSamples, cancelled)
@@ -26,6 +30,15 @@ internal class NativeStackAccumulator private constructor(
         val pixels = width * height
         if (releaseVariance) StackAccumulatorNative.releaseM2(handle)
         val output = FloatArray(pixels * channels)
+        val counts = ShortArray(pixels)
+        readRows(0, height, output, null, counts)
+        return DeepSkyAccumulatorResult(output, PixelCoverage.pack(counts))
+    }
+
+    /** Stable borrowed export view. The next borrowed call may overwrite this buffer. */
+    fun finishBorrowed(): DeepSkyAccumulatorResult {
+        val pixels = width * height
+        val output = borrowedPixels ?: FloatArray(pixels * channels).also { borrowedPixels = it }
         val counts = ShortArray(pixels)
         readRows(0, height, output, null, counts)
         return DeepSkyAccumulatorResult(output, PixelCoverage.pack(counts))
@@ -46,6 +59,7 @@ internal class NativeStackAccumulator private constructor(
             StackAccumulatorNative.release(handle)
             handle = 0L
         }
+        borrowedPixels = null
     }
 
     companion object {

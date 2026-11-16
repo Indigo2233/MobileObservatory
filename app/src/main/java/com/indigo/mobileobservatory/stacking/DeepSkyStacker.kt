@@ -203,7 +203,7 @@ class DeepSkyStacker(private val config: DeepSkyConfig = DeepSkyConfig(), privat
         if (stats.accepted == 0) return null
         val nativeAccumulator = native
         if (nativeAccumulator != null) {
-            val finished = nativeAccumulator.finish()
+            val finished = nativeAccumulator.finishBorrowed()
             return DeepSkySnapshot(LinearImage(width, height, channels, finished.pixels),
                 finished.coverage, stats)
         }
