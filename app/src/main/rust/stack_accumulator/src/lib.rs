@@ -69,6 +69,9 @@ impl Accumulator {
         warmup_samples: i32,
         mut cancelled: impl FnMut() -> bool,
     ) -> jint {
+        let width = self.width;
+        let height = self.height;
+        let channels = self.channels;
         let Some(expected) = self
             .width
             .checked_mul(self.height)
@@ -76,75 +79,177 @@ impl Accumulator {
         else {
             return INVALID;
         };
-        if frame.len() < expected || self.m2.len() < expected {
+        let Some(pixels) = width.checked_mul(height) else {
+            return INVALID;
+        };
+        if frame.len() < expected
+            || self.mean.len() < expected
+            || self.m2.len() < expected
+            || self.coverage.len() < pixels
+        {
             return INVALID;
         }
+        let frame = &frame[..expected];
+        let mean = &mut self.mean[..expected];
+        let m2 = &mut self.m2[..expected];
+        let coverage = &mut self.coverage[..pixels];
+        match channels {
+            1 => accumulate_channels::<1>(
+                width,
+                height,
+                frame,
+                mean,
+                m2,
+                coverage,
+                cosine,
+                sine,
+                dx,
+                dy,
+                sigma_threshold,
+                noise_floor,
+                warmup_samples,
+                &mut cancelled,
+            ),
+            3 => accumulate_channels::<3>(
+                width,
+                height,
+                frame,
+                mean,
+                m2,
+                coverage,
+                cosine,
+                sine,
+                dx,
+                dy,
+                sigma_threshold,
+                noise_floor,
+                warmup_samples,
+                &mut cancelled,
+            ),
+            _ => INVALID,
+        }
+    }
+}
 
-        let mut rejected_pixels: jint = 0;
-        let mut sampled = [0.0_f32; 3];
-        for y in 0..self.height {
+#[allow(clippy::too_many_arguments)]
+fn accumulate_channels<const CHANNELS: usize>(
+    width: usize,
+    height: usize,
+    frame: &[f32],
+    mean: &mut [f32],
+    m2: &mut [f32],
+    coverage: &mut [u16],
+    cosine: f64,
+    sine: f64,
+    dx: f64,
+    dy: f64,
+    sigma_threshold: f64,
+    noise_floor: f64,
+    warmup_samples: i32,
+    cancelled: &mut impl FnMut() -> bool,
+) -> jint {
+    let samples = width * height * CHANNELS;
+    let pixels = width * height;
+    debug_assert!(frame.len() >= samples);
+    debug_assert!(mean.len() >= samples);
+    debug_assert!(m2.len() >= samples);
+    debug_assert!(coverage.len() >= pixels);
+
+    let frame_ptr = frame.as_ptr();
+    let mean_ptr = mean.as_mut_ptr();
+    let m2_ptr = m2.as_mut_ptr();
+    let coverage_ptr = coverage.as_mut_ptr();
+    let mut rejected_pixels: jint = 0;
+    let mut sampled = [0.0_f32; CHANNELS];
+
+    // SAFETY: `new` and `accumulate` validated the backing lengths. Coordinates are clamped
+    // before conversion to pixel indices, every channel is compile-time checked against
+    // CHANNELS, and the three mutable buffers are disjoint fields of one owned accumulator.
+    unsafe {
+        for y in 0..height {
             if y % 128 == 0 && cancelled() {
                 return CANCELLED;
             }
-            for x in 0..self.width {
+            for x in 0..width {
                 let sx = cosine * (x as f64 - dx) + sine * (y as f64 - dy);
                 let sy = -sine * (x as f64 - dx) + cosine * (y as f64 - dy);
                 if sx < -1e-7
                     || sy < -1e-7
-                    || sx > self.width as f64 - 1.0 + 1e-7
-                    || sy > self.height as f64 - 1.0 + 1e-7
+                    || sx > width as f64 - 1.0 + 1e-7
+                    || sy > height as f64 - 1.0 + 1e-7
                 {
                     continue;
                 }
 
-                let fx = sx.clamp(0.0, self.width as f64 - 1.0);
-                let fy = sy.clamp(0.0, self.height as f64 - 1.0);
+                let fx = sx.clamp(0.0, width as f64 - 1.0);
+                let fy = sy.clamp(0.0, height as f64 - 1.0);
                 let ix = fx.floor() as usize;
                 let iy = fy.floor() as usize;
-                let ix1 = (ix + 1).min(self.width - 1);
-                let iy1 = (iy + 1).min(self.height - 1);
+                let ix1 = (ix + 1).min(width - 1);
+                let iy1 = (iy + 1).min(height - 1);
                 let ax = fx - ix as f64;
                 let ay = fy - iy as f64;
-                let p = y * self.width + x;
-                let weight = self.coverage[p] as i32;
+                let p = y * width + x;
+                let weight = *coverage_ptr.add(p) as i32;
                 if weight >= u16::MAX as i32 {
                     return COVERAGE_LIMIT;
                 }
 
+                let needs_temporal_check = weight >= warmup_samples;
+                let upper_row = y.saturating_sub(1) * width;
+                let middle_row = y * width;
+                let lower_row = (y + 1).min(height - 1) * width;
+                let left_column = x.saturating_sub(1);
+                let right_column = (x + 1).min(width - 1);
                 let mut reject = false;
-                for (ch, sampled_value) in sampled.iter_mut().enumerate().take(self.channels) {
-                    let a = (iy * self.width + ix) * self.channels + ch;
-                    let b = (iy * self.width + ix1) * self.channels + ch;
-                    let c = (iy1 * self.width + ix) * self.channels + ch;
-                    let d = (iy1 * self.width + ix1) * self.channels + ch;
-                    *sampled_value = ((frame[a] as f64 * (1.0 - ax) + frame[b] as f64 * ax)
+                for (ch, sampled_value) in sampled.iter_mut().enumerate() {
+                    let a = (iy * width + ix) * CHANNELS + ch;
+                    let b = (iy * width + ix1) * CHANNELS + ch;
+                    let c = (iy1 * width + ix) * CHANNELS + ch;
+                    let d = (iy1 * width + ix1) * CHANNELS + ch;
+                    *sampled_value = ((*frame_ptr.add(a) as f64 * (1.0 - ax)
+                        + *frame_ptr.add(b) as f64 * ax)
                         * (1.0 - ay)
-                        + (frame[c] as f64 * (1.0 - ax) + frame[d] as f64 * ax) * ay)
-                        as f32;
+                        + (*frame_ptr.add(c) as f64 * (1.0 - ax) + *frame_ptr.add(d) as f64 * ax)
+                            * ay) as f32;
 
-                    if weight >= warmup_samples {
-                        let i = p * self.channels + ch;
-                        let mut local_low = self.mean[i];
-                        let mut local_high = self.mean[i];
-                        for oy in -1..=1 {
-                            let ny = (y as isize + oy).clamp(0, self.height as isize - 1) as usize;
-                            for ox in -1..=1 {
-                                let nx =
-                                    (x as isize + ox).clamp(0, self.width as isize - 1) as usize;
-                                let neighbor =
-                                    self.mean[(ny * self.width + nx) * self.channels + ch];
-                                local_low = local_low.min(neighbor);
-                                local_high = local_high.max(neighbor);
-                            }
-                        }
+                    if needs_temporal_check {
+                        let i = p * CHANNELS + ch;
+                        let upper_left = *mean_ptr.add((upper_row + left_column) * CHANNELS + ch);
+                        let upper = *mean_ptr.add((upper_row + x) * CHANNELS + ch);
+                        let upper_right = *mean_ptr.add((upper_row + right_column) * CHANNELS + ch);
+                        let left = *mean_ptr.add((middle_row + left_column) * CHANNELS + ch);
+                        let center = *mean_ptr.add(i);
+                        let right = *mean_ptr.add((middle_row + right_column) * CHANNELS + ch);
+                        let lower_left = *mean_ptr.add((lower_row + left_column) * CHANNELS + ch);
+                        let lower = *mean_ptr.add((lower_row + x) * CHANNELS + ch);
+                        let lower_right = *mean_ptr.add((lower_row + right_column) * CHANNELS + ch);
+                        let local_low = upper_left
+                            .min(upper)
+                            .min(upper_right)
+                            .min(left)
+                            .min(center)
+                            .min(right)
+                            .min(lower_left)
+                            .min(lower)
+                            .min(lower_right);
+                        let local_high = upper_left
+                            .max(upper)
+                            .max(upper_right)
+                            .max(left)
+                            .max(center)
+                            .max(right)
+                            .max(lower_left)
+                            .max(lower)
+                            .max(lower_right);
                         let gradient_allowance = (local_high - local_low) as f64 * 0.35;
                         let measured_variance = if weight > 1 {
-                            self.m2[i] as f64 / (weight - 1) as f64
+                            *m2_ptr.add(i) as f64 / (weight - 1) as f64
                         } else {
                             0.0
                         };
                         let sigma = noise_floor.max(measured_variance.max(0.0).sqrt());
-                        if (*sampled_value as f64 - self.mean[i] as f64).abs()
+                        if (*sampled_value as f64 - center as f64).abs()
                             > sigma_threshold * sigma + gradient_allowance + 1e-5
                         {
                             reject = true;
@@ -158,17 +263,19 @@ impl Accumulator {
                 }
 
                 let next = (weight + 1) as f64;
-                for (ch, sampled_value) in sampled.iter().enumerate().take(self.channels) {
-                    let i = p * self.channels + ch;
-                    let delta = *sampled_value - self.mean[i];
-                    self.mean[i] += (delta as f64 / next) as f32;
-                    self.m2[i] += delta * (*sampled_value - self.mean[i]);
+                for (ch, sampled_value) in sampled.iter().enumerate() {
+                    let i = p * CHANNELS + ch;
+                    let previous = *mean_ptr.add(i);
+                    let delta = *sampled_value - previous;
+                    let updated = previous + (delta as f64 / next) as f32;
+                    *mean_ptr.add(i) = updated;
+                    *m2_ptr.add(i) += delta * (*sampled_value - updated);
                 }
-                self.coverage[p] = (weight + 1) as u16;
+                *coverage_ptr.add(p) = (weight + 1) as u16;
             }
         }
-        rejected_pixels
     }
+    rejected_pixels
 }
 
 fn accumulator_from_handle(handle: jlong) -> Option<&'static mut Accumulator> {
@@ -441,6 +548,22 @@ mod tests {
         );
         assert_eq!(accumulator.mean, frame);
         assert_eq!(accumulator.coverage, vec![2, 2, 2, 2]);
+    }
+
+    #[test]
+    fn accumulates_rgb_with_compile_time_channel_specialization() {
+        let mut accumulator = Accumulator::new(2, 1, 3).expect("accumulator");
+        let frame = [0.1_f32, 0.2, 0.3, 0.4, 0.5, 0.6];
+
+        for _ in 0..2 {
+            assert_eq!(
+                accumulator.accumulate(&frame, 1.0, 0.0, 0.0, 0.0, 5.0, 0.0, 5, || false),
+                0
+            );
+        }
+        assert_eq!(accumulator.mean, frame);
+        assert_eq!(accumulator.coverage, vec![2, 2]);
+        assert_eq!(accumulator.m2, vec![0.0; 6]);
     }
 
     #[test]

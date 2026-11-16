@@ -41,15 +41,10 @@ struct BigEndianSamples<'a> {
     bytes: &'a [u8],
 }
 
-impl BigEndianSamples<'_> {
-    fn get(&self, index: usize) -> Option<f32> {
-        let offset = index.checked_mul(4)?;
-        let end = offset.checked_add(4)?;
-        let bytes = self.bytes.get(offset..end)?;
-        Some(f32::from_bits(u32::from_be_bytes([
-            bytes[0], bytes[1], bytes[2], bytes[3],
-        ])))
-    }
+#[inline(always)]
+unsafe fn read_big_endian_f32(pointer: *const u8, index: usize) -> f32 {
+    let bits = pointer.add(index * 4).cast::<u32>().read_unaligned();
+    f32::from_bits(u32::from_be(bits))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -102,44 +97,159 @@ fn calibrate(
         return INVALID;
     }
 
-    for y in 0..height {
-        if cancel() {
-            return CANCELLED;
-        }
-        let input_start = y * row_samples;
-        let master_row = match y.checked_mul(master_row_pitch) {
-            Some(value) => value,
-            None => return INVALID,
-        };
-        for x in 0..row_samples {
-            let input_index = input_start + x;
-            if input_index % 16384 == 0 && input_index != input_start && cancel() {
+    let subtraction = subtraction.map(|samples| samples.bytes.as_ptr());
+    let flat = flat.map(|samples| samples.bytes.as_ptr());
+    match channels {
+        1 => dispatch_calibration::<1>(
+            src,
+            dst,
+            width,
+            height,
+            start_offset,
+            master_row_pitch,
+            subtraction,
+            flat,
+            &mut cancel,
+        ),
+        3 => dispatch_calibration::<3>(
+            src,
+            dst,
+            width,
+            height,
+            start_offset,
+            master_row_pitch,
+            subtraction,
+            flat,
+            &mut cancel,
+        ),
+        _ => INVALID,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn dispatch_calibration<const CHANNELS: usize>(
+    src: &[f32],
+    dst: &mut [f32],
+    width: usize,
+    height: usize,
+    start_offset: usize,
+    master_row_pitch: usize,
+    subtraction: Option<*const u8>,
+    flat: Option<*const u8>,
+    cancel: &mut impl FnMut() -> bool,
+) -> jint {
+    match (subtraction, flat) {
+        (Some(subtraction), Some(flat)) => calibrate_channels::<CHANNELS, true, true>(
+            src,
+            dst,
+            width,
+            height,
+            start_offset,
+            master_row_pitch,
+            subtraction,
+            flat,
+            cancel,
+        ),
+        (Some(subtraction), None) => calibrate_channels::<CHANNELS, true, false>(
+            src,
+            dst,
+            width,
+            height,
+            start_offset,
+            master_row_pitch,
+            subtraction,
+            std::ptr::null(),
+            cancel,
+        ),
+        (None, Some(flat)) => calibrate_channels::<CHANNELS, false, true>(
+            src,
+            dst,
+            width,
+            height,
+            start_offset,
+            master_row_pitch,
+            std::ptr::null(),
+            flat,
+            cancel,
+        ),
+        (None, None) => calibrate_channels::<CHANNELS, false, false>(
+            src,
+            dst,
+            width,
+            height,
+            start_offset,
+            master_row_pitch,
+            std::ptr::null(),
+            std::ptr::null(),
+            cancel,
+        ),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn calibrate_channels<const CHANNELS: usize, const HAS_SUBTRACTION: bool, const HAS_FLAT: bool>(
+    src: &[f32],
+    dst: &mut [f32],
+    width: usize,
+    height: usize,
+    start_offset: usize,
+    master_row_pitch: usize,
+    subtraction: *const u8,
+    flat: *const u8,
+    cancel: &mut impl FnMut() -> bool,
+) -> jint {
+    let row_samples = width * CHANNELS;
+    let samples = row_samples * height;
+    debug_assert!(src.len() >= samples);
+    debug_assert!(dst.len() >= samples);
+    let src = src.as_ptr();
+    let dst = dst.as_mut_ptr();
+
+    // SAFETY: `calibrate` validated lengths, master ranges and checked arithmetic. Every
+    // master index is below the validated byte range, and all derived offsets are bounded.
+    unsafe {
+        for y in 0..height {
+            if cancel() {
                 return CANCELLED;
             }
-            let input = src[input_index];
-            if !input.is_finite() {
-                return NONFINITE_INPUT;
-            }
-            let master_index = start_offset + master_row + x;
-            let subtraction_value = match subtraction {
-                Some(samples) => match samples.get(master_index) {
-                    Some(value) => value,
-                    None => return INVALID,
-                },
-                None => 0.0,
+            let input_start = y * row_samples;
+            let master_row = y * master_row_pitch;
+            let master_byte_base = (start_offset + master_row) * 4;
+            let subtraction_row = if HAS_SUBTRACTION {
+                subtraction.add(master_byte_base)
+            } else {
+                std::ptr::null()
             };
-            let flat_value = match flat {
-                Some(samples) => match samples.get(master_index) {
-                    Some(value) => value,
-                    None => return INVALID,
-                },
-                None => 1.0,
+            let flat_row = if HAS_FLAT {
+                flat.add(master_byte_base)
+            } else {
+                std::ptr::null()
             };
-            let value = ((input as f64 - subtraction_value as f64) / flat_value as f64) as f32;
-            if !value.is_finite() {
-                return NONFINITE_OUTPUT;
+            for x in 0..row_samples {
+                let input_index = input_start + x;
+                if input_index % 16384 == 0 && input_index != input_start && cancel() {
+                    return CANCELLED;
+                }
+                let input = *src.add(input_index);
+                if !input.is_finite() {
+                    return NONFINITE_INPUT;
+                }
+                let subtraction_value = if HAS_SUBTRACTION {
+                    read_big_endian_f32(subtraction_row, x)
+                } else {
+                    0.0
+                };
+                let flat_value = if HAS_FLAT {
+                    read_big_endian_f32(flat_row, x)
+                } else {
+                    1.0
+                };
+                let value = ((input as f64 - subtraction_value as f64) / flat_value as f64) as f32;
+                if !value.is_finite() {
+                    return NONFINITE_OUTPUT;
+                }
+                *dst.add(input_index) = value;
             }
-            dst[input_index] = value;
         }
     }
     0
@@ -291,6 +401,98 @@ mod tests {
         );
         for (actual, expected) in dst.into_iter().zip([0.8, 1.25, 0.4, 0.5]) {
             assert!((actual - expected).abs() < f32::EPSILON);
+        }
+    }
+
+    #[test]
+    fn applies_rgb_bias_and_flat_with_compile_time_specialization() {
+        let src = [
+            0.5_f32, 0.7, 0.9, 1.1, 1.3, 1.5, 1.7, 1.9, 2.1, 2.3, 2.5, 2.7,
+        ];
+        let mut dst = [0.0_f32; 12];
+        let subtraction = biased_samples(&[0.0; 12]);
+        let flat = biased_samples(&[0.5, 1.0, 2.0, 0.5, 1.0, 2.0, 0.5, 1.0, 2.0, 0.5, 1.0, 2.0]);
+        let subtraction = BigEndianSamples {
+            bytes: &subtraction,
+        };
+        let flat = BigEndianSamples { bytes: &flat };
+        assert_eq!(
+            calibrate(
+                &src,
+                &mut dst,
+                4,
+                1,
+                3,
+                0,
+                12,
+                Some(&subtraction),
+                Some(&flat),
+                || false
+            ),
+            0
+        );
+        for (index, value) in dst.iter().enumerate() {
+            let expected = src[index] / [0.5_f32, 1.0, 2.0][index % 3];
+            assert!((*value - expected).abs() < f32::EPSILON);
+        }
+    }
+
+    #[test]
+    fn specializes_subtraction_only_flat_only_and_copy_paths() {
+        let src = [0.5_f32, 0.75];
+        let subtraction_bytes = biased_samples(&[0.1, 0.25]);
+        let flat_bytes = biased_samples(&[0.5, 1.5]);
+        let subtraction = BigEndianSamples {
+            bytes: &subtraction_bytes,
+        };
+        let flat = BigEndianSamples { bytes: &flat_bytes };
+        for (has_subtraction, has_flat) in [(true, false), (false, true), (false, false)] {
+            let mut dst = [0.0_f32; 2];
+            assert_eq!(
+                calibrate(
+                    &src,
+                    &mut dst,
+                    2,
+                    1,
+                    1,
+                    0,
+                    2,
+                    has_subtraction.then_some(&subtraction),
+                    has_flat.then_some(&flat),
+                    || false
+                ),
+                0
+            );
+            for (index, value) in dst.iter().enumerate() {
+                let subtract = if has_subtraction {
+                    subtraction_bytes[..]
+                        .chunks_exact(4)
+                        .nth(index)
+                        .map(|bytes| {
+                            f32::from_bits(u32::from_be_bytes([
+                                bytes[0], bytes[1], bytes[2], bytes[3],
+                            ]))
+                        })
+                        .unwrap()
+                } else {
+                    0.0
+                };
+                let divide = if has_flat {
+                    flat_bytes[..]
+                        .chunks_exact(4)
+                        .nth(index)
+                        .map(|bytes| {
+                            f32::from_bits(u32::from_be_bytes([
+                                bytes[0], bytes[1], bytes[2], bytes[3],
+                            ]))
+                        })
+                        .unwrap()
+                } else {
+                    1.0
+                };
+                let expected = ((src[index] as f64 - subtract as f64) / divide as f64) as f32;
+                assert!((*value - expected).abs() < f32::EPSILON);
+            }
         }
     }
 
