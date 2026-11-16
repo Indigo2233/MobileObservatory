@@ -202,78 +202,97 @@ class PlanetaryStacker {
                 PlanetaryRegistration.fromLuminance(gray, source.channels, roi, options, control.checkCancelled)
             }
         val framePixels = buffered?.let { FloatArray(source.width * source.height * source.channels) }
-        val sums = DoubleArray(source.width * source.height * source.channels)
-        val weights = CoverageBuffer(ShortArray(source.width * source.height))
-        var grayScratch: FloatArray? = null
-        val warpWorkspace = PlanetaryWarp.Workspace()
-        val hint = if (options.localAlignment) LocalShiftHint() else null
-        val modes = linkedMapOf<PlanetaryRegistrationMode, Long>()
-        val reasons = analysis.rejectionCounts.toMutableMap()
-        var accepted = 0L; var processed = 0L; var totalCorrelation = 0.0; var exposure = 0.0; var unknownExposure = 0L
-        DataInputStream(analysis.indexFile.inputStream().buffered(64 * 1024)).use { input ->
-            var frame = 0L
-            while (frame < source.frameCount) {
-                control.checkCancelled()
-                val rank: Int; val rejected: Int
-                try { rank = input.readInt(); rejected = input.readUnsignedByte() } catch (e: EOFException) {
-                    throw IllegalStateException("Quality cache is truncated; analyze again", e)
-                }
-                val choose = rejected == PlanetaryRejection.NONE.ordinal && (rank > threshold || (rank == threshold && tiesRemaining > 0))
-                if (choose) {
-                    if (rank == threshold) tiesRemaining--
-                    control.progress(PlanetaryProgress(PlanetaryPhase.READ, processed, selected))
-                    val image = if (buffered != null) buffered.readFrameInto(frame, checkNotNull(framePixels)).also {
-                        require(it.pixels === framePixels) { "Decoder did not fill the caller's buffer" }
-                    } else if (frame == analysis.referenceFrame) checkNotNull(reference) else source.readFrame(frame)
-                    validateFrame(image, source)
-                    control.progress(PlanetaryProgress(PlanetaryPhase.REGISTER, processed, selected))
-                    val prepared = if (frame == analysis.referenceFrame) null else registration.prepareFrame(image,
-                        grayScratch ?: FloatArray(source.width * source.height).also { grayScratch = it })
-                    val alignment = if (frame == analysis.referenceFrame) PlanetaryAlignment(
-                        PlanetaryShift(0.0, 0.0, 1.0), emptyList(), registration.points.size,
-                        if (!options.localAlignment) PlanetaryRegistrationMode.GLOBAL else if (registration.points.size < 3) PlanetaryRegistrationMode.GLOBAL_LOW_TEXTURE else PlanetaryRegistrationMode.MULTIPOINT
-                    ) else registration.align(checkNotNull(prepared), hint)
-                    var reason = alignment.rejection
-                    if (reason == PlanetaryRejection.NONE) {
-                        val warp = PlanetaryWarp(source.width, source.height, alignment, control.checkCancelled, warpWorkspace)
-                        if (warp.folded) reason = PlanetaryRejection.FOLDED_WARP
-                        else if (prepared != null && registration.edgeResidual(prepared, warp) > options.maximumEdgeResidual) reason = PlanetaryRejection.EDGE_MISMATCH
-                        else {
-                            control.progress(PlanetaryProgress(PlanetaryPhase.STACK, processed, selected))
-                            accumulate(image, sums, weights, warp, control.checkCancelled)
-                            // Only a full multipoint result is fed forward: a global or
-                            // fallback frame signals that the field itself has moved.
-                            if (hint != null && alignment.mode == PlanetaryRegistrationMode.MULTIPOINT)
-                                hint.record(registration.points, alignment)
-                            accepted++; totalCorrelation += alignment.global.correlation
-                            modes[alignment.mode] = (modes[alignment.mode] ?: 0L) + 1
-                            val seconds = source.exposureSeconds(frame)
-                            if (seconds.isFinite() && seconds > 0) exposure += seconds else unknownExposure++
-                        }
+        val nativeAccumulator = NativePlanetaryAccumulator.create(source.width, source.height, source.channels)
+        val sums = if (nativeAccumulator == null) DoubleArray(source.width * source.height * source.channels) else null
+        val weights = if (nativeAccumulator == null) CoverageBuffer(ShortArray(source.width * source.height)) else null
+        try {
+            var grayScratch: FloatArray? = null
+            val warpWorkspace = PlanetaryWarp.Workspace()
+            val hint = if (options.localAlignment) LocalShiftHint() else null
+            val modes = linkedMapOf<PlanetaryRegistrationMode, Long>()
+            val reasons = analysis.rejectionCounts.toMutableMap()
+            var accepted = 0L; var processed = 0L; var totalCorrelation = 0.0; var exposure = 0.0; var unknownExposure = 0L
+            DataInputStream(analysis.indexFile.inputStream().buffered(64 * 1024)).use { input ->
+                var frame = 0L
+                while (frame < source.frameCount) {
+                    control.checkCancelled()
+                    val rank: Int; val rejected: Int
+                    try { rank = input.readInt(); rejected = input.readUnsignedByte() } catch (e: EOFException) {
+                        throw IllegalStateException("Quality cache is truncated; analyze again", e)
                     }
-                    if (reason != PlanetaryRejection.NONE) reasons[reason] = (reasons[reason] ?: 0L) + 1
-                    processed++
+                    val choose = rejected == PlanetaryRejection.NONE.ordinal && (rank > threshold || (rank == threshold && tiesRemaining > 0))
+                    if (choose) {
+                        if (rank == threshold) tiesRemaining--
+                        control.progress(PlanetaryProgress(PlanetaryPhase.READ, processed, selected))
+                        val image = if (buffered != null) buffered.readFrameInto(frame, checkNotNull(framePixels)).also {
+                            require(it.pixels === framePixels) { "Decoder did not fill the caller's buffer" }
+                        } else if (frame == analysis.referenceFrame) checkNotNull(reference) else source.readFrame(frame)
+                        validateFrame(image, source)
+                        control.progress(PlanetaryProgress(PlanetaryPhase.REGISTER, processed, selected))
+                        val prepared = if (frame == analysis.referenceFrame) null else registration.prepareFrame(image,
+                            grayScratch ?: FloatArray(source.width * source.height).also { grayScratch = it })
+                        val alignment = if (frame == analysis.referenceFrame) PlanetaryAlignment(
+                            PlanetaryShift(0.0, 0.0, 1.0), emptyList(), registration.points.size,
+                            if (!options.localAlignment) PlanetaryRegistrationMode.GLOBAL else if (registration.points.size < 3) PlanetaryRegistrationMode.GLOBAL_LOW_TEXTURE else PlanetaryRegistrationMode.MULTIPOINT
+                        ) else registration.align(checkNotNull(prepared), hint)
+                        var reason = alignment.rejection
+                        if (reason == PlanetaryRejection.NONE) {
+                            val warp = PlanetaryWarp(source.width, source.height, alignment, control.checkCancelled, warpWorkspace)
+                            if (warp.folded) reason = PlanetaryRejection.FOLDED_WARP
+                            else if (prepared != null && registration.edgeResidual(prepared, warp) > options.maximumEdgeResidual) reason = PlanetaryRejection.EDGE_MISMATCH
+                            else {
+                                control.progress(PlanetaryProgress(PlanetaryPhase.STACK, processed, selected))
+                                if (nativeAccumulator != null) nativeAccumulator.accumulate(
+                                    image, warp, StackCancelCheck {
+                                        control.checkCancelled()
+                                        false
+                                    }
+                                ) else accumulate(image, checkNotNull(sums), checkNotNull(weights), warp, control.checkCancelled)
+                                // Only a full multipoint result is fed forward: a global or
+                                // fallback frame signals that the field itself has moved.
+                                if (hint != null && alignment.mode == PlanetaryRegistrationMode.MULTIPOINT)
+                                    hint.record(registration.points, alignment)
+                                accepted++; totalCorrelation += alignment.global.correlation
+                                modes[alignment.mode] = (modes[alignment.mode] ?: 0L) + 1
+                                val seconds = source.exposureSeconds(frame)
+                                if (seconds.isFinite() && seconds > 0) exposure += seconds else unknownExposure++
+                            }
+                        }
+                        if (reason != PlanetaryRejection.NONE) reasons[reason] = (reasons[reason] ?: 0L) + 1
+                        processed++
+                    }
+                    frame++
                 }
-                frame++
             }
-        }
-        check(processed == selected) { "Quality cache changed; analyze again" }
-        require(accepted > 0) { "No frames passed registration; use a larger ROI or improve tracking" }
-        // All inputs have been consumed. Transfer this buffer to the immutable result after
-        // normalization; the source never owns it and a later stack allocates its own input.
-        val output = framePixels ?: FloatArray(sums.size)
-        for (y in 0 until source.height) {
-            control.checkCancelled()
-            for (x in 0 until source.width) {
-                val p = y * source.width + x
-                for (channel in 0 until source.channels) output[p * source.channels + channel] =
-                    if (weights[p] > 0) (sums[p * source.channels + channel] / weights[p]).toFloat() else 0f
+            check(processed == selected) { "Quality cache changed; analyze again" }
+            require(accepted > 0) { "No frames passed registration; use a larger ROI or improve tracking" }
+            // All inputs have been consumed. Transfer this buffer to the immutable result after normalization.
+            val output = framePixels ?: FloatArray(source.width * source.height * source.channels)
+            val coverage = if (nativeAccumulator != null) {
+                nativeAccumulator.finish(output, StackCancelCheck {
+                    control.checkCancelled()
+                    false
+                })
+            } else {
+                val fallbackWeights = checkNotNull(weights)
+                val fallbackSums = checkNotNull(sums)
+                for (y in 0 until source.height) {
+                    control.checkCancelled()
+                    for (x in 0 until source.width) {
+                        val p = y * source.width + x
+                        for (channel in 0 until source.channels) output[p * source.channels + channel] =
+                            if (fallbackWeights[p] > 0) (fallbackSums[p * source.channels + channel] / fallbackWeights[p]).toFloat() else 0f
+                    }
+                }
+                fallbackWeights.take()
             }
+            control.progress(PlanetaryProgress(PlanetaryPhase.COMPLETE, selected, selected))
+            return PlanetaryStackResult(LinearImage(source.width, source.height, source.channels, output), coverage,
+                PlanetaryStackStats(source.frameCount, analysis.validFrames, selected, accepted, analysis.referenceFrame, registration.points.size,
+                    modes, reasons, totalCorrelation / accepted, exposure, unknownExposure, (System.nanoTime() - start) / 1_000_000, analysis.estimatedPeakBytes))
+        } finally {
+            nativeAccumulator?.close()
         }
-        control.progress(PlanetaryProgress(PlanetaryPhase.COMPLETE, selected, selected))
-        return PlanetaryStackResult(LinearImage(source.width, source.height, source.channels, output), weights.take(),
-            PlanetaryStackStats(source.frameCount, analysis.validFrames, selected, accepted, analysis.referenceFrame, registration.points.size,
-                modes, reasons, totalCorrelation / accepted, exposure, unknownExposure, (System.nanoTime() - start) / 1_000_000, analysis.estimatedPeakBytes))
     }
 
     private fun validate(source: PlanetaryFrameSource, options: PlanetaryOptions) {

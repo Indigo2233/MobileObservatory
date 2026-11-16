@@ -368,51 +368,61 @@ internal class PlanetaryWarp(width: Int, height: Int, alignment: PlanetaryAlignm
     var folded = false
         private set
     init {
-        // A point's support radius, correlation weight and displacement relative to the global
-        // shift are identical at every mesh node, so they are resolved once per alignment.
-        val points = alignment.local
-        val pointX = DoubleArray(points.size); val pointY = DoubleArray(points.size)
-        val relativeX = DoubleArray(points.size); val relativeY = DoubleArray(points.size)
-        val correlation4 = DoubleArray(points.size); val support = DoubleArray(points.size)
-        for (i in points.indices) {
-            val local = points[i]
-            pointX[i] = local.point.x; pointY[i] = local.point.y
-            relativeX[i] = local.shift.dx - alignment.global.dx
-            relativeY[i] = local.shift.dy - alignment.global.dy
-            correlation4[i] = local.shift.correlation.pow(4)
-            support[i] = local.point.radius * 3.0
-        }
-        for (y in 0 until rows) {
-          checkCancelled()
-          val nodeY = y * step
-          for (x in 0 until columns) {
-            val nodeX = x * step
-            var sx = 0.0; var sy = 0.0; var weight = 0.0
-            for (i in points.indices) {
-                val distance = hypot(nodeX - pointX[i], nodeY - pointY[i]) / support[i]
-                if (distance < 1) {
-                    val w = (1 - distance * distance).pow(3) * correlation4[i]
-                    sx += relativeX[i] * w
-                    sy += relativeY[i] * w
-                    weight += w
-                }
+        val nativeFold = NativePlanetaryWarpBuilder.buildWarp(
+            width, height, step, alignment, dx, dy, StackCancelCheck {
+                checkCancelled()
+                false
             }
-            val i = y * columns + x
-            // A tiny global anchor makes the boundary transition smooth in areas with no AP coverage.
-            dx[i] = (alignment.global.dx + sx / (weight + .002)).toFloat()
-            dy[i] = (alignment.global.dy + sy / (weight + .002)).toFloat()
-          }
-        }
-        for (y in 0 until rows - 1) {
-          checkCancelled()
-          for (x in 0 until columns - 1) {
-            val i = y * columns + x
-            val ax = 1 + (dx[i + 1] - dx[i]) / step
-            val ay = (dy[i + 1] - dy[i]) / step
-            val bx = (dx[i + columns] - dx[i]) / step
-            val by = 1 + (dy[i + columns] - dy[i]) / step
-            if (ax * by - ay * bx < .35) folded = true
-          }
+        )
+        if (nativeFold != null) {
+            folded = nativeFold
+        } else {
+            // A point's support radius, correlation weight and displacement relative to the global
+            // shift are identical at every mesh node, so they are resolved once per alignment.
+            val points = alignment.local
+            val pointX = DoubleArray(points.size); val pointY = DoubleArray(points.size)
+            val relativeX = DoubleArray(points.size); val relativeY = DoubleArray(points.size)
+            val correlation4 = DoubleArray(points.size); val support = DoubleArray(points.size)
+            for (i in points.indices) {
+                val local = points[i]
+                pointX[i] = local.point.x; pointY[i] = local.point.y
+                relativeX[i] = local.shift.dx - alignment.global.dx
+                relativeY[i] = local.shift.dy - alignment.global.dy
+                correlation4[i] = local.shift.correlation.pow(4)
+                support[i] = local.point.radius * 3.0
+            }
+            for (y in 0 until rows) {
+              checkCancelled()
+              val nodeY = y * step
+              for (x in 0 until columns) {
+                val nodeX = x * step
+                var sx = 0.0; var sy = 0.0; var weight = 0.0
+                for (i in points.indices) {
+                    val distance = hypot(nodeX - pointX[i], nodeY - pointY[i]) / support[i]
+                    if (distance < 1) {
+                        val w = (1 - distance * distance).pow(3) * correlation4[i]
+                        sx += relativeX[i] * w
+                        sy += relativeY[i] * w
+                        weight += w
+                    }
+                }
+                val i = y * columns + x
+                // A tiny global anchor makes the boundary transition smooth in areas with no AP coverage.
+                dx[i] = (alignment.global.dx + sx / (weight + .002)).toFloat()
+                dy[i] = (alignment.global.dy + sy / (weight + .002)).toFloat()
+              }
+            }
+            for (y in 0 until rows - 1) {
+              checkCancelled()
+              for (x in 0 until columns - 1) {
+                val i = y * columns + x
+                val ax = 1 + (dx[i + 1] - dx[i]) / step
+                val ay = (dy[i + 1] - dy[i]) / step
+                val bx = (dx[i + columns] - dx[i]) / step
+                val by = 1 + (dy[i + columns] - dy[i]) / step
+                if (ax * by - ay * bx < .35) folded = true
+              }
+            }
         }
     }
     fun offset(values: FloatArray, x: Int, y: Int): Double =

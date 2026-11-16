@@ -55,9 +55,14 @@ cargo install cargo-ndk --locked
 
 ### RUST-02：行星 warp 与累加
 
-- 状态：待开始。
-- 范围：`PlanetaryWarp` 的 mesh 插值、双线性采样和 `PlanetaryStacker.accumulate`。
-- 验收：现有行星配准、接缝、边缘和流式基准测试通过。
+- 状态：已完成（2026-11-16）。
+- 范围：`NativePlanetaryAccumulator` 和 `NativePlanetaryWarpBuilder`。Rust 生成位移 mesh，并执行每帧 mesh 插值、双线性采样、Double 累加、UInt16 覆盖计数和输出归一化。
+- Kotlin 保留帧解码、配准决策、边缘校验、进度/取消协调和原生不可用时的回退路径。
+- 验收：
+  - Rust identity、越界、取消、RGB、非平凡 local warp 和 NaN 像素测试通过。
+  - native 输出与 Kotlin oracle 逐 Float 一致。
+  - 行星搜索、完整叠加、缓冲复用和 SER/PSER 端到端测试通过。
+  - APK 包含 `libplanetary_stack_jni.so`，5 个 JNI 导出符号已核对。
 
 ### RUST-03：去马赛克
 

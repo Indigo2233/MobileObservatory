@@ -26,6 +26,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@1.89.0
         with:
+          components: rustfmt,clippy
           targets: aarch64-linux-android,x86_64-linux-android,i686-linux-android
 
       - name: Install cargo-ndk
@@ -50,8 +51,17 @@ jobs:
       - name: Run core unit tests
         run: ./gradlew testDebugUnitTest
 
+      - name: Check Rust
+        run: |
+          cargo fmt --manifest-path app/src/main/rust/stack_accumulator/Cargo.toml -- --check
+          cargo fmt --manifest-path app/src/main/rust/planetary_stack/Cargo.toml -- --check
+          cargo clippy --manifest-path app/src/main/rust/stack_accumulator/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --manifest-path app/src/main/rust/planetary_stack/Cargo.toml --all-targets -- -D warnings
+
       - name: Run Rust unit tests
-        run: cargo test --manifest-path app/src/main/rust/stack_accumulator/Cargo.toml
+        run: |
+          cargo test --manifest-path app/src/main/rust/stack_accumulator/Cargo.toml
+          cargo test --manifest-path app/src/main/rust/planetary_stack/Cargo.toml
 
       - name: Compile UI instrumentation tests
         run: ./gradlew assembleDebugAndroidTest
