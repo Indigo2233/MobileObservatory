@@ -202,6 +202,10 @@ pub extern "system" fn Java_com_indigo_mobileobservatory_stacking_NativeCalibrat
     let Ok(master_row_pitch) = usize::try_from(master_row_pitch) else {
         return INVALID;
     };
+    match env.is_same_object(&src_array, &dst_array) {
+        Ok(false) => {}
+        _ => return INVALID,
+    }
     let src = match unsafe { env.get_array_elements(&src_array, ReleaseMode::NoCopyBack) } {
         Ok(values) => values,
         Err(_) => return INVALID,

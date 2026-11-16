@@ -96,6 +96,8 @@ cargo install cargo-ndk --locked
   - Rust 全画幅与带原图 row pitch 的区域计算通过。
   - Rust 输出与 Kotlin oracle 逐 Float 一致，覆盖 borrowed workspace 路径。
   - 非有限输入、非有限输出、取消、重叠行 pitch 和越界缓冲区测试通过。
+  - JNI 拒绝源/目标数组别名并回退 Kotlin；取消后的部分输出可安全复用。
+  - Flat 有效性位图、主帧替换和新建 direct 主帧的 native 峰值计入内存预算。
   - `CalibrationTest`、`CalibrationStorageTest`、`CalibrationSensorInputTest` 和区域解码回归通过。
   - APK 包含 `libcalibration_jni.so`，JNI 符号已核对。
 

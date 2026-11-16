@@ -183,7 +183,7 @@ class CalibrationTest {
         assertEquals(2L * (geometry.sampleCount * 6L) + geometry.sampleCount * 8L + 4L * 1024 * 1024,
             CalibrationBuilder.estimatedBuildBytes(geometry))
         assertEquals(CalibrationBuilder.estimatedBuildBytes(geometry), CalibrationBuilder.estimatedBuildBytes(geometry, true))
-        assertEquals(geometry.sampleCount * 2L,
+        assertEquals(geometry.sampleCount * 3L,
             CalibrationBuilder.estimatedBuildBytes(geometry, withSampleCounts = true) -
                 CalibrationBuilder.estimatedBuildBytes(geometry))
         var reads = 0
@@ -221,7 +221,7 @@ class CalibrationTest {
         var checks = 0
         assertThrows(CancellationException::class.java) {
             selected.applyBorrowed(firstInput,geometry,capture,workspace) {
-                if (++checks == 2) throw CancellationException("calibration")
+                if (++checks == 3) throw CancellationException("calibration")
             }
         }
         assertArrayEquals(expected.pixels,selected.applyBorrowed(firstInput,geometry,capture,workspace).pixels,0f)
@@ -276,5 +276,25 @@ class CalibrationTest {
         rejects("nonfinite_output") {
             CalibrationSelection(flat = tinyFlat).apply(image(FloatArray(8) { Float.MAX_VALUE }), geometry, capture)
         }
+    }
+
+    @Test fun aliasedBorrowedDestinationUsesSafeKotlinFallbackAndReusesWorkspace() {
+        assertTrue("Rust calibration library must load for JVM tests", NativeCalibration.loaded)
+        val g = CalibrationGeometry(14, 14, "MONO", 16)
+        val bias = master(CalibrationType.BIAS, FloatArray(196) { .05f + (it % 9) * .001f }, g)
+        val selected = CalibrationSelection(bias = bias)
+        val workspace = CalibrationSelection.Workspace()
+        val first = selected.applyBorrowed(
+            image(FloatArray(196) { .1f + it * .001f }, g),
+            g,
+            capture,
+            workspace
+        )
+        val aliasedInput = image(first.pixels, g)
+        val expected = selected.apply(aliasedInput, g, capture)
+        val actual = selected.applyBorrowed(aliasedInput, g, capture, workspace)
+        assertSame(first.pixels, actual.pixels)
+        assertArrayEquals(expected.pixels, actual.pixels, 0f)
+        workspace.release()
     }
 }

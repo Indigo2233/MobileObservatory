@@ -393,8 +393,9 @@ object CalibrationBuilder {
         val rawBytes = geometry.sampleCount * 2L
         val accumulator = geometry.sampleCount * 4L
         val directMaster = geometry.sampleCount * 4L
-        val sampleCounts = if (withSampleCounts) geometry.sampleCount * 2L else 0L
-        return 2L * (frame + rawBytes) + accumulator + directMaster + sampleCounts + 4L * 1024 * 1024
+        // Flat normalization retains UInt16 valid-frame counts and one Boolean valid map.
+        val flatScratch = if (withSampleCounts) geometry.sampleCount * 3L else 0L
+        return 2L * (frame + rawBytes) + accumulator + directMaster + flatScratch + 4L * 1024 * 1024
     }
 
     fun build(type: CalibrationType, geometry: CalibrationGeometry, capture: CalibrationCapture,

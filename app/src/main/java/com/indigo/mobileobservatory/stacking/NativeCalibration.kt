@@ -40,7 +40,8 @@ internal object NativeCalibration {
             }
         )) {
             0 -> return true
-            -1 -> error("native_calibration_invalid")
+            // Invalid parameters, unsupported direct buffers and aliased arrays use the Kotlin path.
+            -1 -> return false
             -2 -> throw IllegalArgumentException("calibration_nonfinite_light")
             -3 -> throw CancellationException("Calibration discarded")
             -4 -> throw IllegalArgumentException("calibration_nonfinite_output")

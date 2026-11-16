@@ -251,6 +251,79 @@ class CalibrationCoordinatorInstrumentedTest {
         } finally { main { c.close() }; scope.cancel(); directory.deleteRecursively(); preferences.edit().clear().commit() }
     }
 
+    @Test fun replacingSelectedMasterAccountsForOldAndNewMappedPayloadPeak() = runBlocking {
+        val directory = File(app.cacheDir, "calibration-peak-${System.nanoTime()}").apply { mkdirs() }
+        val geometry = CalibrationGeometry(128, 96, "MONO", 16)
+        val capture = CalibrationCapture()
+        val library = CalibrationLibrary(directory)
+        fun save(type: CalibrationType, value: Float): CalibrationDescriptor {
+            val master = CalibrationBuilder.build(type, geometry, capture, 1, {
+                LinearImage(128, 96, 1, FloatArray(128 * 96) { value })
+            })
+            return library.save(master)
+        }
+        val bias = save(CalibrationType.BIAS, .05f)
+        val dark = save(CalibrationType.DARK, .10f)
+        val flat = save(CalibrationType.FLAT, .50f)
+        val replacement = save(CalibrationType.BIAS, .06f)
+        val masterBytes = 128L * 96 * 4
+        val preferences = app.getSharedPreferences("stack-calibration-selection-${directory.name}", 0)
+        preferences.edit()
+            .putString(CalibrationType.BIAS.name, bias.id)
+            .putString(CalibrationType.DARK.name, dark.id)
+            .putString(CalibrationType.FLAT.name, flat.id)
+            .commit()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        val calibration = CalibrationCoordinator(app, scope, Any(), masterBytes * 3, { null }, directory = directory)
+        try {
+            await { calibration.state.value.initialized && !calibration.state.value.busy }
+            assertEquals(3L * masterBytes, calibration.nativeBytes)
+            main { calibration.selectMaster(CalibrationType.BIAS, replacement.id) }
+            await { !calibration.state.value.busy }
+            assertEquals("memory_budget", calibration.state.value.message)
+            assertEquals(bias.id, calibration.state.value.selectedIds[CalibrationType.BIAS])
+            assertEquals(3L * masterBytes, calibration.nativeBytes)
+        } finally {
+            calibration.close(); scope.cancel()
+            preferences.edit().clear().commit()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test fun changingOneMasterStillValidatesOtherReusedIdsAgainstTheLibrary() = runBlocking {
+        val directory = File(app.cacheDir, "calibration-reused-validation-${System.nanoTime()}").apply { mkdirs() }
+        val geometry = CalibrationGeometry(128, 96, "MONO", 16)
+        val library = CalibrationLibrary(directory)
+        fun save(type: CalibrationType, value: Float): CalibrationDescriptor =
+            library.save(CalibrationBuilder.build(type, geometry, CalibrationCapture(), 1, {
+                LinearImage(128, 96, 1, FloatArray(128 * 96) { value })
+            }))
+        val bias = save(CalibrationType.BIAS, .05f)
+        val dark = save(CalibrationType.DARK, .10f)
+        val replacement = save(CalibrationType.DARK, .12f)
+        val preferences = app.getSharedPreferences("stack-calibration-selection-${directory.name}", 0)
+        preferences.edit()
+            .putString(CalibrationType.BIAS.name, bias.id)
+            .putString(CalibrationType.DARK.name, dark.id)
+            .commit()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        val calibration = CalibrationCoordinator(app, scope, Any(), 64L * 1024 * 1024, { null }, directory = directory)
+        try {
+            await { calibration.state.value.initialized && !calibration.state.value.busy }
+            library.delete(bias.id)
+            main { calibration.selectMaster(CalibrationType.DARK, replacement.id) }
+            await { !calibration.state.value.busy }
+            assertEquals("calibration_master_missing", calibration.state.value.message)
+            assertEquals(bias.id, calibration.state.value.selectedIds[CalibrationType.BIAS])
+            assertEquals(dark.id, calibration.state.value.selectedIds[CalibrationType.DARK])
+            assertEquals(dark.id, preferences.getString(CalibrationType.DARK.name, null))
+        } finally {
+            calibration.close(); scope.cancel()
+            preferences.edit().clear().commit()
+            directory.deleteRecursively()
+        }
+    }
+
     @Test fun cancellingRestoreBeforeItsWorkerStartsStillUnlocksExplicitRecovery() = runBlocking {
         val directory = File(app.cacheDir, "cancel-restore-${System.nanoTime()}")
         val preferences = app.getSharedPreferences("stack-calibration-selection-${directory.name}", 0)

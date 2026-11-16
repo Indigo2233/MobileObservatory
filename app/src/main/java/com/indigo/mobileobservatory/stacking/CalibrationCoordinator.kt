@@ -199,7 +199,8 @@ class CalibrationCoordinator(
             val bias = if (type == CalibrationType.FLAT) selection.bias else null
             require(geometry.width.toLong() * geometry.height <= LinearImage.MAX_PIXELS &&
                 CalibrationBuilder.estimatedBuildBytes(geometry, bias != null, type == CalibrationType.FLAT) +
-                    selection.heapBytes <= memoryBudgetBytes) { "memory_budget" }
+                    selection.heapBytes <= memoryBudgetBytes &&
+                selection.nativeBytes + geometry.sampleCount * 4L <= memoryBudgetBytes) { "memory_budget" }
             val master = CalibrationBuilder.build(type, geometry, capture, header.frameCount.toLong(),
                 readFrame = { index ->
                     ensureActive()
@@ -222,19 +223,21 @@ class CalibrationCoordinator(
         val descriptors = library.list().associateBy { it.id }
         val previous = selection
         val reusable = listOfNotNull(previous.bias, previous.dark, previous.flat).associateBy { it.descriptor.id }
-        val payloadBytes = ids.map { (type, id) ->
+        val selectedPayloads = ids.map { (type, id) ->
             val descriptor = descriptors[id] ?: error("calibration_master_missing")
             check(descriptor.type == type) { "calibration_type_mismatch" }
-            descriptor.geometry.sampleCount * 4L
-        }.sum()
+            id to descriptor.geometry.sampleCount * 4L
+        }.toMap()
         // During a selection change, old immutable masters remain reachable until the worker
-        // commits. Include both selections rather than relying on prompt garbage collection.
-        require(previous.heapBytes <= memoryBudgetBytes) { "memory_budget" }
-        require(payloadBytes <= memoryBudgetBytes) { "memory_budget" }
-        var remainingPayload = memoryBudgetBytes
+        // commits. Reused masters are already covered; only their replacements add peak bytes.
+        val additionalPayload = selectedPayloads.filterKeys { it !in reusable }.values.sum()
+        require(previous.heapBytes <= memoryBudgetBytes &&
+            previous.nativeBytes + additionalPayload <= memoryBudgetBytes) { "memory_budget" }
+        var remainingPayload = memoryBudgetBytes - previous.nativeBytes
         fun load(type: CalibrationType) = ids[type]?.let {
-            val master = reusable[it] ?: library.load(it, maxBytes = remainingPayload, cancelCheck = checkCancelled)
-            remainingPayload -= master.memoryBytes
+            val reused = reusable[it]
+            val master = reused ?: library.load(it, maxBytes = remainingPayload, cancelCheck = checkCancelled)
+            if (reused == null) remainingPayload -= master.memoryBytes
             master
         }
         return CalibrationSelection(load(CalibrationType.BIAS), load(CalibrationType.DARK), load(CalibrationType.FLAT))
