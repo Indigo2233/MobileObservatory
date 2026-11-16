@@ -131,7 +131,7 @@ class CalibrationLibrary(private val directory: File) {
                         .order(ByteOrder.BIG_ENDIAN)
                     mapped.position(payloadOffset.toInt())
                     val payload = mapped.slice().order(ByteOrder.BIG_ENDIAN)
-                    return CalibrationMaster.native(descriptor, payload)
+                    return CalibrationMaster.direct(descriptor, payload)
                 }
             }
             val native = ByteBuffer.allocateDirect(payloadBytes.toInt()).order(ByteOrder.BIG_ENDIAN)
@@ -143,7 +143,7 @@ class CalibrationLibrary(private val directory: File) {
                 }
             }
             native.rewind()
-            return CalibrationMaster.native(descriptor, native)
+            return CalibrationMaster.direct(descriptor, native)
         }
     }
 

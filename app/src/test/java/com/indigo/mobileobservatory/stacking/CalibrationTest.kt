@@ -3,6 +3,8 @@ package com.indigo.mobileobservatory.stacking
 import com.indigo.mobileobservatory.camera.PixelFormat
 import org.junit.Assert.*
 import org.junit.Test
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.util.concurrent.CancellationException
 
 class CalibrationTest {
@@ -12,6 +14,24 @@ class CalibrationTest {
     private fun master(type: CalibrationType, values: FloatArray, g: CalibrationGeometry = geometry,
                        c: CalibrationCapture = capture, bias: CalibrationMaster? = null): CalibrationMaster =
         CalibrationBuilder.build(type, g, c, 1, { image(values.copyOf(), g) }, bias = bias)
+    private fun directMaster(type: CalibrationType, values: FloatArray, g: CalibrationGeometry = geometry): CalibrationMaster {
+        val descriptor = CalibrationDescriptor(type.name, "", type, g, capture, "", 1, 1)
+        val buffer = ByteBuffer.allocateDirect(values.size * 4).order(ByteOrder.BIG_ENDIAN)
+        buffer.asFloatBuffer().put(values)
+        return CalibrationMaster.direct(descriptor, buffer)
+    }
+    private fun heapMaster(type: CalibrationType, values: FloatArray, g: CalibrationGeometry = geometry): CalibrationMaster {
+        val descriptor = CalibrationDescriptor(type.name, "", type, g, capture, "", 1, 1)
+        return CalibrationMaster(descriptor, values.copyOf())
+    }
+    private fun crop(source: LinearImage, region: PixelRoi): LinearImage {
+        val values = FloatArray(region.width * region.height * source.channels)
+        for (y in 0 until region.height) for (x in 0 until region.width) for (c in 0 until source.channels) {
+            values[(y * region.width + x) * source.channels + c] =
+                source.pixels[((region.top + y) * source.width + region.left + x) * source.channels + c]
+        }
+        return LinearImage(region.width, region.height, source.channels, values)
+    }
     private fun rejects(part: String, action: () -> Unit) {
         try { action(); fail("Expected $part") } catch (e: IllegalArgumentException) { assertTrue(e.message, e.message.orEmpty().contains(part)) }
     }
@@ -157,8 +177,10 @@ class CalibrationTest {
         }, progress = { done, total -> assertEquals(3L, total); progress += done })
         assertEquals(listOf(0L, 1L, 2L), order); assertEquals(listOf(1L, 2L, 3L), progress)
         assertArrayEquals(FloatArray(8) { .2f }, mean.imageCopy().pixels, 2e-8f)
+        assertEquals(0L, mean.heapBytes)
+        assertEquals(geometry.sampleCount * 4L, mean.nativeBytes)
         assertEquals(.1f, frames[0].pixels[0], 0f)
-        assertEquals(2L * (geometry.sampleCount * 6L) + geometry.sampleCount * 4L + 4L * 1024 * 1024,
+        assertEquals(2L * (geometry.sampleCount * 6L) + geometry.sampleCount * 8L + 4L * 1024 * 1024,
             CalibrationBuilder.estimatedBuildBytes(geometry))
         assertEquals(CalibrationBuilder.estimatedBuildBytes(geometry), CalibrationBuilder.estimatedBuildBytes(geometry, true))
         assertEquals(geometry.sampleCount * 2L,
@@ -207,5 +229,52 @@ class CalibrationTest {
         assertSame(firstInput,disabled.applyBorrowed(firstInput,geometry,capture,CalibrationSelection.Workspace()))
         workspace.release()
         assertEquals(0L,workspace.retainedBytes)
+    }
+
+    @Test fun directMastersUseRustForFullFrameAndRegionWithKotlinEquivalentOutput() {
+        assertTrue("Rust calibration library must load for JVM tests", NativeCalibration.loaded)
+        for (layout in listOf("MONO", "RGB")) {
+            val g = CalibrationGeometry(14, 14, layout, 16)
+            val samples = g.sampleCount
+            val biasValues = FloatArray(samples) { .04f + (it % 7) * .003f }
+            val flatValues = FloatArray(samples) { .7f + (it % 5) * .13f }
+            val light = image(FloatArray(samples) { .08f + it * .001f }, g)
+            val directBias = directMaster(CalibrationType.BIAS, biasValues, g)
+            val directFlat = directMaster(CalibrationType.FLAT, flatValues, g)
+            val heapBias = heapMaster(CalibrationType.BIAS, biasValues, g)
+            val heapFlat = heapMaster(CalibrationType.FLAT, flatValues, g)
+            assertEquals(0L, directBias.heapBytes)
+            assertNotNull(directBias.nativeBuffer())
+
+            val native = CalibrationSelection(bias = directBias, flat = directFlat)
+            val oracle = CalibrationSelection(bias = heapBias, flat = heapFlat)
+            assertArrayEquals("$layout full", oracle.apply(light, g, capture).pixels,
+                native.apply(light, g, capture).pixels, 0f)
+
+            val region = PixelRoi(left = 1, top = 1, width = 12, height = 12)
+            val regionLight = crop(light, region)
+            assertArrayEquals("$layout region",
+                oracle.applyRegion(regionLight, g, capture, region).pixels,
+                native.applyRegion(regionLight, g, capture, region).pixels, 0f)
+
+            val workspace = CalibrationSelection.Workspace()
+            assertArrayEquals("$layout borrowed region",
+                oracle.applyRegionBorrowed(regionLight, g, capture, region, workspace).pixels,
+                native.applyRegionBorrowed(regionLight, g, capture, region, workspace).pixels, 0f)
+            workspace.release()
+        }
+    }
+
+    @Test fun rustCalibrationReportsNonfiniteInputAndOutput() {
+        val bias = directMaster(CalibrationType.BIAS, FloatArray(8) { .1f })
+        val selected = CalibrationSelection(bias = bias)
+        val nonfinite = FloatArray(8) { .2f }
+        nonfinite[3] = Float.NaN
+        rejects("nonfinite_light") { selected.apply(image(nonfinite), geometry, capture) }
+
+        val tinyFlat = directMaster(CalibrationType.FLAT, FloatArray(8) { 1e-5f })
+        rejects("nonfinite_output") {
+            CalibrationSelection(flat = tinyFlat).apply(image(FloatArray(8) { Float.MAX_VALUE }), geometry, capture)
+        }
     }
 }

@@ -86,11 +86,24 @@ cargo install cargo-ndk --locked
   - Rust 常量色与取消测试通过。
   - APK 包含 `libdemosaic_jni.so`，DDFAPD JNI 符号已核对。
 
-### RUST-05：校准与星点检测
+### RUST-05A：BIAS、DARK 与 FLAT 校准
+
+- 状态：已完成（2026-11-16）。
+- 范围：全画幅与区域校准的减 Bias/Dark、除 Flat、取消和数值边界检查。
+- 实现保留 Kotlin 的主帧构建归一化、元数据校验、内存预算和原生不可用时的回退。
+- 磁盘主帧直接使用只读映射的 BIG_ENDIAN `Float32` 数据；新建主帧在构建结束时转为 direct buffer，JNI 不复制整帧主帧。
+- 验收：
+  - Rust 全画幅与带原图 row pitch 的区域计算通过。
+  - Rust 输出与 Kotlin oracle 逐 Float 一致，覆盖 borrowed workspace 路径。
+  - 非有限输入、非有限输出、取消、重叠行 pitch 和越界缓冲区测试通过。
+  - `CalibrationTest`、`CalibrationStorageTest`、`CalibrationSensorInputTest` 和区域解码回归通过。
+  - APK 包含 `libcalibration_jni.so`，JNI 符号已核对。
+
+### RUST-05B：星点检测与配准
 
 - 状态：待开始。
-- 范围：BIAS/DARK/FLAT 应用、星点质心、HFR、刚体配准。
-- 验收：现有校准和 `DeepSkyAlgorithmsTest` 通过。
+- 范围：星点质心、HFR、刚体配准。
+- 验收：现有 `DeepSkyAlgorithmsTest` 和配准回归通过。
 
 ### RUST-06：FITS、SER、PSER 编解码
 

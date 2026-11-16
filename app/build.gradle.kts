@@ -81,9 +81,11 @@ val observatoryBuildId =
 val rustStackAccumulatorDirectory = file("src/main/rust/stack_accumulator")
 val rustPlanetaryStackDirectory = file("src/main/rust/planetary_stack")
 val rustDemosaicDirectory = file("src/main/rust/demosaic")
+val rustCalibrationDirectory = file("src/main/rust/calibration")
 val rustStackJniLibsDirectory = layout.buildDirectory.dir("rustJniLibs/stack")
 val rustPlanetaryJniLibsDirectory = layout.buildDirectory.dir("rustJniLibs/planetary")
 val rustDemosaicJniLibsDirectory = layout.buildDirectory.dir("rustJniLibs/demosaic")
+val rustCalibrationJniLibsDirectory = layout.buildDirectory.dir("rustJniLibs/calibration")
 val rustTargets = if (emulatorTest) listOf("x86", "x86_64") else listOf("arm64-v8a")
 val rustAndroidTargetDirectory = layout.buildDirectory.dir("rust-target/android")
 val rustHostTargetDirectory = layout.buildDirectory.dir("rust-target/host")
@@ -96,6 +98,9 @@ val rustPlanetaryHostLibrary = rustHostLibraryDirectory.map {
 }
 val rustDemosaicHostLibrary = rustHostLibraryDirectory.map {
     it.file(if (phd2WindowsHost) "demosaic_jni.dll" else "libdemosaic_jni.so")
+}
+val rustCalibrationHostLibrary = rustHostLibraryDirectory.map {
+    it.file(if (phd2WindowsHost) "calibration_jni.dll" else "libcalibration_jni.so")
 }
 
 val buildRustStackAccumulator by tasks.registering(Exec::class) {
@@ -185,6 +190,35 @@ val buildRustDemosaic by tasks.registering(Exec::class) {
     )
 }
 
+val buildRustCalibration by tasks.registering(Exec::class) {
+    group = "build"
+    description = "Builds the Rust sensor calibration core for the selected Android ABI."
+    workingDir(rustCalibrationDirectory)
+    inputs.files(
+        fileTree(rustCalibrationDirectory) {
+            exclude("target/**")
+        }
+    )
+    inputs.property("rustTargets", rustTargets)
+    outputs.dir(rustCalibrationJniLibsDirectory)
+    environment("CARGO_TARGET_DIR", rustAndroidTargetDirectory.get().asFile.absolutePath)
+    environment("CARGO_BUILD_JOBS", "1")
+    commandLine(
+        buildList {
+            add("cargo")
+            add("ndk")
+            rustTargets.forEach {
+                add("-t")
+                add(it)
+            }
+            add("-o")
+            add(rustCalibrationJniLibsDirectory.get().asFile.absolutePath)
+            add("build")
+            add("--release")
+        }
+    )
+}
+
 val buildRustStackAccumulatorHost by tasks.registering(Exec::class) {
     group = "verification"
     description = "Builds the Rust deep-sky accumulator for host JVM tests."
@@ -230,14 +264,30 @@ val buildRustDemosaicHost by tasks.registering(Exec::class) {
     commandLine("cargo", "build", "--manifest-path", file("src/main/rust/demosaic/Cargo.toml").absolutePath)
 }
 
+val buildRustCalibrationHost by tasks.registering(Exec::class) {
+    group = "verification"
+    description = "Builds the Rust sensor calibration core for host JVM tests."
+    workingDir(rustCalibrationDirectory)
+    inputs.files(
+        fileTree(rustCalibrationDirectory) {
+            exclude("target/**")
+        }
+    )
+    outputs.file(rustCalibrationHostLibrary)
+    environment("CARGO_TARGET_DIR", rustHostTargetDirectory.get().asFile.absolutePath)
+    environment("CARGO_BUILD_JOBS", "1")
+    commandLine("cargo", "build", "--manifest-path", file("src/main/rust/calibration/Cargo.toml").absolutePath)
+}
+
 val buildRustNativeLibraries by tasks.registering {
     group = "build"
     description = "Builds all Rust native libraries for Android."
-    dependsOn(buildRustStackAccumulator, buildRustPlanetaryStack, buildRustDemosaic)
+    dependsOn(buildRustStackAccumulator, buildRustPlanetaryStack, buildRustDemosaic, buildRustCalibration)
 }
 
 buildRustPlanetaryStack.configure { mustRunAfter(buildRustStackAccumulator) }
 buildRustDemosaic.configure { mustRunAfter(buildRustPlanetaryStack) }
+buildRustCalibration.configure { mustRunAfter(buildRustDemosaic) }
 
 tasks.matching { it.name == "preBuild" || it.name.endsWith("JniLibFolders") }.configureEach {
     dependsOn(buildRustNativeLibraries)
@@ -246,12 +296,13 @@ tasks.matching { it.name == "preBuild" || it.name.endsWith("JniLibFolders") }.co
 val buildRustHostLibraries by tasks.registering {
     group = "verification"
     description = "Builds all Rust native libraries for host JVM tests."
-    dependsOn(buildRustStackAccumulatorHost, buildRustPlanetaryStackHost, buildRustDemosaicHost)
+    dependsOn(buildRustStackAccumulatorHost, buildRustPlanetaryStackHost, buildRustDemosaicHost, buildRustCalibrationHost)
 }
 
 buildRustPlanetaryStackHost.configure { mustRunAfter(buildRustStackAccumulatorHost) }
 buildRustDemosaicHost.configure { mustRunAfter(buildRustPlanetaryStackHost) }
-buildRustStackAccumulatorHost.configure { mustRunAfter(buildRustDemosaic) }
+buildRustCalibrationHost.configure { mustRunAfter(buildRustDemosaicHost) }
+buildRustStackAccumulatorHost.configure { mustRunAfter(buildRustCalibration) }
 buildRustHostLibraries.configure { mustRunAfter(buildRustNativeLibraries) }
 
 tasks.withType<Test>().configureEach {
@@ -411,6 +462,7 @@ android {
             jniLibs.srcDir(rustStackJniLibsDirectory)
             jniLibs.srcDir(rustPlanetaryJniLibsDirectory)
             jniLibs.srcDir(rustDemosaicJniLibsDirectory)
+            jniLibs.srcDir(rustCalibrationJniLibsDirectory)
             if (stellariumNonCommercial) {
                 assets.srcDir("src/stellarium/assets")
             }

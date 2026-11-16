@@ -3,6 +3,7 @@ package com.indigo.mobileobservatory.stacking
 import com.indigo.mobileobservatory.camera.PixelFormat
 import org.json.JSONObject
 import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.util.UUID
 import kotlin.math.abs
 
@@ -82,6 +83,7 @@ internal interface CalibrationSamples {
     val nativeBytes: Long
     fun get(index: Int): Float
     fun copy(): FloatArray
+    fun nativeBuffer(): ByteBuffer?
 }
 
 private class HeapCalibrationSamples(private val values: FloatArray) : CalibrationSamples {
@@ -90,6 +92,7 @@ private class HeapCalibrationSamples(private val values: FloatArray) : Calibrati
     override val nativeBytes: Long get() = 0L
     override fun get(index: Int): Float = values[index]
     override fun copy(): FloatArray = values.copyOf()
+    override fun nativeBuffer(): ByteBuffer? = null
 }
 
 private class NativeCalibrationSamples(
@@ -97,10 +100,17 @@ private class NativeCalibrationSamples(
     private val offset: Int,
     override val size: Int
 ) : CalibrationSamples {
+    init {
+        require(buffer.isDirect && buffer.order() == ByteOrder.BIG_ENDIAN &&
+            offset >= 0 && size >= 0 && offset.toLong() + size * 4L <= buffer.limit()) {
+            "calibration_buffer"
+        }
+    }
     override val heapBytes: Long get() = 0L
     override val nativeBytes: Long get() = size * 4L
     override fun get(index: Int): Float = buffer.getFloat(offset + index * 4)
     override fun copy(): FloatArray = FloatArray(size) { get(it) }
+    override fun nativeBuffer(): ByteBuffer = buffer
 }
 
 /** Masters cannot expose mutable retained pixels. Library masters use read-only mapped Float32
@@ -126,12 +136,13 @@ class CalibrationMaster internal constructor(
     val heapBytes: Long get() = samples.heapBytes
     val nativeBytes: Long get() = samples.nativeBytes
     internal fun sample(index: Int): Float = samples.get(index)
+    internal fun nativeBuffer(): ByteBuffer? = samples.nativeBuffer()
     fun imageCopy(): LinearImage = descriptor.geometry.let {
         LinearImage(it.width, it.height, it.channels, samples.copy())
     }
 
     companion object {
-        internal fun native(descriptor: CalibrationDescriptor, buffer: ByteBuffer) =
+        internal fun direct(descriptor: CalibrationDescriptor, buffer: ByteBuffer) =
             CalibrationMaster(descriptor, NativeCalibrationSamples(buffer, 0, descriptor.geometry.sampleCount))
     }
 }
@@ -214,6 +225,32 @@ class CalibrationSelection(
         }
     }
 
+    private fun applyNative(
+        sensor: LinearImage,
+        output: FloatArray,
+        startOffset: Long,
+        masterRowPitch: Long,
+        subtraction: CalibrationMaster?,
+        flat: CalibrationMaster?,
+        cancelCheck: () -> Unit
+    ): Boolean {
+        val subtractionBuffer = subtraction?.nativeBuffer()
+        val flatBuffer = flat?.nativeBuffer()
+        if ((subtraction != null && subtractionBuffer == null) || (flat != null && flatBuffer == null)) return false
+        return NativeCalibration.apply(
+            sensor.pixels,
+            output,
+            sensor.width,
+            sensor.height,
+            sensor.channels,
+            startOffset,
+            masterRowPitch,
+            subtractionBuffer,
+            flatBuffer,
+            cancelCheck
+        )
+    }
+
     fun apply(sensor: LinearImage, geometry: CalibrationGeometry, capture: CalibrationCapture,
               cancelCheck: () -> Unit = {}): LinearImage =
         applyImpl(sensor, geometry, capture, null, cancelCheck)
@@ -232,6 +269,11 @@ class CalibrationSelection(
         val subtraction = dark ?: bias
         val output = FloatArray(sensor.pixels.size)
         val rowSamples = region.width * sensor.channels
+        val startOffset = (region.top.toLong() * geometry.width + region.left) * sensor.channels
+        val masterRowPitch = geometry.width.toLong() * sensor.channels
+        if (applyNative(sensor, output, startOffset, masterRowPitch, subtraction, flat, cancelCheck)) {
+            return sensor.copy(pixels = output)
+        }
         for (y in 0 until region.height) {
             cancelCheck()
             val original = ((region.top + y) * geometry.width + region.left) * sensor.channels
@@ -270,6 +312,11 @@ class CalibrationSelection(
         val output = workspace.acquire(sensor.pixels.size)
         try {
             val rowSamples = region.width * sensor.channels
+            val startOffset = (region.top.toLong() * geometry.width + region.left) * sensor.channels
+            val masterRowPitch = geometry.width.toLong() * sensor.channels
+            if (applyNative(sensor, output, startOffset, masterRowPitch, subtraction, flat, cancelCheck)) {
+                return sensor.copy(pixels = output)
+            }
             for (y in 0 until region.height) {
                 cancelCheck()
                 val original = ((region.top + y) * geometry.width + region.left) * sensor.channels
@@ -299,6 +346,10 @@ class CalibrationSelection(
         val subtraction = dark ?: bias
         val output = workspace?.acquire(sensor.pixels.size) ?: FloatArray(sensor.pixels.size)
         try {
+            val masterRowPitch = geometry.width.toLong() * sensor.channels
+            if (applyNative(sensor, output, 0L, masterRowPitch, subtraction, flat, cancelCheck)) {
+                return sensor.copy(pixels = output)
+            }
             for (i in output.indices) {
                 if (i % 16384 == 0) cancelCheck()
                 val input = sensor.pixels[i]
@@ -334,15 +385,16 @@ object CalibrationBuilder {
     private const val MAX_FLAT_INVALID_FRACTION = .01
 
     /** Two decoded frames and their native byte copies may overlap while the next frame is
-     * decoded, plus the mean accumulator, which becomes the output master. The optional bias
-     * is owned by CalibrationSelection and counted there. */
+     * decoded. The mean accumulator and its direct-buffer master may overlap during conversion.
+     * The optional bias is owned by CalibrationSelection and counted there. */
     fun estimatedBuildBytes(geometry: CalibrationGeometry, @Suppress("UNUSED_PARAMETER") withBias: Boolean = false,
                             withSampleCounts: Boolean = false): Long {
         val frame = geometry.sampleCount * 4L
         val rawBytes = geometry.sampleCount * 2L
         val accumulator = geometry.sampleCount * 4L
+        val directMaster = geometry.sampleCount * 4L
         val sampleCounts = if (withSampleCounts) geometry.sampleCount * 2L else 0L
-        return 2L * (frame + rawBytes) + accumulator + sampleCounts + 4L * 1024 * 1024
+        return 2L * (frame + rawBytes) + accumulator + directMaster + sampleCounts + 4L * 1024 * 1024
     }
 
     fun build(type: CalibrationType, geometry: CalibrationGeometry, capture: CalibrationCapture,
@@ -434,7 +486,9 @@ object CalibrationBuilder {
         cancelCheck()
         val descriptor = CalibrationDescriptor(UUID.randomUUID().toString(), name, type, geometry, capture,
             sourceIdentity, frameCount, System.currentTimeMillis(), bias?.descriptor?.id)
-        return CalibrationMaster(descriptor, output)
+        val direct = ByteBuffer.allocateDirect(output.size * 4).order(ByteOrder.BIG_ENDIAN)
+        direct.asFloatBuffer().put(output)
+        return CalibrationMaster.direct(descriptor, direct)
     }
 
     private fun sameGroupNeighborMedian(geometry: CalibrationGeometry, normalized: FloatArray,
