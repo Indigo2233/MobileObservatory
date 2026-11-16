@@ -3,6 +3,7 @@
 local.properties
 **/build/
 **/.cxx/
+app/src/main/rust/**/target/
 bin/
 out/
 *.iml

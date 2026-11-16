@@ -5,6 +5,7 @@ import org.gradle.api.provider.ListProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.TaskAction
+import org.gradle.api.tasks.Exec
 
 plugins {
     id("com.android.application")
@@ -76,6 +77,71 @@ val emulatorTest =
 
 val observatoryBuildId =
     providers.gradleProperty("observatoryBuildId").orNull?.takeIf { it.isNotBlank() } ?: "development"
+
+val rustStackAccumulatorDirectory = file("src/main/rust/stack_accumulator")
+val rustJniLibsDirectory = layout.buildDirectory.dir("rustJniLibs")
+val rustTargets = if (emulatorTest) listOf("x86", "x86_64") else listOf("arm64-v8a")
+val rustHostTargetDirectory = layout.buildDirectory.dir("rust-host-target")
+val rustHostLibraryDirectory = rustHostTargetDirectory.map { it.dir("debug") }
+val rustHostLibrary = rustHostLibraryDirectory.map {
+    it.file(if (phd2WindowsHost) "stack_accumulator_jni.dll" else "libstack_accumulator_jni.so")
+}
+
+val buildRustStackAccumulator by tasks.registering(Exec::class) {
+    group = "build"
+    description = "Builds the Rust deep-sky accumulator for the selected Android ABI."
+    workingDir(rustStackAccumulatorDirectory)
+    inputs.files(
+        fileTree(rustStackAccumulatorDirectory) {
+            exclude("target/**")
+        }
+    )
+    inputs.property("rustTargets", rustTargets)
+    outputs.dir(rustJniLibsDirectory)
+    commandLine(
+        buildList {
+            add("cargo")
+            add("ndk")
+            rustTargets.forEach {
+                add("-t")
+                add(it)
+            }
+            add("-o")
+            add(rustJniLibsDirectory.get().asFile.absolutePath)
+            add("build")
+            add("--release")
+        }
+    )
+}
+
+val buildRustStackAccumulatorHost by tasks.registering(Exec::class) {
+    group = "verification"
+    description = "Builds the Rust deep-sky accumulator for host JVM tests."
+    workingDir(rustStackAccumulatorDirectory)
+    inputs.files(
+        fileTree(rustStackAccumulatorDirectory) {
+            exclude("target/**")
+        }
+    )
+    outputs.file(rustHostLibrary)
+    environment("CARGO_TARGET_DIR", rustHostTargetDirectory.get().asFile.absolutePath)
+    commandLine("cargo", "build", "--manifest-path", file("src/main/rust/stack_accumulator/Cargo.toml").absolutePath)
+}
+
+tasks.matching { it.name == "preBuild" || it.name.endsWith("JniLibFolders") }.configureEach {
+    dependsOn(buildRustStackAccumulator)
+}
+
+tasks.withType<Test>().configureEach {
+    dependsOn(buildRustStackAccumulatorHost)
+    systemProperty(
+        "java.library.path",
+        listOf(
+            rustHostLibraryDirectory.get().asFile.absolutePath,
+            phd2HostDirectory.get().asFile.absolutePath
+        ).joinToString(File.pathSeparator)
+    )
+}
 
 val updateManifestUrl =
     providers.gradleProperty("updateManifestUrl").orNull
@@ -220,6 +286,7 @@ android {
     sourceSets {
         getByName("androidTest").assets.srcDir("src/test/resources/astrometry")
         getByName("main") {
+            jniLibs.srcDir(rustJniLibsDirectory)
             if (stellariumNonCommercial) {
                 assets.srcDir("src/stellarium/assets")
             }
