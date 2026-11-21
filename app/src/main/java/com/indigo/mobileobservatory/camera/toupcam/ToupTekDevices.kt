@@ -61,6 +61,27 @@ object ToupTekDevices {
     fun displayNameFor(device: UsbDevice, sdkModelName: String?): String =
         cameraDisplayName(sdkModelName ?: hintedModelName(device.productName, device.manufacturerName))
 
+    /** ToupTek product pages or manuals explicitly document HDR for these models. */
+    private val HDR_MODEL_PREFIXES = listOf(
+        "ATR585M",
+        "ATR585C",
+        "AE676M",
+        "AE676C",
+        "ATR2110C",
+        "G3M662M",
+        "G3M662C",
+        "G3M664C"
+    )
+
+    /**
+     * SDK model flags are not sufficient to decide whether to expose HDR.
+     * G3M678M reports the CGHDR bit but ToupTek documents only HCG/LCG for it.
+     */
+    fun supportsHdr(modelName: String?): Boolean {
+        val normalized = modelName.orEmpty().trim().uppercase()
+        return HDR_MODEL_PREFIXES.any(normalized::startsWith)
+    }
+
     /**
      * Android 上报 `0x2BA2` 时，SDK 型号表对不上。先用真实 VID/PID 打开，
      * 失败再按 USB 字符串（或 462 默认）试官方 `0x0547` PID。

@@ -217,7 +217,7 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
             refreshRawDescription()
             supportedPixelFormats = buildSupportedFormats()
 
-            initReadoutModes()
+            initReadoutModes(modelName)
 
             // Disable SDK auto-exposure so manual control works
             try { ToupcamJni.putAutoExpoEnable(0) } catch (_: Exception) {}
@@ -501,39 +501,27 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
         if (wasCapturing && cb != null) startCapture(cb)
     }
 
-    private fun initReadoutModes() {
+    private fun initReadoutModes(modelName: String) {
         val hasCg = (modelFlag and ToupcamJni.FLAG_CG) != 0L
         val hasCgHdr = (modelFlag and ToupcamJni.FLAG_CGHDR) != 0L
         val hasLowNoise = (modelFlag and ToupcamJni.FLAG_LOW_NOISE) != 0L
 
-        val modes = mutableListOf<ReadoutMode>()
-        if (hasCg || hasCgHdr) {
-            modes.add(ReadoutMode.LCG)
-            modes.add(ReadoutMode.HCG)
-            if (hasCgHdr) modes.add(ReadoutMode.HDR)
+        val modes = ToupcamReadoutModes.advertised(modelName, hasCg, hasCgHdr, hasLowNoise)
+        supportedReadoutModes = modes
+        val cgValue = try {
+            ToupcamJni.getOption(ToupcamJni.OPTION_CG)
+        } catch (e: Exception) {
+            Log.w(TAG, "initReadoutModes: failed to read CG: ${e.message}")
+            null
         }
-        if (hasLowNoise) modes.add(ReadoutMode.LOW_NOISE)
-
-        if (modes.isEmpty()) {
-            supportedReadoutModes = listOf(ReadoutMode.NORMAL)
-            currentReadoutMode = ReadoutMode.NORMAL
-        } else {
-            supportedReadoutModes = modes
-            try {
-                val cgVal = ToupcamJni.getOption(ToupcamJni.OPTION_CG)
-                currentReadoutMode = when (cgVal) {
-                    0 -> ReadoutMode.LCG
-                    1 -> ReadoutMode.HCG
-                    2 -> ReadoutMode.HDR
-                    else -> modes.first()
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "initReadoutModes: failed to read CG: ${e.message}")
-                currentReadoutMode = modes.first()
-            }
+        val restored = ToupcamReadoutModes.restoredModel(cgValue, modes, writable = true)
+        restored.write?.let { requested ->
+            val accepted = ToupcamJni.putOption(ToupcamJni.OPTION_CG, requested)
+            Log.w(TAG, "Unsupported stored HDR mode on $modelName; restored CG=$requested accepted=$accepted")
         }
+        currentReadoutMode = restored.current
         Log.i(TAG, "Readout modes: ${supportedReadoutModes.joinToString { it.name }}, current=${currentReadoutMode.name}" +
-            " (CG=$hasCg CGHDR=$hasCgHdr LowNoise=$hasLowNoise)")
+            " (model=$modelName CG=$hasCg CGHDR=$hasCgHdr LowNoise=$hasLowNoise)")
     }
 
     @Synchronized override fun setReadoutMode(mode: ReadoutMode) {
@@ -567,7 +555,7 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
                 val ok = ToupcamJni.putOption(ToupcamJni.OPTION_CG, cgVal)
                 Log.i(TAG, "Readout mode -> ${mode.name} (CG=$cgVal, ok=$ok)")
 
-                val isHdr = mode == ReadoutMode.HDR && (modelFlag and ToupcamJni.FLAG_CGHDR) != 0L
+                val isHdr = mode == ReadoutMode.HDR
                 val wasHdr = currentReadoutMode == ReadoutMode.HDR
                 if (isHdr && !wasHdr) {
                     ToupcamJni.putOption(ToupcamJni.OPTION_RAW, 0)
@@ -598,7 +586,7 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
     }
 
     private fun refreshBitDepthAndFormat() {
-        val isHdr = currentReadoutMode == ReadoutMode.HDR && (modelFlag and ToupcamJni.FLAG_CGHDR) != 0L
+        val isHdr = currentReadoutMode == ReadoutMode.HDR
 
         if (isHdr) {
             rawBits = 16
