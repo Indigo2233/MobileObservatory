@@ -3,6 +3,7 @@ package com.indigo.mobileobservatory.media
 import com.indigo.mobileobservatory.astrometry.SolveFailureArchive
 import java.io.File
 import java.security.MessageDigest
+import java.util.UUID
 import org.json.JSONObject
 
 /** Keeps recipes with their image and remembers the exact app-owned restoration location. */
@@ -15,15 +16,24 @@ object MediaTrash {
         return File(file.parentFile, ".entry-$key.json")
     }
 
+    fun move(source: File, trash: File): Boolean = move(source, trash, uniqueName = false)
+
+    internal fun moveSequenceFrame(source: File, trash: File): Boolean = move(source, trash, uniqueName = true)
+
     @Synchronized
-    fun move(source: File, trash: File): Boolean = runCatching {
-        val target = File(trash, source.name)
+    private fun move(source: File, trash: File, uniqueName: Boolean): Boolean = runCatching {
+        val name = if (uniqueName)
+            "${source.nameWithoutExtension.take(40)}-${UUID.randomUUID().toString().take(12)}.${source.extension}"
+        else source.name
+        val target = File(trash, name)
         val companions = sidecars(source).zip(sidecars(target))
         if (!source.exists() || target.exists() || companions.any { it.second.exists() } || marker(target).exists()) return false
         check(trash.isDirectory || trash.mkdirs())
         val metadata = marker(target)
         try {
-            metadata.writeText(JSONObject().put("original", source.canonicalPath).toString())
+            metadata.writeText(JSONObject().put("original", source.canonicalPath).apply {
+                if (uniqueName) put("storedName", name)
+            }.toString())
             check(source.renameTo(target))
             if (source.isFile || target.isFile) {
                 companions.forEach { (from, to) -> if (from.isFile) check(from.renameTo(to)) }
@@ -39,11 +49,12 @@ object MediaTrash {
     @Synchronized
     fun restore(source: File, fallback: File, roots: List<File>): Boolean = runCatching {
         val metadata = marker(source)
-        val path = if (metadata.isFile && metadata.length() < 16 * 1024) JSONObject(metadata.readText()).getString("original") else null
+        val entry = if (metadata.isFile && metadata.length() < 16 * 1024) JSONObject(metadata.readText()) else null
+        val path = entry?.getString("original")
         val target = path?.let(::File) ?: File(fallback, source.name)
         val canonical = target.canonicalFile
         require(roots.any { root -> canonical.toPath().startsWith(root.canonicalFile.toPath()) && canonical != root.canonicalFile })
-        require(target.name == source.name && !target.exists())
+        require((target.name == source.name || entry?.optString("storedName") == source.name) && !target.exists())
         val companions = sidecars(source).zip(sidecars(target))
         require(companions.none { it.first.isFile && it.second.exists() })
         check(target.parentFile!!.isDirectory || target.parentFile!!.mkdirs())

@@ -24,6 +24,7 @@ object ExternalMediaImporter {
     private const val MAX_SER_BYTES = 8L * 1024 * 1024 * 1024
     private const val MAX_IMAGE_BYTES = 128L * 1024 * 1024
     private const val MAX_FITS_BYTES = 32L * 1024 * 1024
+    private const val MAX_SEQUENCE_FRAME_BYTES = 512L * 1024 * 1024
     private val extensions = setOf("ser", "pser", "fit", "fits", "jpg", "jpeg", "png")
     private val mimeExtensions = mapOf("application/x-ser" to "ser", "application/x-pser" to "pser",
         "application/fits" to "fits", "image/fits" to "fits", "image/jpeg" to "jpg", "image/png" to "png")
@@ -38,7 +39,12 @@ object ExternalMediaImporter {
         return uri?.takeIf { it.scheme == "content" }
     }
 
-    suspend fun importFile(context: Context, intent: Intent): File {
+    suspend fun importFile(context: Context, intent: Intent): File = copyIntoLibrary(context, intent, null)
+
+    internal suspend fun importFitsFrame(context: Context, uri: Uri, directory: File): File =
+        copyIntoLibrary(context, Intent(Intent.ACTION_VIEW, uri), directory)
+
+    private suspend fun copyIntoLibrary(context: Context, intent: Intent, fitsDirectory: File?): File {
         val uri = contentUri(intent) ?: throw ExternalMediaImportException(ExternalMediaImportError.MISSING_FILE)
         val resolver = context.contentResolver
         var displayName: String? = null; var reportedSize: Long? = null
@@ -54,11 +60,19 @@ object ExternalMediaImporter {
             val mime = resolver.getType(uri)?.lowercase() ?: intent.type?.lowercase()
             val extension = supportedExtension(displayName ?: uri.lastPathSegment, mime)
                 ?: throw ExternalMediaImportException(ExternalMediaImportError.UNSUPPORTED)
-            val limit = when (extension) { "ser", "pser" -> MAX_SER_BYTES; "fit", "fits" -> MAX_FITS_BYTES; else -> MAX_IMAGE_BYTES }
+            if (fitsDirectory != null && extension != "fit" && extension != "fits")
+                throw ExternalMediaImportException(ExternalMediaImportError.UNSUPPORTED)
+            val limit = when (extension) {
+                "ser", "pser" -> MAX_SER_BYTES
+                "fit", "fits" -> if (fitsDirectory == null) MAX_FITS_BYTES else MAX_SEQUENCE_FRAME_BYTES
+                else -> MAX_IMAGE_BYTES
+            }
             if (reportedSize?.let { it > limit } == true) throw ExternalMediaImportException(ExternalMediaImportError.TOO_LARGE)
-            val root = context.getExternalFilesDir(if (extension in setOf("ser", "pser")) "recordings" else "captures")
-                ?: throw ExternalMediaImportException(ExternalMediaImportError.NO_SPACE)
-            val directory = File(root, when (extension) { "ser" -> "SER"; "pser" -> "PSER"; "fit", "fits" -> "FITS"; else -> "JPG" })
+            val directory = fitsDirectory ?: run {
+                val root = context.getExternalFilesDir(if (extension in setOf("ser", "pser")) "recordings" else "captures")
+                    ?: throw ExternalMediaImportException(ExternalMediaImportError.NO_SPACE)
+                File(root, when (extension) { "ser" -> "SER"; "pser" -> "PSER"; "fit", "fits" -> "FITS"; else -> "JPG" })
+            }
             if (!directory.isDirectory && !directory.mkdirs()) throw ExternalMediaImportException(ExternalMediaImportError.NO_SPACE)
             val budget = minOf(limit, (directory.usableSpace - RESERVE_BYTES).coerceAtLeast(0))
             if (budget <= 0 || reportedSize?.let { it > budget } == true) throw ExternalMediaImportException(ExternalMediaImportError.NO_SPACE)
@@ -89,7 +103,7 @@ object ExternalMediaImporter {
                     }
                 } ?: throw ExternalMediaImportException(ExternalMediaImportError.READ_PERMISSION)
                 coroutine.ensureActive()
-                validateContent(partial, extension)
+                if (fitsDirectory != null) validateFits(partial, 128_000_000L, limit) else validateContent(partial, extension)
                 coroutine.ensureActive()
                 if (!partial.renameTo(result)) throw ExternalMediaImportException(ExternalMediaImportError.COPY_FAILED)
                 return result
@@ -127,7 +141,7 @@ object ExternalMediaImporter {
     }
 
     /** The legacy integer FITS preview materializes its input, so impose an explicit preview budget. */
-    private fun validateFits(file: File) {
+    private fun validateFits(file: File, maxPixels: Long = 8_000_000L, maxBytes: Long = MAX_FITS_BYTES) {
         try {
             RandomAccessFile(file, "r").use { input ->
                 val header = FitsHeaderParser.read(input)
@@ -137,10 +151,10 @@ object ExternalMediaImporter {
                 val channels = if (axes == 3) header.longValue("NAXIS3") ?: 0 else 1
                 val bitpix = header.intValue("BITPIX") ?: 0
                 if (header["SIMPLE"] != "T" || axes !in 2..3 || width <= 0 || height <= 0 ||
-                    channels !in setOf(1L, 3L) || bitpix !in setOf(8, 16, 32, -32) || width > 8_000_000L / height)
+                    channels !in setOf(1L, 3L) || bitpix !in setOf(8, 16, 32, -32) || width > maxPixels / height)
                     throw ExternalMediaImportException(ExternalMediaImportError.INVALID_FILE)
                 val bytes = width * height * channels * kotlin.math.abs(bitpix) / 8
-                if (bytes > MAX_FITS_BYTES || header.dataOffset + bytes > input.length())
+                if (bytes > maxBytes || header.dataOffset + bytes > input.length())
                     throw ExternalMediaImportException(ExternalMediaImportError.INVALID_FILE)
             }
         } catch (invalid: ExternalMediaImportException) {

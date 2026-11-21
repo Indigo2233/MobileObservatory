@@ -121,8 +121,8 @@ fun StackingScreen(viewModel: CameraViewModel, mode: StackMode, onBack: () -> Un
             }) { Text(stringResource(R.string.stack_change_target_confirm)) } },
             dismissButton = { TextButton(onClick = { pendingTarget = null }) { Text(stringResource(R.string.cancel)) } })
     }
-    val documentPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri?.let(coordinator::importFile)
+    val documentPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        coordinator.importFiles(uris)
     }
     val navigateBack: () -> Unit = {
         when {
@@ -140,7 +140,8 @@ fun StackingScreen(viewModel: CameraViewModel, mode: StackMode, onBack: () -> Un
     if (browseRecordings) AppRecordingPicker(viewModel,
         onDismiss = { browseRecordings = false },
         onSelect = { file -> browseRecordings = false; viewModel.openPlanetaryStack(file) },
-        onCamera = { browseRecordings = false; onCamera() })
+        onCamera = { browseRecordings = false; onCamera() },
+        onSelectFits = { files -> browseRecordings = false; coordinator.loadFitsFiles(files) })
 
     val bitmap = if (mode == StackMode.LIVE && (!showStack || rendered == null)) cameraFrame
         else if (mode == StackMode.PLANETARY && (drawRoi || offlineResultStale || !coordinator.hasResult(mode))) sourcePreview else rendered
@@ -511,6 +512,8 @@ private fun OfflineStackControls(c: StackingCoordinator, task: StackingTaskState
     val currentConfig = "$roiX,$roiY,$roiW,$roiH,$local,$softwareBin,${source?.identity},${c.endianConvention},${c.sampleAlignment},$algorithm,$interpretation"
     val region = source?.let { runCatching { PixelRoi(roiX.toInt(), roiY.toInt(), roiW.toInt(), roiH.toInt()).checked(it.width, it.height) }.getOrNull() }
     val plan = region?.let { c.offlinePlan(it, softwareBin) }
+    val fits = source?.fitsFiles?.isNotEmpty() == true
+    val fitsCalibration = fits && c.calibration.enabled
     val issue = plan?.issue(c.memoryBudgetBytes)
     LaunchedEffect(region, source?.identity) { onRegionChange(region) }
     LaunchedEffect(drawn) { drawn?.let { roiX = it.left.toString(); roiY = it.top.toString(); roiW = it.width.toString(); roiH = it.height.toString() } }
@@ -534,16 +537,20 @@ private fun OfflineStackControls(c: StackingCoordinator, task: StackingTaskState
     }
     Button(onClick = onBrowse, enabled = !task.busy, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.stack_local_files)) }
     OutlinedButton(onClick = onChoose, enabled = !task.busy, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.stack_import_other)) }
-    if (source == null) Text(stringResource(R.string.stack_library_hint), style = MaterialTheme.typography.bodySmall)
+    if (source == null) Text(stringResource(R.string.stack_fits_library_hint), style = MaterialTheme.typography.bodySmall)
     Text(stackTaskPhase(task.phase), style = MaterialTheme.typography.titleSmall)
     if (source != null) {
-        Text(stringResource(R.string.stack_source, source.file.name, source.width, source.height, source.bits, source.frames))
-        val effectiveLayout = if (interpretation == SerCfaInterpretation.AUTO) source.effectiveLayout else interpretation.name
+        val name = if (source.fitsFiles.size > 1 && source.file == source.fitsFiles.first())
+            stringResource(R.string.stack_fits_files) else source.file.name
+        Text(stringResource(R.string.stack_source, name, source.width, source.height, source.bits, source.frames))
+        if (fitsCalibration) Text(stringResource(R.string.stack_fits_disable_calibration),
+            color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+        val effectiveLayout = if (fits || interpretation == SerCfaInterpretation.AUTO) source.effectiveLayout else interpretation.name
         val layoutLabel = if (effectiveLayout == "MONO") stringResource(R.string.stack_cfa_mono) else effectiveLayout
-        Text(if (source.canOverrideCfa) stringResource(R.string.stack_cfa_detected, layoutLabel)
+        Text(if (fits || source.canOverrideCfa) stringResource(R.string.stack_cfa_detected, layoutLabel)
             else stringResource(R.string.stack_cfa_rgb), style = MaterialTheme.typography.bodySmall)
         var decodeExpanded by rememberSaveable(source.identity) { mutableStateOf(false) }
-        TextButton(onClick = { decodeExpanded = !decodeExpanded }) {
+        if (!fits || source.isBayer) TextButton(onClick = { decodeExpanded = !decodeExpanded }) {
             Text(stringResource(if (decodeExpanded) R.string.stack_decode_hide_settings else R.string.stack_decode_settings))
         }
         if (decodeExpanded) {
@@ -555,6 +562,7 @@ private fun OfflineStackControls(c: StackingCoordinator, task: StackingTaskState
                 enabled = !task.busy && !calibration.busy && !rendering && live.phase == LiveStackPhase.EMPTY,
                 requiresResetConfirmation = task.histogram.isNotEmpty() || c.hasResult(StackMode.PLANETARY),
                 onSelect = c::setDemosaicAlgorithm)
+            if (!fits) {
             Text(stringResource(R.string.stack_cfa_effective, layoutLabel, source.headerColorId),
                 style = MaterialTheme.typography.bodySmall)
             Text(stringResource(R.string.stack_decode_hint), style = MaterialTheme.typography.bodySmall)
@@ -570,6 +578,7 @@ private fun OfflineStackControls(c: StackingCoordinator, task: StackingTaskState
                         onClick = { c.setDecodeOptions(c.endianConvention, alignment) },
                         label = { Text(stringResource(when (alignment) { SampleAlignment.AUTO -> R.string.stack_auto; SampleAlignment.RIGHT -> R.string.stack_right; SampleAlignment.LEFT -> R.string.stack_left })) })
                 }
+            }
             }
         }
         Text(stringResource(R.string.stack_offline_region), style = MaterialTheme.typography.titleSmall)
@@ -641,7 +650,8 @@ private fun OfflineStackControls(c: StackingCoordinator, task: StackingTaskState
         Button(onClick = {
             val roi = runCatching { PixelRoi(roiX.toInt(), roiY.toInt(), roiW.toInt(), roiH.toInt()).checked(source.width, source.height) }.getOrNull()
             if (roi == null) c.report("invalid_roi") else { analyzedConfig = currentConfig; c.analyze(roi, local, softwareBin) }
-        }, enabled = !task.busy && region != null && issue == null, modifier = Modifier.fillMaxWidth().testTag("offline-analyze")) { Text(stringResource(R.string.stack_analyze)) }
+        }, enabled = !task.busy && region != null && issue == null && !fitsCalibration,
+            modifier = Modifier.fillMaxWidth().testTag("offline-analyze")) { Text(stringResource(R.string.stack_analyze)) }
         if (task.histogram.isNotEmpty()) {
             Text(stringResource(R.string.stack_quality, task.qualityFrames, task.referenceFrame + 1))
             QualityHistogram(task.histogram)
@@ -660,7 +670,7 @@ private fun OfflineStackControls(c: StackingCoordinator, task: StackingTaskState
                 val n = if (count.isBlank()) null else count.toLongOrNull()
                 if (p == null || !p.isFinite() || p <= 0 || p > 100 || (count.isNotBlank() && (n == null || n <= 0))) c.report("invalid_selection")
                 else c.stack(PlanetarySelection(p, n))
-            }, enabled = !task.busy && analyzedConfig == currentConfig, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.stack_align)) }
+            }, enabled = !task.busy && !fitsCalibration && analyzedConfig == currentConfig, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.stack_align)) }
         }
         task.stats?.let { stats ->
             Text(stringResource(R.string.stack_offline_stats, stats.selectedFrames, stats.stackedFrames, stats.alignmentPoints,
@@ -678,7 +688,8 @@ private fun OfflineStackControls(c: StackingCoordinator, task: StackingTaskState
             if (stats.framesWithUnknownExposure > 0) Text(stringResource(R.string.stack_unknown_exposure, stats.framesWithUnknownExposure), style = MaterialTheme.typography.bodySmall)
         }
         } else {
-            Button(onClick = { c.stackDeepSky(region, softwareBin) }, enabled = !task.busy && region != null && issue == null && !calibration.busy && live.phase == LiveStackPhase.EMPTY,
+            Button(onClick = { c.stackDeepSky(region, softwareBin) }, enabled = !task.busy && region != null && issue == null &&
+                !fitsCalibration && !calibration.busy && live.phase == LiveStackPhase.EMPTY,
                 modifier = Modifier.fillMaxWidth().testTag("stack-deep-sky-start")) {
                 Text(stringResource(R.string.stack_deep_sky_start))
             }
@@ -751,32 +762,56 @@ private fun ProcessingControls(c: StackingCoordinator, p: StackProcessingParamet
 
 @Composable
 internal fun AppRecordingPicker(vm: CameraViewModel, onDismiss: () -> Unit,
-    onSelect: (File) -> Unit, onCamera: () -> Unit) {
+    onSelect: (File) -> Unit, onCamera: () -> Unit, onSelectFits: ((List<File>) -> Unit)? = null) {
     var refresh by remember { mutableIntStateOf(0) }
     val recording by vm.isRecording.collectAsStateWithPageLifecycle()
+    val finalizing by vm.recordingFinalizing.collectAsStateWithPageLifecycle()
     val recordings = vm.getRecordingsDir()
     val captures = vm.getCapturesDir()
     var loading by remember { mutableStateOf(true) }
-    val files by produceState(emptyList<VideoFileInfo>(), refresh, recording) {
+    var chooseStills by rememberSaveable { mutableStateOf(false) }
+    var selectedPaths by rememberSaveable { mutableStateOf(emptyList<String>()) }
+    val files by produceState(emptyList<VideoFileInfo>(), refresh, recording, finalizing, chooseStills, onSelectFits != null) {
         loading = true
-        value = withContext(Dispatchers.IO) { MediaLibrary.list(recordings, captures, MediaCategory.SER_PSER, vm.getActiveRecordingFile()) }
+        value = withContext(Dispatchers.IO) {
+            val excluded = vm.getActiveRecordingFile()
+            when {
+                chooseStills -> MediaLibrary.browse(recordings, captures, MediaCategory.PHOTOS, excluded)
+                    .filter { it.file.isFitsImage() }
+                    .sortedWith(compareBy<VideoFileInfo> { it.name.lowercase() }.thenBy { it.file.absolutePath })
+                onSelectFits != null -> MediaLibrary.browse(recordings, captures, MediaCategory.VIDEOS, excluded)
+                    .filter { it.format != "MP4" }
+                else -> MediaLibrary.list(recordings, captures, MediaCategory.SER_PSER, excluded)
+            }
+        }
         loading = false
     }
     AlertDialog(onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.stack_local_files)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(stringResource(R.string.stack_library_hint))
-                if (recording) Text(stringResource(R.string.stack_recording_excluded), color = MaterialTheme.colorScheme.tertiary)
+                if (onSelectFits == null) Text(stringResource(R.string.stack_library_hint))
+                else Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(selected = !chooseStills, onClick = { chooseStills = false },
+                        label = { Text(stringResource(R.string.wf_videos)) })
+                    FilterChip(selected = chooseStills, onClick = { chooseStills = true },
+                        label = { Text(stringResource(R.string.stack_fits_files)) })
+                }
+                if (recording || finalizing) Text(stringResource(R.string.stack_recording_excluded), color = MaterialTheme.colorScheme.tertiary)
                 if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
                 else if (files.isEmpty()) {
-                    Text(stringResource(R.string.stack_no_recordings))
-                    OutlinedButton(onClick = { vm.setRecordFormat("SER"); onCamera() }, enabled = !recording) {
+                    Text(stringResource(if (chooseStills) R.string.stack_fits_empty else R.string.stack_no_recordings))
+                    if (!chooseStills) OutlinedButton(onClick = { vm.setRecordFormat("SER"); onCamera() }, enabled = !recording && !finalizing) {
                         Text(stringResource(R.string.stack_prepare_ser))
                     }
                 } else LazyColumn(Modifier.fillMaxWidth().heightIn(max = 340.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     items(files, key = { it.file.absolutePath }) { entry ->
-                        OutlinedButton(onClick = { onSelect(entry.file) }, modifier = Modifier.fillMaxWidth()) {
+                        val path = entry.file.absolutePath
+                        OutlinedButton(onClick = {
+                            if (chooseStills) selectedPaths = if (path in selectedPaths) selectedPaths - path else selectedPaths + path
+                            else onSelect(entry.file)
+                        }, modifier = Modifier.fillMaxWidth()) {
+                            if (chooseStills) Checkbox(checked = path in selectedPaths, onCheckedChange = null)
                             Column(Modifier.fillMaxWidth()) {
                                 Text(entry.name, style = MaterialTheme.typography.bodyMedium)
                                 Text("${entry.format} · ${"%.1f".format(entry.size / 1024.0 / 1024.0)} MiB", style = MaterialTheme.typography.bodySmall)
@@ -786,7 +821,14 @@ internal fun AppRecordingPicker(vm: CameraViewModel, onDismiss: () -> Unit,
                 }
             }
         },
-        confirmButton = { TextButton(onClick = { refresh++ }) { Text(stringResource(R.string.stack_refresh_library)) } },
+        confirmButton = {
+            if (chooseStills && onSelectFits != null) {
+                val selected = files.filter { it.file.absolutePath in selectedPaths }.map { it.file }
+                TextButton(onClick = { onSelectFits(selected) }, enabled = !loading && selected.isNotEmpty()) {
+                    Text(stringResource(R.string.stack_load_fits_files, selected.size))
+                }
+            } else TextButton(onClick = { refresh++ }) { Text(stringResource(R.string.stack_refresh_library)) }
+        },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } })
 }
 
@@ -931,6 +973,13 @@ internal fun stackMessage(code: String): String {
         "deep_sky_frame_count" -> R.string.stack_deep_sky_frame_limit
         "stack_selecting_reference" -> R.string.stack_selecting_reference
         "source_geometry_changed" -> R.string.stack_reason_source
+        "stack_fits_invalid" -> R.string.stack_fits_invalid
+        "stack_fits_empty" -> R.string.stack_fits_empty
+        "stack_fits_layout" -> R.string.stack_fits_layout
+        "stack_fits_float_scale" -> R.string.stack_fits_float_scale
+        "stack_fits_display_only" -> R.string.stack_fits_display_only
+        "stack_fits_only_import" -> R.string.stack_fits_only_import
+        "stack_fits_disable_calibration" -> R.string.stack_fits_disable_calibration
         "calibration_busy" -> R.string.stack_cal_working
         "calibration_cancelled" -> R.string.stack_phase_cancelled
         "calibration_reset_required" -> R.string.stack_cal_locked

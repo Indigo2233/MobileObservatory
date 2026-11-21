@@ -22,6 +22,13 @@ data class PreparedMediaImage(
 
 /** UInt16 previews and bounded source regions; PNG/FITS exports are streamed in 32-row bands. */
 object MediaImageEditing {
+    internal fun previewFitsFrame(file: File, check: () -> Unit): Bitmap {
+        val preview = MediaImageFitsCodec.read(file, maximumSide = 640, check = check).image
+        val window = MediaImageProcessing.window(preview)
+        MediaImageProcessing.apply(preview, MediaImageEditSettings(), floatArrayOf(1f, 1f, 1f), window, check)
+        return bitmap(preview, check)
+    }
+
     fun prepare(source: File, recipe: MediaEditRecipe? = null, cancelled: () -> Boolean = { false }): PreparedMediaImage {
         val key = fingerprint(source)
         require(recipe == null || recipe.sourceFingerprint == key) { "source_changed" }

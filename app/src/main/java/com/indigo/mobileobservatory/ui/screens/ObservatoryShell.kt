@@ -473,7 +473,9 @@ private fun ObservatoryContent(
         ObservatoryDestination.PLAYER -> PlayerScreen(vm.getRecordingsDir(), vm.getCapturesDir(), coordinates,
             onStackFile = { file -> vm.openPlanetaryStack(file); open(ObservatoryDestination.STACK) },
             initialFile = playerFile?.let(::File), initialCategory = playerCategory,
-            excludeFile = vm.getActiveRecordingFile(), onBack = back)
+            excludeFile = vm.getActiveRecordingFile(), onBack = back,
+            onFramesEdited = vm.stacking::refreshEditedSource,
+            isRecordingFile = { it.absoluteFile == vm.getActiveRecordingFile()?.absoluteFile })
         null -> when (navigation.workspace) {
             ObservatoryWorkspace.CAPTURE -> CaptureWorkspaceScreen(vm,
                 onPlateSolve = { open(ObservatoryDestination.PLATE_SOLVE) },
@@ -491,6 +493,8 @@ private fun ObservatoryContent(
                 onStackFile = { file -> vm.openPlanetaryStack(file); open(ObservatoryDestination.STACK) },
                 initialCategory = MediaCategory.RECENT, excludeFile = vm.getActiveRecordingFile(),
                 isWorkspace = true, onCamera = { select(ObservatoryWorkspace.CAPTURE) },
+                onFramesEdited = vm.stacking::refreshEditedSource,
+                isRecordingFile = { it.absoluteFile == vm.getActiveRecordingFile()?.absoluteFile },
                 onPostStack = { openStack(StackMode.PLANETARY) },
                 onPlateSolve = { open(ObservatoryDestination.PLATE_SOLVE) }, onBack = back)
             ObservatoryWorkspace.EQUIPMENT -> AccessoriesScreen(vm,

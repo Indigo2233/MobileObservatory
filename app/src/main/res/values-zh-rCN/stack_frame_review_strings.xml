@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="stack_review_frames">手动筛片</string>
+    <string name="stack_frames_kept">保留 %1$d / %2$d 帧</string>
+    <string name="stack_frame_kept">已保留</string>
+    <string name="stack_frame_excluded">已剔除</string>
+    <string name="stack_restore_frame">恢复此帧</string>
+    <string name="stack_exclude_frame">剔除此帧</string>
+    <string name="stack_edit_frame_range">设置帧范围</string>
+    <string name="stack_restore_all_frames">全部恢复</string>
+    <string name="stack_no_kept_frames">至少保留一帧。</string>
+    <string name="stack_apply_frame_selection">删除所选帧</string>
+    <string name="frame_edit_confirm_title">删除所选帧？</string>
+    <string name="frame_edit_confirm_fits">将本序列中选中的 %1$d 张 FITS 移入回收站？</string>
+    <string name="frame_edit_confirm_ser">将替换原录像文件，永久删除选中的 %1$d 帧。</string>
+    <string name="frame_edit_writing">正在更新文件…</string>
+    <string name="frame_edit_failed">未能完成帧编辑。</string>
+    <string name="frame_edit_invalid_ser">录像损坏，或使用了暂不支持的文件结构。</string>
+    <string name="stack_frame_range_hint">输入 1 到 %1$d 的帧号，包含起止帧。</string>
+    <string name="stack_frame_start">起始帧</string>
+    <string name="stack_frame_end">结束帧</string>
+    <string name="stack_exclude_range">剔除范围</string>
+    <string name="stack_restore_range">恢复范围</string>
+    <string name="stack_previous_frame">上一帧</string>
+    <string name="stack_next_frame">下一帧</string>
+    <string name="stack_frame_number">帧号</string>
+    <string name="stack_frame_preview_failed">无法预览此帧。</string>
+    <string name="stack_fits_empty">没有找到 FITS 帧。</string>
+    <string name="stack_fits_files">FITS 单张</string>
+    <string name="stack_fits_library_hint">可选择 SER/PSER 录像、整组 FITS 序列，或多张 FITS 单帧。</string>
+    <string name="stack_load_fits_files">使用 %1$d 张</string>
+    <string name="stack_fits_disable_calibration">叠加 FITS 序列前，请关闭 SER 校准主帧。</string>
+    <string name="stack_fits_invalid">FITS 帧损坏，或使用了暂不支持的编码。</string>
+    <string name="stack_fits_layout">请保留尺寸、采样类型和 CFA 布局一致的 FITS 帧。</string>
+    <string name="stack_fits_float_scale">此浮点 FITS 的数值标度未知，请使用归一化的线性数据。</string>
+    <string name="stack_fits_display_only">此 FITS 已应用显示处理，请使用线性原始帧。</string>
+    <string name="stack_fits_only_import">成组导入时，请只选择 FITS 文件。</string>
+</resources>

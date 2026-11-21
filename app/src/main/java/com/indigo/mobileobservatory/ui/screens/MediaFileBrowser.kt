@@ -76,6 +76,7 @@ internal fun MediaFileBrowser(
     onSelect: (VideoFileInfo) -> Unit,
     onBack: () -> Unit,
     onStackFile: ((File) -> Unit)?,
+    onReviewFrames: (File) -> Unit,
     selectedCategory: MediaCategory,
     excludeFile: File?,
     fileUnavailable: Boolean,
@@ -404,7 +405,13 @@ internal fun MediaFileBrowser(
                             else -> {
                                 MediaActionsMenu(stringResource(R.string.media_file_actions, info.name),
                                     Modifier.testTag("media-file-menu-${info.name}"), enabled = !blocked) { close ->
-                                    if (onStackFile != null && (info.format == "SER" || info.format == "PSER")) {
+                                    val fitsSequence = info.format == "FITS" && info.file.isDirectory
+                                    val recordingFrames = info.format == "SER" || info.format == "PSER"
+                                    if (recordingFrames || fitsSequence && trashDir != null) {
+                                        DropdownMenuItem(text = { Text(stringResource(R.string.stack_review_frames)) },
+                                            onClick = { close(); onReviewFrames(info.file) })
+                                    }
+                                    if (onStackFile != null && (recordingFrames || fitsSequence)) {
                                         DropdownMenuItem(text = { Text(stringResource(R.string.media_stack_action)) },
                                             onClick = { close(); onStackFile(info.file) }, modifier = Modifier.testTag("media-stack-${info.name}"))
                                     }

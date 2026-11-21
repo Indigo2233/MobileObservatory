@@ -7,6 +7,10 @@ import android.net.Uri
 import android.os.Debug
 import android.provider.OpenableColumns
 import com.indigo.mobileobservatory.camera.FrameData
+import com.indigo.mobileobservatory.camera.PixelFormat
+import com.indigo.mobileobservatory.media.ExternalMediaImporter
+import com.indigo.mobileobservatory.media.ExternalMediaImportException
+import com.indigo.mobileobservatory.media.ExternalMediaImportError
 import com.indigo.mobileobservatory.recording.SERReader
 import com.indigo.mobileobservatory.recording.SerEndianConvention
 import kotlinx.coroutines.*
@@ -27,7 +31,8 @@ data class StackSourceInfo(val file: File, val width: Int, val height: Int, val 
     val bits: Int, val frames: Long, val identity: String, val isBayer: Boolean = false,
     val headerColorId: Int = 0, val effectiveLayout: String = "MONO",
     val decodingIdentity: String = identity,
-    val canOverrideCfa: Boolean = true)
+    val canOverrideCfa: Boolean = true, val fitsFiles: List<File> = emptyList(),
+    val sensorFormat: PixelFormat? = null)
 
 data class StackingTaskState(
     val phase: StackTaskPhase = StackTaskPhase.EMPTY,
@@ -125,6 +130,8 @@ class StackingCoordinator(
     private var analysisRegion: PixelRoi? = null
     private var analysisBin = 1
     private var sourceFile: File? = null
+    private var looseFitsFiles: List<File>? = null
+    @Volatile private var editedSourceNeedsReload = false
     var endianConvention: SerEndianConvention = SerEndianConvention.COMPATIBILITY
         private set
     // Use one explicit layout for the sequence: dim left-aligned frames must not rescale differently.
@@ -208,7 +215,11 @@ class StackingCoordinator(
             _preview.value = if (mode == StackMode.LIVE) _livePreview.value else planetaryPreview
             scheduleRender(mode)
         }
-        if (mode == StackMode.PLANETARY && file != null && sourceFile != file) loadFile(file)
+        if (mode == StackMode.PLANETARY) {
+            if (file != null && (sourceFile != file || file.isDirectory || file.isFitsImage() ||
+                    looseFitsFiles != null || _task.value.message == "source_changed")) loadFile(file)
+            else if (editedSourceNeedsReload && live.state.value.phase == LiveStackPhase.EMPTY) sourceFile?.let(::reloadSource)
+        }
     }
 
     fun leave() = synchronized(stateLock) {
@@ -291,7 +302,7 @@ class StackingCoordinator(
                 sourceFile = retainedFile
                 _task.value = StackingTaskState(phase = if (retainedFile == null) StackTaskPhase.EMPTY else StackTaskPhase.READY,
                     source = _task.value.source?.takeIf { it.file == retainedFile })
-            } else if (retainedFile != null) loadFile(retainedFile) else clearPlanetary()
+            } else if (retainedFile != null) reloadSource(retainedFile) else clearPlanetary()
         }
         if (activeMode == mode) restoreRecipeLocked(mode)
         true
@@ -453,7 +464,7 @@ class StackingCoordinator(
             completed = 0, total = 0, histogram = emptyList(), qualityFrames = 0, referenceFrame = 0,
             stats = null, deepSkyStats = null, message = "", exportedFiles = emptyList()) }
         // Reserve the reload before releasing the monitor; Analyze cannot use the old decode.
-        if (file != null) loadFile(file)
+        if (file != null) reloadSource(file)
     }
 
     fun setDecodeOptions(endian: SerEndianConvention, alignment: SampleAlignment): Unit = synchronized(stateLock) {
@@ -461,7 +472,7 @@ class StackingCoordinator(
         require(alignment != SampleAlignment.AUTO) { "Choose an explicit sequence bit alignment" }
         endianConvention = endian
         sampleAlignment = alignment
-        sourceFile?.let(::loadFile)
+        sourceFile?.let(::reloadSource)
     }
 
     /** Reinterpret raw sensor samples, invalidate scientific products, and rebuild the preview. */
@@ -481,17 +492,36 @@ class StackingCoordinator(
         _task.update { it.copy(phase = if (file == null) StackTaskPhase.EMPTY else StackTaskPhase.READY,
             completed = 0, total = 0, histogram = emptyList(), qualityFrames = 0, referenceFrame = 0,
             stats = null, deepSkyStats = null, message = "", exportedFiles = emptyList()) }
-        if (file != null) loadFile(file)
+        if (file != null) reloadSource(file)
     }
 
-    fun loadFile(file: File) = runTask(StackTaskPhase.READING) {
+    fun loadFile(file: File) = runTask(StackTaskPhase.READING) { prepareSource(file, null) }
+
+    fun loadFitsFiles(files: List<File>) {
+        val selected = files.distinct().toList()
+        if (selected.isEmpty()) return
+        runTask(StackTaskPhase.READING) {
+            check(selected.all { it.isFile && it.isFitsImage() }) { "stack_fits_invalid" }
+            prepareSource(selected.first(), selected)
+        }
+    }
+
+    private fun reloadSource(file: File) {
+        val selected = looseFitsFiles
+        runTask(StackTaskPhase.READING) { prepareSource(file, selected) }
+    }
+
+    private suspend fun CoroutineScope.prepareSource(file: File, selected: List<File>?) {
         ensureOfflineAvailable()
-        check(!isSourceBusy(file)) { "recording_active" }
+        check(!isSourceBusy(file) && selected.orEmpty().none(isSourceBusy)) { "recording_active" }
         // Re-decoding the same source must not reset the user's ROI fields in the UI.
-        val retainedSource = _task.value.source?.takeIf { it.identity == identity(file) }
+        val oldTask = _task.value
+        val retainedSource = oldTask.source?.takeIf { it.identity == sourceIdentity(file, fitsMembers(file, selected)) }
         analysis?.close(); analysis = null; analysisCalibration = null; analysisDemosaic = null
         planetaryProduct = null
         sourceFile = null
+        looseFitsFiles = selected
+        editedSourceNeedsReload = false
         synchronized(stateLock) {
             planetaryPreview = null; _sourcePreview.value = null
             if (activeMode == StackMode.PLANETARY) _preview.value = null
@@ -506,12 +536,57 @@ class StackingCoordinator(
             _task.value = StackingTaskState(phase = StackTaskPhase.READING, source = info)
             // Selecting a large recording must show a bounded full-field preview before
             // science admission, so the user can actually choose a crop or software Bin.
-            val bitmap = source.reader.readPreviewBitmap(0, maxPixels = 262_144) { ensureActive() }
-                ?: error(source.reader.lastError ?: "read_failed")
+            val bitmap = if (source is SerSource) {
+                source.reader.readPreviewBitmap(0, maxPixels = 262_144) { ensureActive() }
+                    ?: error(source.reader.lastError ?: "read_failed")
+            } else previewFitsFrame(info.fitsFiles.first()) { ensureActive() }
             ensureActive()
             publishPlanetaryPreview(bitmap, sourceImage = true)
             sourceFile = file
             _task.value = StackingTaskState(phase = StackTaskPhase.READY, source = info)
+        }
+    }
+
+    fun refreshEditedSource(file: File) = synchronized(stateLock) {
+        val current = sourceFile ?: return
+        if (current.absoluteFile != file.absoluteFile && looseFitsFiles.orEmpty().none { it.absoluteFile == file.absoluteFile }) return
+        // Old products own their original source snapshot and become stale after editing.
+        if (live.state.value.phase == LiveStackPhase.EMPTY) reloadSource(current)
+        else editedSourceNeedsReload = true
+    }
+
+    fun importFiles(uris: List<Uri>) {
+        if (uris.size == 1) importFile(uris.single())
+        else if (uris.isNotEmpty()) runTask(StackTaskPhase.READING) { importFitsSequence(uris.distinct()) }
+    }
+
+    private suspend fun CoroutineScope.importFitsSequence(uris: List<Uri>) {
+        val root = app.getExternalFilesDir("recordings") ?: error("storage_unavailable")
+        val parent = File(root, "FITS")
+        check(parent.isDirectory || parent.mkdirs()) { "storage_unavailable" }
+        val token = UUID.randomUUID().toString()
+        val staging = File(parent, ".partial-$token")
+        val target = File(parent, "FITS-$token")
+        check(staging.mkdir()) { "storage_unavailable" }
+        try {
+            _task.update { it.copy(total = uris.size.toLong(), completed = 0) }
+            for ((index, uri) in uris.withIndex()) {
+                ensureActive()
+                try { ExternalMediaImporter.importFitsFrame(app, uri, staging) }
+                catch (failure: ExternalMediaImportException) {
+                    error(when (failure.reason) {
+                        ExternalMediaImportError.NO_SPACE, ExternalMediaImportError.TOO_LARGE -> "storage_full"
+                        ExternalMediaImportError.UNSUPPORTED -> "stack_fits_only_import"
+                        else -> "stack_fits_invalid"
+                    })
+                }
+                _task.update { it.copy(completed = index + 1L) }
+            }
+            ensureActive()
+            check(staging.renameTo(target)) { "storage_unavailable" }
+            prepareSource(target, null)
+        } finally {
+            staging.deleteRecursively()
         }
     }
 
@@ -525,7 +600,13 @@ class StackingCoordinator(
                 cursor.getColumnIndex(OpenableColumns.SIZE).takeIf { it >= 0 && !cursor.isNull(it) }?.let { declaredSize = cursor.getLong(it) }
             }
         }
-        val dir = File(app.getExternalFilesDir("recordings"), if (displayName.endsWith(".pser", true)) "PSER" else "SER")
+        val extension = ExternalMediaImporter.supportedExtension(displayName, app.contentResolver.getType(uri)?.lowercase())
+        if (extension == "fit" || extension == "fits") {
+            importFitsSequence(listOf(uri))
+            return@runTask
+        }
+        val recordings = app.getExternalFilesDir("recordings") ?: error("storage_unavailable")
+        val dir = File(recordings, if (displayName.endsWith(".pser", true)) "PSER" else "SER")
         check(dir.isDirectory || dir.mkdirs()) { "storage_unavailable" }
         check(declaredSize < 0 || dir.usableSpace > declaredSize + 16L * 1024 * 1024) { "storage_full" }
         val safeName = displayName.replace(Regex("[^\\p{L}\\p{N}._-]"), "_").takeLast(100)
@@ -549,7 +630,7 @@ class StackingCoordinator(
             // Validate the recording before publishing the import, but defer processing
             // budget checks: a valid file may fit a cheaper demosaic algorithm.
             try {
-                source(partial).use { }
+                serSource(partial).use { }
             } catch (failure: IllegalStateException) {
                 if (_serCfaInterpretation.value != SerCfaInterpretation.AUTO || failure.message != "cfa_unknown_header") throw failure
                 // A valid single-sample container with missing CFA metadata can be retained
@@ -562,13 +643,14 @@ class StackingCoordinator(
             analysis?.close(); analysis = null; analysisCalibration = null; analysisDemosaic = null
             planetaryProduct = null
             sourceFile = null
+            looseFitsFiles = null
             synchronized(stateLock) {
                 planetaryPreview = null; _sourcePreview.value = null
                 if (activeMode == StackMode.PLANETARY) _preview.value = null
             }
             _task.value = StackingTaskState(phase = StackTaskPhase.READING)
             sourceFile = target
-            source(target).use {
+            serSource(target).use {
                 sourceFile = target
                 _task.value = StackingTaskState(phase = StackTaskPhase.READING, source = it.info)
                 val bitmap = it.reader.readPreviewBitmap(0, maxPixels = 262_144) { ensureActive() }
@@ -591,6 +673,7 @@ class StackingCoordinator(
         _task.update { it.copy(histogram = emptyList(), qualityFrames = 0, referenceFrame = 0, stats = null, deepSkyStats = null) }
         source(file, roi, softwareBin).use { source ->
             checkBudget(source)
+            check(_task.value.source?.identity == source.info.identity) { "source_changed" }
             val options = PlanetaryOptions(localAlignment = localAlignment,
                 memoryBudgetBytes = memoryBudgetBytes - source.processingOverheadBytes)
             val result = engine.analyze(source, options, cache, control())
@@ -606,7 +689,8 @@ class StackingCoordinator(
                     analysisBin = softwareBin
                     _task.update { it.copy(phase = StackTaskPhase.ANALYZED, source = source.info,
                         histogram = result.histogram.toList(), qualityFrames = result.validFrames,
-                        referenceFrame = result.referenceFrame, message = "", completed = result.frameCount, total = result.frameCount) }
+                        referenceFrame = result.referenceFrame, message = "",
+                        completed = result.frameCount, total = result.frameCount) }
                 }
             }
             catch (failure: Throwable) { result.close(); throw failure }
@@ -629,7 +713,7 @@ class StackingCoordinator(
             check(source.algorithm == analysisDemosaic) { "demosaic_changed_analyze_again" }
             val result = engine.stack(source, quality, selection, control())
             ensureActive()
-            check(identity(file) == source.info.identity) { "source_changed" }
+            check(sourceIdentity(file, fitsMembers(file, looseFitsFiles)) == source.info.identity) { "source_changed" }
             val stats = result.stats.copy(estimatedPeakBytes = result.stats.estimatedPeakBytes + source.processingOverheadBytes)
             val meta = linkedMapOf(
                 "kind" to "planetary", "workflow" to "offline", "target" to "planetary",
@@ -640,8 +724,7 @@ class StackingCoordinator(
                 "effectiveSensorLayout" to source.info.effectiveLayout,
                 "frameCount" to stats.stackedFrames.toString(), "exposureSeconds" to stats.effectiveExposureSeconds.toString(),
                 "unknownExposureFrames" to stats.framesWithUnknownExposure.toString(),
-                "inputFormat" to "${source.reader.header?.colorId}/${source.info.bits}bit",
-                "byteOrderConvention" to endianConvention.name, "sampleAlignment" to sampleAlignment.name,
+                "inputFormat" to source.inputFormat, "exposureSource" to source.exposureSource,
                 "demosaicAlgorithm" to if (source.info.isBayer) source.algorithm.name else "NONE",
                 "demosaicScratchBytes" to source.demosaicScratchBytes.toString(),
                 "qualitySelection" to JSONObject().apply { put("percent", selection.percent); put("count", selection.count ?: JSONObject.NULL) }.toString(),
@@ -656,6 +739,10 @@ class StackingCoordinator(
                     put("quality", "noise-corrected smoothed gradient within ROI; global frame ranking")
                 }.toString()
             )
+            if (source is SerSource) {
+                meta["byteOrderConvention"] = endianConvention.name
+                meta["sampleAlignment"] = sampleAlignment.name
+            }
             meta.putAll(source.calibrationMetadata())
             synchronized(stateLock) {
                 ensureActive()
@@ -678,6 +765,7 @@ class StackingCoordinator(
         _task.update { it.copy(histogram = emptyList(), qualityFrames = 0, referenceFrame = 0, stats = null, deepSkyStats = null) }
         source(file, roi, softwareBin).use { source ->
             checkBudget(source)
+            check(_task.value.source?.identity == source.info.identity) { "source_changed" }
             val result = OfflineDeepSkyStacker().stack(source,
                 DeepSkyConfig(memoryBudgetBytes = memoryBudgetBytes),
                 checkCancelled = { ensureActive() },
@@ -698,7 +786,7 @@ class StackingCoordinator(
                 }, decoderWorkingBytes = source.processingOverheadBytes - source.calibration.heapBytes,
                 retainedCalibrationBytes = source.calibration.heapBytes)
             ensureActive()
-            check(identity(file) == source.info.identity) { "source_changed" }
+            check(sourceIdentity(file, fitsMembers(file, looseFitsFiles)) == source.info.identity) { "source_changed" }
             val stats = result.stats
             val memory = source.plan.deepSkyMemory()
             val meta = linkedMapOf(
@@ -712,9 +800,7 @@ class StackingCoordinator(
                 "frameCount" to stats.stack.accepted.toString(),
                 "exposureSeconds" to stats.stack.exposureSeconds.toString(),
                 "unknownExposureFrames" to stats.unknownExposureFrames.toString(),
-                "exposureSource" to "validated_capture_sidecar_or_unknown",
-                "inputFormat" to "${source.reader.header?.colorId}/${source.info.bits}bit",
-                "byteOrderConvention" to endianConvention.name, "sampleAlignment" to sampleAlignment.name,
+                "exposureSource" to source.exposureSource, "inputFormat" to source.inputFormat,
                 "demosaicAlgorithm" to if (source.info.isBayer) source.algorithm.name else "NONE",
                 "demosaicScratchBytes" to source.demosaicScratchBytes.toString(),
                 "qualitySelection" to "all_frames_passing_star_field_and_registration_checks",
@@ -749,6 +835,10 @@ class StackingCoordinator(
                 "rejectionLimit" to DeepSkyStacker.REJECTION_LIMITATION,
                 "frameLimit" to DeepSkyStacker.FRAME_LIMITATION
             )
+            if (source is SerSource) {
+                meta["byteOrderConvention"] = endianConvention.name
+                meta["sampleAlignment"] = sampleAlignment.name
+            }
             meta.putAll(source.calibrationMetadata())
             synchronized(stateLock) {
                 ensureActive()
@@ -766,7 +856,7 @@ class StackingCoordinator(
         analysis?.close(); analysis = null
         analysisCalibration = null
         analysisDemosaic = null
-        planetaryProduct = null; sourceFile = null
+        planetaryProduct = null; sourceFile = null; looseFitsFiles = null
         synchronized(stateLock) {
             planetaryPreview = null; _sourcePreview.value = null
             if (activeMode == StackMode.PLANETARY) _preview.value = null
@@ -1026,7 +1116,8 @@ class StackingCoordinator(
         check(live.state.value.phase == LiveStackPhase.EMPTY) { "reset_live_first" }
     }
 
-    private fun checkBudget(source: SerSource) {
+    private fun checkBudget(source: OfflineStackSource) {
+        check(source is SerSource || !calibration.enabled) { "stack_fits_disable_calibration" }
         FileLogger.i("Stacking", "Offline input=${source.info.width}x${source.info.height} region=${source.plan.region} " +
             "bin=${source.plan.softwareBin} output=${source.width}x${source.height} estimate=${source.plan.workingBytes} " +
             "budget=$memoryBudgetBytes heapLimit=$heapLimitBytes target=${source.plan.target}")
@@ -1037,10 +1128,11 @@ class StackingCoordinator(
 
     fun offlinePlan(region: PixelRoi? = null, softwareBin: Int = 1): OfflineRegionPlan? {
         val info = _task.value.source ?: return null
+        val fits = info.fitsFiles.isNotEmpty()
         return runCatching { OfflineRegionPlan(info.width, info.height,
-            _serCfaInterpretation.value.sensorFormat(info.headerColorId, info.bits),
+            info.sensorFormat ?: _serCfaInterpretation.value.sensorFormat(info.headerColorId, info.bits),
             region ?: PixelRoi(0, 0, info.width, info.height), _demosaicAlgorithm.value, _offlineTarget.value,
-            softwareBin, calibration.memoryBytes, calibration.enabled) }.getOrNull()
+            softwareBin, if (fits) 0 else calibration.memoryBytes, !fits && calibration.enabled) }.getOrNull()
     }
 
     private fun CoroutineScope.control() = PlanetaryControl(checkCancelled = { ensureActive() }, progress = { progress ->
@@ -1061,24 +1153,49 @@ class StackingCoordinator(
         _task.update { it.copy(javaPeakBytes = maxOf(java, it.javaPeakBytes), nativePeakBytes = maxOf(native, it.nativePeakBytes)) }
     }
 
-    private suspend fun CoroutineScope.source(file: File, region: PixelRoi? = null, softwareBin: Int = 1): SerSource =
+    private fun fitsMembers(file: File, selected: List<File>?): List<File>? = when {
+        selected != null -> selected
+        file.isDirectory -> fitsSequenceMembers(file)
+        file.isFitsImage() -> listOf(file)
+        else -> null
+    }
+
+    private fun sourceIdentity(file: File, frames: List<File>?): String {
+        if (frames == null) return identity(file)
+        val digest = MessageDigest.getInstance("SHA-256")
+        frames.forEach { member ->
+            digest.update("${member.canonicalPath}\u0000${member.length()}\u0000${member.lastModified()}\u0000".toByteArray())
+        }
+        return "${file.canonicalPath}|${file.length()}|${file.lastModified()}|fits:" +
+            digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) }
+    }
+
+    private suspend fun CoroutineScope.source(file: File, region: PixelRoi? = null, softwareBin: Int = 1): OfflineStackSource {
+        val frames = fitsMembers(file, looseFitsFiles) ?: return serSource(file, region, softwareBin)
+        check(frames.isNotEmpty()) { "stack_fits_empty" }
+        check(frames.none(isSourceBusy)) { "recording_active" }
+        return FitsSequenceStackSource(file, frames, sourceIdentity(file, frames), _demosaicAlgorithm.value,
+            region, softwareBin, _offlineTarget.value) { ensureActive() }
+    }
+
+    private suspend fun CoroutineScope.serSource(file: File, region: PixelRoi? = null, softwareBin: Int = 1): SerSource =
         SerSource(file, endianConvention, sampleAlignment, calibration.snapshot(), _demosaicAlgorithm.value,
             _serCfaInterpretation.value, region, softwareBin, _offlineTarget.value) { ensureActive() }
 
     private class SerSource(file: File, endian: SerEndianConvention, alignment: SampleAlignment,
-        val calibration: CalibrationSelection, val algorithm: DemosaicAlgorithm,
-        val interpretation: SerCfaInterpretation,
+        override val calibration: CalibrationSelection, override val algorithm: DemosaicAlgorithm,
+        override val interpretation: SerCfaInterpretation,
         region: PixelRoi?, softwareBin: Int, target: StackTarget,
-        private val cancelCheck: () -> Unit) : BufferedPlanetaryFrameSource {
+        private val cancelCheck: () -> Unit) : OfflineStackSource {
         val reader = SERReader(file, endian, interpretation).apply { sampleAlignment = alignment }
         private val decodeWorkspace = SerRegionDecoder.Workspace()
-        val info: StackSourceInfo
+        override val info: StackSourceInfo
         private val capture: CalibrationCapture
         private val geometry: CalibrationGeometry
-        val plan: OfflineRegionPlan
+        override val plan: OfflineRegionPlan
         val calibrationOverheadBytes: Long
-        val demosaicScratchBytes: Long
-        val processingOverheadBytes: Long get() = plan.overheadBytes
+        override val inputFormat get() = "${reader.header?.colorId}/${info.bits}bit"
+        override val exposureSource get() = "validated_capture_sidecar_or_unknown"
         init {
             try {
                 check(reader.open()) { reader.lastError ?: "invalid_source" }
@@ -1098,16 +1215,8 @@ class StackingCoordinator(
                     else runCatching { CalibrationCoordinator.recordingCapture(file) }.getOrDefault(CalibrationCapture())
                 calibration.validate(geometry, capture)
                 calibrationOverheadBytes = plan.calibrationOverheadBytes
-                demosaicScratchBytes = plan.demosaicScratchBytes
             } catch (failure: Throwable) { reader.close(); throw failure }
         }
-        override val width get() = plan.width
-        override val height get() = plan.height
-        override val channels get() = info.channels
-        override val boundedDecode get() = true
-        override val physicalEdges get() = PlanetaryImageEdges(plan.region.left == 0, plan.region.top == 0,
-            plan.region.right == info.width, plan.region.bottom == info.height)
-        override val frameCount get() = info.frames
         override fun readFrame(index: Long): LinearImage {
             require(index in 0 until frameCount && index <= Int.MAX_VALUE)
             cancelCheck()
@@ -1122,7 +1231,7 @@ class StackingCoordinator(
                 decodeWorkspace, destination, luminance, cancelCheck)
         }
         override fun exposureSeconds(index: Long): Double = capture.exposureUs?.div(1_000_000.0) ?: 0.0
-        fun calibrationMetadata() = calibration.metadata() + mapOf(
+        override fun calibrationMetadata() = calibration.metadata() + mapOf(
             "sourceWidth" to info.width.toString(), "sourceHeight" to info.height.toString(),
             "sourceRegion" to JSONArray(listOf(plan.region.left, plan.region.top, plan.region.width, plan.region.height)).toString(),
             "softwareBin" to plan.softwareBin.toString(), "processingDomain" to "native_tiles_calibrate_demosaic_then_bin",

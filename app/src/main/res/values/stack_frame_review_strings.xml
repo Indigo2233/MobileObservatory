@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="stack_review_frames">Review frames</string>
+    <string name="stack_frames_kept">Keeping %1$d of %2$d frames</string>
+    <string name="stack_frame_kept">Kept</string>
+    <string name="stack_frame_excluded">Excluded</string>
+    <string name="stack_restore_frame">Restore frame</string>
+    <string name="stack_exclude_frame">Exclude frame</string>
+    <string name="stack_edit_frame_range">Frame range</string>
+    <string name="stack_restore_all_frames">Restore all</string>
+    <string name="stack_no_kept_frames">Keep at least one frame.</string>
+    <string name="stack_apply_frame_selection">Remove frames</string>
+    <string name="frame_edit_confirm_title">Remove selected frames?</string>
+    <string name="frame_edit_confirm_fits">Move %1$d FITS images from this sequence to the trash?</string>
+    <string name="frame_edit_confirm_ser">The recording at its current path will be replaced. %1$d frames will be permanently removed.</string>
+    <string name="frame_edit_writing">Updating the file…</string>
+    <string name="frame_edit_failed">The frame edit could not be completed.</string>
+    <string name="frame_edit_invalid_ser">This recording is damaged or has an unsupported file layout.</string>
+    <string name="stack_frame_range_hint">Enter frame numbers from 1 to %1$d. Both endpoints are included.</string>
+    <string name="stack_frame_start">First frame</string>
+    <string name="stack_frame_end">Last frame</string>
+    <string name="stack_exclude_range">Exclude range</string>
+    <string name="stack_restore_range">Restore range</string>
+    <string name="stack_previous_frame">Previous frame</string>
+    <string name="stack_next_frame">Next frame</string>
+    <string name="stack_frame_number">Frame number</string>
+    <string name="stack_frame_preview_failed">This frame could not be previewed.</string>
+    <string name="stack_fits_empty">No FITS frames found.</string>
+    <string name="stack_fits_files">FITS images</string>
+    <string name="stack_fits_library_hint">Choose a SER/PSER recording, a FITS sequence, or several FITS images.</string>
+    <string name="stack_load_fits_files">Use %1$d images</string>
+    <string name="stack_fits_disable_calibration">Turn off SER calibration masters before stacking a FITS sequence.</string>
+    <string name="stack_fits_invalid">The FITS frame is invalid or uses an unsupported encoding.</string>
+    <string name="stack_fits_layout">The FITS frames must have compatible dimensions, sample types, and CFA layouts.</string>
+    <string name="stack_fits_float_scale">This floating-point FITS uses an unknown scale. Use normalized linear data.</string>
+    <string name="stack_fits_display_only">This FITS contains display processing. Use linear source frames.</string>
+    <string name="stack_fits_only_import">Select only FITS files when importing a sequence.</string>
+</resources>

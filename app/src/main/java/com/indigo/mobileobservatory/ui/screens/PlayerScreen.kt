@@ -160,7 +160,9 @@ fun PlayerScreen(
     onPostStack: (() -> Unit)? = null,
     onPlateSolve: (() -> Unit)? = null,
     /** External file viewing has a platform Back boundary and a separate app-owned Up destination. */
-    onNavigateUp: (() -> Unit)? = null
+    onNavigateUp: (() -> Unit)? = null,
+    onFramesEdited: (File) -> Unit = {},
+    isRecordingFile: (File) -> Boolean = { it.absoluteFile == excludeFile?.absoluteFile }
 ) {
     // Orientation belongs to CameraScreen's navigation owner. Mutating it again here,
     // especially during disposal, can request a second Activity configuration change.
@@ -174,6 +176,7 @@ fun PlayerScreen(
     var selectedCategory by rememberSaveable(initialCategory) { mutableStateOf(initialCategory) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+    var frameEditPath by rememberSaveable { mutableStateOf<String?>(null) }
     var showFilePicker by rememberSaveable { mutableStateOf(true) }
     com.indigo.mobileobservatory.ui.components.ReportObservatoryImmersion(selectedFile != null && !showFilePicker)
     var refreshTrigger by remember { mutableIntStateOf(0) }
@@ -245,6 +248,15 @@ fun PlayerScreen(
         }
         refreshTrigger++
     }
+    frameEditPath?.let { path ->
+        val file = remember(path) { File(path) }
+        MediaFrameEditor(file, trashDir, isRecordingFile, onDismiss = { frameEditPath = null }, onEdited = { failed ->
+            frameEditPath = null
+            refreshLibrary()
+            onFramesEdited(file)
+            if (failed > 0) Toast.makeText(context, context.getString(R.string.media_trash_partial, failed), Toast.LENGTH_LONG).show()
+        })
+    }
 
     if (showFilePicker && selectedFile == null) {
         MediaFileBrowser(
@@ -261,6 +273,7 @@ fun PlayerScreen(
             },
             onBack = onNavigateUp ?: onBack,
             onStackFile = onStackFile,
+            onReviewFrames = { frameEditPath = it.absolutePath },
             selectedCategory = selectedCategory,
             excludeFile = excludeFile,
             fileUnavailable = directFileUnavailable,
@@ -279,6 +292,12 @@ fun PlayerScreen(
     } else {
         val info = selectedFile
         if (info != null) {
+            if (info.format == "FITS" && info.file.isDirectory) {
+                FitsSequencePreviewScreen(info.file, refreshTrigger, onNavigateUp ?: leaveFile,
+                    onStackFile?.let { stack -> { stack(info.file) } },
+                    if (trashDir != null) ({ frameEditPath = info.file.absolutePath }) else null)
+                return
+            }
             key(info.file.absolutePath) {
             PlaybackView(
                 fileInfo = info,
