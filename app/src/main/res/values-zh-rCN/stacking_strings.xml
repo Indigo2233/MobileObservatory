@@ -83,6 +83,7 @@
     <string name="stack_phase_empty">等待输入</string>
     <string name="stack_phase_reading">读取文件</string>
     <string name="stack_phase_ready">可以开始分析</string>
+    <string name="stack_phase_reference_selection">正在选择参考帧</string>
     <string name="stack_phase_analyzing">正在分析质量</string>
     <string name="stack_phase_analyzed">质量分析完成</string>
     <string name="stack_phase_registering">正在配准</string>

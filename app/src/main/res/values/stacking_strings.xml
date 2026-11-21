@@ -83,6 +83,7 @@
     <string name="stack_phase_empty">Waiting for input</string>
     <string name="stack_phase_reading">Reading file</string>
     <string name="stack_phase_ready">Ready to analyze</string>
+    <string name="stack_phase_reference_selection">Selecting reference frame</string>
     <string name="stack_phase_analyzing">Analyzing quality</string>
     <string name="stack_phase_analyzed">Quality analysis complete</string>
     <string name="stack_phase_registering">Registering frames</string>

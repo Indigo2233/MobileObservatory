@@ -229,6 +229,66 @@ class LiveStackSessionTest {
         } finally { session.close(); runCurrent() }
     }
 
+    @Test fun captureLimitStopsBeforeTheNextFrameEntersTheEngine() = runTest {
+        val engine = Engine()
+        val session = LiveStackSession(this, { engine }, ::decode, {})
+        try {
+            session.start(key)
+            session.updateCaptureLimit(LiveCaptureLimit(frames = 1))
+            session.offer(frame(1), key); runCurrent()
+            assertEquals(1L, session.state.value.accepted)
+            assertEquals(LiveStackPhase.PAUSED, session.state.value.phase)
+            assertEquals(LiveStackSession.CAPTURE_LIMIT_REASON, session.state.value.reason)
+            session.offer(frame(2), key); runCurrent()
+            assertEquals(1L, session.state.value.accepted)
+            assertEquals(1, engine.samples.size)
+        } finally { session.close(); runCurrent() }
+    }
+
+    @Test fun loweringLimitPausesAnAlreadyAccumulatedSession() = runTest {
+        val session = LiveStackSession(this, { Engine() }, ::decode, {})
+        try {
+            session.start(key); session.offer(frame(1), key); runCurrent()
+            session.updateCaptureLimit(LiveCaptureLimit(frames = 1))
+            runCurrent()
+            assertEquals(LiveStackPhase.PAUSED, session.state.value.phase)
+            session.updateCaptureLimit(null)
+            assertEquals(LiveStackPhase.PAUSED, session.state.value.phase)
+            assertTrue(session.resume(key))
+            assertEquals(LiveStackPhase.RUNNING, session.state.value.phase)
+        } finally { session.close(); runCurrent() }
+    }
+
+    @Test fun limitLoweredDuringDecodeResumesCleanlyAfterLimitRemoval() = runBlocking {
+        val release = CountDownLatch(1)
+        val decodeStarted = CountDownLatch(1)
+        val source = key.copy(exposureUs = 250_000.0)
+        val delayedEngine = Engine()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val delayedSession = LiveStackSession(scope, { delayedEngine }, { packet, settings ->
+            decodeStarted.countDown()
+            check(release.await(5, TimeUnit.SECONDS))
+            decode(packet, settings)
+        }, {})
+        try {
+            delayedSession.start(source)
+            delayedSession.offer(frame(1), source)
+            assertTrue(decodeStarted.await(5, TimeUnit.SECONDS))
+            delayedSession.updateCaptureLimit(LiveCaptureLimit(frames = 0))
+            release.countDown()
+            withTimeout(5_000) {
+                while (delayedSession.state.value.phase != LiveStackPhase.PAUSED) delay(5)
+            }
+            delayedSession.updateCaptureLimit(null)
+            assertTrue(delayedSession.resume(source))
+            assertEquals(0, delayedEngine.samples.size)
+        } finally {
+            release.countDown()
+            delayedSession.close()
+            scope.cancel()
+        }
+    }
+
     @Test fun duplicatesAndQualityRejectsDoNotIncreaseExposure() = runTest {
         val engine = Engine()
         val session = LiveStackSession(this, { engine }, ::decode, {})

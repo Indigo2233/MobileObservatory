@@ -96,6 +96,7 @@ internal fun CaptureWorkspaceScreen(
     val captureFormat by viewModel.captureFormat.collectAsStateWithPageLifecycle()
     val recordFormat by viewModel.recordFormat.collectAsStateWithPageLifecycle()
     val recordLimit by viewModel.recordLimit.collectAsStateWithPageLifecycle()
+    val liveStackState by viewModel.stacking.live.state.collectAsStateWithPageLifecycle()
     val previewPaused by viewModel.previewPaused.collectAsStateWithPageLifecycle()
     val captureNotice by viewModel.captureNotice.collectAsStateWithPageLifecycle()
     val recordingFinalizing by viewModel.recordingFinalizing.collectAsStateWithPageLifecycle()
@@ -617,7 +618,15 @@ internal fun CaptureWorkspaceScreen(
                 onSelectCaptureFormat = { viewModel.setCaptureFormat(it) },
                 onSelectRecordFormat = { viewModel.setRecordFormat(it) },
                 onSelectRecordLimit = { viewModel.setRecordLimit(it) },
-                compact = portrait, onOpenLibrary = { viewModel.openPlayer() }, isFinalizing = recordingFinalizing
+                compact = portrait,
+                onOpenLibrary = { viewModel.openPlayer() },
+                isFinalizing = recordingFinalizing,
+                liveFrameCount = liveStackState.accepted.toInt(),
+                liveExposureSeconds = liveStackState.exposureSeconds,
+                limitPaused =
+                    liveStackState.phase == com.indigo.mobileobservatory.stacking.LiveStackPhase.PAUSED &&
+                    liveStackState.reason == com.indigo.mobileobservatory.stacking.LiveStackSession.CAPTURE_LIMIT_REASON,
+                onContinueWithoutLimit = viewModel::continueLiveStackAfterCaptureLimit
             )
         }
             }

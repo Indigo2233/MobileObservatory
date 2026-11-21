@@ -80,7 +80,7 @@ object DslrUsb {
 class PtpTransport(
     private val connection: UsbDeviceConnection,
     private val endpoints: PtpEndpoints,
-    private val timeoutMs: Int = 5_000
+    private val timeoutMs: Int = 10_000
 ) : PtpWire {
     private val lock = Any()
     private val transactionIds = PtpTransactionCounter()
@@ -95,6 +95,35 @@ class PtpTransport(
         runCatching { connection.releaseInterface(endpoints.usbInterface) }
     }
 
+    fun prepareNikonSession() {
+        val resetResult = runCatching {
+            connection.controlTransfer(
+                PTP_CONTROL_REQUEST_TYPE_CLASS_OUT,
+                PTP_CLASS_REQUEST_DEVICE_RESET,
+                0,
+                0,
+                null,
+                0,
+                timeoutMs
+            )
+        }.getOrElse { result ->
+            FileLogger.w(TAG, "PTP device reset failed: ${result.message}")
+            -1
+        }
+        FileLogger.i(TAG, "PTP device reset result=$resetResult")
+        if (resetResult >= 0) {
+            try {
+                Thread.sleep(NIKON_RESET_SETTLE_MS)
+            } catch (error: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw PtpException("PTP reset interrupted")
+            }
+        }
+        clearEndpointHalt(endpoints.bulkIn, "IN")
+        clearEndpointHalt(endpoints.bulkOut, "OUT")
+        drainInput()
+    }
+
     override fun beginSession() {
         transactionIds.reset()
     }
@@ -105,27 +134,31 @@ class PtpTransport(
     fun transact(code: Int, params: LongArray, dataOut: ByteArray?, timeoutMs: Int): PtpResult {
         synchronized(lock) {
             val transactionId = transactionIds.next()
-            writeFully(PtpContainer.command(code, transactionId, params).toBytes(), timeoutMs)
+            val operation = "0x${code.toString(16).padStart(4, '0')} tx=$transactionId"
+            writeFully(PtpContainer.command(code, transactionId, params).toBytes(), timeoutMs, operation)
             if (dataOut != null) {
-                writeFully(PtpContainer.data(code, transactionId, dataOut).toBytes(), timeoutMs)
+                writeFully(PtpContainer.data(code, transactionId, dataOut).toBytes(), timeoutMs, operation)
             }
-            val first = readContainerSkippingEvents(timeoutMs)
+            val first = readContainerSkippingEvents(timeoutMs, operation)
             return when (first.type) {
                 PtpConstants.CONTAINER_DATA -> {
-                    val response = readContainerSkippingEvents(timeoutMs)
+                    val response = readContainerSkippingEvents(timeoutMs, operation)
                     if (response.type != PtpConstants.CONTAINER_RESPONSE) {
-                        throw PtpException("Expected PTP response after data, got type ${response.type}")
+                        throw PtpException(
+                            "$operation expected PTP response after data, got type ${response.type}"
+                        )
                     }
                     PtpResult(response.code, first.payload)
                 }
                 PtpConstants.CONTAINER_RESPONSE -> PtpResult(first.code, ByteArray(0))
-                else -> throw PtpException("Unexpected PTP container type ${first.type} for 0x${code.toString(16)}")
+                else -> throw PtpException("$operation unexpected PTP container type ${first.type}")
             }
         }
     }
 
-    private fun writeFully(bytes: ByteArray, timeoutMs: Int) {
+    private fun writeFully(bytes: ByteArray, timeoutMs: Int, operation: String) {
         var offset = 0
+        var recoveryAttempted = false
         while (offset < bytes.size) {
             val remaining = bytes.size - offset
             val written = connection.bulkTransfer(
@@ -135,35 +168,55 @@ class PtpTransport(
                 remaining,
                 timeoutMs
             )
-            if (written <= 0) throw PtpException("PTP bulk OUT failed: $written")
+            if (written <= 0) {
+                if (!recoveryAttempted) {
+                    recoveryAttempted = true
+                    clearEndpointHalt(endpoints.bulkOut, "OUT")
+                    continue
+                }
+                throw PtpException("$operation PTP bulk OUT failed: $written")
+            }
             offset += written
         }
     }
 
-    private fun readContainerSkippingEvents(timeoutMs: Int): PtpContainer {
+    private fun readContainerSkippingEvents(timeoutMs: Int, operation: String): PtpContainer {
         repeat(8) {
-            val container = readContainer(timeoutMs)
+            val container = readContainer(timeoutMs, operation)
             if (container.type != PtpConstants.CONTAINER_EVENT) return container
         }
-        throw PtpException("PTP bulk IN filled with events")
+        throw PtpException("$operation PTP bulk IN filled with events")
     }
 
-    private fun readContainer(timeoutMs: Int): PtpContainer {
+    private fun readContainer(timeoutMs: Int, operation: String): PtpContainer {
         val header = ByteArray(PtpConstants.HEADER_SIZE)
-        readFully(header, PtpConstants.HEADER_SIZE, timeoutMs = timeoutMs)
+        readFully(header, PtpConstants.HEADER_SIZE, timeoutMs = timeoutMs, operation = operation)
         val length = ptpU32(header, 0).toInt()
         if (length < PtpConstants.HEADER_SIZE || length > 24_000_000) {
-            throw PtpException("PTP container length $length")
+            throw PtpException("$operation PTP container length $length")
         }
         if (length == PtpConstants.HEADER_SIZE) return PtpContainer.parse(header)
         val full = ByteArray(length)
         header.copyInto(full)
-        readFully(full, length, already = PtpConstants.HEADER_SIZE, timeoutMs = timeoutMs)
+        readFully(
+            full,
+            length,
+            already = PtpConstants.HEADER_SIZE,
+            timeoutMs = timeoutMs,
+            operation = operation
+        )
         return PtpContainer.parse(full)
     }
 
-    private fun readFully(buffer: ByteArray, length: Int, already: Int = 0, timeoutMs: Int) {
+    private fun readFully(
+        buffer: ByteArray,
+        length: Int,
+        already: Int = 0,
+        timeoutMs: Int,
+        operation: String
+    ) {
         var offset = already
+        var recoveryAttempted = false
         while (offset < length) {
             val sliceLength = length - offset
             val read = connection.bulkTransfer(
@@ -173,8 +226,68 @@ class PtpTransport(
                 sliceLength,
                 timeoutMs
             )
-            if (read <= 0) throw PtpException("PTP bulk IN failed: $read at $offset/$length")
+            if (read <= 0) {
+                if (!recoveryAttempted) {
+                    recoveryAttempted = true
+                    clearEndpointHalt(endpoints.bulkIn, "IN")
+                    drainInput()
+                    continue
+                }
+                throw PtpException("$operation PTP bulk IN failed: $read at $offset/$length")
+            }
             offset += read
         }
+    }
+
+    private fun clearEndpointHalt(endpoint: UsbEndpoint, direction: String): Boolean {
+        val result = runCatching {
+            connection.controlTransfer(
+                USB_CONTROL_REQUEST_TYPE_STANDARD_OUT,
+                USB_STANDARD_REQUEST_CLEAR_FEATURE,
+                USB_FEATURE_ENDPOINT_HALT,
+                endpoint.address,
+                null,
+                0,
+                timeoutMs
+            )
+        }.getOrElse { -1 }
+        FileLogger.i(
+            TAG,
+            "PTP bulk $direction clear halt address=0x${endpoint.address.toString(16)} result=$result"
+        )
+        return result >= 0
+    }
+
+    private fun drainInput() {
+        val buffer = ByteArray(endpoints.bulkIn.maxPacketSize.coerceAtLeast(64))
+        var total = 0
+        repeat(MAX_DRAIN_PACKETS) {
+            val read = runCatching {
+                connection.bulkTransfer(
+                    endpoints.bulkIn,
+                    buffer,
+                    buffer.size,
+                    DRAIN_TIMEOUT_MS
+                )
+            }.getOrDefault(-1)
+            if (read <= 0) {
+                if (total > 0) FileLogger.i(TAG, "PTP bulk IN drained $total stale bytes")
+                return
+            }
+            total += read
+        }
+        FileLogger.w(TAG, "PTP bulk IN drain reached packet limit after $total bytes")
+    }
+
+    companion object {
+        private const val TAG = "PtpTransport"
+        private const val PTP_CONTROL_REQUEST_TYPE_CLASS_OUT = 0x21
+        private const val PTP_CLASS_REQUEST_DEVICE_RESET = 0x66
+        private const val USB_CONTROL_REQUEST_TYPE_STANDARD_OUT = 0x02
+        private const val USB_STANDARD_REQUEST_CLEAR_FEATURE = 0x01
+        private const val USB_FEATURE_ENDPOINT_HALT = 0x00
+        private const val NIKON_RESET_SETTLE_MS = 2_500L
+        private const val MAX_DRAIN_PACKETS = 8
+        private const val DRAIN_TIMEOUT_MS = 100
     }
 }

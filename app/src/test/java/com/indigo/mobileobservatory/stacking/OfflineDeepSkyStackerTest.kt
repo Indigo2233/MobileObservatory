@@ -79,9 +79,25 @@ class OfflineDeepSkyStackerTest {
         var cancelled = false
         assertThrows(CancellationException::class.java) {
             OfflineDeepSkyStacker().stack(source, checkCancelled = { if (cancelled) throw CancellationException() },
-                progress = { _, _, _ -> cancelled = true })
+                progress = { _, _, _, _ -> cancelled = true })
         }
         assertEquals(1, source.reads)
+    }
+
+    @Test fun progressReportsReferenceAndStackingAsSeparateFrameStages() {
+        val source = Source(List(4) { field(seed = it + 1L) }, List(4) { 1.0 })
+        val events = mutableListOf<Triple<OfflineDeepSkyPhase, Long, Long>>()
+
+        OfflineDeepSkyStacker().stack(source, progress = { phase, completed, total, _ ->
+            events += Triple(phase, completed, total)
+        })
+
+        val reference = events.filter { it.first == OfflineDeepSkyPhase.REFERENCE }
+        val stacking = events.filter { it.first == OfflineDeepSkyPhase.STACKING }
+        assertEquals((1L..4L).toList(), reference.map { it.second })
+        assertEquals(List(4) { 4L }, reference.map { it.third })
+        assertEquals((1L..4L).toList(), stacking.map { it.second })
+        assertEquals(List(4) { 4L }, stacking.map { it.third })
     }
 
     @Test fun memoryAdmissionHappensBeforeAnyDecodeAndAnEmptyStarFieldCannotProduceAResult() {

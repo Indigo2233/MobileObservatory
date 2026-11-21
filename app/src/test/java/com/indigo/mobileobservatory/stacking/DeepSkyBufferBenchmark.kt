@@ -68,7 +68,7 @@ object DeepSkyBufferBenchmark {
                     engine.snapshot()!!
                 } finally { engine.reset() }
             } else {
-                val stacked = OfflineDeepSkyStacker().stack(source, config, progress = { _, _, _ -> sample() })
+                val stacked = OfflineDeepSkyStacker().stack(source, config, progress = { _, _, _, _ -> sample() })
                 DeepSkySnapshot(stacked.image, stacked.weights, stacked.stats.stack)
             }
             val bytes = allocated() - before

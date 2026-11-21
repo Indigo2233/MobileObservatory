@@ -1,13 +1,17 @@
 package com.indigo.mobileobservatory.ui.components
 
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Camera
 import androidx.compose.material.icons.filled.FiberManualRecord
@@ -24,8 +28,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
@@ -67,7 +74,11 @@ private fun FormatToggle(
             Box(
                 modifier = Modifier
                     .background(if (isActive) activeBg else inactiveBg)
-                    .clickable { onSelect(option) }
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        role = Role.Tab
+                    ) { onSelect(option) }
                     .padding(horizontal = 8.dp, vertical = 4.dp),
                 contentAlignment = Alignment.Center
             ) {
@@ -87,27 +98,198 @@ data class RecordLimit(val type: RecordLimitType, val value: Int) {
     fun displayText(): String = when (type) {
         RecordLimitType.NONE -> "∞"
         RecordLimitType.FRAMES -> "${value}f"
-        RecordLimitType.TIME -> if (value >= 60) "${value / 60}m" else "${value}s"
+        RecordLimitType.TIME -> formatRecordLimitDuration(value)
     }
 }
 
 private val FRAME_OPTIONS = listOf(500, 1000, 2000, 5000)
 private val TIME_OPTIONS = listOf(5, 10, 20, 30, 60, 120, 300, 600)
 
+internal const val MAX_CUSTOM_RECORD_FRAMES = 2_000_000_000
+internal const val MAX_CUSTOM_RECORD_SECONDS = 99 * 3600 + 59 * 60 + 59
+
+internal fun parseCustomRecordFrames(text: String): Int? =
+    text.toIntOrNull()?.takeIf { it in 1..MAX_CUSTOM_RECORD_FRAMES }
+
+internal fun parseCustomRecordDuration(hours: String, minutes: String, seconds: String): Int? {
+    if (hours.any { !it.isDigit() } || minutes.any { !it.isDigit() } || seconds.any { !it.isDigit() }) return null
+    val h = hours.ifEmpty { "0" }.toIntOrNull() ?: return null
+    val m = minutes.ifEmpty { "0" }.toIntOrNull() ?: return null
+    val s = seconds.ifEmpty { "0" }.toIntOrNull() ?: return null
+    if (m !in 0..59 || s !in 0..59) return null
+    val total = h.toLong() * 3600L + m * 60L + s
+    return total.takeIf { it in 1..MAX_CUSTOM_RECORD_SECONDS.toLong() }?.toInt()
+}
+
+internal fun formatRecordLimitDuration(totalSeconds: Int): String {
+    val h = totalSeconds / 3600
+    val m = totalSeconds % 3600 / 60
+    val s = totalSeconds % 60
+    return when {
+        h > 0 && (m > 0 || s > 0) -> "${h}h${m.toString().padStart(2, '0')}m${s.toString().padStart(2, '0')}s"
+        h > 0 -> "${h}h"
+        m > 0 && s > 0 -> "${m}m${s.toString().padStart(2, '0')}s"
+        m > 0 -> "${m}m"
+        else -> "${s}s"
+    }
+}
+
+@Composable
+private fun CustomFrameLimitDialog(
+    initial: RecordLimit,
+    onDismiss: () -> Unit,
+    onConfirm: (RecordLimit) -> Unit
+) {
+    var text by remember {
+        mutableStateOf(if (initial.type == RecordLimitType.FRAMES) initial.value.toString() else "")
+    }
+    val frames = parseCustomRecordFrames(text)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.custom_frame_limit_title)) },
+        text = {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { value -> text = value.filter(Char::isDigit).take(10) },
+                label = { Text(stringResource(R.string.custom_frame_limit_label)) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Number,
+                    imeAction = ImeAction.Done
+                ),
+                keyboardActions = KeyboardActions(
+                    onDone = { frames?.let { onConfirm(RecordLimit(RecordLimitType.FRAMES, it)) } }
+                ),
+                supportingText = {
+                    Text(stringResource(R.string.custom_frame_limit_range, MAX_CUSTOM_RECORD_FRAMES))
+                },
+                isError = text.isNotEmpty() && frames == null,
+                modifier = Modifier.fillMaxWidth().testTag("custom-frame-limit")
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { frames?.let { onConfirm(RecordLimit(RecordLimitType.FRAMES, it)) } },
+                enabled = frames != null
+            ) { Text(stringResource(R.string.apply_limit)) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
+        }
+    )
+}
+
+@Composable
+private fun CustomDurationLimitDialog(
+    initial: RecordLimit,
+    onDismiss: () -> Unit,
+    onConfirm: (RecordLimit) -> Unit
+) {
+    val initialSeconds = if (initial.type == RecordLimitType.TIME) initial.value else 0
+    var hours by remember { mutableStateOf(if (initialSeconds > 0) (initialSeconds / 3600).toString() else "") }
+    var minutes by remember {
+        mutableStateOf(if (initialSeconds > 0) (initialSeconds % 3600 / 60).toString().padStart(2, '0') else "")
+    }
+    var seconds by remember {
+        mutableStateOf(if (initialSeconds > 0) (initialSeconds % 60).toString().padStart(2, '0') else "")
+    }
+    val total = parseCustomRecordDuration(hours, minutes, seconds)
+    val confirm = {
+        val value = total
+        if (value != null) onConfirm(RecordLimit(RecordLimitType.TIME, value))
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.custom_duration_limit_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
+                    OutlinedTextField(
+                        value = hours,
+                        onValueChange = { hours = it.filter(Char::isDigit).take(2) },
+                        label = { Text(stringResource(R.string.duration_hours)) },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(1f).testTag("custom-duration-hours")
+                    )
+                    OutlinedTextField(
+                        value = minutes,
+                        onValueChange = { minutes = it.filter(Char::isDigit).take(2) },
+                        label = { Text(stringResource(R.string.duration_minutes)) },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        isError = minutes.any(Char::isDigit) && (minutes.toIntOrNull() ?: 60) !in 0..59,
+                        modifier = Modifier.weight(1f).testTag("custom-duration-minutes")
+                    )
+                    OutlinedTextField(
+                        value = seconds,
+                        onValueChange = { seconds = it.filter(Char::isDigit).take(2) },
+                        label = { Text(stringResource(R.string.duration_seconds)) },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Number,
+                            imeAction = ImeAction.Done
+                        ),
+                        keyboardActions = KeyboardActions(onDone = { confirm() }),
+                        isError = seconds.any(Char::isDigit) && (seconds.toIntOrNull() ?: 60) !in 0..59,
+                        modifier = Modifier.weight(1f).testTag("custom-duration-seconds")
+                    )
+                }
+                Text(
+                    if (total != null) stringResource(R.string.custom_duration_summary, formatRecordLimitDuration(total))
+                    else stringResource(R.string.custom_duration_range),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (total != null) MaterialTheme.colorScheme.onSurfaceVariant
+                    else MaterialTheme.colorScheme.error
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = confirm, enabled = total != null) {
+                Text(stringResource(R.string.apply_limit))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
+        }
+    )
+}
+
 @Composable
 private fun RecordLimitSelector(
     limit: RecordLimit,
-    onSelect: (RecordLimit) -> Unit
+    onSelect: (RecordLimit) -> Unit,
+    liveFrameCount: Int?,
+    liveExposureSeconds: Double?,
+    limitPaused: Boolean,
+    onContinueWithoutLimit: () -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
+    var customFrames by remember { mutableStateOf(false) }
+    var customDuration by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(6.dp)
+
+    if (customFrames) CustomFrameLimitDialog(
+        initial = limit,
+        onDismiss = { customFrames = false },
+        onConfirm = { onSelect(it); customFrames = false }
+    )
+    if (customDuration) CustomDurationLimitDialog(
+        initial = limit,
+        onDismiss = { customDuration = false },
+        onConfirm = { onSelect(it); customDuration = false }
+    )
     
     Box {
         Box(
             modifier = Modifier
                 .clip(shape)
                 .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f), shape)
-                .clickable { expanded = true }
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    role = Role.Button
+                ) { expanded = true }
                 .height(40.dp)
                 .padding(horizontal = 12.dp),
             contentAlignment = Alignment.Center
@@ -131,39 +313,87 @@ private fun RecordLimitSelector(
             onDismissRequest = { expanded = false }
         ) {
             PopupWindowBackHandler(enabled = expanded) { expanded = false }
-            DropdownMenuItem(
-                text = { Text(stringResource(R.string.no_limit)) },
-                onClick = {
-                    onSelect(RecordLimit(RecordLimitType.NONE, 0))
-                    expanded = false
+            Column(
+                Modifier
+                    .heightIn(max = 520.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.no_limit)) },
+                    onClick = {
+                        onSelect(RecordLimit(RecordLimitType.NONE, 0))
+                        expanded = false
+                    }
+                )
+                Divider()
+                Text(stringResource(R.string.frames_header), modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp), fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
+                FRAME_OPTIONS.forEach { f ->
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.frames_option, f)) },
+                        onClick = {
+                            onSelect(RecordLimit(RecordLimitType.FRAMES, f))
+                            expanded = false
+                        }
+                    )
                 }
-            )
-            Divider()
-            Text(stringResource(R.string.frames_header), modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp), fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
-            FRAME_OPTIONS.forEach { f ->
                 DropdownMenuItem(
-                    text = { Text(stringResource(R.string.frames_option, f)) },
+                    text = { Text(stringResource(R.string.custom_frame_limit)) },
                     onClick = {
-                        onSelect(RecordLimit(RecordLimitType.FRAMES, f))
+                        customFrames = true
                         expanded = false
                     }
                 )
-            }
-            Divider()
-            Text(stringResource(R.string.duration_header), modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp), fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
-            TIME_OPTIONS.forEach { t ->
+                Divider()
+                Text(stringResource(R.string.duration_header), modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp), fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
+                TIME_OPTIONS.forEach { t ->
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                if (t >= 60) stringResource(R.string.duration_min, t / 60)
+                                else stringResource(R.string.duration_sec, t)
+                            )
+                        },
+                        onClick = {
+                            onSelect(RecordLimit(RecordLimitType.TIME, t))
+                            expanded = false
+                        }
+                    )
+                }
                 DropdownMenuItem(
-                    text = {
+                    text = { Text(stringResource(R.string.custom_duration_limit)) },
+                    onClick = {
+                        customDuration = true
+                        expanded = false
+                    }
+                )
+                if (liveFrameCount != null || liveExposureSeconds != null) {
+                    Divider()
+                    Text(
+                        stringResource(
+                            R.string.record_limit_live_summary,
+                            liveFrameCount ?: 0,
+                            liveExposureSeconds ?: 0.0
+                        ),
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (limitPaused) {
                         Text(
-                            if (t >= 60) stringResource(R.string.duration_min, t / 60)
-                            else stringResource(R.string.duration_sec, t)
+                            stringResource(R.string.capture_limit_paused_hint),
+                            modifier = Modifier.padding(horizontal = 12.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.tertiary
                         )
-                    },
-                    onClick = {
-                        onSelect(RecordLimit(RecordLimitType.TIME, t))
-                        expanded = false
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.capture_limit_continue)) },
+                            onClick = {
+                                onContinueWithoutLimit()
+                                expanded = false
+                            }
+                        )
                     }
-                )
+                }
             }
         }
     }
@@ -232,7 +462,11 @@ fun RecordBar(
     modifier: Modifier = Modifier,
     compact: Boolean = false,
     onOpenLibrary: () -> Unit = {},
-    isFinalizing: Boolean = false
+    isFinalizing: Boolean = false,
+    liveFrameCount: Int? = null,
+    liveExposureSeconds: Double? = null,
+    limitPaused: Boolean = false,
+    onContinueWithoutLimit: () -> Unit = {}
 ) {
     if (compact) {
         Column(modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(horizontal = 12.dp, vertical = 4.dp)) {
@@ -244,7 +478,14 @@ fun RecordBar(
                 TargetSelector(targetName, onTargetNameChange)
                 CompactFormatMenu(stringResource(R.string.capture_photo_label), listOf("JPG", "FITS"), captureFormatLabel, onSelectCaptureFormat)
                 CompactFormatMenu(stringResource(R.string.capture_video_label), listOf("SER", "PSER", "MP4", "FITS"), recordFormatLabel, onSelectRecordFormat)
-                RecordLimitSelector(recordLimit, onSelectRecordLimit)
+                RecordLimitSelector(
+                    recordLimit,
+                    onSelectRecordLimit,
+                    liveFrameCount,
+                    liveExposureSeconds,
+                    limitPaused,
+                    onContinueWithoutLimit
+                )
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onOpenLibrary, modifier = Modifier.size(48.dp)) {
@@ -300,7 +541,14 @@ fun RecordBar(
                 TargetSelector(targetName, onTargetNameChange)
                 FormatToggle(listOf("JPG", "FITS"), captureFormatLabel, onSelectCaptureFormat)
                 FormatToggle(listOf("SER", "PSER", "MP4", "FITS"), recordFormatLabel, onSelectRecordFormat)
-                RecordLimitSelector(recordLimit, onSelectRecordLimit)
+                RecordLimitSelector(
+                    recordLimit,
+                    onSelectRecordLimit,
+                    liveFrameCount,
+                    liveExposureSeconds,
+                    limitPaused,
+                    onContinueWithoutLimit
+                )
             }
         }
 

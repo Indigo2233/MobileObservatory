@@ -75,6 +75,8 @@ import com.indigo.mobileobservatory.recording.RawRecordingNormalizer
 import com.indigo.mobileobservatory.recording.RecordingWriteOutcome
 import com.indigo.mobileobservatory.recording.RecordingWriteSession
 import com.indigo.mobileobservatory.stacking.LiveStackPhase
+import com.indigo.mobileobservatory.stacking.LiveCaptureLimit
+import com.indigo.mobileobservatory.stacking.LiveStackSession
 import com.indigo.mobileobservatory.stacking.LiveStackAdmission
 import com.indigo.mobileobservatory.stacking.StackRoiAspect
 import com.indigo.mobileobservatory.stacking.StackRoiPlanner
@@ -85,6 +87,7 @@ import com.indigo.mobileobservatory.stacking.PixelTraits
 import com.indigo.mobileobservatory.stacking.StackSessionKey
 import com.indigo.mobileobservatory.stacking.StackMode
 import com.indigo.mobileobservatory.stacking.StackingCoordinator
+import com.indigo.mobileobservatory.stacking.StackTarget
 import com.indigo.mobileobservatory.stacking.ScienceFrameProvenance
 import com.indigo.mobileobservatory.stacking.SerCfaInterpretation
 import com.indigo.mobileobservatory.stacking.CalibrationRecordingContext
@@ -983,6 +986,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setRecordLimit(limit: RecordLimit) {
         _recordLimit.value = limit
+        updateLiveStackCaptureLimit(limit)
+    }
+
+    fun setLiveStackTarget(target: StackTarget, resetConfirmed: Boolean = false): Boolean {
+        val changed = stacking.setTarget(StackMode.LIVE, target, resetConfirmed)
+        if (changed) updateLiveStackCaptureLimit(_recordLimit.value)
+        return changed
     }
 
     private val _showPlayer = MutableStateFlow(false)
@@ -3031,11 +3041,39 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
         val key = currentStackKey() ?: run { stacking.report("wait_frame"); return }
         if (stacking.live.state.value.phase == LiveStackPhase.PAUSED) stacking.live.resume(key)
-        else stacking.startLive(key)
+        else if (stacking.live.state.value.phase == LiveStackPhase.EMPTY) {
+            updateLiveStackCaptureLimit(_recordLimit.value)
+            stacking.startLive(key)
+        }
         if (stacking.live.state.value.phase == LiveStackPhase.RUNNING) {
             if (_focusAssistEnabled.value) toggleFocusAssist()
             if (!stacking.showLiveStack.value) stacking.toggleLiveDisplay()
         }
+    }
+
+    /** Removes the limit, then resumes the paused live stack without discarding its result. */
+    fun continueLiveStackAfterCaptureLimit() {
+        val key = currentStackKey() ?: return
+        FileLogger.i(TAG, "Continue live stack without capture limit accepted=${stacking.live.state.value.accepted}")
+        setRecordLimit(RecordLimit(RecordLimitType.NONE, 0))
+        stacking.live.resume(key)
+    }
+
+    private fun updateLiveStackCaptureLimit(limit: RecordLimit) {
+        stacking.live.updateCaptureLimit(recordingLimitForLiveStack(limit))
+        if (limit.type == RecordLimitType.NONE) {
+            val session = stacking.live.state.value
+            if (session.phase == LiveStackPhase.PAUSED &&
+                session.reason == LiveStackSession.CAPTURE_LIMIT_REASON) {
+                stacking.live.resume(session.key ?: return)
+            }
+        }
+    }
+
+    private fun recordingLimitForLiveStack(limit: RecordLimit): LiveCaptureLimit? = when (limit.type) {
+        RecordLimitType.NONE -> null
+        RecordLimitType.FRAMES -> LiveCaptureLimit(frames = limit.value.toLong())
+        RecordLimitType.TIME -> LiveCaptureLimit(exposureSeconds = limit.value.toDouble())
     }
 
     fun resumeCaptureForStacking() {

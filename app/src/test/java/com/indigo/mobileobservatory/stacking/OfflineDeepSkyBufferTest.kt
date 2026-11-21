@@ -66,7 +66,7 @@ class OfflineDeepSkyBufferTest {
             val originals = frames(channels)
             val source = BufferedSource(originals)
             val progress = mutableListOf<DeepSkyStats>()
-            val actual = OfflineDeepSkyStacker().stack(source, progress = { _, _, s -> progress += comparable(s) })
+            val actual = OfflineDeepSkyStacker().stack(source, progress = { _, _, _, s -> progress += comparable(s) })
             val owned = OfflineDeepSkyStacker().stack(Source(originals))
             val referenceField = StarRegistration.detect(originals[actual.stats.referenceFrame.toInt()])
             val copying = DeepSkyStacker().apply {
@@ -138,7 +138,7 @@ class OfflineDeepSkyBufferTest {
                         else -> source.reads >= 2 && ++checks > 11
                     }
                     if (cancel) throw CancellationException(whenToCancel)
-                }, progress = { done, _, _ -> completed = done })
+                }, progress = { _, done, _, _ -> completed = done })
             }
             if (whenToCancel == "before") assertEquals(0, source.reads)
             val result = OfflineDeepSkyStacker().stack(source)
@@ -192,7 +192,7 @@ class OfflineDeepSkyBufferTest {
         }
         assertEquals(0, source.reads)
         val result = OfflineDeepSkyStacker().stack(source, DeepSkyConfig(memoryBudgetBytes = estimate.stackingBytes),
-            progress = { _, _, stats -> assertEquals(estimate.peakBytes, stats.estimatedWorkingBytes) },
+            progress = { _, _, _, stats -> assertEquals(estimate.peakBytes, stats.estimatedWorkingBytes) },
             decoderWorkingBytes = decoder, retainedCalibrationBytes = masters)
         assertEquals(estimate.peakBytes, result.stats.stack.estimatedWorkingBytes)
     }

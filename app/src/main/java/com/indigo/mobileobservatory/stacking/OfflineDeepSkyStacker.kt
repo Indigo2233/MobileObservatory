@@ -12,6 +12,8 @@ data class OfflineDeepSkyStats(
 
 data class OfflineDeepSkyResult(val image: LinearImage, val weights: PixelWeights, val stats: OfflineDeepSkyStats)
 
+enum class OfflineDeepSkyPhase { REFERENCE, STACKING }
+
 /**
  * Sequential star-field registration and online temporal rejection, using exactly the same
  * science engine as live deep-sky stacking. No lucky-imaging ranking, planetary AP warp or
@@ -22,7 +24,8 @@ class OfflineDeepSkyStacker {
         source: PlanetaryFrameSource,
         config: DeepSkyConfig = DeepSkyConfig(),
         checkCancelled: () -> Unit = {},
-        progress: (completed: Long, total: Long, stats: DeepSkyStats) -> Unit = { _, _, _ -> },
+        progress: (phase: OfflineDeepSkyPhase, completed: Long, total: Long, stats: DeepSkyStats) -> Unit =
+            { _, _, _, _ -> },
         decoderWorkingBytes: Long = 0,
         retainedCalibrationBytes: Long = 0
     ): OfflineDeepSkyResult {
@@ -57,7 +60,7 @@ class OfflineDeepSkyStacker {
                     checkCancelled()
                     false
                 }
-                progress(completed + 1L, referenceIndices.size + source.frameCount,
+                progress(OfflineDeepSkyPhase.REFERENCE, completed + 1L, referenceIndices.size.toLong(),
                     DeepSkyStats(received = completed + 1, estimatedWorkingBytes = memory.peakBytes))
                 DeepSkyReferenceSample(index, field)
             }
@@ -76,7 +79,7 @@ class OfflineDeepSkyStacker {
                     if (exposure == 0.0) unknown++
                 } else outcome.reason?.let { rejected[it] = (rejected[it] ?: 0L) + 1L }
                 index++
-                progress(referenceIndices.size + index, referenceIndices.size + source.frameCount,
+                progress(OfflineDeepSkyPhase.STACKING, index, source.frameCount,
                     outcome.stats.copy(estimatedWorkingBytes = memory.peakBytes))
                 if (!outcome.accepted && outcome.reason == DeepSkyRejection.FRAME_LIMIT)
                     error("deep_sky_frame_count")

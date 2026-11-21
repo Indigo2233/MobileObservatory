@@ -48,6 +48,22 @@ class ObservingUiWiringTest {
     }
 
     @Test
+    fun allTargetsOfferCustomCountAndDurationLimits() {
+        val bar = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/components/RecordBar.kt"
+        )
+        val camera = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/CameraScreen.kt"
+        )
+        assertTrue(bar.contains("custom_frame_limit"))
+        assertTrue(bar.contains("custom_duration_limit"))
+        assertTrue(bar.contains("parseCustomRecordDuration"))
+        assertTrue(!bar.contains("supportsCustomRecordLimit"))
+        assertTrue(camera.contains("liveFrameCount = liveStackState.accepted.toInt()"))
+        assertTrue(camera.contains("liveExposureSeconds = liveStackState.exposureSeconds"))
+    }
+
+    @Test
     fun successfulCameraConnectionDoesNotExposeIdentityInThePreviewMessage() {
         val viewModel = read(
             "src/main/java/com/indigo/mobileobservatory/ui/viewmodel/CameraViewModel.kt"

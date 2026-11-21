@@ -21,7 +21,7 @@ import java.util.concurrent.Executors
 
 /** PLANETARY is the historic persisted name of the offline workflow; its target is separate. */
 enum class StackMode { LIVE, PLANETARY }
-enum class StackTaskPhase { EMPTY, READING, READY, ANALYZING, ANALYZED, REGISTERING, STACKING, PROCESSING, EXPORTING, COMPLETE, CANCELLED, FAILED }
+enum class StackTaskPhase { EMPTY, READING, READY, REFERENCE_SELECTION, ANALYZING, ANALYZED, REGISTERING, STACKING, PROCESSING, EXPORTING, COMPLETE, CANCELLED, FAILED }
 
 data class StackSourceInfo(val file: File, val width: Int, val height: Int, val channels: Int,
     val bits: Int, val frames: Long, val identity: String, val isBayer: Boolean = false,
@@ -44,7 +44,8 @@ data class StackingTaskState(
     val nativePeakBytes: Long = 0,
     val exportedFiles: List<String> = emptyList()
 ) {
-    val busy get() = phase in setOf(StackTaskPhase.READING, StackTaskPhase.ANALYZING,
+    val busy get() = phase in setOf(StackTaskPhase.READING, StackTaskPhase.REFERENCE_SELECTION,
+        StackTaskPhase.ANALYZING,
         StackTaskPhase.REGISTERING, StackTaskPhase.STACKING, StackTaskPhase.PROCESSING, StackTaskPhase.EXPORTING)
 }
 
@@ -666,7 +667,8 @@ class StackingCoordinator(
         }
     }
 
-    fun stackDeepSky(roi: PixelRoi? = null, softwareBin: Int = 1) = runTask(StackTaskPhase.STACKING) {
+    fun stackDeepSky(roi: PixelRoi? = null, softwareBin: Int = 1) =
+        runTask(StackTaskPhase.REFERENCE_SELECTION) {
         ensureOfflineAvailable()
         check(_offlineTarget.value == StackTarget.DEEP_SKY) { "stack_target_changed" }
         val file = sourceFile ?: error("choose_source")
@@ -676,15 +678,22 @@ class StackingCoordinator(
         _task.update { it.copy(histogram = emptyList(), qualityFrames = 0, referenceFrame = 0, stats = null, deepSkyStats = null) }
         source(file, roi, softwareBin).use { source ->
             checkBudget(source)
-            val referenceSampleCount = OfflineDeepSkyStacker.referenceIndices(source.frameCount).size
             val result = OfflineDeepSkyStacker().stack(source,
                 DeepSkyConfig(memoryBudgetBytes = memoryBudgetBytes),
                 checkCancelled = { ensureActive() },
-                progress = { completed, total, stats ->
+                progress = { stage, completed, total, stats ->
                     ensureActive()
-                    _task.update { it.copy(phase = StackTaskPhase.STACKING, completed = completed, total = total,
-                        qualityFrames = stats.accepted.toLong(),
-                        message = if (completed <= referenceSampleCount) "stack_selecting_reference" else "") }
+                    _task.update {
+                        it.copy(
+                            phase = when (stage) {
+                                OfflineDeepSkyPhase.REFERENCE -> StackTaskPhase.REFERENCE_SELECTION
+                                OfflineDeepSkyPhase.STACKING -> StackTaskPhase.STACKING
+                            },
+                            completed = completed,
+                            total = total,
+                            qualityFrames = stats.accepted.toLong()
+                        )
+                    }
                     recordMemory()
                 }, decoderWorkingBytes = source.processingOverheadBytes - source.calibration.heapBytes,
                 retainedCalibrationBytes = source.calibration.heapBytes)

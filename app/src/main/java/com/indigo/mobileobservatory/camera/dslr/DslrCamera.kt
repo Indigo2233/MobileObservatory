@@ -86,9 +86,27 @@ class DslrCamera : Camera, CameraStillCaptureCapable {
             connection = usbConnection
             transport = ptp
             ptp.claim()
-            val ptpSession = PtpSession(ptp)
-            session = ptpSession
-            val info = ptpSession.open()
+            var openedInfo: PtpDeviceInfo? = null
+            var lastOpenError: Throwable? = null
+            for (attempt in 1..2) {
+                ptp.prepareNikonSession()
+                val candidateSession = PtpSession(ptp)
+                session = candidateSession
+                val result = runCatching { candidateSession.open() }
+                openedInfo = result.getOrNull()
+                if (openedInfo != null) break
+                lastOpenError = result.exceptionOrNull()
+                if (candidateSession.isSessionOpen) {
+                    runCatching { candidateSession.close() }
+                }
+                FileLogger.w(
+                    TAG,
+                    "Nikon PTP open attempt $attempt failed: ${lastOpenError?.message}"
+                )
+            }
+            val info = openedInfo ?: throw (
+                lastOpenError ?: PtpException("Nikon PTP produced no device information")
+            )
             deviceInfo = info
             liveViewOps = NikonLiveView.detect(info)
             cameraInfo = CameraInfo(
@@ -99,7 +117,7 @@ class DslrCamera : Camera, CameraStillCaptureCapable {
                 maxBitDepth = 14,
                 sensorName = info.manufacturer.ifBlank { "Nikon" }
             )
-            dumpProbe(usbDevice, info, ptpSession)
+            session?.let { dumpProbe(usbDevice, info, it) }
             _isOpen.value = true
             true
         } catch (error: Throwable) {

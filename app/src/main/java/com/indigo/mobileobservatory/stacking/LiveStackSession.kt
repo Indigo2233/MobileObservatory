@@ -79,6 +79,16 @@ data class LiveFrameOutcome(
     val requiresReset: Boolean = false
 )
 
+/** Evaluated on the science worker before another frame enters the engine. */
+data class LiveCaptureLimit(
+    val frames: Long? = null,
+    val exposureSeconds: Double? = null
+) {
+    fun reached(acceptedFrames: Long, accumulatedExposureSeconds: Double): Boolean =
+        frames?.let { acceptedFrames >= it } == true ||
+            exposureSeconds?.let { accumulatedExposureSeconds >= it } == true
+}
+
 /** Testable engine boundary. Called only by the single session worker. */
 interface LiveStackEngine {
     fun add(image: LinearImage, exposureSeconds: Double, cancelled: () -> Boolean): LiveFrameOutcome
@@ -114,7 +124,10 @@ class LiveStackSession(
     private val maxInFlightFrames: Int = queueCapacity + 1
 ) : Closeable {
     // One RGB48 packet at the supported pixel ceiling. Admission budgets its actual layout.
-    companion object { const val MAX_INPUT_BYTES = LinearImage.MAX_PIXELS * 6 }
+    companion object {
+        const val MAX_INPUT_BYTES = LinearImage.MAX_PIXELS * 6
+        const val CAPTURE_LIMIT_REASON = "capture_limit_reached"
+    }
     private data class Packet(val frame: FrameData, val key: StackSessionKey, val generation: Long)
     private val lock = Any()
     private val queue = ArrayDeque<Packet>()
@@ -131,6 +144,10 @@ class LiveStackSession(
     private var lastPublish = 0L
     private var processingPacket = false
     private var exporting = false
+    @Volatile private var captureLimit: LiveCaptureLimit? = null
+    @Volatile private var captureLimitRevision = 0L
+    private var appliedCaptureLimitRevision = 0L
+    private val engineAdmissionLock = Any()
     private val job: Job
 
     init {
@@ -140,6 +157,7 @@ class LiveStackSession(
         job = scope.launch {
             try { for (signal in wake) {
                 while (!closed) {
+                    applyCaptureLimitRevisionOnWorker()
                     val packet = synchronized(lock) {
                         if (workerEpoch != epoch) {
                             engine = null
@@ -149,6 +167,7 @@ class LiveStackSession(
                         queue.pollFirst()?.also { processingPacket = true }
                     }
                     if (packet == null) {
+                        applyCaptureLimitRevisionOnWorker()
                         finishPause()
                         break
                     }
@@ -167,11 +186,17 @@ class LiveStackSession(
 
     fun start(key: StackSessionKey) = synchronized(lock) {
         check(!closed)
-        check(_state.value.phase == LiveStackPhase.EMPTY) { "Reset the previous live session first" }
+        val old = _state.value
+        check(old.phase == LiveStackPhase.EMPTY) { "Reset the previous live session first" }
         require(key.exposureUs.isFinite() && key.exposureUs > 0) { "Exposure must be known" }
         require(key.width > 0 && key.height > 0)
         lastFrameId = null
         _state.value = LiveStackState(phase = LiveStackPhase.RUNNING, key = key, generation = epoch)
+        val reachedAtStart = captureLimit?.reached(0, 0.0) == true
+        if (reachedAtStart) _state.value = _state.value.copy(
+            phase = LiveStackPhase.PAUSING,
+            reason = CAPTURE_LIMIT_REASON
+        )
         wake.trySend(Unit)
     }
 
@@ -180,6 +205,17 @@ class LiveStackSession(
         synchronized(lock) {
             val old = _state.value
             if (old.phase != LiveStackPhase.RUNNING || closed) return
+            if (captureLimit?.reached(old.accepted, old.exposureSeconds) == true) {
+                val queued = queue.size
+                queue.clear()
+                _state.value = old.copy(
+                    phase = LiveStackPhase.PAUSING,
+                    dropped = old.dropped + queued,
+                    reason = CAPTURE_LIMIT_REASON
+                )
+                wake.trySend(Unit)
+                return
+            }
             if (key != old.key || frame.width != key.width || frame.height != key.height || frame.pixelFormat != key.format) {
                 invalidateLocked("settings_changed")
                 return
@@ -227,6 +263,39 @@ class LiveStackSession(
         }
     }
 
+    /** Publishes a new limit; the science worker applies it at the next frame boundary. */
+    fun updateCaptureLimit(limit: LiveCaptureLimit?) {
+        captureLimit = limit
+        captureLimitRevision++
+        wake.trySend(Unit)
+    }
+
+    private fun applyCaptureLimitRevisionOnWorker() {
+        val revision = captureLimitRevision
+        if (revision == appliedCaptureLimitRevision) return
+        synchronized(engineAdmissionLock) {
+            synchronized(lock) {
+                if (revision == appliedCaptureLimitRevision) return
+                val old = _state.value
+                val limit = captureLimit
+                if (limit == null && old.phase == LiveStackPhase.PAUSING &&
+                    old.reason == CAPTURE_LIMIT_REASON) {
+                    _state.value = old.copy(phase = LiveStackPhase.RUNNING)
+                } else if (old.phase == LiveStackPhase.RUNNING &&
+                    limit?.reached(old.accepted, old.exposureSeconds) == true) {
+                    val queued = queue.size
+                    queue.clear()
+                    _state.value = old.copy(
+                        phase = LiveStackPhase.PAUSING,
+                        dropped = old.dropped + queued,
+                        reason = CAPTURE_LIMIT_REASON
+                    )
+                }
+                appliedCaptureLimitRevision = revision
+            }
+        }
+    }
+
     /** The SDK may restart its frame counter at one after capture stops. Call only after the
      * previous capture has stopped and before starting its replacement. Normal stack pause/
      * resume keeps the deduplication baseline; a capture restart preserves all accumulated data. */
@@ -265,6 +334,9 @@ class LiveStackSession(
             queue.clear()
             lastFrameId = null
             latestSnapshot = null
+            captureLimit = null
+            captureLimitRevision++
+            appliedCaptureLimitRevision = captureLimitRevision
             _state.value = LiveStackState(generation = epoch)
         }
         onSnapshot(null)
@@ -274,11 +346,50 @@ class LiveStackSession(
     private fun process(packet: Packet) {
         val started = nowNanos()
         try {
+            val current = synchronized(lock) { _state.value }
+            if (current.phase != LiveStackPhase.RUNNING ||
+                captureLimit?.reached(current.accepted, current.exposureSeconds) == true) {
+                if (current.phase == LiveStackPhase.RUNNING) {
+                    pause(CAPTURE_LIMIT_REASON)
+                }
+                return
+            }
             val decoded = decode(packet.frame, packet.key)
             if (epoch != packet.generation || closed) return
-            val currentEngine = engine ?: engineFactory().also { engine = it }
-            val outcome = currentEngine.add(decoded, packet.key.exposureUs / 1_000_000.0) {
-                closed || epoch != packet.generation
+            val finalCheck = synchronized(lock) {
+                val state = _state.value
+                val reachesLimit = captureLimit?.reached(state.accepted, state.exposureSeconds) == true
+                if (state.phase != LiveStackPhase.RUNNING) return@synchronized false
+                if (reachesLimit) {
+                    pause(CAPTURE_LIMIT_REASON)
+                    false
+                } else {
+                    packet.generation
+                }
+            }
+            if (finalCheck == false) return
+            val outcome = synchronized(engineAdmissionLock) {
+                val state = _state.value
+                if (state.phase != LiveStackPhase.RUNNING) {
+                    null
+                } else {
+                    val currentEngine = engine ?: engineFactory().also { engine = it }
+                    currentEngine.add(decoded, packet.key.exposureUs / 1_000_000.0) {
+                        val currentState = synchronized(lock) { _state.value }
+                        closed || epoch != packet.generation ||
+                            captureLimit?.reached(currentState.accepted, currentState.exposureSeconds) == true
+                    }
+                }
+            }
+            if (outcome == null) {
+                synchronized(lock) {
+                    val state = _state.value
+                    if (state.phase == LiveStackPhase.RUNNING &&
+                        captureLimit?.reached(state.accepted, state.exposureSeconds) == true) {
+                        pause(CAPTURE_LIMIT_REASON)
+                    }
+                }
+                return
             }
             synchronized(lock) {
                 if (epoch != packet.generation || closed) return
@@ -302,13 +413,33 @@ class LiveStackSession(
                 )
                 if (outcome.requiresReset) invalidateLocked(outcome.reason)
             }
-            if (nowNanos() - lastPublish >= 1_000_000_000L || latestSnapshot == null) publish(packet.generation)
+            val limitReached = synchronized(lock) {
+                val state = _state.value
+                if (state.phase == LiveStackPhase.RUNNING &&
+                    captureLimit?.reached(state.accepted, state.exposureSeconds) == true) {
+                    pause(CAPTURE_LIMIT_REASON)
+                    true
+                } else {
+                    false
+                }
+            }
+            if (nowNanos() - lastPublish >= 1_000_000_000L || latestSnapshot == null || limitReached) {
+                publish(packet.generation)
+            }
         } catch (_: java.util.concurrent.CancellationException) {
             // Reset/close discards this generation and its engine.
         } catch (error: Exception) {
             fail(packet.generation, error.message ?: "processing_failed")
         } catch (_: OutOfMemoryError) {
             fail(packet.generation, "memory_budget")
+        } finally {
+            synchronized(lock) {
+                val updated = _state.value
+                if (updated.phase == LiveStackPhase.RUNNING &&
+                    captureLimit?.reached(updated.accepted, updated.exposureSeconds) == true) {
+                    pause(CAPTURE_LIMIT_REASON)
+                }
+            }
         }
     }
 

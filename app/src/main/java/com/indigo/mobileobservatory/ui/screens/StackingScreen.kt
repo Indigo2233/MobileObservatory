@@ -112,7 +112,12 @@ fun StackingScreen(viewModel: CameraViewModel, mode: StackMode, onBack: () -> Un
             title = { Text(stringResource(R.string.stack_change_target_title, stackTargetLabel(choice))) },
             text = { Text(stringResource(R.string.stack_change_target_body)) },
             confirmButton = { TextButton(enabled = targetSelectionEnabled, onClick = {
-                if (coordinator.setTarget(mode, choice, resetConfirmed = true)) pendingTarget = null
+                val changed = if (mode == StackMode.LIVE) {
+                    viewModel.setLiveStackTarget(choice, resetConfirmed = true)
+                } else {
+                    coordinator.setTarget(mode, choice, resetConfirmed = true)
+                }
+                if (changed) pendingTarget = null
             }) { Text(stringResource(R.string.stack_change_target_confirm)) } },
             dismissButton = { TextButton(onClick = { pendingTarget = null }) { Text(stringResource(R.string.cancel)) } })
     }
@@ -225,7 +230,10 @@ fun StackingScreen(viewModel: CameraViewModel, mode: StackMode, onBack: () -> Un
         StackTargetTabs(target, enabled = targetSelectionEnabled) { choice ->
             if (choice != target) {
                 if (coordinator.targetChangeNeedsReset(mode)) pendingTarget = choice
-                else coordinator.setTarget(mode, choice)
+                else {
+                    if (mode == StackMode.LIVE) viewModel.setLiveStackTarget(choice)
+                    else coordinator.setTarget(mode, choice)
+                }
             }
         }
         if (mode == StackMode.LIVE) {
@@ -369,21 +377,21 @@ private fun LiveStackControls(vm: CameraViewModel, state: LiveStackState, showSt
                     Icon(Icons.Default.Pause, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp))
                     Text(stringResource(R.string.stack_pause), maxLines = 1)
                 }
-                LiveStackPhase.PAUSED -> Button(onClick = vm::startLiveStack, enabled = !blocked,
+                LiveStackPhase.PAUSED -> Button(onClick = vm::startLiveStack,
                     modifier = Modifier.weight(1.35f), contentPadding = PaddingValues(horizontal = 12.dp)) {
                     Icon(Icons.Default.PlayArrow, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp))
                     Text(stringResource(R.string.stack_resume), maxLines = 1)
                 }
                 else -> Unit
             }
-            if (state.phase != LiveStackPhase.EMPTY) OutlinedButton(onClick = c::resetLive,
-                modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 10.dp)) {
-                Text(stringResource(R.string.stack_reset), maxLines = 1)
-            }
             FilterChip(selected = !showStack, onClick = { if (showStack) c.toggleLiveDisplay() },
                 label = { Text(stringResource(R.string.stack_single), maxLines = 1, overflow = TextOverflow.Ellipsis) })
             FilterChip(selected = showStack, onClick = { if (!showStack) c.toggleLiveDisplay() },
                 label = { Text(stringResource(R.string.stack_accumulated), maxLines = 1, overflow = TextOverflow.Ellipsis) })
+            if (state.phase != LiveStackPhase.EMPTY) OutlinedButton(onClick = c::resetLive,
+                modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 10.dp)) {
+                Text(stringResource(R.string.stack_reset), maxLines = 1)
+            }
         }
         TextButton(onClick = { details = !details }, modifier = Modifier.align(Alignment.End)) {
             Text(stringResource(R.string.stack_quality_details))
@@ -429,7 +437,12 @@ private fun LiveStackControls(vm: CameraViewModel, state: LiveStackState, showSt
                 style = MaterialTheme.typography.bodyMedium)
             Text(stringResource(R.string.stack_perf, state.processingMs, state.javaPeakBytes / 1048576,
                 state.nativePeakBytes / 1048576), style = MaterialTheme.typography.bodySmall)
-            if (state.reason.isNotEmpty()) Text(stackMessage(state.reason), color = MaterialTheme.colorScheme.tertiary)
+            if (state.reason.isNotEmpty()) Text(
+                if (state.reason == com.indigo.mobileobservatory.stacking.LiveStackSession.CAPTURE_LIMIT_REASON)
+                    stringResource(R.string.capture_limit_paused_hint)
+                else stackMessage(state.reason),
+                color = MaterialTheme.colorScheme.tertiary
+            )
             diagnostic?.takeIf { !it.startable && (readiness == "memory_budget" || readiness == "input_budget") }?.let {
                 Text(stringResource(R.string.stack_live_budget_detail, it.workingBytes / 1048576,
                     it.budgetBytes / 1048576), style = MaterialTheme.typography.bodySmall,
@@ -437,6 +450,12 @@ private fun LiveStackControls(vm: CameraViewModel, state: LiveStackState, showSt
             }
             if (state.phase == LiveStackPhase.RESET_REQUIRED && state.reason != "REFERENCE_RESTART_REQUIRED")
                 Text(stringResource(R.string.stack_reset_required))
+            if (state.phase == LiveStackPhase.PAUSED &&
+                state.reason == com.indigo.mobileobservatory.stacking.LiveStackSession.CAPTURE_LIMIT_REASON) {
+                TextButton(onClick = vm::continueLiveStackAfterCaptureLimit) {
+                    Text(stringResource(R.string.capture_limit_continue))
+                }
+            }
         }
     }
 }
@@ -891,7 +910,9 @@ private fun stackLivePhase(phase: LiveStackPhase) = stringResource(when (phase) 
 @Composable
 private fun stackTaskPhase(phase: StackTaskPhase) = stringResource(when (phase) {
     StackTaskPhase.EMPTY -> R.string.stack_phase_empty; StackTaskPhase.READING -> R.string.stack_phase_reading
-    StackTaskPhase.READY -> R.string.stack_phase_ready; StackTaskPhase.ANALYZING -> R.string.stack_phase_analyzing
+    StackTaskPhase.READY -> R.string.stack_phase_ready
+    StackTaskPhase.REFERENCE_SELECTION -> R.string.stack_phase_reference_selection
+    StackTaskPhase.ANALYZING -> R.string.stack_phase_analyzing
     StackTaskPhase.ANALYZED -> R.string.stack_phase_analyzed; StackTaskPhase.REGISTERING -> R.string.stack_phase_registering
     StackTaskPhase.STACKING -> R.string.stack_phase_stacking; StackTaskPhase.PROCESSING -> R.string.stack_phase_processing
     StackTaskPhase.EXPORTING -> R.string.stack_phase_exporting; StackTaskPhase.COMPLETE -> R.string.stack_phase_complete
