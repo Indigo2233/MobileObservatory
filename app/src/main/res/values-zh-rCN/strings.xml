@@ -239,7 +239,7 @@
     <!-- SettingsScreen -->
     <string name="settings">设置</string>
     <string name="save_location">存储位置</string>
-    <string name="save_location_desc">SER: Movies/MobileObservatory/\nFITS: Pictures/MobileObservatory/</string>
+    <string name="save_location_desc">应用目录 Android/data/%1$s/files/\n录制文件按格式保存在 recordings/ 下。\n单张照片保存在 captures/ 下。\nMP4 图库副本保存在 Movies/MobileObservatory/。</string>
     <string name="debug">调试</string>
     <string name="export_log">导出日志</string>
     <string name="clear_log">清除日志</string>
@@ -602,6 +602,7 @@
     <string name="pixel_format_switch_failed">相机不支持切换到 %s，已保持原位深</string>
     <string name="trial_recording_disabled">试用版已禁用录制</string>
     <string name="record_error_detail">录制错误：%s</string>
+    <string name="record_storage_unavailable">录制存储不可用</string>
     <string name="record_mp4_encoder_failed">此手机无法录制 MP4（%s）。请改用 SER 或 FITS，或缩小 ROI。</string>
     <string name="dslr_live_view_not_science">Live View 不能保存为 SER/FITS。请用单张拍摄保存 JPEG。</string>
     <string name="recording_stopped">录制已停止</string>

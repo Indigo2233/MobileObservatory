@@ -74,6 +74,26 @@ class ScienceCaptureProvenanceInstrumentedTest {
         }
     }
 
+    @Test fun recordingNamesWithSlashesStayInTheirFormatDirectory() = runBlocking {
+        workspace { vm, camera ->
+            val recordings = checkNotNull(vm.getRecordingsDir())
+            val target = "C/../../../logs/recording-${System.nanoTime()}"
+            main { vm.setRecordFormat("FITS"); vm.setTargetName(target); vm.startRecording() }
+            val session = checkNotNull(vm.getActiveRecordingFile())
+            try {
+                camera.emit(camera.scienceCaptureGeneration!!)
+                main { vm.stopRecording() }
+                await { vm.getActiveRecordingFile() == null }
+                assertEquals(File(recordings, "FITS").canonicalFile, session.canonicalFile.parentFile)
+                assertTrue(File(session, "frame_000001.fits").isFile)
+            } finally {
+                main { vm.stopRecording() }
+                await { vm.getActiveRecordingFile() == null }
+                session.canonicalFile.deleteRecursively()
+            }
+        }
+    }
+
     @Test fun pauseAndResumeDuringControlWriteCannotStartAnUnverifiedReader() = runBlocking {
         workspace { vm, camera ->
             camera.emit(camera.scienceCaptureGeneration!!)

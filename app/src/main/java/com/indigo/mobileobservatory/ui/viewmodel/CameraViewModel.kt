@@ -4133,12 +4133,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 fmt == RecordFormat.FITS -> "fits"
                 else -> "ser"
             }
-            val dir = File(
-                getApplication<Application>().getExternalFilesDir("recordings"),
-                effectiveExt.uppercase()
-            )
+            val recordingsDir = checkNotNull(getRecordingsDir()) {
+                app.getString(R.string.record_storage_unavailable)
+            }
+            val dir = File(recordingsDir, effectiveExt.uppercase())
             dir.mkdirs()
+            check(dir.isDirectory) { app.getString(R.string.record_storage_unavailable) }
             val sessionName = "$ts-$target$filterPart-$cameraShort"
+                .replace('/', '_')
+                .replace('\\', '_')
             var file = if (fmt == RecordFormat.FITS) {
                 File(dir, sessionName)
             } else {

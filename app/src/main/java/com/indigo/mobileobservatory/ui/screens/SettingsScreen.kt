@@ -127,7 +127,7 @@ private fun SequenceSettingsEditor(vm: CameraViewModel, exit: com.indigo.mobileo
 private fun GeneralSettingsPage(updateViewModel: UpdateViewModel) = SettingsPage {
     Text(stringResource(R.string.save_location), style = MaterialTheme.typography.titleSmall)
     Text(
-        stringResource(R.string.save_location_desc),
+        stringResource(R.string.save_location_desc, BuildConfig.APPLICATION_ID),
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )

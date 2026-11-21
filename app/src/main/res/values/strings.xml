@@ -241,7 +241,7 @@
     <!-- SettingsScreen -->
     <string name="settings">Settings</string>
     <string name="save_location">Save Location</string>
-    <string name="save_location_desc">SER: Movies/MobileObservatory/\nFITS: Pictures/MobileObservatory/</string>
+    <string name="save_location_desc">App files are stored in Android/data/%1$s/files/.\nRecordings are saved by format under recordings/.\nStill captures are saved under captures/.\nMP4 gallery copies are saved in Movies/MobileObservatory/.</string>
     <string name="debug">Debug</string>
     <string name="export_log">Export Log</string>
     <string name="clear_log">Clear Log</string>
@@ -602,6 +602,7 @@
     <string name="pixel_format_switch_failed">Camera rejected %s, kept the previous bit depth</string>
     <string name="trial_recording_disabled">Trial version — recording disabled</string>
     <string name="record_error_detail">Record error: %s</string>
+    <string name="record_storage_unavailable">Recording storage is unavailable</string>
     <string name="record_mp4_encoder_failed">MP4 encoder failed on this phone (%s). Try SER or FITS, or a smaller ROI.</string>
     <string name="dslr_live_view_not_science">Live View cannot be saved as SER/FITS. Use still capture for JPEG.</string>
     <string name="recording_stopped">Recording stopped</string>
