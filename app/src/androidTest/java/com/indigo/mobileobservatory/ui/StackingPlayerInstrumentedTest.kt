@@ -144,7 +144,7 @@ class StackingPlayerInstrumentedTest {
         compose.waitUntil(10_000) { displayedFrame() > pausedFrame }
         compose.onNodeWithContentDescription(context.getString(R.string.back)).performClick()
         compose.waitUntil(10_000) {
-            compose.onAllNodesWithText(context.getString(R.string.media_stack_action)).fetchSemanticsNodes().isNotEmpty()
+            compose.onAllNodesWithTag("media-file-menu-${source.name}").fetchSemanticsNodes().isNotEmpty()
         }
         assertEquals("Leaving playback must still close its reader", 0, descriptorsFor(source))
         compose.onNodeWithContentDescription(context.getString(R.string.back)).performClick()

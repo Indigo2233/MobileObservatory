@@ -6,6 +6,23 @@ import java.io.File
 import java.nio.file.Files
 
 class MediaLibraryTest {
+    @Test fun browserSeparatesStillsRecordingsAndStackResultsIncludingRenamedOutputs() = withLibrary { recordings, captures ->
+        val photo = file(captures, "JPG/moon.jpg", 1000)
+        val still = file(captures, "FITS/raw.fits", 2000)
+        val video = file(recordings, "MP4/moon.mp4", 3000)
+        val fitsSession = file(recordings, "FITS/session/frame-001.fit", 4000).parentFile!!
+        check(fitsSession.setLastModified(4000))
+        val active = file(recordings, "SER/in-progress.ser", 5000)
+        val result = file(captures, "JPG/stack-M42.png", 6000)
+        val renamed = file(captures, "JPG/M42-display.png", 7000)
+        File(renamed.parentFile, "M42-display.json").writeText("""{"schema":"indigo-stack-1"}""")
+        fun browse(category: MediaCategory) = MediaLibrary.browse(recordings, captures, category, active).map { it.file }
+        assertEquals(listOf(still, photo), browse(MediaCategory.PHOTOS))
+        assertEquals(listOf(fitsSession, video), browse(MediaCategory.VIDEOS))
+        assertEquals(listOf(renamed, result), browse(MediaCategory.STACK_RESULTS))
+        assertEquals(listOf(renamed, result, fitsSession, video, still, photo), browse(MediaCategory.RECENT))
+    }
+
     @Test fun imagePickerIncludesIndividualFitsFramesAndExcludesRunningAndUnfinishedFiles() = withLibrary { recordings, captures ->
         val photo = file(captures, "JPG/moon.png", 1000)
         val raw = file(captures, "FITS/raw.fits", 2000)

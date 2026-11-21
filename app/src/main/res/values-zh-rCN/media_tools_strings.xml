@@ -25,7 +25,16 @@
     <string name="media_role_stack_display">叠加显示图</string>
     <string name="media_role_edited">编辑版本</string>
     <string name="media_batch_select">多选</string>
-    <string name="media_batch_selected">清除选择（%1$d）</string>
+    <string name="media_batch_selected">已选 %1$d 项</string>
+    <string name="media_more_actions">更多操作</string>
+    <string name="media_file_actions">%1$s 的文件操作</string>
+    <string name="media_empty_videos">暂无录像</string>
+    <string name="media_select_all">全选当前分类</string>
+    <string name="media_clear_selection">取消全选</string>
+    <string name="media_move_to_trash">移入回收站</string>
+    <string name="media_move_selected">将选中的 %1$d 项移入回收站？</string>
+    <string name="media_trash_partial">有 %1$d 项未能完成操作。</string>
+    <string name="media_empty_trash_confirm">永久删除回收站中的所有项目？</string>
     <string name="media_batch_export">导出 ZIP</string>
     <string name="media_batch_share">系统分享</string>
     <string name="media_batch_working">正在导出所选素材 · %1$d/%2$d</string>

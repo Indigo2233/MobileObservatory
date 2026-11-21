@@ -1,6 +1,5 @@
 package com.indigo.mobileobservatory.ui.screens
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -12,7 +11,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
@@ -23,8 +21,8 @@ import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Divider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -36,7 +34,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.indigo.mobileobservatory.R
-import com.indigo.mobileobservatory.ui.theme.ObservatoryTheme
 
 /**
  * User-requested tools hub. These are shortcuts into existing tasks, with the
@@ -64,26 +61,23 @@ fun ToolsScreen(
         modifier = modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+            .padding(vertical = 8.dp)
     ) {
         Text(
             text = stringResource(R.string.cockpit_tools_title),
             style = MaterialTheme.typography.titleLarge,
-            color = MaterialTheme.colorScheme.onSurface
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
         )
 
         val entries = buildList {
-            add(ToolEntry("live_stack", stringResource(R.string.stack_live),
-                stringResource(R.string.tools_live_stack_hint), null, Icons.Default.Layers, onOpenLiveStacking))
-            add(ToolEntry("post_stack", stringResource(R.string.stack_offline_title),
-                stringResource(R.string.tools_post_stack_hint), null, Icons.Default.Layers, onOpenStacking))
+            add(ToolEntry("live_stack", stringResource(R.string.stack_live), null, Icons.Default.Layers, onOpenLiveStacking))
+            add(ToolEntry("post_stack", stringResource(R.string.stack_offline_title), null, Icons.Default.Layers, onOpenStacking))
             add(
                 ToolEntry(
                     key = "plate_solve",
                     title = stringResource(R.string.plate_solve),
-                    hint = stringResource(R.string.tools_plate_database_hint),
-                    status = plateSolveStatus,
+                    detail = plateSolveStatus ?: stringResource(R.string.tools_plate_database_hint),
                     icon = Icons.Default.Search,
                     onClick = onOpenPlateSolve
                 )
@@ -92,8 +86,7 @@ fun ToolsScreen(
                 ToolEntry(
                     key = "polar",
                     title = stringResource(R.string.polar_alignment),
-                    hint = stringResource(R.string.cockpit_tools_polar_hint),
-                    status = polarStatus,
+                    detail = polarStatus,
                     icon = Icons.Default.Explore,
                     onClick = onOpenPolarAlignment
                 )
@@ -102,8 +95,7 @@ fun ToolsScreen(
                 ToolEntry(
                     key = "guide",
                     title = stringResource(R.string.guiding),
-                    hint = stringResource(R.string.cockpit_tools_guide_hint),
-                    status = guideStatus,
+                    detail = guideStatus,
                     icon = Icons.Default.PlayCircle,
                     onClick = onOpenGuide
                 )
@@ -112,8 +104,7 @@ fun ToolsScreen(
                 ToolEntry(
                     key = "player",
                     title = stringResource(R.string.wf_media),
-                    hint = stringResource(R.string.cockpit_tools_player_hint),
-                    status = playerStatus,
+                    detail = playerStatus,
                     icon = Icons.Default.Movie,
                     onClick = onOpenPlayer
                 )
@@ -123,8 +114,7 @@ fun ToolsScreen(
                     ToolEntry(
                         key = "sequence",
                         title = stringResource(R.string.tab_sequence),
-                        hint = stringResource(R.string.cockpit_tools_sequence_hint),
-                        status = sequenceStatus,
+                        detail = sequenceStatus,
                         icon = Icons.Default.Description,
                         onClick = onOpenSequence
                     )
@@ -136,7 +126,7 @@ fun ToolsScreen(
             entries.chunked(2).forEach { row ->
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     row.forEach { entry ->
-                        ToolCard(entry = entry, modifier = Modifier.weight(1f))
+                        ToolRow(entry = entry, modifier = Modifier.weight(1f))
                     }
                     if (row.size == 1) {
                         Box(Modifier.weight(1f))
@@ -144,7 +134,7 @@ fun ToolsScreen(
                 }
             }
         } else {
-            entries.forEach { entry -> ToolCard(entry = entry) }
+            entries.forEach { entry -> ToolRow(entry = entry) }
         }
     }
 }
@@ -152,61 +142,35 @@ fun ToolsScreen(
 private data class ToolEntry(
     val key: String,
     val title: String,
-    val hint: String,
-    val status: String?,
+    val detail: String?,
     val icon: ImageVector,
     val onClick: () -> Unit,
 )
 
 @Composable
-private fun ToolCard(
+private fun ToolRow(
     entry: ToolEntry,
     modifier: Modifier = Modifier,
 ) {
-    val cardColor = ObservatoryTheme.colors.card
-    Surface(
-        color = cardColor,
-        shape = RoundedCornerShape(ObservatoryTheme.dimens.radiusLarge),
-        modifier = modifier
-            .fillMaxWidth()
-            .heightIn(min = 84.dp)
-            .testTag("tool-${entry.key}")
-            .clickable { entry.onClick() }
-            .semantics { contentDescription = entry.title }
-    ) {
+    Column(modifier.fillMaxWidth()) {
         Row(
-            modifier = Modifier.padding(16.dp),
+            Modifier.fillMaxWidth().heightIn(min = 56.dp)
+                .testTag("tool-${entry.key}").clickable(onClick = entry.onClick)
+                .semantics { contentDescription = entry.title }.padding(horizontal = 16.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            Box(
-                modifier = Modifier
-                    .size(44.dp)
-                    .background(
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        shape = RoundedCornerShape(ObservatoryTheme.dimens.radiusMedium)
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = entry.icon,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(22.dp)
-                )
-            }
+            Icon(entry.icon, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(24.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = entry.title,
-                    style = MaterialTheme.typography.titleSmall,
+                    style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurface
                 )
-                Text(
-                    text = entry.status ?: entry.hint,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2
-                )
+                entry.detail?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
             Icon(
                 imageVector = Icons.Default.ChevronRight,
@@ -215,5 +179,6 @@ private fun ToolCard(
                 modifier = Modifier.size(20.dp)
             )
         }
+        Divider(Modifier.padding(start = 54.dp))
     }
 }

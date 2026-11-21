@@ -1,5 +1,6 @@
 package com.indigo.mobileobservatory.recording
 
+import com.indigo.mobileobservatory.media.MediaLineage
 import java.io.File
 
 data class VideoFileInfo(val file: File, val name: String, val size: Long, val format: String)
@@ -19,6 +20,21 @@ enum class MediaCategory(val extensions: List<String>) {
  * File-system work is synchronous: UI callers must use Dispatchers.IO.
  */
 object MediaLibrary {
+    /** Browser categories keep stills, recording sessions and stack outputs separate. */
+    fun browse(recordingsDir: File?, capturesDir: File?, category: MediaCategory,
+               excludeFile: File? = null): List<VideoFileInfo> = when (category) {
+        MediaCategory.PHOTOS, MediaCategory.STACK_RESULTS -> list(recordingsDir, capturesDir, MediaCategory.PHOTOS, excludeFile)
+            .filter { it.file.isFile && isStackResult(it.file) == (category == MediaCategory.STACK_RESULTS) }
+        MediaCategory.VIDEOS -> list(recordingsDir, capturesDir, MediaCategory.RECENT, excludeFile)
+            .filter { it.format in videoFormats || it.file.isDirectory }
+        else -> list(recordingsDir, capturesDir, category, excludeFile)
+    }
+
+    private val videoFormats = setOf("SER", "PSER", "MP4")
+    private fun isStackResult(file: File): Boolean =
+        file.extension.lowercase() in MediaCategory.STACK_RESULTS.extensions &&
+            (file.name.startsWith("stack-", ignoreCase = true) || MediaLineage.metadata(file)["schema"] == "indigo-stack-1")
+
     /** Individual still images, including completed frames within FITS recordings. */
     fun listImages(recordingsDir: File?, capturesDir: File?, excludeFile: File? = null): List<VideoFileInfo> =
         list(recordingsDir, capturesDir, MediaCategory.PHOTOS, excludeFile).flatMap { info ->

@@ -59,7 +59,8 @@ class MediaSolveShareInstrumentedTest {
         compose.setContent { MaterialTheme {
             PlayerScreen(File(root, "recordings"), File(root, "captures"), initialCategory = MediaCategory.PHOTOS, onBack = {})
         } }
-        compose.waitUntil(10_000) { compose.onAllNodesWithTag("media-share-${image.name}").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(10_000) { compose.onAllNodesWithTag("media-file-menu-${image.name}").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("media-file-menu-${image.name}").performClick()
         compose.onNodeWithTag("media-share-${image.name}").assertIsDisplayed().assertHasClickAction()
     }
 

@@ -227,11 +227,10 @@ private fun deviceSummary(viewModel: CameraViewModel, destination: DeviceControl
 private fun EquipmentList(viewModel: CameraViewModel, onOpen: (DeviceControlDestination) -> Unit) {
     val scanError by viewModel.accessoryScanError.collectAsStateWithPageLifecycle()
     Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(vertical = 8.dp)
     ) {
         Row(
-            Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(stringResource(R.string.wf_equipment_title), style = MaterialTheme.typography.titleLarge)
@@ -239,30 +238,28 @@ private fun EquipmentList(viewModel: CameraViewModel, onOpen: (DeviceControlDest
                 Icon(Icons.Default.Refresh, stringResource(R.string.scan))
             }
         }
-        VirtualObservationEntry(viewModel)
+        Box(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) { VirtualObservationEntry(viewModel) }
         DeviceControlDestination.equipment.forEach { destination ->
             val summary = deviceSummary(viewModel, destination)
-            Card(Modifier.fillMaxWidth().testTag("equipment-${destination.key}").clickable { onOpen(destination) }) {
-                Row(
-                    Modifier.fillMaxWidth().padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(deviceTitle(destination), style = MaterialTheme.typography.titleMedium)
-                        if (summary.connected && summary.identity.isNotBlank()) {
-                            Text(summary.identity, style = MaterialTheme.typography.bodyMedium)
-                        }
-                        Text(
-                            stringResource(if (summary.connected) R.string.connected else R.string.not_connected),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Icon(Icons.Default.ChevronRight, stringResource(R.string.wf_device_details))
+            Row(
+                Modifier.fillMaxWidth().testTag("equipment-${destination.key}").clickable { onOpen(destination) }
+                    .heightIn(min = 56.dp).padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                val status = stringResource(if (summary.connected) R.string.connected else R.string.not_connected)
+                Column(Modifier.weight(1f).padding(end = 8.dp)) {
+                    Text(deviceTitle(destination), style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        if (summary.connected && summary.identity.isNotBlank()) "$status · ${summary.identity}" else status,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
+                Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+            Divider(Modifier.padding(horizontal = 16.dp))
         }
-        scanError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        scanError?.let { Text(it, Modifier.padding(16.dp), color = MaterialTheme.colorScheme.error) }
     }
 }
 

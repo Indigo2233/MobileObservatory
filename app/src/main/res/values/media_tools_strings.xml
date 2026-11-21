@@ -25,7 +25,16 @@
     <string name="media_role_stack_display">Stack display image</string>
     <string name="media_role_edited">Edited version</string>
     <string name="media_batch_select">Select</string>
-    <string name="media_batch_selected">Clear selection (%1$d)</string>
+    <string name="media_batch_selected">%1$d selected</string>
+    <string name="media_more_actions">More actions</string>
+    <string name="media_file_actions">Actions for %1$s</string>
+    <string name="media_empty_videos">No recordings yet</string>
+    <string name="media_select_all">Select all in this tab</string>
+    <string name="media_clear_selection">Clear selection</string>
+    <string name="media_move_to_trash">Move to trash</string>
+    <string name="media_move_selected">Move %1$d selected items to trash?</string>
+    <string name="media_trash_partial">Could not complete the operation for %1$d items.</string>
+    <string name="media_empty_trash_confirm">Permanently delete all items in the trash?</string>
     <string name="media_batch_export">Export ZIP</string>
     <string name="media_batch_share">Share</string>
     <string name="media_batch_working">Exporting selected media · %1$d/%2$d</string>

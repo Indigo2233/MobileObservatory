@@ -1,15 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="media_library_title">My captures</string>
+    <string name="media_library_title">Media library</string>
     <string name="media_library_hint">Videos and photos taken in this app appear here automatically. You do not need to find their folders.</string>
     <string name="media_category_ser">Astronomy videos · SER/PSER</string>
     <string name="media_category_mp4">Videos · MP4</string>
     <string name="media_category_fits">Science images · FITS</string>
-    <string name="media_category_photos">Photos / PNG</string>
+    <string name="media_category_photos">Photos</string>
     <string name="media_category_results">Stacking results</string>
     <string name="media_empty_ser">No SER/PSER videos yet. Choose SER or PSER in the camera recording settings, then record your target. MP4 videos cannot be used for planetary stacking.</string>
     <string name="media_empty_results">Saved stacking results appear here: PNG for viewing and linear FITS for further processing. Save a result from live or planetary stacking to get started.</string>
-    <string name="media_empty_photos">Photos taken in this app and saved stacking PNG images appear here.</string>
+    <string name="media_empty_photos">No photos yet.</string>
     <string name="media_empty_fits">FITS captures, recording sequences and linear stacking results appear here.</string>
     <string name="media_empty_mp4">Videos recorded with the MP4 format appear here.</string>
     <string name="media_stack_action">Stack</string>

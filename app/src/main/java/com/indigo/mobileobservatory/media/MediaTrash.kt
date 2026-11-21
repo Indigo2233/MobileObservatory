@@ -15,6 +15,7 @@ object MediaTrash {
         return File(file.parentFile, ".entry-$key.json")
     }
 
+    @Synchronized
     fun move(source: File, trash: File): Boolean = runCatching {
         val target = File(trash, source.name)
         val companions = sidecars(source).zip(sidecars(target))
@@ -35,6 +36,7 @@ object MediaTrash {
         }
     }.getOrDefault(false)
 
+    @Synchronized
     fun restore(source: File, fallback: File, roots: List<File>): Boolean = runCatching {
         val metadata = marker(source)
         val path = if (metadata.isFile && metadata.length() < 16 * 1024) JSONObject(metadata.readText()).getString("original") else null
@@ -59,7 +61,11 @@ object MediaTrash {
         metadata.delete(); true
     }.getOrDefault(false)
 
-    fun delete(source: File) {
-        if (source.deleteRecursively()) { sidecars(source).forEach { it.delete() }; marker(source).delete() }
+    @Synchronized
+    fun delete(source: File): Boolean {
+        if (!source.deleteRecursively()) return false
+        sidecars(source).forEach { it.delete() }
+        marker(source).delete()
+        return true
     }
 }

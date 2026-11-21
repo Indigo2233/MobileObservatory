@@ -14,15 +14,13 @@ import android.os.SystemClock
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -48,7 +46,6 @@ import androidx.compose.ui.unit.sp
 import android.graphics.BitmapFactory
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.media.LibraryImportViewModel
-import com.indigo.mobileobservatory.media.ExternalMediaImportError
 import com.indigo.mobileobservatory.media.MediaImageEditSettings
 import com.indigo.mobileobservatory.media.MediaImageMemory
 import com.indigo.mobileobservatory.media.MediaImageEditing
@@ -60,9 +57,6 @@ import com.indigo.mobileobservatory.media.MediaEditRecipeStore
 import com.indigo.mobileobservatory.media.MediaLineage
 import com.indigo.mobileobservatory.media.MediaRename
 import com.indigo.mobileobservatory.media.MediaTrash
-import com.indigo.mobileobservatory.media.shareMediaFiles
-import com.indigo.mobileobservatory.media.MediaGroup
-import com.indigo.mobileobservatory.media.MediaRole
 import com.indigo.mobileobservatory.ui.components.Lp750Credit
 import com.indigo.mobileobservatory.mount.MountCoordinates
 import com.indigo.mobileobservatory.recording.SERReader
@@ -78,7 +72,6 @@ import com.indigo.mobileobservatory.util.FitsHeaderParser
 import com.indigo.mobileobservatory.util.FitsDisplayStretch
 import com.indigo.mobileobservatory.ui.theme.ObservatoryTheme
 import com.indigo.mobileobservatory.util.FileLogger
-import com.indigo.mobileobservatory.util.ImageUtils
 import kotlinx.coroutines.*
 import java.io.File
 import org.json.JSONObject
@@ -126,28 +119,6 @@ private fun RepeatableIconButton(
 typealias VideoFileInfo = com.indigo.mobileobservatory.recording.VideoFileInfo
 typealias MediaCategory = com.indigo.mobileobservatory.recording.MediaCategory
 
-private fun mediaCategoryLabel(category: MediaCategory) = when (category) {
-    MediaCategory.RECENT -> R.string.wf_recent
-    MediaCategory.PHOTOS -> R.string.media_category_photos
-    MediaCategory.VIDEOS -> R.string.wf_videos
-    MediaCategory.SER_PSER -> R.string.media_category_ser
-    MediaCategory.MP4 -> R.string.media_category_mp4
-    MediaCategory.FITS -> R.string.media_category_fits
-    MediaCategory.JPG -> R.string.media_category_photos
-    MediaCategory.STACK_RESULTS -> R.string.media_category_results
-}
-
-private fun mediaEmptyHint(category: MediaCategory) = when (category) {
-    MediaCategory.RECENT -> R.string.wf_media_empty
-    MediaCategory.PHOTOS -> R.string.media_empty_photos
-    MediaCategory.VIDEOS -> R.string.media_empty_ser
-    MediaCategory.SER_PSER -> R.string.media_empty_ser
-    MediaCategory.MP4 -> R.string.media_empty_mp4
-    MediaCategory.FITS -> R.string.media_empty_fits
-    MediaCategory.JPG -> R.string.media_empty_photos
-    MediaCategory.STACK_RESULTS -> R.string.media_empty_results
-}
-
 /** Read-only content URI; the recorder's app-owned file is never exposed as a file:// URI. */
 internal fun mediaVideoViewIntent(context: Context, file: File): Intent = Intent(Intent.ACTION_VIEW).apply {
     setDataAndType(FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file), "video/mp4")
@@ -155,7 +126,7 @@ internal fun mediaVideoViewIntent(context: Context, file: File): Intent = Intent
     if (context.findActivity() == null) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 }
 
-private fun openMp4(context: Context, file: File) {
+internal fun openMp4(context: Context, file: File) {
     try {
         context.startActivity(mediaVideoViewIntent(context, file))
     } catch (_: ActivityNotFoundException) {
@@ -201,6 +172,8 @@ fun PlayerScreen(
     var plateSolvePath by rememberSaveable { mutableStateOf<String?>(null) }
     val plateSolveFile = remember(plateSolvePath) { plateSolvePath?.let(::File) }
     var selectedCategory by rememberSaveable(initialCategory) { mutableStateOf(initialCategory) }
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
     var showFilePicker by rememberSaveable { mutableStateOf(true) }
     com.indigo.mobileobservatory.ui.components.ReportObservatoryImmersion(selectedFile != null && !showFilePicker)
     var refreshTrigger by remember { mutableIntStateOf(0) }
@@ -215,6 +188,7 @@ fun PlayerScreen(
             lastImportCompletion = importState.completionId
             selectedCategory = MediaCategory.RECENT
             refreshTrigger++
+            if (showFilePicker && selectedFile == null) listState.scrollToItem(0)
         }
     }
     var directFileUnavailable by remember { mutableStateOf(false) }
@@ -255,18 +229,32 @@ fun PlayerScreen(
         return
     }
     
-    val trashDir = remember(recordingsDir) {
-        recordingsDir?.let { File(it, ".trash").also { d -> d.mkdirs() } }
+    val trashDir = recordingsDir?.resolve(".trash")
+    var listing by remember(recordingsDir, capturesDir) { mutableStateOf<Pair<MediaCategory, List<VideoFileInfo>>?>(null) }
+    LaunchedEffect(recordingsDir, capturesDir, selectedCategory, refreshTrigger, excludeFile) {
+        val category = selectedCategory
+        val files = withContext(Dispatchers.IO) { MediaLibrary.browse(recordingsDir, capturesDir, category, excludeFile) }
+        listing = category to files
     }
-    
-    val currentFiles by produceState<List<VideoFileInfo>>(emptyList(), recordingsDir, capturesDir, selectedCategory, refreshTrigger, excludeFile) {
-        value = withContext(Dispatchers.IO) { MediaLibrary.list(recordingsDir, capturesDir, selectedCategory, excludeFile) }
+    val currentFiles = listing?.takeIf { it.first == selectedCategory }?.second
+    val currentExclude by rememberUpdatedState(excludeFile)
+    var deletingFile by remember { mutableStateOf(false) }
+    fun refreshLibrary(removed: Set<File> = emptySet()) {
+        if (removed.isNotEmpty()) listing = listing?.let { (category, files) ->
+            category to files.filterNot { it.file in removed }
+        }
+        refreshTrigger++
     }
 
     if (showFilePicker && selectedFile == null) {
-        FilePickerView(
+        MediaFileBrowser(
             recordingsDir = recordingsDir,
             capturesDir = capturesDir,
+            trashDir = trashDir,
+            listState = listState,
+            files = currentFiles?.filterNot { it.file == excludeFile }.orEmpty(),
+            loading = currentFiles == null,
+            initialCategory = initialCategory,
             onSelect = { info ->
                 selectedFile = info
                 showFilePicker = false
@@ -276,11 +264,17 @@ fun PlayerScreen(
             selectedCategory = selectedCategory,
             excludeFile = excludeFile,
             fileUnavailable = directFileUnavailable,
-            onCategoryChange = { cat -> selectedCategory = cat },
+            onCategoryChange = { cat ->
+                if (cat != selectedCategory) {
+                    selectedCategory = cat
+                    scope.launch { listState.scrollToItem(0) }
+                }
+            },
             isWorkspace = isWorkspace, onCamera = onCamera,
             onImport = onImport ?: if (isWorkspace) ({ importPicker.launch(arrayOf("*/*")) }) else null,
             onPostStack = onPostStack, onPlateSolve = onPlateSolve, importState = if (isWorkspace) importState else null,
-            onCancelImport = importer::cancel, refreshVersion = refreshTrigger
+            onCancelImport = importer::cancel,
+            onRefresh = ::refreshLibrary
         )
     } else {
         val info = selectedFile
@@ -302,25 +296,19 @@ fun PlayerScreen(
                     launch(file)
                 } },
                 onDelete = {
-                    val currentIndex = currentFiles.indexOfFirst { it.file.absolutePath == info.file.absolutePath }
-                    if (trashDir != null && info.file.exists()) {
-                        if (!MediaTrash.move(info.file, trashDir)) {
-                            Toast.makeText(context, R.string.media_trash_failed, Toast.LENGTH_LONG).show()
-                            return@PlaybackView
+                    if (deletingFile) return@PlaybackView
+                    deletingFile = true
+                    scope.launch {
+                        val moved = withContext(Dispatchers.IO) {
+                            trashDir != null && info.file != currentExclude && MediaTrash.move(info.file, trashDir)
                         }
-                    }
-                    refreshTrigger++
-                    val newFiles = currentFiles.filter { it.file.absolutePath != info.file.absolutePath }
-                    val nextIndex = when {
-                        newFiles.isEmpty() -> -1
-                        currentIndex >= newFiles.size -> newFiles.size - 1
-                        else -> currentIndex
-                    }
-                    if (nextIndex >= 0 && nextIndex < newFiles.size) {
-                        selectedFile = newFiles[nextIndex]
-                    } else {
-                        selectedFile = null
-                        showFilePicker = true
+                        deletingFile = false
+                        if (moved) {
+                            refreshLibrary(setOf(info.file))
+                            if (selectedFile == info) leaveFile()
+                        } else {
+                            Toast.makeText(context, R.string.media_trash_failed, Toast.LENGTH_LONG).show()
+                        }
                     }
                 },
                 onRename = { renamed ->
@@ -337,456 +325,6 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
     is Activity -> this
     is ContextWrapper -> baseContext.findActivity()
     else -> null
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun FilePickerView(
-    recordingsDir: File?,
-    capturesDir: File? = null,
-    onSelect: (VideoFileInfo) -> Unit,
-    onBack: () -> Unit,
-    onStackFile: ((File) -> Unit)? = null,
-    selectedCategory: MediaCategory,
-    excludeFile: File? = null,
-    fileUnavailable: Boolean = false,
-    onCategoryChange: (MediaCategory) -> Unit = {},
-    isWorkspace: Boolean = false,
-    onCamera: (() -> Unit)? = null,
-    onImport: (() -> Unit)? = null,
-    onPostStack: (() -> Unit)? = null,
-    onPlateSolve: (() -> Unit)? = null,
-    importState: com.indigo.mobileobservatory.media.LibraryImportState? = null,
-    onCancelImport: () -> Unit = {},
-    refreshVersion: Int = 0
-) {
-    val context = LocalContext.current
-    var showTrash by rememberSaveable { mutableStateOf(false) }
-    BackHandler(enabled = showTrash) { showTrash = false }
-    var fileToDelete by remember { mutableStateOf<VideoFileInfo?>(null) }
-    var fileToRename by remember { mutableStateOf<VideoFileInfo?>(null) }
-    var renameText by remember { mutableStateOf("") }
-    var renameError by remember { mutableStateOf<String?>(null) }
-    var refreshTrigger by remember { mutableIntStateOf(0) }
-    var grouped by rememberSaveable { mutableStateOf(true) }
-    var selecting by rememberSaveable { mutableStateOf(false) }
-    var selectedPaths by rememberSaveable { mutableStateOf(emptyList<String>()) }
-    var mediaGroups by remember { mutableStateOf(emptyList<MediaGroup>()) }
-    val recipeStore = remember(context) { MediaEditRecipeStore(File(context.filesDir, "image-recipes")) }
-    val scope = rememberCoroutineScope()
-    BackHandler(enabled = selecting && !showTrash) { selectedPaths = emptyList(); selecting = false }
-
-    fun requestRename(info: VideoFileInfo) {
-        fileToRename = info
-        renameText = info.file.nameWithoutExtension
-        renameError = null
-    }
-
-    fun commitRename() {
-        val info = fileToRename ?: return
-        val indexed = mediaGroups.flatMap { it.members }
-        val name = renameText
-        scope.launch(Dispatchers.IO) {
-            val result = runCatching {
-                MediaRename.rename(info.file, name, indexed, onRewritten = { recipeStore.refresh(it) })
-                    .also { recipeStore.rename(info.file, it) }
-            }
-            withContext(Dispatchers.Main) {
-                result.onSuccess {
-                refreshTrigger++
-                fileToRename = null
-                renameError = null
-                }.onFailure { failure ->
-                    renameError = context.getString(when (failure.message) {
-                        "name_empty", "name_invalid", "name_too_long", "name_exists" ->
-                            R.string.media_rename_invalid
-                        else -> R.string.media_rename_failed
-                    })
-                }
-            }
-        }
-    }
-    
-    val trashDir = remember(recordingsDir) {
-        recordingsDir?.let { File(it, ".trash").also { d -> d.mkdirs() } }
-    }
-
-    var loading by remember { mutableStateOf(true) }
-    val files by produceState<List<VideoFileInfo>>(emptyList(), recordingsDir, capturesDir, selectedCategory, refreshTrigger, refreshVersion, excludeFile) {
-        loading = true
-        value = emptyList()
-        val snapshot = withContext(Dispatchers.IO) {
-            MediaLibrary.list(recordingsDir, capturesDir, selectedCategory, excludeFile) to
-                MediaLineage.groups(MediaLibrary.list(recordingsDir, capturesDir, MediaCategory.RECENT, excludeFile)) { ensureActive() }
-        }
-        value = snapshot.first
-        mediaGroups = snapshot.second
-        loading = false
-    }
-    
-    val trashFiles by produceState<List<VideoFileInfo>>(emptyList(), trashDir, showTrash, refreshTrigger) {
-        value = withContext(Dispatchers.IO) {
-            if (showTrash && trashDir != null && trashDir.exists()) {
-                trashDir.listFiles()?.filter { !it.name.startsWith('.') && it.extension.lowercase() != "json" }?.map { f ->
-                    VideoFileInfo(f, f.name, f.length(), f.extension.uppercase())
-                }?.sortedByDescending { it.file.lastModified() } ?: emptyList()
-            } else emptyList()
-        }
-    }
-    
-    if (fileToDelete != null) {
-        AlertDialog(
-            onDismissRequest = { fileToDelete = null },
-            title = { Text(stringResource(R.string.delete_file)) },
-            text = { Text(stringResource(R.string.move_to_trash, fileToDelete?.name ?: "")) },
-            confirmButton = {
-                TextButton(onClick = {
-                    fileToDelete?.let { info ->
-                        trashDir?.let { trash ->
-                            if (!MediaTrash.move(info.file, trash)) Toast.makeText(context, R.string.media_trash_failed, Toast.LENGTH_LONG).show()
-                            refreshTrigger++
-                        }
-                    }
-                    fileToDelete = null
-                }) { Text(stringResource(R.string.delete)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { fileToDelete = null }) { Text(stringResource(R.string.cancel)) }
-            }
-        )
-    }
-    if (fileToRename != null) {
-        AlertDialog(
-            onDismissRequest = { fileToRename = null; renameError = null },
-            title = { Text(stringResource(R.string.media_rename_title)) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = renameText,
-                        onValueChange = { renameText = it; renameError = null },
-                        label = { Text(stringResource(R.string.media_rename_label)) },
-                        singleLine = true,
-                        isError = renameError != null
-                    )
-                    renameError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-                    Text(stringResource(R.string.media_rename_hint, fileToRename?.file?.extension?.uppercase().orEmpty()),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = ::commitRename, enabled = renameText.isNotBlank()) {
-                    Text(stringResource(R.string.rename))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { fileToRename = null; renameError = null }) { Text(stringResource(R.string.cancel)) }
-            }
-        )
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            if (!isWorkspace || showTrash) IconButton(onClick = { if (showTrash) showTrash = false else onBack() }) {
-                Icon(Icons.Default.ArrowBack, stringResource(R.string.back))
-            }
-            Text(
-                if (showTrash) stringResource(R.string.trash) else stringResource(R.string.media_library_title),
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier
-                    .padding(start = 8.dp)
-                    .weight(1f)
-            )
-            IconButton(onClick = { showTrash = !showTrash }) {
-                Icon(
-                    if (showTrash) Icons.Default.FolderOpen else Icons.Default.Delete,
-                    if (showTrash) stringResource(R.string.files) else stringResource(R.string.trash)
-                )
-            }
-        }
-        
-        if (!showTrash) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(selected = grouped, onClick = { grouped = !grouped }, label = { Text(stringResource(R.string.media_group_related)) })
-                TextButton(onClick = { selecting = !selecting; if (!selecting) selectedPaths = emptyList() }) {
-                    Text(stringResource(if (selecting) R.string.cancel else R.string.media_batch_select))
-                }
-            }
-            if (selecting) MediaBatchActions(
-                selected = mediaGroups.flatMap { it.members }.filter { it.file.absolutePath in selectedPaths },
-                onClear = { selectedPaths = emptyList(); selecting = false })
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (onImport != null) TextButton(onClick = onImport, enabled = importState?.busy != true,
-                    modifier = Modifier.testTag("media-import")) { Text(stringResource(R.string.wf_import_video)) }
-                if (onPostStack != null) OutlinedButton(onClick = onPostStack,
-                    modifier = Modifier.testTag("media-post-stack")) { Text(stringResource(R.string.stack_offline_title)) }
-                if (onPlateSolve != null) TextButton(onClick = onPlateSolve,
-                    modifier = Modifier.testTag("media-plate-solve")) { Text(stringResource(R.string.plate_solve)) }
-            }
-            if (importState?.busy == true) Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-                verticalAlignment = Alignment.CenterVertically) {
-                Text(stringResource(R.string.external_media_importing), Modifier.weight(1f))
-                TextButton(onClick = onCancelImport) { Text(stringResource(R.string.cancel)) }
-            }
-            importState?.error?.let { reason -> Text(stringResource(when (reason) {
-                ExternalMediaImportError.MISSING_FILE -> R.string.external_media_missing
-                ExternalMediaImportError.UNSUPPORTED -> R.string.external_media_unsupported
-                ExternalMediaImportError.READ_PERMISSION -> R.string.external_media_permission
-                ExternalMediaImportError.NO_SPACE -> R.string.external_media_space
-                ExternalMediaImportError.TOO_LARGE -> R.string.external_media_large
-                ExternalMediaImportError.INVALID_FILE -> R.string.external_media_invalid
-                ExternalMediaImportError.COPY_FAILED -> R.string.external_media_copy_failed
-            }), Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.error) }
-            Text(stringResource(if (fileUnavailable) R.string.media_file_unavailable else R.string.media_library_hint),
-                Modifier.padding(horizontal = 16.dp, vertical = 6.dp), style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                (if (isWorkspace) listOf(MediaCategory.RECENT, MediaCategory.PHOTOS, MediaCategory.VIDEOS, MediaCategory.STACK_RESULTS)
-                else MediaCategory.entries).forEach { cat ->
-                    FilterChip(
-                        selected = selectedCategory == cat,
-                        onClick = { 
-                            onCategoryChange(cat)
-                        },
-                        label = { Text(stringResource(mediaCategoryLabel(cat)), fontSize = 11.sp) },
-                        modifier = Modifier.heightIn(min = 32.dp)
-                    )
-                }
-            }
-        }
-
-        val included = files.map { it.file.absolutePath }.toSet()
-        val visibleGroups = if (showTrash || !grouped) emptyList() else mediaGroups.filter { group -> group.members.any { it.file.absolutePath in included } }
-        val displayFiles = if (showTrash) trashFiles else if (grouped) visibleGroups.flatMap { it.members } else files
-        val headings = visibleGroups.filter { it.members.size > 1 }.associateBy { it.members.first().file.absolutePath }
-        val roles = mediaGroups.flatMap { it.roles.entries }.associate { it.key to it.value }
-        
-        if (displayFiles.isEmpty()) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(vertical = 8.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(
-                        if (showTrash) Icons.Default.Delete else Icons.Default.VideoLibrary,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(48.dp)
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    if (!showTrash && !loading && onCamera != null) TextButton(onClick = onCamera) { Text(stringResource(R.string.wf_go_capture)) }
-                    Text(
-                        if (showTrash) stringResource(R.string.trash_empty) else if (loading) stringResource(R.string.media_loading)
-                        else stringResource(mediaEmptyHint(selectedCategory)),
-                        modifier = Modifier.padding(horizontal = 24.dp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-        } else {
-            if (showTrash) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    OutlinedButton(
-                        onClick = {
-                            trashFiles.forEach { info ->
-                                val originalDir = when {
-                                    info.format.equals("SER", true) || info.format.equals("PSER", true) -> 
-                                        File(recordingsDir, info.format.uppercase())
-                                    info.format.equals("MP4", true) -> File(recordingsDir, "MP4")
-                                    info.format.equals("FIT", true) || info.format.equals("FITS", true) -> 
-                                        File(if (info.name.startsWith("stack-", true)) capturesDir else recordingsDir, "FITS")
-                                    else -> File(capturesDir, "JPG")
-                                }
-                                if (!MediaTrash.restore(info.file, originalDir, listOfNotNull(recordingsDir, capturesDir)))
-                                    Toast.makeText(context, R.string.media_trash_failed, Toast.LENGTH_LONG).show()
-                            }
-                            refreshTrigger++
-                        },
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Icon(Icons.Default.Restore, null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text(stringResource(R.string.restore_all))
-                    }
-                    Button(
-                        onClick = {
-                            trashFiles.forEach { MediaTrash.delete(it.file) }
-                            refreshTrigger++
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.error
-                        ),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Icon(Icons.Default.DeleteForever, null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text(stringResource(R.string.empty_trash))
-                    }
-                }
-            }
-            
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(8.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                items(displayFiles, key = { it.file.absolutePath }) { info ->
-                    headings[info.file.absolutePath]?.let { group ->
-                        Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text(stringResource(R.string.media_group_count, group.members.size), Modifier.weight(1f),
-                                style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
-                            if (selecting) TextButton(onClick = {
-                                val paths = group.members.map { it.file.absolutePath }
-                                selectedPaths = if (paths.all { it in selectedPaths }) selectedPaths - paths.toSet()
-                                else (selectedPaths + paths).distinct()
-                            }) { Text(stringResource(R.string.media_group_select)) }
-                        }
-                    }
-                    Surface(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { 
-                                if (!showTrash) {
-                                    if (selecting) {
-                                        val path = info.file.absolutePath
-                                        selectedPaths = if (path in selectedPaths) selectedPaths - path else selectedPaths + path
-                                        return@clickable
-                                    }
-                                    if (info.format.equals("MP4", true)) {
-                                        openMp4(context, info.file)
-                                        return@clickable
-                                    }
-                                    val canOpen = info.format.equals("SER", true) || 
-                                                  info.format.equals("PSER", true) ||
-                                                  info.format.equals("JPG", true) ||
-                                                  info.format.equals("JPEG", true) ||
-                                                  info.format.equals("PNG", true) ||
-                                                  info.format.equals("FIT", true) ||
-                                                  info.format.equals("FITS", true)
-                                    if (canOpen) onSelect(info)
-                                }
-                            },
-                        shape = MaterialTheme.shapes.medium,
-                        tonalElevation = 1.dp
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                when {
-                                    info.format.equals("SER", true) || info.format.equals("PSER", true) -> 
-                                        Icons.Default.Movie
-                                    info.format.equals("MP4", true) -> Icons.Default.PlayCircle
-                                    info.format.equals("JPG", true) || info.format.equals("JPEG", true) ||
-                                    info.format.equals("PNG", true) -> Icons.Default.Image
-                                    else -> Icons.Default.Description
-                                },
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(28.dp)
-                            )
-                            Spacer(Modifier.width(12.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                if (!showTrash) roles[info.file.absolutePath]?.let { role ->
-                                    Text(stringResource(when (role) {
-                                        MediaRole.ORIGINAL -> R.string.media_role_original
-                                        MediaRole.STACK_LINEAR -> R.string.media_role_linear
-                                        MediaRole.STACK_DISPLAY -> R.string.media_role_stack_display
-                                        MediaRole.EDITED -> R.string.media_role_edited
-                                    }), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                                }
-                                Text(
-                                    info.name,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    maxLines = 1
-                                )
-                                Text(
-                                    "${java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT).format(java.util.Date(info.file.lastModified()))}  ·  ${info.format}  ·  ${ImageUtils.formatFileSize(info.size)}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.outline
-                                )
-                            }
-                            if (showTrash) {
-                                IconButton(onClick = {
-                                    val originalDir = when {
-                                        info.format.equals("SER", true) || info.format.equals("PSER", true) -> 
-                                            File(recordingsDir, info.format.uppercase())
-                                        info.format.equals("MP4", true) -> File(recordingsDir, "MP4")
-                                        info.format.equals("FIT", true) || info.format.equals("FITS", true) -> 
-                                            File(if (info.name.startsWith("stack-", true)) capturesDir else recordingsDir, "FITS")
-                                        else -> File(capturesDir, "JPG")
-                                    }
-                                    if (!MediaTrash.restore(info.file, originalDir, listOfNotNull(recordingsDir, capturesDir)))
-                                        Toast.makeText(context, R.string.media_trash_failed, Toast.LENGTH_LONG).show()
-                                    refreshTrigger++
-                                }) {
-                                    Icon(Icons.Default.Restore, stringResource(R.string.restore), modifier = Modifier.size(20.dp))
-                                }
-                            } else {
-                                if (selecting) Checkbox(checked = info.file.absolutePath in selectedPaths,
-                                    onCheckedChange = { checked -> selectedPaths = if (checked) (selectedPaths + info.file.absolutePath).distinct()
-                                        else selectedPaths - info.file.absolutePath })
-                                else {
-                                    if (info.file.isFile) IconButton(onClick = { requestRename(info) },
-                                        modifier = Modifier.testTag("media-rename-${info.name}")) {
-                                        Icon(Icons.Default.Edit, stringResource(R.string.rename), modifier = Modifier.size(20.dp))
-                                    }
-                                    if (info.file.isFile) IconButton(onClick = {
-                                        if (!shareMediaFiles(context, listOf(info.file)))
-                                            Toast.makeText(context, R.string.media_share_failed, Toast.LENGTH_LONG).show()
-                                    }, modifier = Modifier.testTag("media-share-${info.name}")) {
-                                        Icon(Icons.Default.Share, stringResource(R.string.media_batch_share), modifier = Modifier.size(20.dp))
-                                    }
-                                    if (onStackFile != null && (info.format.equals("SER", true) || info.format.equals("PSER", true))) {
-                                        val description = stringResource(R.string.stack_process_file)
-                                        TextButton(onClick = { onStackFile(info.file) },
-                                            modifier = Modifier.semantics { contentDescription = description }) {
-                                            Icon(Icons.Default.Layers, null,
-                                                tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
-                                            Spacer(Modifier.width(4.dp))
-                                            Text(stringResource(R.string.media_stack_action))
-                                        }
-                                    }
-                                    IconButton(onClick = { fileToDelete = info }) {
-                                        Icon(
-                                            Icons.Default.Delete,
-                                            stringResource(R.string.delete),
-                                            tint = MaterialTheme.colorScheme.error,
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
 }
 
 @Composable

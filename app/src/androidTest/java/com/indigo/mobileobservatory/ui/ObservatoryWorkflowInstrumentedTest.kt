@@ -386,8 +386,9 @@ class ObservatoryWorkflowInstrumentedTest {
         selectWorkspace("MEDIA")
         compose.onNodeWithText(app.getString(R.string.media_library_title)).assertIsDisplayed()
         compose.onNodeWithContentDescription(app.getString(R.string.back)).assertDoesNotExist()
-        compose.onNodeWithContentDescription(app.getString(R.string.trash)).performClick()
-        compose.onNodeWithContentDescription(app.getString(R.string.files)).assertIsDisplayed()
+        compose.onNodeWithTag("media-library-more").performClick()
+        compose.onNodeWithText(app.getString(R.string.trash)).performClick()
+        compose.onNodeWithText(app.getString(R.string.trash)).assertIsDisplayed()
         compose.onNodeWithContentDescription(app.getString(R.string.back)).assertIsDisplayed()
         systemBack()
         compose.onNodeWithText(app.getString(R.string.media_library_title)).assertIsDisplayed()
@@ -478,7 +479,8 @@ class ObservatoryWorkflowInstrumentedTest {
 
     @Test fun offlineSolveAndDatabaseRemainReachableFromMediaAndSkyWithTheirOwnBackPath() {
         selectWorkspace("MEDIA")
-        compose.onNodeWithTag("media-plate-solve").performScrollTo().performClick()
+        compose.onNodeWithTag("media-library-more").performClick()
+        compose.onNodeWithTag("media-plate-solve").performClick()
         assertGradedDatabaseChoices()
         compose.onNodeWithTag("solve-database-D50").performClick().assertIsSelected()
         // Selecting a tier is local; these navigation tests do not download or delete data.

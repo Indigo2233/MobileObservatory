@@ -81,7 +81,7 @@ class MediaLibraryInstrumentedTest {
         compose.onNodeWithText("stack-live-fixture.json").assertDoesNotExist()
     }
 
-    @Test fun fileListExcludesActiveRecordingAndOffersVisibleStackAction() {
+    @Test fun fileListExcludesActiveRecordingAndKeepsStackActionInTheFileMenu() {
         val folder = File(root, "recordings/SER").apply { mkdirs() }
         val ready = File(folder, "finished.ser").apply { writeBytes(byteArrayOf(1)) }
         val active = File(folder, "recording-now.ser").apply { writeBytes(byteArrayOf(2)) }
@@ -99,10 +99,48 @@ class MediaLibraryInstrumentedTest {
             throw failure
         }
         compose.onNodeWithText(active.name).assertDoesNotExist()
+        compose.onNodeWithTag("media-file-menu-${ready.name}").performClick()
         compose.onNodeWithText(context.getString(R.string.media_stack_action)).assertIsDisplayed()
-        compose.onNodeWithContentDescription(context.getString(R.string.stack_process_file)).performClick()
+        compose.onNodeWithTag("media-stack-${ready.name}").performClick()
         assertEquals(ready.absolutePath, selected.get()?.absolutePath)
         assertTrue(active.isFile)
+    }
+
+    @Test fun singleAndBatchTrashKeepTheListNearTheDeletedRows() {
+        val recordings = File(root, "recordings")
+        val folder = File(root, "captures/JPG").apply { check(mkdirs()) }
+        val files = List(40) { index ->
+            File(folder, "capture-${index}.jpg").apply {
+                writeBytes(byteArrayOf(1))
+                check(setLastModified(1_700_000_000_000L - index * 1000L))
+            }
+        }
+        compose.setContent { MaterialTheme {
+            PlayerScreen(recordings, File(root, "captures"), initialCategory = MediaCategory.PHOTOS, onBack = {})
+        } }
+        compose.waitUntil(10_000) { compose.onAllNodesWithText(files.first().name).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("media-file-list").performScrollToIndex(16)
+        compose.onNodeWithTag("media-file-menu-${files[16].name}").performClick()
+        compose.onNodeWithText(context.getString(R.string.media_move_to_trash)).performClick()
+        compose.onNodeWithTag("media-confirm-trash").performClick()
+        compose.waitUntil(10_000) {
+            !files[16].exists() && compose.onAllNodesWithText(files[16].name).fetchSemanticsNodes().isEmpty()
+        }
+        compose.onNodeWithText(files[17].name).assertIsDisplayed()
+        compose.onNodeWithText(files.first().name).assertDoesNotExist()
+
+        compose.onNodeWithText(files[17].name).performTouchInput { longClick() }
+        compose.onNodeWithText(files[18].name).performClick()
+        compose.onNodeWithTag("media-batch-trash").performClick()
+        compose.onNodeWithText(context.getString(R.string.media_move_selected, 2)).assertIsDisplayed()
+        compose.onNodeWithTag("media-confirm-trash").performClick()
+        val trash = File(recordings, ".trash")
+        compose.waitUntil(10_000) {
+            files.slice(16..18).all { !it.exists() && File(trash, it.name).isFile } &&
+                compose.onAllNodesWithTag("media-batch-trash").fetchSemanticsNodes().isEmpty()
+        }
+        compose.onNodeWithText(files[19].name).assertIsDisplayed()
+        compose.onNodeWithText(files.first().name).assertDoesNotExist()
     }
 
     @Test fun mp4UsesProviderContentUriWithReadOnlyGrantAndReadableOriginalBytes() {
