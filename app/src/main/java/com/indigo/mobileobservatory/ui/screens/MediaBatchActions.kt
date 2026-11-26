@@ -10,7 +10,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -18,7 +17,6 @@ import androidx.compose.ui.unit.dp
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.media.MediaBatchState
 import com.indigo.mobileobservatory.media.MediaBatchViewModel
-import com.indigo.mobileobservatory.media.shareMediaFiles
 import com.indigo.mobileobservatory.recording.VideoFileInfo
 
 @Composable
@@ -33,14 +31,14 @@ internal fun MediaBatchActions(
     onClose: () -> Unit,
     onMoveToTrash: (() -> Unit)?
 ) {
-    val context = LocalContext.current
     var shareFailed by remember { mutableStateOf(false) }
+    val shareFiles = rememberMediaShareLauncher { shareFailed = true }
     val destination = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { task.save(it) }
     LaunchedEffect(state.readyId) {
         if (state.readyId == null) return@LaunchedEffect
         task.acknowledge()
         val archive = state.archive ?: return@LaunchedEffect
-        if (state.share) shareFailed = !shareMediaFiles(context, listOf(archive))
+        if (state.share) shareFiles(listOf(archive))
         else destination.launch("Indigo-captures.zip")
     }
     Column(Modifier.fillMaxWidth()) {
@@ -64,7 +62,7 @@ internal fun MediaBatchActions(
                 DropdownMenuItem(text = { Text(stringResource(R.string.media_batch_share)) }, onClick = {
                     close()
                     if (selected.any { it.file.isDirectory }) task.prepare(selected, share = true)
-                    else shareFailed = !shareMediaFiles(context, selected.map { it.file })
+                    else shareFiles(selected.map { it.file })
                 }, enabled = selected.isNotEmpty())
                 DropdownMenuItem(text = { Text(stringResource(R.string.media_batch_export)) },
                     onClick = { close(); task.prepare(selected) }, enabled = selected.isNotEmpty())

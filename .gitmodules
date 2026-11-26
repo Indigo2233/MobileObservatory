@@ -1,3 +1,6 @@
 [submodule "app/src/main/cpp/libusb"]
 	path = app/src/main/cpp/libusb
 	url = https://github.com/libusb/libusb.git
+[submodule "app/src/main/rust/mjsolex"]
+	path = app/src/main/rust/mjsolex
+	url = https://github.com/Indigo2233/mjsolex-rs.git

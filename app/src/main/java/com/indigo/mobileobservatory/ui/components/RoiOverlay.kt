@@ -105,6 +105,8 @@ fun RoiOverlay(
             roi.x * scaleX, roi.y * scaleY,
             (roi.x + roi.width) * scaleX, (roi.y + roi.height) * scaleY
         )
+        val strokeWidth = 2f
+        val outline = RoiEditing.insetStrokeRect(roiRect, strokeWidth)
 
         drawRect(
             Color(0x40000000),
@@ -129,17 +131,17 @@ fun RoiOverlay(
 
         drawRect(
             Color(0xFFFFD700),
-            topLeft = roiRect.topLeft,
-            size = roiRect.size,
+            topLeft = outline.topLeft,
+            size = outline.size,
             style = Stroke(
-                width = 2f,
+                width = strokeWidth,
                 pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 4f))
             )
         )
 
         val handleRadius = 10f
         val handleColor = Color(0xFFFFD700)
-        listOf(roiRect.topLeft, roiRect.topRight, roiRect.bottomLeft, roiRect.bottomRight).forEach { corner ->
+        listOf(outline.topLeft, outline.topRight, outline.bottomLeft, outline.bottomRight).forEach { corner ->
             drawCircle(handleColor, handleRadius, corner)
         }
     }

@@ -30,7 +30,6 @@ import com.indigo.mobileobservatory.media.MediaBatchViewModel
 import com.indigo.mobileobservatory.media.MediaEditRecipeStore
 import com.indigo.mobileobservatory.media.MediaRename
 import com.indigo.mobileobservatory.media.MediaTrash
-import com.indigo.mobileobservatory.media.shareMediaFiles
 import com.indigo.mobileobservatory.recording.MediaLibrary
 import com.indigo.mobileobservatory.util.ImageUtils
 import java.io.File
@@ -42,6 +41,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private val libraryCategories = listOf(MediaCategory.RECENT, MediaCategory.PHOTOS, MediaCategory.VIDEOS, MediaCategory.STACK_RESULTS)
+private data class TrashFileEntry(val info: VideoFileInfo, val expiresAtUtcMs: Long?)
 
 private fun categoryLabel(category: MediaCategory) = when (category) {
     MediaCategory.RECENT -> R.string.wf_recent
@@ -76,6 +76,7 @@ internal fun MediaFileBrowser(
     onSelect: (VideoFileInfo) -> Unit,
     onBack: () -> Unit,
     onStackFile: ((File) -> Unit)?,
+    onSolarScanFile: ((File) -> Unit)?,
     onReviewFrames: (File) -> Unit,
     selectedCategory: MediaCategory,
     excludeFile: File?,
@@ -93,17 +94,36 @@ internal fun MediaFileBrowser(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val notification = remember { SnackbarHostState() }
+    val shareFiles = rememberMediaShareLauncher {
+        scope.launch {
+            notification.showSnackbar(context.getString(R.string.media_share_failed))
+        }
+    }
     val currentExclude by rememberUpdatedState(excludeFile)
     var showTrash by rememberSaveable { mutableStateOf(false) }
     val trashListState = rememberLazyListState()
     var trashRevision by remember { mutableIntStateOf(0) }
-    val trashFiles by produceState(emptyList<VideoFileInfo>(), trashDir, showTrash, trashRevision) {
+    val trashEntries by produceState(emptyList<TrashFileEntry>(), trashDir, showTrash, trashRevision) {
         if (showTrash) value = withContext(Dispatchers.IO) {
             trashDir?.listFiles().orEmpty()
                 .filter { !it.name.startsWith('.') && !it.extension.equals("json", true) }
                 .sortedByDescending(File::lastModified)
-                .map { VideoFileInfo(it, it.name, it.length(), if (it.isDirectory) "FITS" else it.extension.uppercase()) }
+                .map {
+                    TrashFileEntry(
+                        VideoFileInfo(
+                            it,
+                            it.name,
+                            it.length(),
+                            if (it.isDirectory) "FITS" else it.extension.uppercase()
+                        ),
+                        MediaTrash.expiresAtUtcMs(it)
+                    )
+                }
         }
+    }
+    val trashFiles = trashEntries.map { it.info }
+    val trashExpiryByPath = remember(trashEntries) {
+        trashEntries.associate { it.info.file.absolutePath to it.expiresAtUtcMs }
     }
     var selecting by rememberSaveable(selectedCategory) { mutableStateOf(false) }
     var selectedPaths by rememberSaveable(selectedCategory) { mutableStateOf(emptyList<String>()) }
@@ -221,6 +241,7 @@ internal fun MediaFileBrowser(
                 }.onFailure {
                     renameError = context.getString(when (it.message) {
                         "name_empty", "name_invalid", "name_too_long", "name_exists" -> R.string.media_rename_invalid
+                        MediaRename.BUSY -> R.string.media_rename_busy
                         else -> R.string.media_rename_failed
                     })
                 }
@@ -383,6 +404,7 @@ internal fun MediaFileBrowser(
                     val checked = info.file.absolutePath in selectedPathSet
                     MediaFileRow(
                         info = info, selecting = selecting && !showTrash, checked = checked,
+                        trashExpiresAtMs = trashExpiryByPath[info.file.absolutePath],
                         onClick = if (showTrash) null else ({
                             when {
                                 selecting -> toggle(info)
@@ -415,6 +437,13 @@ internal fun MediaFileBrowser(
                                         DropdownMenuItem(text = { Text(stringResource(R.string.media_stack_action)) },
                                             onClick = { close(); onStackFile(info.file) }, modifier = Modifier.testTag("media-stack-${info.name}"))
                                     }
+                                    if (onSolarScanFile != null && info.format == "SER") {
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(R.string.solar_scan_reconstruct)) },
+                                            onClick = { close(); onSolarScanFile(info.file) },
+                                            modifier = Modifier.testTag("media-solar-${info.name}")
+                                        )
+                                    }
                                     if (info.file.isFile) {
                                         DropdownMenuItem(text = { Text(stringResource(R.string.rename)) }, onClick = {
                                             close()
@@ -424,9 +453,7 @@ internal fun MediaFileBrowser(
                                         }, modifier = Modifier.testTag("media-rename-${info.name}"))
                                         DropdownMenuItem(text = { Text(stringResource(R.string.media_batch_share)) }, onClick = {
                                             close()
-                                            if (!shareMediaFiles(context, listOf(info.file))) {
-                                                scope.launch { notification.showSnackbar(context.getString(R.string.media_share_failed)) }
-                                            }
+                                            shareFiles(listOf(info.file))
                                         }, modifier = Modifier.testTag("media-share-${info.name}"))
                                     }
                                     DropdownMenuItem(text = { Text(stringResource(R.string.media_move_to_trash)) }, enabled = trashDir != null,
@@ -461,6 +488,7 @@ private fun MediaFileRow(
     info: VideoFileInfo,
     selecting: Boolean,
     checked: Boolean,
+    trashExpiresAtMs: Long?,
     onClick: (() -> Unit)?,
     onLongClick: (() -> Unit)?,
     enabled: Boolean,
@@ -472,6 +500,10 @@ private fun MediaFileRow(
     )
     val date = remember(info) {
         DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(info.file.lastModified()))
+    }
+    val expiry = remember(trashExpiresAtMs) {
+        trashExpiresAtMs
+            ?.let { DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(it)) }
     }
     Row(Modifier.fillMaxWidth().then(interaction)
         .then(if (selecting) Modifier.semantics { selected = checked } else Modifier)
@@ -485,6 +517,15 @@ private fun MediaFileRow(
             Text(info.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text("$date · ${info.format} · ${ImageUtils.formatFileSize(info.size)}", style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            expiry?.let {
+                Text(
+                    stringResource(R.string.media_trash_expires, it),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
         actions()
     }

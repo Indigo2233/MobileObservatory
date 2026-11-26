@@ -662,6 +662,19 @@ class ObservingUiWiringTest {
     }
 
     @Test
+    fun solarScanBackgroundCancellationLivesAtThePersistentShellHost() {
+        val shell = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/ObservatoryShell.kt"
+        )
+        val screen = read(
+            "src/main/java/com/indigo/mobileobservatory/ui/screens/SolarScanScreen.kt"
+        )
+        assertTrue(shell.contains("solarScanViewModel.cancel()"))
+        assertTrue(!screen.contains("LifecycleEventObserver"))
+        assertTrue(!screen.contains("viewModel.cancel()"))
+    }
+
+    @Test
     fun theCapturePreviewShowsOnlyTheSaveNoticeForThreeSeconds() {
         val camera = read(
             "src/main/java/com/indigo/mobileobservatory/ui/screens/CameraScreen.kt"
@@ -794,6 +807,19 @@ class ObservingUiWiringTest {
         assertTrue(viewer.contains("detectTransformGestures"))
         assertTrue(viewer.contains("detectTapGestures"))
         assertTrue(viewer.contains("rotation = (rotation + 90) % 360"))
+    }
+
+    @Test
+    fun solarTasksWaitForStartupMaintenanceBeforeTouchingTaskFiles() {
+        val viewModel = read("src/main/java/com/indigo/mobileobservatory/ui/viewmodel/SolarScanViewModel.kt")
+        for (entry in listOf("fun reconstructSelected()", "fun runSimulation()")) {
+            val operation = viewModel.substringAfter(entry).substringBefore("\n    fun ")
+            val wait = operation.indexOf("startupMaintenance.join()")
+            assertTrue(wait >= 0 && wait < operation.indexOf("repository.createStaging("))
+            if (entry.contains("reconstructSelected")) {
+                assertTrue(wait < operation.indexOf("SolarSourceIdentity.of("))
+            }
+        }
     }
 
     private fun read(relative: String): String {

@@ -149,7 +149,7 @@ fun LivePreview(
             }
             if (roiRect != null) {
                 val strokeWidth = (roiStrokeWidthPx / displayScale).coerceAtLeast(0.25f)
-                val outline = RoiEditing.outerStrokeRect(roiRect, strokeWidth)
+                val outline = RoiEditing.insetStrokeRect(roiRect, strokeWidth)
                 val shade = Color(0x28000000)
                 clipRect(0f, 0f, imgW, imgH) {
                     drawRect(shade, Offset.Zero, androidx.compose.ui.geometry.Size(imgW, roiRect.top))

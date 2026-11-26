@@ -1,0 +1,20 @@
+MJSol'Ex
+=========
+
+The Android build links the Apache-2.0 MJSol'Ex Rust reconstruction core at:
+
+https://github.com/Indigo2233/mjsolex-rs
+Revision: 2b047d9e7f87b28c0800dadeafebd94b08544552 (v0.0.3)
+
+Indigo Observatory adds a JNI bridge for file input, progress, cancellation and
+output paths. The reconstruction, spectrum fitting, corrections and product
+encoding execute in the upstream Rust crate.
+
+MJSol'Ex SER layout and reconstruction are in turn based on Astro4j and
+JSol'Ex revision 7ffdaf5c.
+
+Copyright 2023 the original Astro4j / JSol'Ex author or authors.
+Licensed under the Apache License, Version 2.0.
+
+The BASS2000 solar atlas is not included in this build. It remains separately
+licensed under CC BY-NC-SA 4.0 in the upstream project.

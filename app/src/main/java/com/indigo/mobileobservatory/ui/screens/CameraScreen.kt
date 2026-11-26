@@ -50,6 +50,7 @@ internal fun CaptureWorkspaceScreen(
     onPlateSolve: () -> Unit,
     onTargets: () -> Unit,
     onSequence: () -> Unit,
+    onSolarScan: () -> Unit,
     selectedTarget: String?,
     onCurrentFrameSolve: (File) -> Unit
 ) {
@@ -507,6 +508,7 @@ internal fun CaptureWorkspaceScreen(
                     portrait = portrait,
                     showSequence = SequenceFeature.ENABLED,
                     onOpenSequence = onSequence,
+                    onOpenSolarScan = onSolarScan,
                     mountConnected = mountConnected,
                     showMountPad = showMountPad,
                     onToggleMountPad = { showMountPad = !showMountPad },

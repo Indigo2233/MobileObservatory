@@ -70,6 +70,19 @@ class RoiEditingTest {
     }
 
     @Test
+    fun fullFrameStrokeStaysInsideTheVisibleImage() {
+        val image = Rect(0f, 0f, 640f, 480f)
+        val inset = RoiEditing.insetStrokeRect(image, strokeWidth = 5f)
+
+        assertEquals(2.5f, inset.left, 0f)
+        assertEquals(2.5f, inset.top, 0f)
+        assertEquals(637.5f, inset.right, 0f)
+        assertEquals(477.5f, inset.bottom, 0f)
+        assertEquals(2.5f, 640f - inset.right, 0f)
+        assertEquals(2.5f, 480f - inset.bottom, 0f)
+    }
+
+    @Test
     fun fullFrameKeepsASensorWhoseSizeIsNotAlignedToTheRoiStep() {
         val qhyLimits = RoiEditingLimits(
             sensorWidth = 6422,

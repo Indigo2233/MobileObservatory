@@ -62,6 +62,15 @@ $libusbRepository = Join-Path $repoRoot "app\src\main\cpp\libusb"
 if (-not (Test-Path -LiteralPath (Join-Path $libusbRepository ".git"))) {
     throw "Initialize the libusb submodule before packaging release source."
 }
+$mjsolexTreeEntry = & git -C $repoRoot ls-tree HEAD app/src/main/rust/mjsolex
+if ($LASTEXITCODE -ne 0 -or -not $mjsolexTreeEntry) {
+    throw "Unable to resolve the MJSol'Ex submodule commit."
+}
+$mjsolexCommit = ($mjsolexTreeEntry -split "\s+")[2]
+$mjsolexRepository = Join-Path $repoRoot "app\src\main\rust\mjsolex"
+if (-not (Test-Path -LiteralPath (Join-Path $mjsolexRepository ".git"))) {
+    throw "Initialize the MJSol'Ex submodule before packaging release source."
+}
 
 $systemTemp = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
 $tempRoot = Join-Path $systemTemp ("IndigoObservatory-source-" + [Guid]::NewGuid().ToString("N"))
@@ -90,10 +99,19 @@ try {
     )
     Invoke-NativeCommand -FilePath "tar.exe" -Arguments @("-xf", $libusbTar, "-C", $archivedLibusb)
 
+    $archivedMjsolex = Join-Path $appSource "app\src\main\rust\mjsolex"
+    $mjsolexTar = Join-Path $tempRoot "mjsolex.tar"
+    New-Item -ItemType Directory -Path $archivedMjsolex -Force | Out-Null
+    Invoke-NativeCommand -FilePath "git" -Arguments @(
+        "-C", $mjsolexRepository, "archive", "--format=tar", "--output=$mjsolexTar", $mjsolexCommit
+    )
+    Invoke-NativeCommand -FilePath "tar.exe" -Arguments @("-xf", $mjsolexTar, "-C", $archivedMjsolex)
+
     @(
         "application=Indigo Observatory"
         "sourceCommit=$sourceCommit"
         "libusbCommit=$libusbCommit"
+        "mjsolexCommit=$mjsolexCommit"
         "stellariumWebEngineCommit=$stellariumRevision"
     ) | Set-Content -LiteralPath (Join-Path $appSource "SOURCE_MANIFEST.txt") -Encoding utf8
 

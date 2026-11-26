@@ -13,6 +13,7 @@ import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
@@ -74,13 +75,19 @@ fun CameraScreen(viewModel: CameraViewModel, redNightMode: Boolean = false,
     val motion by viewModel.mountMotionState.collectAsStateWithPageLifecycle()
     LaunchedEffect(motion.isActive) { if (motion.isActive) viewModel.pointingRepository.invalidateCurrentDirections() }
     val lifecycleOwner = LocalLifecycleOwner.current
+    val solarScanViewModel: com.indigo.mobileobservatory.ui.viewmodel.SolarScanViewModel = viewModel()
     val context = LocalContext.current
     val focus = LocalFocusManager.current
     DisposableEffect(lifecycleOwner, viewModel) {
         val observer = LifecycleEventObserver { _, event ->
             var host = context
             while (host is android.content.ContextWrapper && host !is android.app.Activity) host = host.baseContext
-            if (event == Lifecycle.Event.ON_STOP && (host as? android.app.Activity)?.isChangingConfigurations != true) viewModel.stacking.onBackground()
+            if (event == Lifecycle.Event.ON_STOP &&
+                (host as? android.app.Activity)?.isChangingConfigurations != true
+            ) {
+                viewModel.stacking.onBackground()
+                solarScanViewModel.cancel()
+            }
             if (event == Lifecycle.Event.ON_START) viewModel.stacking.onForeground()
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -232,6 +239,7 @@ fun CameraScreen(viewModel: CameraViewModel, redNightMode: Boolean = false,
                         onDevice = { key -> if (key == "guide") open(ObservatoryDestination.GUIDE) else quickDevice = key })
                 }
                 ObservatorySequenceSummary(viewModel, navigation.current, open)
+                SolarScanSummary(solarScanViewModel, navigation.current, open)
                 VirtualObservationBar(viewModel)
                 Box(Modifier.weight(1f).fillMaxWidth()) {
                     val workspaceStacks = navigation.workspaceStacks
@@ -248,7 +256,7 @@ fun CameraScreen(viewModel: CameraViewModel, redNightMode: Boolean = false,
                             val visible = owner == navigation.workspace && page == navigation.pages.lastOrNull()
                             ObservatoryPageHost(visible) {
                                 savedScreens.SaveableStateProvider(screenKey) {
-                                    ObservatoryContent(viewModel, pageNavigation, target,
+                                    ObservatoryContent(viewModel, solarScanViewModel, pageNavigation, target,
                                         if (page?.destination == ObservatoryDestination.STACK) page.argument?.let(StackMode::valueOf) ?: stackMode else stackMode,
                                         if (page?.destination == ObservatoryDestination.PLAYER) page.argument else null,
                                         if (page?.destination == ObservatoryDestination.PLAYER) page.category?.let(MediaCategory::valueOf) ?: MediaCategory.RECENT else MediaCategory.RECENT,
@@ -284,7 +292,9 @@ fun CameraScreen(viewModel: CameraViewModel, redNightMode: Boolean = false,
 
 @Composable
 private fun ObservatoryContent(
-    vm: CameraViewModel, navigation: ObservatoryNavigation, target: StarMapTarget?, stackMode: StackMode,
+    vm: CameraViewModel,
+    solarScanViewModel: com.indigo.mobileobservatory.ui.viewmodel.SolarScanViewModel,
+    navigation: ObservatoryNavigation, target: StarMapTarget?, stackMode: StackMode,
     playerFile: String?, playerCategory: MediaCategory, redNightMode: Boolean,
     open: (ObservatoryDestination) -> Unit, back: () -> Unit, select: (ObservatoryWorkspace) -> Unit,
     chooseTarget: (StarMapTarget) -> Unit, pushTo: (StarMapTarget) -> Unit, openStack: (StackMode) -> Unit,
@@ -472,15 +482,28 @@ private fun ObservatoryContent(
             onOpenResult = { onPlayer(it, MediaCategory.STACK_RESULTS) })
         ObservatoryDestination.PLAYER -> PlayerScreen(vm.getRecordingsDir(), vm.getCapturesDir(), coordinates,
             onStackFile = { file -> vm.openPlanetaryStack(file); open(ObservatoryDestination.STACK) },
+            onSolarScanFile = { file -> solarScanViewModel.selectSource(file); open(ObservatoryDestination.SOLAR_SCAN) },
             initialFile = playerFile?.let(::File), initialCategory = playerCategory,
             excludeFile = vm.getActiveRecordingFile(), onBack = back,
             onFramesEdited = vm.stacking::refreshEditedSource,
             isRecordingFile = { it.absoluteFile == vm.getActiveRecordingFile()?.absoluteFile })
+        ObservatoryDestination.SOLAR_SCAN -> {
+            SolarScanScreen(
+                viewModel = solarScanViewModel,
+                onBack = back,
+                onOpenResult = { file ->
+                    onPlayer(file, MediaCategory.RECENT)
+                },
+                busySource = vm.getActiveRecordingFile()
+            )
+        }
         null -> when (navigation.workspace) {
             ObservatoryWorkspace.CAPTURE -> CaptureWorkspaceScreen(vm,
                 onPlateSolve = { open(ObservatoryDestination.PLATE_SOLVE) },
                 onTargets = { open(ObservatoryDestination.TARGETS) },
-                onSequence = { open(ObservatoryDestination.SEQUENCE) }, selectedTarget = target?.name,
+                onSequence = { open(ObservatoryDestination.SEQUENCE) },
+                onSolarScan = { open(ObservatoryDestination.SOLAR_SCAN) },
+                selectedTarget = target?.name,
                 onCurrentFrameSolve = onCurrentFrameSolve)
             ObservatoryWorkspace.STAR_MAP -> SkyWorkspaceScreen(vm, target, redNightMode,
                 onTargets = { open(ObservatoryDestination.TARGETS) },
@@ -491,6 +514,7 @@ private fun ObservatoryContent(
                 onOpticalPathInvalidated = { train, reason -> vm.pointingRepository.invalidateOpticalPath(train.prefValue(), reason.name) })
             ObservatoryWorkspace.MEDIA -> PlayerScreen(vm.getRecordingsDir(), vm.getCapturesDir(), coordinates,
                 onStackFile = { file -> vm.openPlanetaryStack(file); open(ObservatoryDestination.STACK) },
+                onSolarScanFile = { file -> solarScanViewModel.selectSource(file); open(ObservatoryDestination.SOLAR_SCAN) },
                 initialCategory = MediaCategory.RECENT, excludeFile = vm.getActiveRecordingFile(),
                 isWorkspace = true, onCamera = { select(ObservatoryWorkspace.CAPTURE) },
                 onFramesEdited = vm.stacking::refreshEditedSource,
@@ -509,6 +533,7 @@ private fun ObservatoryContent(
                     onOpenSequence = { open(ObservatoryDestination.SEQUENCE) },
                     onOpenStacking = { openStack(StackMode.PLANETARY) },
                     onOpenLiveStacking = { openStack(StackMode.LIVE) },
+                    onOpenSolarScan = { open(ObservatoryDestination.SOLAR_SCAN) },
                     wideLayout = maxWidth >= 600.dp
                 )
             }
@@ -559,5 +584,36 @@ private fun ObservatorySequenceSummary(vm: CameraViewModel, current: Observatory
             detail = stringResource(R.string.sequence_progress, state.framesDone, draft.plannedFrames()), paused = paused,
             onOpen = { open(ObservatoryDestination.SEQUENCE) }, onPause = vm.sequenceRuntime::pause,
             onResume = vm.sequenceRuntime::resume, onStop = vm.sequenceRuntime::stop)
+    }
+}
+
+@Composable
+private fun SolarScanSummary(
+    vm: com.indigo.mobileobservatory.ui.viewmodel.SolarScanViewModel,
+    current: ObservatoryDestination?,
+    open: (ObservatoryDestination) -> Unit
+) {
+    val state by vm.state.collectAsStateWithPageLifecycle()
+    if (!state.busy || current == ObservatoryDestination.SOLAR_SCAN) return
+    Surface(
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 44.dp).padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            TextButton(onClick = { open(ObservatoryDestination.SOLAR_SCAN) }) {
+                Text(
+                    stringResource(
+                        R.string.solar_scan_global_status,
+                        state.currentLeg.coerceAtLeast(1),
+                        state.totalLegs.coerceAtLeast(1)
+                    )
+                )
+            }
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = vm::cancel) { Text(stringResource(R.string.solar_scan_stop)) }
+        }
     }
 }

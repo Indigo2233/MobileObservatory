@@ -6,7 +6,8 @@
 
 ## 工具链
 
-- Rust stable：`rustc 1.89.0` 或更高版本。
+- Rust stable：`rustc 1.95.0` 或更高版本，太阳线扫使用的 MJSol'Ex v0.0.3 要求该最低版本。
+- `patches/mjsolex-core-only.patch` 为 MJSol'Ex 增加 `android-ui` Cargo 特性。太阳线扫依赖关闭该特性，Gradle 在构建前幂等应用补丁。
 - Android Rust targets：
   - `aarch64-linux-android`
   - `x86_64-linux-android`

@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Divider
 import androidx.compose.material3.MaterialTheme
@@ -49,6 +50,7 @@ fun ToolsScreen(
     onOpenSequence: () -> Unit,
     onOpenStacking: () -> Unit = {},
     onOpenLiveStacking: () -> Unit = {},
+    onOpenSolarScan: () -> Unit = {},
     modifier: Modifier = Modifier,
     wideLayout: Boolean = false,
     plateSolveStatus: String? = null,
@@ -73,6 +75,15 @@ fun ToolsScreen(
         val entries = buildList {
             add(ToolEntry("live_stack", stringResource(R.string.stack_live), null, Icons.Default.Layers, onOpenLiveStacking))
             add(ToolEntry("post_stack", stringResource(R.string.stack_offline_title), null, Icons.Default.Layers, onOpenStacking))
+            add(
+                ToolEntry(
+                    key = "solar_scan",
+                    title = stringResource(R.string.solar_scan),
+                    detail = stringResource(R.string.solar_scan_hint),
+                    icon = Icons.Default.WbSunny,
+                    onClick = onOpenSolarScan
+                )
+            )
             add(
                 ToolEntry(
                     key = "plate_solve",

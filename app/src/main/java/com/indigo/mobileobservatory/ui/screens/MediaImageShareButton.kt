@@ -13,7 +13,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.indigo.mobileobservatory.R
-import com.indigo.mobileobservatory.media.shareMediaFiles
 import com.indigo.mobileobservatory.media.writeMediaSharePreview
 import com.indigo.mobileobservatory.ui.theme.ObservatoryTheme
 import kotlinx.coroutines.*
@@ -23,13 +22,16 @@ import java.io.File
 internal fun MediaImageShareButton(file: File, preview: Bitmap?, enabled: Boolean) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val shareFiles = rememberMediaShareLauncher {
+        Toast.makeText(context, R.string.media_share_failed, Toast.LENGTH_LONG).show()
+    }
     var expanded by remember { mutableStateOf(false) }
     var preparing by remember { mutableStateOf(false) }
     val solveLog = remember(file) {
         com.indigo.mobileobservatory.astrometry.SolveFailureArchive.logFor(file).takeIf { it.isFile }
     }
     fun share(files: List<File>) {
-        if (!shareMediaFiles(context, files)) Toast.makeText(context, R.string.media_share_failed, Toast.LENGTH_LONG).show()
+        shareFiles(files)
     }
     Box {
         TextButton(onClick = { expanded = true }, enabled = enabled && !preparing,

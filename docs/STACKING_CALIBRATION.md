@@ -335,6 +335,9 @@ ROI, a dashed outline shows the suggested maximum, and tapping the sensor
 diagram moves the proposal. It is a sensor-coordinate diagram, not a reticle
 drawn over a potentially cropped/flipped/rotated live image. Input and stacked
 output dimensions and actual hardware/software Bin are shown separately.
+ROI outlines are inset by half their stroke width, so a full-frame ROI remains
+visible without clipping and users can still see whether a planet reaches an
+image edge.
 Memory estimates and the remaining ceilings live under “Why this limit?”.
 Manual crop presets/sliders are expandable in the capture panel.
 

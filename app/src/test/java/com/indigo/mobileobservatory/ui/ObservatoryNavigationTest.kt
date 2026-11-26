@@ -116,6 +116,16 @@ class ObservatoryNavigationTest {
         assertEquals(reopened, ObservatoryNavigation.restore(reopened.save()))
     }
 
+    @Test fun solarScanReopensItsRetainedTaskFromAnotherWorkspace() {
+        val solar = ObservatoryNavigation().select(TOOLS).open(SOLAR_SCAN)
+        val capture = solar.select(CAPTURE).open(PLATE_SOLVE)
+        val reopened = capture.open(SOLAR_SCAN)
+        assertEquals(TOOLS, reopened.workspace)
+        assertEquals(solar.pages, reopened.pages)
+        assertEquals(PLATE_SOLVE, reopened.select(CAPTURE).current)
+        assertEquals(reopened, ObservatoryNavigation.restore(reopened.save()))
+    }
+
     @Test fun calibrationAliasesReuseTheSamePageAndItsSelectedSource() {
         val calibration = ObservatoryNavigation().select(STAR_MAP).open(PREPARATION).open(POINTING_SETUP)
         val reopened = calibration.open(PLATE_SOLVE).open(AUXILIARY_CALIBRATION)

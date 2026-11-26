@@ -121,6 +121,18 @@ internal object RoiEditing {
         )
     }
 
+    /** Returns geometry whose centered stroke stays fully inside [inner]. */
+    fun insetStrokeRect(inner: Rect, strokeWidth: Float): Rect {
+        val insetX = min(strokeWidth.coerceAtLeast(0f) / 2f, inner.width / 2f)
+        val insetY = min(strokeWidth.coerceAtLeast(0f) / 2f, inner.height / 2f)
+        return Rect(
+            left = inner.left + insetX,
+            top = inner.top + insetY,
+            right = inner.right - insetX,
+            bottom = inner.bottom - insetY
+        )
+    }
+
     private fun alignDown(value: Int, step: Int): Int =
         (value / step.coerceAtLeast(1)) * step.coerceAtLeast(1)
 

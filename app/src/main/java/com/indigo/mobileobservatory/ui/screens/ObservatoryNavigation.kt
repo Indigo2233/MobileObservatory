@@ -5,7 +5,7 @@ enum class ObservatoryWorkspace { STAR_MAP, CAPTURE, MEDIA, EQUIPMENT, TOOLS }
 
 enum class ObservatoryDestination {
     SETTINGS, PREPARATION, POINTING_SETUP, AUXILIARY_CALIBRATION, TARGETS, PUSH_TO, PUSH_TO_AUXILIARY, PHONE_DEBUG,
-    PLATE_SOLVE, POLAR_ALIGNMENT, GUIDE, STACK, PLAYER, SEQUENCE
+    PLATE_SOLVE, POLAR_ALIGNMENT, GUIDE, STACK, PLAYER, SEQUENCE, SOLAR_SCAN
 }
 
 data class ObservatoryPage(val id: Int, val destination: ObservatoryDestination,
@@ -33,7 +33,8 @@ data class ObservatoryNavigation(
         val calibrationAliases = setOf(ObservatoryDestination.POINTING_SETUP, ObservatoryDestination.AUXILIARY_CALIBRATION)
         val sharedCalibration = destination in calibrationAliases
         if (sharedCalibration || destination in setOf(ObservatoryDestination.STACK, ObservatoryDestination.SETTINGS,
-                ObservatoryDestination.GUIDE, ObservatoryDestination.POLAR_ALIGNMENT)) {
+                ObservatoryDestination.GUIDE, ObservatoryDestination.POLAR_ALIGNMENT,
+                ObservatoryDestination.SOLAR_SCAN)) {
             workspaceStacks.forEach { (owner, stack) ->
                 val existing = stack.indexOfLast { if (sharedCalibration) it.destination in calibrationAliases
                     else it.destination == destination && it.argument == argument }

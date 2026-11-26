@@ -78,6 +78,7 @@ fun CameraPreviewTools(
     portrait: Boolean = false,
     showSequence: Boolean = false,
     onOpenSequence: () -> Unit = {},
+    onOpenSolarScan: () -> Unit = {},
     mountConnected: Boolean = false,
     showMountPad: Boolean = false,
     onToggleMountPad: () -> Unit = {},
@@ -134,6 +135,10 @@ fun CameraPreviewTools(
                 onDismissRequest = { menuOpen = false }
             ) {
                 PopupWindowBackHandler(enabled = menuOpen) { menuOpen = false }
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.solar_scan)) },
+                    onClick = { menuOpen = false; onOpenSolarScan() }
+                )
                 if (mountConnected) DropdownMenuItem(
                     text = { Text(stringResource(R.string.capture_mount_pad)) },
                     onClick = { menuOpen = false; onToggleMountPad() },

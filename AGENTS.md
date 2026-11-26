@@ -76,6 +76,24 @@ One). After upgrading any vendor SDK, re-verify the SONAMEs do not collide
 A stripped 1,173,184-byte snapshot without that table was accidentally
 committed in April 2026 and breaks post-2020 ZWO cameras; never restore it.
 
+### Solar reconstruction boundary
+
+- Solar line detection, SER sampling, reconstruction, correction, framing and
+  PNG/FITS product encoding use the pinned MJSol'Ex Rust submodule at
+  `app/src/main/rust/mjsolex` (commit
+  `2b047d9e7f87b28c0800dadeafebd94b08544552`, v0.0.3).
+- `app/src/main/rust/solar_scan` is the JNI bridge for file input, progress,
+  cancellation and output paths.
+- `patches/mjsolex-core-only.patch` adds the upstream `android-ui` feature
+  and is applied idempotently by Gradle. The JNI dependency disables that
+  feature so eframe/winit/egui and the MJSol'Ex Android activity stay out of
+  the APK.
+- Kotlin owns camera/mount orchestration, task state, persistence, result
+  manifests and source disposition. Do not reimplement reconstruction or
+  spectrum fitting in Kotlin.
+- Rust 1.95 or newer is required. Update the toolchain and workflow pins
+  deliberately when moving the MJSol'Ex revision.
+
 ## Native package changes
 
 The camera JNI functions use package-qualified exported names. Any future Android

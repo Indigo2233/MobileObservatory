@@ -72,7 +72,16 @@ object MediaLibrary {
             MediaCategory.STACK_RESULTS -> listOfNotNull(capturesDir?.resolve("JPG"), capturesDir?.resolve("FITS"))
             else -> emptyList()
         }
-        return directories.flatMap { it.listFiles().orEmpty().toList() }.filter(::visible).mapNotNull { file ->
+        val direct = directories.flatMap { it.listFiles().orEmpty().toList() }
+        val solarResults = when (category) {
+            MediaCategory.FITS, MediaCategory.JPG -> capturesDir?.resolve("SOLAR")
+                ?.walkTopDown()
+                ?.filter { it.isFile }
+                ?.toList()
+                .orEmpty()
+            else -> emptyList()
+        }
+        return (direct + solarResults).filter(::visible).mapNotNull { file ->
             when {
                 category == MediaCategory.STACK_RESULTS && !file.name.startsWith("stack-", ignoreCase = true) -> null
                 matches(file) -> describe(file)

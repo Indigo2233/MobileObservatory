@@ -1,8 +1,13 @@
 import java.io.File
 import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
+import org.gradle.api.file.ConfigurableFileCollection
+import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.ListProperty
 import org.gradle.api.provider.Property
+import org.gradle.api.tasks.InputDirectory
+import org.gradle.api.tasks.InputFile
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.TaskAction
 import org.gradle.api.tasks.Exec
@@ -37,6 +42,66 @@ abstract class VerifyReleaseSigning : DefaultTask() {
             keyAlias.get().equals("androiddebugkey", ignoreCase = true)
         ) {
             throw GradleException("Release builds cannot use the Android debug signing identity.")
+        }
+    }
+}
+
+abstract class ApplyGitPatch : DefaultTask() {
+    @get:InputDirectory
+    abstract val repository: DirectoryProperty
+
+    @get:InputFile
+    abstract val patchFile: RegularFileProperty
+
+    @TaskAction
+    fun apply() {
+        val repo = repository.get().asFile.absolutePath
+        val patch = patchFile.get().asFile.absolutePath
+
+        fun git(vararg arguments: String): Int {
+            val process = ProcessBuilder(listOf("git", "-C", repo) + arguments)
+                .redirectErrorStream(true)
+            process.environment().keys.removeIf { it.startsWith("GIT_CONFIG_") }
+            val started = process.start()
+            val output = started.inputStream.bufferedReader().use { it.readText() }
+            val code = started.waitFor()
+            if (output.isNotBlank()) logger.info(output.trimEnd())
+            return code
+        }
+
+        val reverseCode = git("apply", "--reverse", "--check", patch)
+        logger.info("MJSolEx patch reverse-check exit code: $reverseCode")
+        if (reverseCode == 0) return
+        val forwardCheckCode = git("apply", "--check", patch)
+        logger.info("MJSolEx patch forward-check exit code: $forwardCheckCode")
+        if (forwardCheckCode != 0) {
+            throw GradleException("Could not apply patch: $patch")
+        }
+        val applyCode = git("apply", patch)
+        logger.info("MJSolEx patch apply exit code: $applyCode")
+        if (applyCode != 0) throw GradleException("Could not apply patch: $patch")
+    }
+}
+
+abstract class VerifyRustLibraryPackaging : DefaultTask() {
+    @get:InputFiles
+    abstract val libraries: ConfigurableFileCollection
+
+    @get:Input
+    abstract val maxBytesPerLibrary: Property<Long>
+
+    @TaskAction
+    fun verify() {
+        val files = libraries.files
+        if (files.isEmpty() || files.any { !it.isFile || it.length() <= 0L }) {
+            throw GradleException("Rust JNI library output is missing or empty.")
+        }
+        val oversized = files.firstOrNull { it.length() > maxBytesPerLibrary.get() }
+        if (oversized != null) {
+            throw GradleException(
+                "Rust JNI library ${oversized.name} is ${oversized.length()} bytes; " +
+                    "Android GUI dependencies may have been linked."
+            )
         }
     }
 }
@@ -82,10 +147,14 @@ val rustStackAccumulatorDirectory = file("src/main/rust/stack_accumulator")
 val rustPlanetaryStackDirectory = file("src/main/rust/planetary_stack")
 val rustDemosaicDirectory = file("src/main/rust/demosaic")
 val rustCalibrationDirectory = file("src/main/rust/calibration")
+val rustMjsolexDirectory = file("src/main/rust/mjsolex")
+val rustSolarScanDirectory = file("src/main/rust/solar_scan")
 val rustStackJniLibsDirectory = layout.buildDirectory.dir("rustJniLibs/stack")
 val rustPlanetaryJniLibsDirectory = layout.buildDirectory.dir("rustJniLibs/planetary")
 val rustDemosaicJniLibsDirectory = layout.buildDirectory.dir("rustJniLibs/demosaic")
 val rustCalibrationJniLibsDirectory = layout.buildDirectory.dir("rustJniLibs/calibration")
+val rustSolarScanCargoOutputDirectory = layout.buildDirectory.dir("rustJniLibs/solar_scan-cargo")
+val rustSolarScanJniLibsDirectory = layout.buildDirectory.dir("rustJniLibs/solar_scan")
 val rustTargets = if (emulatorTest) listOf("x86", "x86_64") else listOf("arm64-v8a")
 val rustAndroidTargetDirectory = layout.buildDirectory.dir("rust-target/android")
 val rustHostTargetDirectory = layout.buildDirectory.dir("rust-target/host")
@@ -101,6 +170,15 @@ val rustDemosaicHostLibrary = rustHostLibraryDirectory.map {
 }
 val rustCalibrationHostLibrary = rustHostLibraryDirectory.map {
     it.file(if (phd2WindowsHost) "calibration_jni.dll" else "libcalibration_jni.so")
+}
+val rustSolarScanHostLibrary = rustHostLibraryDirectory.map {
+    it.file(if (phd2WindowsHost) "solar_scan_jni.dll" else "libsolar_scan_jni.so")
+}
+
+val applyMjsolexCorePatch by tasks.registering(ApplyGitPatch::class) {
+    description = "Builds only the MJSol'Ex reconstruction core, without its Android GUI."
+    repository.set(rustMjsolexDirectory)
+    patchFile.set(file("../patches/mjsolex-core-only.patch"))
 }
 
 val buildRustStackAccumulator by tasks.registering(Exec::class) {
@@ -219,6 +297,60 @@ val buildRustCalibration by tasks.registering(Exec::class) {
     )
 }
 
+val buildRustSolarScanCargo by tasks.registering(Exec::class) {
+    group = "build"
+    description = "Builds the MJSol'Ex Rust reconstruction JNI libraries."
+    dependsOn(applyMjsolexCorePatch)
+    workingDir(rustSolarScanDirectory)
+    inputs.files(
+        fileTree(rustSolarScanDirectory) {
+            exclude("target/**")
+        },
+        fileTree(rustMjsolexDirectory) {
+            exclude("target/**", ".git")
+        }
+    )
+    inputs.property("rustTargets", rustTargets)
+    outputs.dir(rustSolarScanCargoOutputDirectory)
+    environment("CARGO_TARGET_DIR", rustAndroidTargetDirectory.get().asFile.absolutePath)
+    environment("CARGO_BUILD_JOBS", "1")
+    commandLine(
+        buildList {
+            add("cargo")
+            add("ndk")
+            rustTargets.forEach {
+                add("-t")
+                add(it)
+            }
+            add("-o")
+            add(rustSolarScanCargoOutputDirectory.get().asFile.absolutePath)
+            add("build")
+            add("--release")
+            add("--locked")
+        }
+    )
+}
+
+val buildRustSolarScan by tasks.registering(Sync::class) {
+    group = "build"
+    description = "Stages the Solar JNI library without unused dependency cdylibs."
+    dependsOn(buildRustSolarScanCargo)
+    from(rustSolarScanCargoOutputDirectory) {
+        include("**/libsolar_scan_jni.so")
+    }
+    into(rustSolarScanJniLibsDirectory)
+}
+
+val verifyRustSolarScanPackaging by tasks.registering(VerifyRustLibraryPackaging::class) {
+    group = "verification"
+    description = "Rejects Solar JNI libraries that unexpectedly link the MJSol'Ex Android GUI."
+    dependsOn(buildRustSolarScan)
+    libraries.from(fileTree(rustSolarScanJniLibsDirectory) {
+        include("**/*.so")
+    })
+    maxBytesPerLibrary.set(5L * 1024L * 1024L)
+}
+
 val buildRustStackAccumulatorHost by tasks.registering(Exec::class) {
     group = "verification"
     description = "Builds the Rust deep-sky accumulator for host JVM tests."
@@ -279,15 +411,47 @@ val buildRustCalibrationHost by tasks.registering(Exec::class) {
     commandLine("cargo", "build", "--manifest-path", file("src/main/rust/calibration/Cargo.toml").absolutePath)
 }
 
+val buildRustSolarScanHost by tasks.registering(Exec::class) {
+    group = "verification"
+    description = "Builds the MJSol'Ex Rust reconstruction core for host JVM tests."
+    dependsOn(applyMjsolexCorePatch)
+    workingDir(rustSolarScanDirectory)
+    inputs.files(
+        fileTree(rustSolarScanDirectory) {
+            exclude("target/**")
+        },
+        fileTree(rustMjsolexDirectory) {
+            exclude("target/**", ".git")
+        }
+    )
+    outputs.file(rustSolarScanHostLibrary)
+    environment("CARGO_TARGET_DIR", rustHostTargetDirectory.get().asFile.absolutePath)
+    environment("CARGO_BUILD_JOBS", "1")
+    commandLine(
+        "cargo",
+        "build",
+        "--manifest-path",
+        file("src/main/rust/solar_scan/Cargo.toml").absolutePath,
+        "--locked"
+    )
+}
+
 val buildRustNativeLibraries by tasks.registering {
     group = "build"
     description = "Builds all Rust native libraries for Android."
-    dependsOn(buildRustStackAccumulator, buildRustPlanetaryStack, buildRustDemosaic, buildRustCalibration)
+    dependsOn(
+        buildRustStackAccumulator,
+        buildRustPlanetaryStack,
+        buildRustDemosaic,
+        buildRustCalibration,
+        verifyRustSolarScanPackaging
+    )
 }
 
 buildRustPlanetaryStack.configure { mustRunAfter(buildRustStackAccumulator) }
 buildRustDemosaic.configure { mustRunAfter(buildRustPlanetaryStack) }
 buildRustCalibration.configure { mustRunAfter(buildRustDemosaic) }
+buildRustSolarScanCargo.configure { mustRunAfter(buildRustCalibration) }
 
 tasks.matching { it.name == "preBuild" || it.name.endsWith("JniLibFolders") }.configureEach {
     dependsOn(buildRustNativeLibraries)
@@ -296,12 +460,19 @@ tasks.matching { it.name == "preBuild" || it.name.endsWith("JniLibFolders") }.co
 val buildRustHostLibraries by tasks.registering {
     group = "verification"
     description = "Builds all Rust native libraries for host JVM tests."
-    dependsOn(buildRustStackAccumulatorHost, buildRustPlanetaryStackHost, buildRustDemosaicHost, buildRustCalibrationHost)
+    dependsOn(
+        buildRustStackAccumulatorHost,
+        buildRustPlanetaryStackHost,
+        buildRustDemosaicHost,
+        buildRustCalibrationHost,
+        buildRustSolarScanHost
+    )
 }
 
 buildRustPlanetaryStackHost.configure { mustRunAfter(buildRustStackAccumulatorHost) }
 buildRustDemosaicHost.configure { mustRunAfter(buildRustPlanetaryStackHost) }
 buildRustCalibrationHost.configure { mustRunAfter(buildRustDemosaicHost) }
+buildRustSolarScanHost.configure { mustRunAfter(buildRustCalibrationHost) }
 buildRustStackAccumulatorHost.configure { mustRunAfter(buildRustCalibration) }
 buildRustHostLibraries.configure { mustRunAfter(buildRustNativeLibraries) }
 
@@ -463,6 +634,7 @@ android {
             jniLibs.srcDir(rustPlanetaryJniLibsDirectory)
             jniLibs.srcDir(rustDemosaicJniLibsDirectory)
             jniLibs.srcDir(rustCalibrationJniLibsDirectory)
+            jniLibs.srcDir(rustSolarScanJniLibsDirectory)
             if (stellariumNonCommercial) {
                 assets.srcDir("src/stellarium/assets")
             }
@@ -510,6 +682,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
     implementation("androidx.activity:activity-compose:1.8.2")
     implementation("androidx.webkit:webkit:1.10.0")
+    implementation("androidx.work:work-runtime-ktx:2.9.0")
 
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")

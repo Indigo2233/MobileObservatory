@@ -113,10 +113,19 @@ internal fun StackRoiPanel(context: StackRoiContext, showBinning: Boolean = fals
             val origin = Offset((size.width - context.sensorWidth * scale) / 2, (size.height - context.sensorHeight * scale) / 2)
             drawRect(outline, origin, Size(context.sensorWidth * scale, context.sensorHeight * scale), style = Stroke(1.dp.toPx()))
             fun topLeft(roi: Roi) = origin + Offset(roi.x * scale, roi.y * scale)
-            drawRect(currentColor, topLeft(current), Size(current.width * scale, current.height * scale), style = Stroke(2.dp.toPx()))
+            fun strokeRect(roi: Roi): androidx.compose.ui.geometry.Rect {
+                val rect = androidx.compose.ui.geometry.Rect(
+                    topLeft(roi),
+                    Size(roi.width * scale, roi.height * scale)
+                )
+                return RoiEditing.insetStrokeRect(rect, 2.dp.toPx())
+            }
+            val currentStroke = strokeRect(current)
+            drawRect(currentColor, currentStroke.topLeft, currentStroke.size, style = Stroke(2.dp.toPx()))
             maximum?.let { roi ->
                 drawRect(maxColor.copy(alpha = .12f), topLeft(roi), Size(roi.width * scale, roi.height * scale))
-                drawRect(maxColor, topLeft(roi), Size(roi.width * scale, roi.height * scale),
+                val stroke = strokeRect(roi)
+                drawRect(maxColor, stroke.topLeft, stroke.size,
                     style = Stroke(2.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(10.dp.toPx(), 5.dp.toPx()))))
             }
         }

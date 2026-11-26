@@ -5,4 +5,6 @@
     <string name="media_rename_hint">The .%1$s extension is kept. Capture settings and related files follow the new name.</string>
     <string name="media_rename_invalid">Use a non-empty name without \\ / : * ? \" &lt; &gt; or | , and choose a name that does not already exist.</string>
     <string name="media_rename_failed">The capture could not be renamed. Close any app using it, then retry.</string>
+    <string name="media_rename_busy">This file is in use. Close other views or wait until sharing or processing finishes, then retry.</string>
+    <string name="media_frame_edit_unavailable">The recording is busy or unavailable. Refresh the library and try again.</string>
 </resources>

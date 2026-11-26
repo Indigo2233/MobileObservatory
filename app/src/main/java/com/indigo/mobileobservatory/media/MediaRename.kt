@@ -16,6 +16,7 @@ import org.json.JSONObject
 
 /** Renames an app-owned media file without stranding its capture or edit metadata. */
 object MediaRename {
+    internal const val BUSY = "rename_busy"
     private const val FITS_BLOCK = 2880L
     private const val FITS_CARD = 80
     private val invalidStemCharacters = Regex("""[\\/:*?"<>|]""")
@@ -35,6 +36,20 @@ object MediaRename {
     fun rename(file: File, requestedStem: String,
                indexed: List<com.indigo.mobileobservatory.recording.VideoFileInfo> = emptyList(),
                onRewritten: (File) -> Unit = {}): File {
+        var renamed = file
+        val result = MediaUsageRegistry.withExclusiveAccess(file) {
+            renamed = renameExclusive(file, requestedStem, indexed, onRewritten)
+            true
+        }
+        check(result == ExclusiveAccessResult.SUCCESS) {
+            if (result == ExclusiveAccessResult.BUSY) BUSY else "rename_failed"
+        }
+        return renamed
+    }
+
+    private fun renameExclusive(file: File, requestedStem: String,
+                                indexed: List<com.indigo.mobileobservatory.recording.VideoFileInfo>,
+                                onRewritten: (File) -> Unit): File {
         require(file.isFile) { "rename_file" }
         require(file.extension.isNotEmpty()) { "rename_extension" }
         val stem = normalizedStem(requestedStem)

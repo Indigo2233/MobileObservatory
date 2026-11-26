@@ -1,6 +1,7 @@
 package com.indigo.mobileobservatory.ui.screens
 
 import android.graphics.Bitmap
+import android.widget.Toast
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -264,6 +265,10 @@ private fun FrameRangeDialog(frame: Long, total: Long, onDismiss: () -> Unit,
 @Composable
 internal fun FitsSequencePreviewScreen(directory: File, revision: Int, onBack: () -> Unit,
     onStack: (() -> Unit)?, onEdit: (() -> Unit)?) {
+    val context = LocalContext.current
+    val shareFiles = rememberMediaShareLauncher(leaseDirectory = directory) {
+        Toast.makeText(context, R.string.media_share_failed, Toast.LENGTH_LONG).show()
+    }
     val members by produceState<List<File>?>(null, directory, revision) {
         value = withContext(Dispatchers.IO) { fitsSequenceMembers(directory) }
     }
@@ -276,8 +281,13 @@ internal fun FitsSequencePreviewScreen(directory: File, revision: Int, onBack: (
             if (onStack != null) TextButton(onClick = onStack, enabled = members?.isNotEmpty() == true) {
                 Text(stringResource(R.string.stack_offline_title))
             }
-            if (onEdit != null) {
-                MediaActionsMenu(stringResource(R.string.media_more_actions), enabled = members?.isNotEmpty() == true) { close ->
+            MediaActionsMenu(stringResource(R.string.media_more_actions), enabled = members?.isNotEmpty() == true) { close ->
+                DropdownMenuItem(text = { Text(stringResource(R.string.media_share_first_frame)) },
+                    onClick = {
+                        close()
+                        members?.firstOrNull()?.let { shareFiles(listOf(it)) }
+                    })
+                if (onEdit != null) {
                     DropdownMenuItem(text = { Text(stringResource(R.string.stack_review_frames)) },
                         onClick = { close(); onEdit() })
                 }

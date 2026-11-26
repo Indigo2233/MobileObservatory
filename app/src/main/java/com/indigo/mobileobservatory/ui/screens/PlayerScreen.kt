@@ -43,6 +43,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import android.graphics.BitmapFactory
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.media.LibraryImportViewModel
@@ -57,6 +59,7 @@ import com.indigo.mobileobservatory.media.MediaEditRecipeStore
 import com.indigo.mobileobservatory.media.MediaLineage
 import com.indigo.mobileobservatory.media.MediaRename
 import com.indigo.mobileobservatory.media.MediaTrash
+import com.indigo.mobileobservatory.media.MediaUsageRegistry
 import com.indigo.mobileobservatory.ui.components.Lp750Credit
 import com.indigo.mobileobservatory.mount.MountCoordinates
 import com.indigo.mobileobservatory.recording.SERReader
@@ -150,6 +153,7 @@ fun PlayerScreen(
     capturesDir: File? = null,
     mountCoordinates: MountCoordinates? = null,
     onStackFile: ((File) -> Unit)? = null,
+    onSolarScanFile: ((File) -> Unit)? = null,
     initialFile: File? = null,
     initialCategory: MediaCategory = MediaCategory.SER_PSER,
     excludeFile: File? = null,
@@ -171,6 +175,12 @@ fun PlayerScreen(
         save = { info -> info?.let { listOf(it.file.absolutePath, it.name, it.size.toString(), it.format) } ?: emptyList() },
         restore = { if (it.isEmpty()) null else VideoFileInfo(File(it[0]), it[1], it[2].toLong(), it[3]) })
     var selectedFile by rememberSaveable(stateSaver = fileSaver) { mutableStateOf<VideoFileInfo?>(null) }
+    var mediaLeaseRevision by remember { mutableIntStateOf(0) }
+    var selectedMediaLease by remember { mutableStateOf<AutoCloseable?>(null) }
+    val selection = selectedFile
+    val leaseRevision = mediaLeaseRevision
+    var selectionOpened by remember(selection) { mutableStateOf(false) }
+    var readyLeaseRevision by remember(selection) { mutableStateOf<Int?>(null) }
     var plateSolvePath by rememberSaveable { mutableStateOf<String?>(null) }
     val plateSolveFile = remember(plateSolvePath) { plateSolvePath?.let(::File) }
     var selectedCategory by rememberSaveable(initialCategory) { mutableStateOf(initialCategory) }
@@ -195,6 +205,35 @@ fun PlayerScreen(
         }
     }
     var directFileUnavailable by remember { mutableStateOf(false) }
+    LaunchedEffect(selection, leaseRevision) {
+        val file = selection?.file ?: return@LaunchedEffect
+        var lease: AutoCloseable? = null
+        try {
+            val jobContext = currentCoroutineContext()
+            try {
+                runInterruptible(Dispatchers.IO) {
+                    lease = MediaUsageRegistry.acquireInterruptibly(file) { jobContext.ensureActive() }
+                }
+            } catch (_: IllegalArgumentException) {
+                // The original path may have been removed while the request was waiting.
+            }
+            if (selectedFile != selection || mediaLeaseRevision != leaseRevision) return@LaunchedEffect
+            if (lease == null) {
+                selectedFile = null
+                showFilePicker = true
+                directFileUnavailable = true
+                refreshTrigger++
+                return@LaunchedEffect
+            }
+            selectedMediaLease = lease
+            readyLeaseRevision = leaseRevision
+            selectionOpened = true
+            awaitCancellation()
+        } finally {
+            lease?.close()
+            if (selectedMediaLease === lease) selectedMediaLease = null
+        }
+    }
     var initialFileLoaded by rememberSaveable(initialFile?.absolutePath) { mutableStateOf(false) }
     LaunchedEffect(initialFile) {
         if (initialFileLoaded) return@LaunchedEffect
@@ -250,12 +289,27 @@ fun PlayerScreen(
     }
     frameEditPath?.let { path ->
         val file = remember(path) { File(path) }
-        MediaFrameEditor(file, trashDir, isRecordingFile, onDismiss = { frameEditPath = null }, onEdited = { failed ->
-            frameEditPath = null
-            refreshLibrary()
-            onFramesEdited(file)
-            if (failed > 0) Toast.makeText(context, context.getString(R.string.media_trash_partial, failed), Toast.LENGTH_LONG).show()
-        })
+        var editorLeaseHeld by remember(path) { mutableStateOf(false) }
+        DisposableEffect(path) {
+            val lease = runCatching {
+                MediaUsageRegistry.acquire(file, waitForExclusive = false)
+            }.getOrNull()
+            if (lease == null) {
+                Toast.makeText(context, R.string.media_frame_edit_unavailable, Toast.LENGTH_LONG).show()
+                frameEditPath = null
+            } else {
+                editorLeaseHeld = true
+            }
+            onDispose { lease?.close() }
+        }
+        if (editorLeaseHeld) {
+            MediaFrameEditor(file, trashDir, isRecordingFile, onDismiss = { frameEditPath = null }, onEdited = { failed ->
+                frameEditPath = null
+                refreshLibrary()
+                onFramesEdited(file)
+                if (failed > 0) Toast.makeText(context, context.getString(R.string.media_trash_partial, failed), Toast.LENGTH_LONG).show()
+            })
+        }
     }
 
     if (showFilePicker && selectedFile == null) {
@@ -270,9 +324,11 @@ fun PlayerScreen(
             onSelect = { info ->
                 selectedFile = info
                 showFilePicker = false
+                directFileUnavailable = false
             },
             onBack = onNavigateUp ?: onBack,
             onStackFile = onStackFile,
+            onSolarScanFile = onSolarScanFile,
             onReviewFrames = { frameEditPath = it.absolutePath },
             selectedCategory = selectedCategory,
             excludeFile = excludeFile,
@@ -292,6 +348,12 @@ fun PlayerScreen(
     } else {
         val info = selectedFile
         if (info != null) {
+            if (!selectionOpened) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
+                }
+                return
+            }
             if (info.format == "FITS" && info.file.isDirectory) {
                 FitsSequencePreviewScreen(info.file, refreshTrigger, onNavigateUp ?: leaveFile,
                     onStackFile?.let { stack -> { stack(info.file) } },
@@ -306,6 +368,8 @@ fun PlayerScreen(
                 excludeFile = excludeFile,
                 onBack = leaveFile,
                 onNavigateUp = onNavigateUp,
+                waitingForMediaLease = readyLeaseRevision != leaseRevision || selectedMediaLease == null,
+                deletingFile = deletingFile,
                 onImageExported = { refreshTrigger++ },
                 onViewExported = { file ->
                     MediaLibrary.describe(file)?.let { selectedFile = it; showFilePicker = false }
@@ -314,9 +378,14 @@ fun PlayerScreen(
                 onStackFile = onStackFile?.let { launch -> { file: File ->
                     launch(file)
                 } },
+                onSolarScanFile = onSolarScanFile?.let { launch -> { file: File ->
+                    launch(file)
+                } },
                 onDelete = {
                     if (deletingFile) return@PlaybackView
                     deletingFile = true
+                    selectedMediaLease?.close()
+                    selectedMediaLease = null
                     scope.launch {
                         val moved = withContext(Dispatchers.IO) {
                             trashDir != null && info.file != currentExclude && MediaTrash.move(info.file, trashDir)
@@ -326,6 +395,7 @@ fun PlayerScreen(
                             refreshLibrary(setOf(info.file))
                             if (selectedFile == info) leaveFile()
                         } else {
+                            if (selectedFile == info) mediaLeaseRevision++
                             Toast.makeText(context, R.string.media_trash_failed, Toast.LENGTH_LONG).show()
                         }
                     }
@@ -333,6 +403,13 @@ fun PlayerScreen(
                 onRename = { renamed ->
                     refreshTrigger++
                     selectedFile = MediaLibrary.describe(renamed)
+                },
+                onReleaseRenameLease = {
+                    selectedMediaLease?.close()
+                    selectedMediaLease = null
+                },
+                onReacquireRenameLease = {
+                    if (selectedFile == info) mediaLeaseRevision++
                 }
             )
             }
@@ -347,16 +424,34 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
 }
 
 @Composable
+private fun MediaLeaseProgressDialog(deletingFile: Boolean, onBack: () -> Unit) {
+    Dialog(
+        onDismissRequest = onBack,
+        properties = DialogProperties(
+            dismissOnBackPress = !deletingFile,
+            dismissOnClickOutside = false
+        )
+    ) {
+        CircularProgressIndicator()
+    }
+}
+
+@Composable
 private fun PlaybackView(
     fileInfo: VideoFileInfo,
     capturesDir: File?,
     recordingsDir: File?,
     excludeFile: File?,
     onBack: () -> Unit,
+    waitingForMediaLease: Boolean,
+    deletingFile: Boolean,
     onSolve: () -> Unit = {},
     onStackFile: ((File) -> Unit)? = null,
+    onSolarScanFile: ((File) -> Unit)? = null,
     onDelete: () -> Unit = {},
     onRename: (File) -> Unit = {},
+    onReleaseRenameLease: () -> Unit = {},
+    onReacquireRenameLease: () -> Unit = {},
     onNavigateUp: (() -> Unit)? = null,
     onImageExported: () -> Unit = {},
     onViewExported: (File) -> Unit = {}
@@ -376,7 +471,11 @@ private fun PlaybackView(
             onBack = onNavigateUp ?: onBack,
             onSolve = onSolve,
             onDelete = onDelete,
+            waitingForMediaLease = waitingForMediaLease,
+            deletingFile = deletingFile,
             onRename = onRename,
+            onReleaseRenameLease = onReleaseRenameLease,
+            onReacquireRenameLease = onReacquireRenameLease,
             externalUp = onNavigateUp != null,
             onExported = onImageExported,
             onViewExported = onViewExported
@@ -450,6 +549,9 @@ private fun PlaybackView(
     }
 
     BackHandler { closeThen(onBack) }
+    if (waitingForMediaLease || deletingFile) {
+        MediaLeaseProgressDialog(deletingFile) { closeThen(onBack) }
+    }
 
     fun pauseThen(action: () -> Unit) {
         if (readerClosed || navigationPending) return
@@ -596,6 +698,18 @@ private fun PlaybackView(
                     Icon(Icons.Default.Layers, stringResource(R.string.stack_planetary), tint = Color.White)
                 }
             }
+            if (onSolarScanFile != null && fileInfo.format.equals("SER", true)) {
+                IconButton(
+                    onClick = { pauseThen { onSolarScanFile(fileInfo.file) } },
+                    enabled = !readerClosed && !navigationPending
+                ) {
+                    Icon(
+                        Icons.Default.WbSunny,
+                        stringResource(R.string.solar_scan_reconstruct),
+                        tint = Color.White
+                    )
+                }
+            }
             IconButton(onClick = {
                 closeThen(onDelete)
             }) {
@@ -731,7 +845,11 @@ private fun ImageViewScreen(
     onBack: () -> Unit,
     onSolve: () -> Unit,
     onDelete: () -> Unit,
+    waitingForMediaLease: Boolean,
+    deletingFile: Boolean,
     onRename: (File) -> Unit = {},
+    onReleaseRenameLease: () -> Unit = {},
+    onReacquireRenameLease: () -> Unit = {},
     externalUp: Boolean = false,
     onExported: () -> Unit = {},
     onViewExported: (File) -> Unit = {}
@@ -745,6 +863,7 @@ private fun ImageViewScreen(
     var showLp750Help by remember(fileInfo) { mutableStateOf(false) }
     var indexedMedia by remember(fileInfo, recordingsDir, capturesDir) { mutableStateOf(emptyList<VideoFileInfo>()) }
     var fileToRename by remember { mutableStateOf<File?>(null) }
+    var renaming by remember { mutableStateOf(false) }
     var renameText by remember { mutableStateOf("") }
     var renameError by remember { mutableStateOf<String?>(null) }
     var fitsCache by remember(fileInfo) { mutableStateOf<FitsViewCache?>(null) }
@@ -784,6 +903,7 @@ private fun ImageViewScreen(
         if (editing && !exporting) editing = false else leaveImage(onBack)
     }
     BackHandler(enabled = editing || dirty || exporting) { navigateImageBack() }
+    val showLeaseProgress = !showDiscard && !renaming && (waitingForMediaLease || deletingFile)
 
     if (showDiscard) {
         AlertDialog(
@@ -857,9 +977,9 @@ private fun ImageViewScreen(
         )
     }
 
-    fileToRename?.let { original ->
+    fileToRename?.takeUnless { showDiscard || showLeaseProgress }?.let { original ->
         AlertDialog(
-            onDismissRequest = { fileToRename = null; renameError = null },
+            onDismissRequest = { if (!renaming) { fileToRename = null; renameError = null } },
             title = { Text(stringResource(R.string.media_rename_title)) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -876,17 +996,21 @@ private fun ImageViewScreen(
                 }
             },
             confirmButton = {
-                TextButton(enabled = renameText.isNotBlank(), onClick = {
+                TextButton(enabled = renameText.isNotBlank() && !renaming, onClick = {
                     val name = renameText
-                    scope.launch(Dispatchers.IO) {
-                        val result = runCatching {
-                            val indexed = indexedMedia.ifEmpty {
-                                MediaLibrary.list(recordingsDir, capturesDir, MediaCategory.RECENT, excludeFile)
+                    renaming = true
+                    scope.launch {
+                        onReleaseRenameLease()
+                        try {
+                            val result = withContext(Dispatchers.IO) {
+                                runCatching {
+                                    val indexed = indexedMedia.ifEmpty {
+                                        MediaLibrary.list(recordingsDir, capturesDir, MediaCategory.RECENT, excludeFile)
+                                    }
+                                    MediaRename.rename(original, name, indexed, onRewritten = { recipeStore.refresh(it) })
+                                        .also { recipeStore.rename(original, it) }
+                                }
                             }
-                            MediaRename.rename(original, name, indexed, onRewritten = { recipeStore.refresh(it) })
-                                .also { recipeStore.rename(original, it) }
-                        }
-                        withContext(Dispatchers.Main) {
                             result.onSuccess { renamed ->
                                 fileToRename = null
                                 renameError = null
@@ -895,17 +1019,31 @@ private fun ImageViewScreen(
                                 renameError = context.getString(when (failure.message) {
                                     "name_empty", "name_invalid", "name_too_long", "name_exists" ->
                                         R.string.media_rename_invalid
+                                    MediaRename.BUSY -> R.string.media_rename_busy
                                     else -> R.string.media_rename_failed
                                 })
                             }
+                        } finally {
+                            onReacquireRenameLease()
+                            renaming = false
                         }
                     }
                 }) { Text(stringResource(R.string.rename)) }
             },
             dismissButton = {
-                TextButton(onClick = { fileToRename = null; renameError = null }) { Text(stringResource(R.string.cancel)) }
+                TextButton(enabled = !renaming, onClick = { fileToRename = null; renameError = null }) {
+                    Text(stringResource(R.string.cancel))
+                }
             }
         )
+    }
+
+    if (showLeaseProgress) {
+        MediaLeaseProgressDialog(deletingFile) {
+            fileToRename = null
+            renameError = null
+            navigateImageBack()
+        }
     }
 
     LaunchedEffect(fileInfo) {

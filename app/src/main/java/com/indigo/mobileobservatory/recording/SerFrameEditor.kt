@@ -1,5 +1,6 @@
 package com.indigo.mobileobservatory.recording
 
+import com.indigo.mobileobservatory.media.MediaUsageRegistry
 import java.io.File
 import java.io.FileOutputStream
 import java.io.RandomAccessFile
@@ -61,7 +62,7 @@ internal object SerFrameEditor {
         sourceBusy: () -> Boolean = { false },
         checkCancelled: () -> Unit = {},
         progress: (copiedBytes: Long, totalBytes: Long) -> Unit = { _, _ -> }
-    ) {
+    ) = MediaUsageRegistry.acquire(file).use {
         require(selection.total == expected.frames && selection.count in 1 until expected.frames) { "stack_no_kept_frames" }
         check(!sourceBusy()) { "recording_active" }
         check(readLayout(file) == expected) { "source_changed" }
