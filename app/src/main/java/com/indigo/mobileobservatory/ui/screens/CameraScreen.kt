@@ -10,6 +10,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -31,6 +32,7 @@ import com.indigo.mobileobservatory.camera.ConnectionState
 import com.indigo.mobileobservatory.camera.DeviceEntry
 import com.indigo.mobileobservatory.camera.FrameProcessor
 import com.indigo.mobileobservatory.camera.GainCapability
+import com.indigo.mobileobservatory.camera.Roi
 import com.indigo.mobileobservatory.ui.components.*
 import com.indigo.mobileobservatory.ui.theme.ObservatoryTheme
 import com.indigo.mobileobservatory.ui.viewmodel.CameraViewModel
@@ -70,6 +72,8 @@ internal fun CaptureWorkspaceScreen(
     val supportedPixelFormats by viewModel.supportedPixelFormats.collectAsStateWithPageLifecycle()
     val supportsHostRoi by viewModel.supportsHostRoi.collectAsStateWithPageLifecycle()
     val roi by viewModel.roi.collectAsStateWithPageLifecycle()
+    val roiApplying by viewModel.roiApplying.collectAsStateWithPageLifecycle()
+    val roiSyncRevision by viewModel.roiSyncRevision.collectAsStateWithPageLifecycle()
     val binning by viewModel.binning.collectAsStateWithPageLifecycle()
     val binningUsesHardware by viewModel.binningUsesHardware.collectAsStateWithPageLifecycle()
     val binningUsesSdk by viewModel.binningUsesSdk.collectAsStateWithPageLifecycle()
@@ -214,8 +218,40 @@ internal fun CaptureWorkspaceScreen(
             else viewModel.cameraCfaChangeMessage(value) },
         onApply = { value, reset -> viewModel.applyCameraCfa(value, reset) }, onDismiss = viewModel::dismissCameraCfaSettings)
     val sensorHeight = imagingHeight
-    val roiMinW = viewModel.cameraManager.activeCamera?.roiMinWidth ?: 8
-    val roiMinH = viewModel.cameraManager.activeCamera?.roiMinHeight ?: 8
+    val activeCamera = viewModel.cameraManager.activeCamera
+    val roiMinW = activeCamera?.roiMinWidth ?: 8
+    val roiMinH = activeCamera?.roiMinHeight ?: 8
+    val roiWidthStep = activeCamera?.roiWidthStep ?: 8
+    val roiHeightStep = activeCamera?.roiHeightStep ?: 8
+    val roiOffsetXStep = activeCamera?.roiOffsetXStep ?: 1
+    val roiOffsetYStep = activeCamera?.roiOffsetYStep ?: 1
+    val roiLimits = RoiEditingLimits(
+        sensorWidth = sensorWidth,
+        sensorHeight = sensorHeight,
+        minWidth = roiMinW,
+        minHeight = roiMinH,
+        widthStep = roiWidthStep,
+        heightStep = roiHeightStep,
+        offsetXStep = roiOffsetXStep,
+        offsetYStep = roiOffsetYStep
+    )
+    val roiSaver = remember {
+        Saver<Roi, List<Int>>(
+            save = { listOf(it.x, it.y, it.width, it.height) },
+            restore = { Roi(it[0], it[1], it[2], it[3]) }
+        )
+    }
+    var draftRoi by rememberSaveable(stateSaver = roiSaver) {
+        mutableStateOf(RoiEditing.clamp(roi, roiLimits))
+    }
+    val connectedCameraIdentity = (connectionState as? ConnectionState.Connected)
+        ?.info?.let { "${it.name}|${it.serialNumber}" }.orEmpty()
+    LaunchedEffect(roi, roiLimits, connectedCameraIdentity, roiSyncRevision) {
+        draftRoi = RoiEditing.clamp(roi, roiLimits)
+    }
+    fun updateDraftRoi(next: Roi) {
+        draftRoi = RoiEditing.clamp(next, roiLimits)
+    }
 
     Column(
                 modifier = Modifier
@@ -251,13 +287,15 @@ internal fun CaptureWorkspaceScreen(
                             resetTrigger = viewResetTrigger,
                             focusAssistEnabled = focusAssistEnabled,
                             showCenterMarker = showCenterMarker,
-                            preferFullWidth = portrait
+                            preferFullWidth = portrait,
+                            proposedRoi = if (supportsHostRoi) draftRoi else null,
+                            sourceRoi = roi
                         )
 
                         if (showOverlayPanel) {
                             OverlayPanel(
                                 histogram = histogram,
-                                roi = roi,
+                                roi = draftRoi,
                                 sensorWidth = sensorWidth,
                                 sensorHeight = sensorHeight,
                                 modifier = Modifier
@@ -504,7 +542,8 @@ internal fun CaptureWorkspaceScreen(
                         usbBandwidthRange = usbBandwidthRange,
                         pixelFormat = pixelFormat,
                         supportedPixelFormats = supportedPixelFormats,
-                        roi = roi,
+                        roi = draftRoi,
+                        appliedRoi = roi,
                         autoStretch = autoStretch,
                         autoExposureMode = autoExposureMode,
                         fps = fps,
@@ -546,8 +585,10 @@ internal fun CaptureWorkspaceScreen(
                         readoutMode = readoutMode,
                         supportedReadoutModes = supportedReadoutModes,
                         onReadoutModeChange = { viewModel.setReadoutMode(it) },
-                        onRoiChange = { viewModel.setRoi(it) },
-                        onResetRoi = { viewModel.resetRoi() },
+                        onRoiChange = ::updateDraftRoi,
+                        onResetRoi = { updateDraftRoi(RoiEditing.fullFrame(roiLimits)) },
+                        onApplyRoi = { viewModel.setRoi(draftRoi) },
+                        roiApplying = roiApplying,
                         onAutoStretchToggle = { viewModel.setAutoStretch(it) },
                         onAutoExposureModeChange = { viewModel.setAutoExposureMode(it) },
                         awbMode = awbMode.ordinal,
@@ -559,6 +600,10 @@ internal fun CaptureWorkspaceScreen(
                         onToggleLongExposure = { viewModel.toggleLongExposure() },
                         roiMinWidth = roiMinW,
                         roiMinHeight = roiMinH,
+                        roiWidthStep = roiWidthStep,
+                        roiHeightStep = roiHeightStep,
+                        roiOffsetXStep = roiOffsetXStep,
+                        roiOffsetYStep = roiOffsetYStep,
                         showHostRoi = supportsHostRoi,
                         binning = binning,
                         binningUsesHardware = binningUsesHardware,
@@ -878,7 +923,9 @@ private fun MainPreviewImage(
     resetTrigger: Int,
     focusAssistEnabled: Boolean,
     showCenterMarker: Boolean,
-    preferFullWidth: Boolean
+    preferFullWidth: Boolean,
+    proposedRoi: Roi?,
+    sourceRoi: Roi
 ) {
     val bitmap by viewModel.previewBitmap.collectAsStateWithPageLifecycle()
     LivePreview(
@@ -888,6 +935,8 @@ private fun MainPreviewImage(
         rotationDeg = rotation,
         resetTrigger = resetTrigger,
         showCenterMarker = showCenterMarker,
+        proposedRoi = proposedRoi,
+        sourceRoi = sourceRoi,
         preferFullWidth = preferFullWidth,
         modifier = Modifier
             .fillMaxSize()

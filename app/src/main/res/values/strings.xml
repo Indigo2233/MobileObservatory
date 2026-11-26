@@ -138,6 +138,8 @@
     <string name="offset_x_label">Offset X: %d</string>
     <string name="offset_y_label">Offset Y: %d</string>
     <string name="reset_roi">Reset ROI</string>
+    <string name="roi_apply_current">Set current ROI</string>
+    <string name="roi_apply_failed">The camera rejected the requested ROI.</string>
 
     <!-- Info section -->
     <string name="info_camera">Camera</string>

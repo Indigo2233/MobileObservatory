@@ -136,6 +136,8 @@
     <string name="offset_x_label">偏移 X: %d</string>
     <string name="offset_y_label">偏移 Y: %d</string>
     <string name="reset_roi">重置裁切区域</string>
+    <string name="roi_apply_current">设置当前 ROI</string>
+    <string name="roi_apply_failed">相机拒绝了当前 ROI 设置。</string>
 
     <!-- Info section -->
     <string name="info_camera">相机</string>

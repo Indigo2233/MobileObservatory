@@ -53,6 +53,7 @@ fun ControlPanel(
     pixelFormat: PixelFormat,
     supportedPixelFormats: List<PixelFormat>,
     roi: Roi,
+    appliedRoi: Roi = roi,
     autoStretch: Boolean,
     autoExposureMode: AutoExposureMode,
     fps: Float,
@@ -93,6 +94,8 @@ fun ControlPanel(
     onReadoutModeChange: (ReadoutMode) -> Unit = {},
     onRoiChange: (Roi) -> Unit,
     onResetRoi: () -> Unit,
+    onApplyRoi: () -> Unit = {},
+    roiApplying: Boolean = false,
     onAutoStretchToggle: (Boolean) -> Unit,
     onAutoExposureModeChange: (AutoExposureMode) -> Unit,
     awbMode: Int = 0,
@@ -104,6 +107,10 @@ fun ControlPanel(
     onToggleLongExposure: () -> Unit,
     roiMinWidth: Int = 8,
     roiMinHeight: Int = 8,
+    roiWidthStep: Int = 8,
+    roiHeightStep: Int = 8,
+    roiOffsetXStep: Int = 1,
+    roiOffsetYStep: Int = 1,
     showHostRoi: Boolean = true,
     binning: Int = 1,
     binningUsesHardware: Boolean = false,
@@ -951,6 +958,16 @@ fun ControlPanel(
         // ── ROI ───────
         if (activeSection == ControlPanelSection.ROI) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                val limits = RoiEditingLimits(
+                    sensorWidth = sensorWidth,
+                    sensorHeight = sensorHeight,
+                    minWidth = roiMinWidth,
+                    minHeight = roiMinHeight,
+                    widthStep = roiWidthStep,
+                    heightStep = roiHeightStep,
+                    offsetXStep = roiOffsetXStep,
+                    offsetYStep = roiOffsetYStep
+                )
                 if (roiBudgetControls == null) Text(
                     "${roi.width} x ${roi.height}  @  (${roi.x}, ${roi.y})",
                     style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
@@ -1036,7 +1053,7 @@ fun ControlPanel(
                             row.forEach { (label, preset) ->
                                 FilterChip(
                                     selected = roi.width == preset.width && roi.height == preset.height,
-                                    onClick = { onRoiChange(preset) },
+                                    onClick = { onRoiChange(RoiEditing.normalize(preset, limits)) },
                                     label = { Text(label, fontSize = 10.sp) },
                                     modifier = Modifier.height(28.dp)
                                 )
@@ -1045,17 +1062,10 @@ fun ControlPanel(
                     }
                 }
 
-                val step = 8
-
                 Text(stringResource(R.string.width_label, roi.width), fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Slider(
                     value = roi.width.toFloat(),
-                    onValueChange = {
-                        val w = (it.toInt() / step) * step
-                        val cx = roi.x + roi.width / 2
-                        val nx = ((cx - w / 2) / step * step).coerceIn(0, sensorWidth - w)
-                        onRoiChange(Roi(nx, roi.y, w, roi.height))
-                    },
+                    onValueChange = { onRoiChange(RoiEditing.resizeWidth(roi, it.toInt(), limits)) },
                     valueRange = roiMinWidth.toFloat()..sensorWidth.toFloat(),
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -1063,12 +1073,7 @@ fun ControlPanel(
                 Text(stringResource(R.string.height_label, roi.height), fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Slider(
                     value = roi.height.toFloat(),
-                    onValueChange = {
-                        val h = (it.toInt() / step) * step
-                        val cy = roi.y + roi.height / 2
-                        val ny = ((cy - h / 2) / step * step).coerceIn(0, sensorHeight - h)
-                        onRoiChange(Roi(roi.x, ny, roi.width, h))
-                    },
+                    onValueChange = { onRoiChange(RoiEditing.resizeHeight(roi, it.toInt(), limits)) },
                     valueRange = roiMinHeight.toFloat()..sensorHeight.toFloat(),
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -1076,18 +1081,18 @@ fun ControlPanel(
                 Text(stringResource(R.string.offset_x_label, roi.x), fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = {
-                        onRoiChange(roi.copy(x = (roi.x - step).coerceAtLeast(0)))
+                        onRoiChange(RoiEditing.moveX(roi, roi.x - roiOffsetXStep.coerceAtLeast(1), limits))
                     }, modifier = Modifier.size(28.dp).semantics { contentDescription = decreaseRoiXDescription }) {
                         Icon(Icons.Default.Remove, null, modifier = Modifier.size(16.dp))
                     }
                     Slider(
                         value = roi.x.toFloat(),
-                        onValueChange = { onRoiChange(roi.copy(x = (it.toInt() / step) * step)) },
+                        onValueChange = { onRoiChange(RoiEditing.moveX(roi, it.toInt(), limits)) },
                         valueRange = 0f..(sensorWidth - roi.width).toFloat().coerceAtLeast(0f),
                         modifier = Modifier.weight(1f)
                     )
                     IconButton(onClick = {
-                        onRoiChange(roi.copy(x = (roi.x + step).coerceAtMost(sensorWidth - roi.width)))
+                        onRoiChange(RoiEditing.moveX(roi, roi.x + roiOffsetXStep.coerceAtLeast(1), limits))
                     }, modifier = Modifier.size(28.dp).semantics { contentDescription = increaseRoiXDescription }) {
                         Icon(Icons.Default.Add, null, modifier = Modifier.size(16.dp))
                     }
@@ -1096,25 +1101,41 @@ fun ControlPanel(
                 Text(stringResource(R.string.offset_y_label, roi.y), fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = {
-                        onRoiChange(roi.copy(y = (roi.y - step).coerceAtLeast(0)))
+                        onRoiChange(RoiEditing.moveY(roi, roi.y - roiOffsetYStep.coerceAtLeast(1), limits))
                     }, modifier = Modifier.size(28.dp).semantics { contentDescription = decreaseRoiYDescription }) {
                         Icon(Icons.Default.Remove, null, modifier = Modifier.size(16.dp))
                     }
                     Slider(
                         value = roi.y.toFloat(),
-                        onValueChange = { onRoiChange(roi.copy(y = (it.toInt() / step) * step)) },
+                        onValueChange = { onRoiChange(RoiEditing.moveY(roi, it.toInt(), limits)) },
                         valueRange = 0f..(sensorHeight - roi.height).toFloat().coerceAtLeast(0f),
                         modifier = Modifier.weight(1f)
                     )
                     IconButton(onClick = {
-                        onRoiChange(roi.copy(y = (roi.y + step).coerceAtMost(sensorHeight - roi.height)))
+                        onRoiChange(RoiEditing.moveY(roi, roi.y + roiOffsetYStep.coerceAtLeast(1), limits))
                     }, modifier = Modifier.size(28.dp).semantics { contentDescription = increaseRoiYDescription }) {
                         Icon(Icons.Default.Add, null, modifier = Modifier.size(16.dp))
                     }
                 }
 
-                TextButton(onClick = onResetRoi) {
-                    Text(stringResource(R.string.reset_roi), fontSize = 11.sp)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(onClick = onResetRoi) {
+                        Text(stringResource(R.string.reset_roi), fontSize = 11.sp)
+                    }
+                    Button(
+                        onClick = onApplyRoi,
+                        enabled = !roiApplying && roi != appliedRoi,
+                        modifier = Modifier.weight(1f).height(36.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp)
+                    ) {
+                        Icon(Icons.Default.Check, null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(stringResource(R.string.roi_apply_current), fontSize = 11.sp)
+                    }
                 }
                 }
             }
@@ -1140,7 +1161,7 @@ fun ControlPanel(
                         "$prefix$displayBitDepth"
                     }
                     InfoRow(stringResource(R.string.info_format), formatDisplayName)
-                    InfoRow(stringResource(R.string.info_roi), "${roi.width} x ${roi.height}")
+                    InfoRow(stringResource(R.string.info_roi), "${appliedRoi.width} x ${appliedRoi.height}")
                 }
             }
         }

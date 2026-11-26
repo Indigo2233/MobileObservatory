@@ -13,15 +13,19 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.unit.dp
 import com.indigo.mobileobservatory.R
+import com.indigo.mobileobservatory.camera.Roi
 import java.util.IdentityHashMap
 import kotlin.math.max
 import kotlin.math.min
@@ -45,6 +49,8 @@ fun LivePreview(
     rotationDeg: Int = 0,
     resetTrigger: Int = 0,
     showCenterMarker: Boolean = false,
+    proposedRoi: Roi? = null,
+    sourceRoi: Roi? = null,
     modifier: Modifier = Modifier,
     preferFullWidth: Boolean = false
 ) {
@@ -78,6 +84,7 @@ fun LivePreview(
     val zoomDescription = stringResource(R.string.wf_preview_zoom, (scale * 100).roundToInt())
     val imageDescription = stringResource(R.string.image_desc)
     val resetDescription = stringResource(R.string.fit_to_view)
+    val roiStrokeWidthPx = with(LocalDensity.current) { 1.25.dp.toPx() }
 
     val imageBitmapCache = remember { IdentityHashMap<Bitmap, androidx.compose.ui.graphics.ImageBitmap>() }
     val imageBitmap = bitmap?.let { current ->
@@ -135,6 +142,40 @@ fun LivePreview(
             translate(-imgW / 2f, -imgH / 2f)
         }) {
             drawImage(image)
+            val roiRect = proposedRoi?.let { proposed ->
+                sourceRoi?.let { source ->
+                    RoiEditing.previewRect(proposed, source, imgW, imgH)
+                }
+            }
+            if (roiRect != null) {
+                val strokeWidth = (roiStrokeWidthPx / displayScale).coerceAtLeast(0.25f)
+                val outline = RoiEditing.outerStrokeRect(roiRect, strokeWidth)
+                val shade = Color(0x28000000)
+                clipRect(0f, 0f, imgW, imgH) {
+                    drawRect(shade, Offset.Zero, androidx.compose.ui.geometry.Size(imgW, roiRect.top))
+                    drawRect(
+                        shade,
+                        Offset(0f, roiRect.bottom),
+                        androidx.compose.ui.geometry.Size(imgW, imgH - roiRect.bottom)
+                    )
+                    drawRect(
+                        shade,
+                        Offset(0f, roiRect.top),
+                        androidx.compose.ui.geometry.Size(roiRect.left, roiRect.height)
+                    )
+                    drawRect(
+                        shade,
+                        Offset(roiRect.right, roiRect.top),
+                        androidx.compose.ui.geometry.Size(imgW - roiRect.right, roiRect.height)
+                    )
+                    drawRect(
+                        color = Color(0x996AD8FF),
+                        topLeft = outline.topLeft,
+                        size = outline.size,
+                        style = Stroke(width = strokeWidth)
+                    )
+                }
+            }
             if (showCenterMarker) {
                 val cx = imgW / 2f
                 val cy = imgH / 2f

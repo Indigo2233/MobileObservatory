@@ -123,6 +123,7 @@ import java.io.FileOutputStream
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.LinkedBlockingQueue
@@ -424,6 +425,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _roi = MutableStateFlow(Roi(0, 0, 1920, 1200))
     val roi: StateFlow<Roi> = _roi.asStateFlow()
+    private val _roiApplying = MutableStateFlow(false)
+    val roiApplying: StateFlow<Boolean> = _roiApplying.asStateFlow()
+    private val _roiSyncRevision = MutableStateFlow(0)
+    val roiSyncRevision: StateFlow<Int> = _roiSyncRevision.asStateFlow()
+    private val roiApplyInFlight = AtomicBoolean(false)
 
     private val _binning = MutableStateFlow(1)
     val binning: StateFlow<Int> = _binning.asStateFlow()
@@ -3651,12 +3657,32 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setRoi(roi: Roi) {
         val cam = cameraManager.activeCamera ?: return
-        changeCaptureSettings(cam, layoutChanged = true) { cam.setRoi(roi); _roi.value = cam.currentRoi }
+        if (roi == cam.currentRoi || !roiApplyInFlight.compareAndSet(false, true)) return
+        _roiApplying.value = true
+        changeCaptureSettings(cam, layoutChanged = true, onFinished = {
+            roiApplyInFlight.set(false)
+            _roiApplying.value = false
+            if (cameraManager.activeCamera === cam) _roi.value = cam.currentRoi
+            _roiSyncRevision.value += 1
+        }, onFailure = {
+            _statusMessage.value = app.getString(R.string.roi_apply_failed)
+        }) {
+            cam.setRoi(roi)
+        }
     }
 
     fun resetRoi() {
         val cam = cameraManager.activeCamera ?: return
-        changeCaptureSettings(cam, layoutChanged = true) { cam.resetRoi(); _roi.value = cam.currentRoi }
+        if (!roiApplyInFlight.compareAndSet(false, true)) return
+        _roiApplying.value = true
+        changeCaptureSettings(cam, layoutChanged = true, onFinished = {
+            roiApplyInFlight.set(false)
+            _roiApplying.value = false
+            if (cameraManager.activeCamera === cam) _roi.value = cam.currentRoi
+            _roiSyncRevision.value += 1
+        }) {
+            cam.resetRoi()
+        }
     }
 
     @Volatile private var binningSwitching = false

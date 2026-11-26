@@ -89,6 +89,10 @@ class ToupcamCamera : Camera, CameraOffsetCapable, NativeEventCallback, CoolingC
     @Volatile override var cropInfo: CropInfo = CropInfo(0, 0, 1920, 1200)
         private set
 
+    // Toupcam_put_Roi requires every coordinate and dimension to be even.
+    override val roiOffsetXStep: Int = 2
+    override val roiOffsetYStep: Int = 2
+
     override var hwExposureMaxUs: Float = 1_000_000f
         private set
 
