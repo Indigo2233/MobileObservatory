@@ -73,6 +73,13 @@ internal object SolarScanNative {
         }
     }
 
+    fun trialCoverage(source: File, observer: SolarNativeObserver): SolarTrialCoverage {
+        check(loaded) { "Solar Rust library is unavailable." }
+        val values = checkNotNull(NativeSolarBridge.trialCoverage(source.absolutePath, observer))
+        check(values.size == 6)
+        return SolarTrialCoverage(values[0], values[1], values[2], values[3], values[4], values[5])
+    }
+
     fun reconstruct(
         source: File,
         outputDirectory: File,
@@ -121,6 +128,7 @@ internal object SolarScanNative {
 private object NativeSolarBridge {
     external fun preview(sourcePath: String, observer: SolarNativeObserver): NativeSolarPreview?
     external fun analyze(sourcePath: String, observer: SolarNativeObserver): NativeSolarAnalysis?
+    external fun trialCoverage(sourcePath: String, observer: SolarNativeObserver): IntArray?
     external fun reconstruct(
         sourcePath: String,
         outputDirectory: String,

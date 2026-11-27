@@ -18,6 +18,7 @@ import com.indigo.mobileobservatory.util.FileLogger
 import com.hoho.android.usbserial.driver.UsbSerialPort
 import com.hoho.android.usbserial.driver.UsbSerialProber
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import java.io.BufferedInputStream
@@ -226,6 +227,7 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
     private var synScanSocket: DatagramSocket? = null
     private var skyWatcherAdapter: MountSession? = null
     private val closeLock = Any()
+    private val solarWireLock = Any()
     @Volatile private var permanentlyClosed = false
 
     var activeProtocol: MountProtocolType = MountProtocolType.AUTO
@@ -235,6 +237,66 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
     private val isOnStepFirmware: Boolean
         get() = activeProtocol == MountProtocolType.LX200_ONSTEP &&
             mountModel?.filter(Char::isLetterOrDigit)?.contains("OnStep", ignoreCase = true) == true
+    internal val supportsSolarSweep: Boolean get() = isOnStepFirmware && isConnected
+    private val isOnStepX: Boolean
+        get() = mountModel?.filter(Char::isLetterOrDigit)?.contains("OnStepX", ignoreCase = true) == true
+
+    internal suspend fun readSolarStatus(rate: MountSlewRate? = null): SolarMountStatus = withContext(Dispatchers.IO) {
+        pointingAccess.requireWritable()
+        check(supportsSolarSweep) { "Connect a writable OnStep mount for a solar sweep." }
+        val status = sendCommand(":GU#", 750)
+        check(('E' in status || 'K' in status) && 'A' !in status && 'p' in status && 'n' !in status &&
+            status.none { it in "IPF" }) {
+            "Unpark the OnStep mount and select its equatorial mode."
+        }
+        if (rate != null) {
+            val rates = status.takeLast(3)
+            check(rates.length == 3 && rates[1].digitToIntOrNull() == rate.index && rates[2] == '0' &&
+                if (isOnStepX) rates[0] in '0'..'2' else rates[0].digitToIntOrNull() == rate.index
+            ) {
+                "OnStep must confirm the selected RA rate and report no mount error. Use shared pulse and manual rates."
+            }
+        }
+        val pier = if ('K' in status) 'K' else status.singleOrNull { it in "TW" }
+        checkNotNull(pier) { "OnStep did not report the equatorial pier side." }
+        SolarMountStatus(pier, 'N' in status && status.none { it in "Gg" })
+    }
+
+    internal suspend fun readSolarCoordinates(): MountCoordinates = withContext(Dispatchers.IO) {
+        MountProtocolCodec.parseLx200Coordinates(sendCommand(":GRH#", 400), sendCommand(":GDH#", 400))
+    }
+
+    internal suspend fun startSolarPulse(direction: MountDirection, durationMs: Int): Long = withContext(Dispatchers.IO) {
+        pointingAccess.requireWritable()
+        require(durationMs in 1..15_000)
+        check(supportsSolarSweep)
+        val axis = when (direction) {
+            MountDirection.EAST -> 'e'
+            MountDirection.WEST -> 'w'
+            else -> error("Solar sweeps use only the RA axis.")
+        }
+        val context = coroutineContext
+        sendSolarPulse(":MG$axis$durationMs#") { context.ensureActive() }
+    }
+
+    @Synchronized
+    private fun sendSolarPulse(command: String, checkActive: () -> Unit): Long {
+        val sentAt = synchronized(solarWireLock) {
+            checkActive()
+            writeBytes(command.toByteArray(Charsets.US_ASCII))
+            elapsedRealtime()
+        }
+        check(readSingleAcknowledgement(750) == '1'.code) { "OnStep rejected the timed sweep." }
+        return sentAt
+    }
+
+    internal suspend fun stopSolarPulse(direction: MountDirection): Long = withContext(Dispatchers.IO) {
+        // Directional stop preserves solar tracking. Do not wait for a pending read.
+        synchronized(solarWireLock) {
+            emergencyWriteBytes(direction.stopCommand.toByteArray(Charsets.US_ASCII))
+            elapsedRealtime()
+        }
+    }
     val supportsSync: Boolean
         get() = pointingCapabilities.value.sync
     val supportsTimeSync: Boolean
@@ -893,7 +955,7 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
 
     /** Sends a physical stop immediately, then restores protocol synchronization. */
     suspend fun abortMotion() = withContext(Dispatchers.IO) {
-        emergencyStop()
+        synchronized(solarWireLock) { emergencyStop() }
         synchronized(this@Lx200MountController) {
             drainTransportInput()
             stopMoveBlocking()
@@ -1240,11 +1302,20 @@ class Lx200MountController(private val elapsedRealtime: () -> Long = { SystemClo
     @Synchronized
     private fun sendBooleanCommand(command: String): Boolean {
         writeBytes(command.toByteArray(Charsets.US_ASCII))
-        return when (val value = readByte()) {
+        return when (val value = readSingleAcknowledgement(SERIAL_TIMEOUT_MS)) {
             '1'.code -> true
             '0'.code -> false
             else -> error("Unexpected mount reply: $value")
         }
+    }
+
+    private fun readSingleAcknowledgement(timeoutMs: Int): Int {
+        val port = serialPort ?: return readByte(timeoutMs)
+        // FTDI needs a packet-sized buffer to strip its status bytes.
+        val buffer = ByteArray(64)
+        val count = port.read(buffer, timeoutMs)
+        if (count <= 0) error("Mount serial acknowledgement timeout.")
+        return buffer[0].toInt() and 0xff
     }
 
     @Synchronized

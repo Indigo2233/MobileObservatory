@@ -13,6 +13,7 @@ import androidx.core.content.ContextCompat
 import com.indigo.mobileobservatory.R
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -22,6 +23,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import com.indigo.mobileobservatory.util.FileLogger
 
 /** Owns mount state, transport lifecycle, permissions, and mutually exclusive motion. */
@@ -902,28 +904,91 @@ class MountModule(
         operation: suspend (slew: suspend (name: String, coordinates: MountCoordinates) -> Unit) -> Unit
     ) {
         check(pointingCapabilities.value.goto) { "GOTO is unavailable for this mount connection" }
+        runOwnedMotion(MountMotionType.GOTO, application.getString(R.string.wf_pointing_setup)) { owner ->
+            operation { name, coordinates ->
+                check(motionState.value.ownerToken == owner && pointingCapabilities.value.goto)
+                _mountMoveStatus.value = application.getString(R.string.wfp_auto_moving, name)
+                controller.slewTo(coordinates)
+                awaitGotoTarget(name, coordinates)
+                delay(1_000)
+                _mountMoveStatus.value = application.getString(R.string.wfp_sampling)
+            }
+        }
+    }
+
+    internal val canSolarSweep: Boolean
+        get() = controller.supportsSolarSweep && pointingCapabilities.value.manualMove
+
+    internal suspend fun runSolarMotion(operation: suspend (SolarMountMotion) -> Unit) {
+        runOwnedMotion(MountMotionType.SOLAR_SWEEP, application.getString(R.string.solar_scan)) { owner ->
+            val initial = controller.readSolarStatus()
+            check(initial.still) { "Wait for the mount to stop moving." }
+            val verifyTracking: suspend () -> Unit = {
+                check(trackingLock.withLock { controller.readTracking().rate == MountTrackingRate.SOLAR }) {
+                    "Select and verify solar tracking before starting a scan."
+                }
+            }
+            verifyTracking()
+            val revision = modelRevision.value
+            val selectedRate = mountSlewRate.value
+            val rate = checkNotNull(SolarSweepRate.entries.firstOrNull { it.mountRate == selectedRate }) {
+                "Select a supported solar sweep rate."
+            }
+            val checkMount = {
+                check(motionState.value.ownerToken == owner && !motionState.value.isStopping &&
+                    canSolarSweep && modelRevision.value == revision && mountSlewRate.value == selectedRate) {
+                    "Mount connection or sweep settings changed."
+                }
+            }
+            val isStill: suspend () -> Boolean = {
+                checkMount()
+                val current = controller.readSolarStatus(selectedRate)
+                check(current.pier == initial.pier) { "The mount changed its pier side. Repeat both trials." }
+                current.still
+            }
+            withContext(Dispatchers.IO) {
+                operation(SolarMountMotion(
+                    revision = revision,
+                    rate = rate,
+                    pier = initial.pier,
+                    prepare = {
+                        checkMount()
+                        verifyTracking()
+                        controller.setMoveRate(selectedRate)
+                        check(isStill()) { "Wait for the mount to stop moving." }
+                    },
+                    read = {
+                        checkMount()
+                        controller.readSolarCoordinates().also { _mountCoordinates.value = it }
+                    },
+                    start = { direction, durationMs ->
+                        checkMount()
+                        controller.startSolarPulse(direction, durationMs)
+                    },
+                    stop = controller::stopSolarPulse,
+                    abort = controller::abortMotion,
+                    isStill = isStill,
+                    verifyTracking = verifyTracking
+                ))
+            }
+        }
+    }
+
+    private suspend fun runOwnedMotion(type: MountMotionType, label: String, operation: suspend (String) -> Unit) {
         val owner = java.util.UUID.randomUUID().toString()
         val completion = kotlinx.coroutines.CompletableDeferred<Unit>()
-        val started = motionRunner.start(MountMotionState(MountMotionType.GOTO,
-            application.getString(R.string.wf_pointing_setup), holdStop = true, ownerToken = owner),
+        val started = motionRunner.start(MountMotionState(type, label, holdStop = true, ownerToken = owner),
             onError = { completion.completeExceptionally(it) }) {
             _mountBusy.value = true
             try {
-                operation { name, coordinates ->
-                    check(motionRunner.state.value.ownerToken == owner && pointingCapabilities.value.goto)
-                    _mountMoveStatus.value = application.getString(R.string.wfp_auto_moving, name)
-                    controller.slewTo(coordinates)
-                    awaitGotoTarget(name, coordinates)
-                    delay(1_000)
-                    _mountMoveStatus.value = application.getString(R.string.wfp_sampling)
-                }
+                operation(owner)
                 completion.complete(Unit)
             } catch (cancelled: CancellationException) {
                 completion.cancel(cancelled)
                 throw cancelled
             } finally { _mountBusy.value = false }
         }
-        check(started) { "Stop the current mount task before automatic calibration" }
+        check(started) { "Stop the current mount task before starting another." }
         try {
             kotlinx.coroutines.coroutineScope {
                 // Cancellation can finish the runner before its lazy operation body ever starts.
@@ -931,10 +996,13 @@ class MountModule(
                 val ownerWatcher = launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
                     motionState.first { it.ownerToken != owner }
                     if (!completion.isCompleted) {
-                        completion.cancel(CancellationException("Automatic calibration was stopped"))
+                        completion.cancel(CancellationException("Mount task was stopped"))
                     }
                 }
-                try { completion.await() } finally { ownerWatcher.cancel() }
+                try {
+                    completion.await()
+                    motionState.first { it.ownerToken != owner }
+                } finally { ownerWatcher.cancel() }
             }
         }
         catch (cancelled: CancellationException) {
@@ -1292,9 +1360,11 @@ class MountModule(
         mountCoordinatePollingJob = scope.launch {
             var trackingPoll = 0
             while (controller.isConnected) {
-                refreshMountCoordinatesAfterCommand()
-                runCatching { controller.refreshTracking() }
-                if (trackingPoll++ % 4 == 0 && !motionState.value.isActive) refreshMountTracking()
+                if (motionState.value.type != MountMotionType.SOLAR_SWEEP) {
+                    refreshMountCoordinatesAfterCommand()
+                    runCatching { controller.refreshTracking() }
+                    if (trackingPoll++ % 4 == 0 && !motionState.value.isActive) refreshMountTracking()
+                }
                 kotlinx.coroutines.delay(500)
             }
         }
@@ -1306,12 +1376,14 @@ class MountModule(
     }
 
     fun setMountSlewRate(rate: MountSlewRate) {
+        if (motionState.value.type == MountMotionType.SOLAR_SWEEP) return
         if (!controller.isConnected) {
             _mountSlewRate.value = rate
             prefs.edit().putString("mount_slew_rate", rate.name).apply()
             return
         }
         scope.launch {
+            if (motionState.value.type == MountMotionType.SOLAR_SWEEP) return@launch
             try {
                 controller.setMoveRate(rate)
                 _mountSlewRate.value = rate
@@ -1330,11 +1402,14 @@ class MountModule(
     }
 
     fun setMountTrackingRate(rate: MountTrackingRate) {
+        if (motionState.value.type == MountMotionType.SOLAR_SWEEP) return
         if (!controller.isConnected) return
         scope.launch {
+            if (motionState.value.type == MountMotionType.SOLAR_SWEEP) return@launch
             _mountBusy.value = true
             try {
                 trackingLock.withLock {
+                    if (motionState.value.type == MountMotionType.SOLAR_SWEEP) return@launch
                     try {
                         if (rate.tracks) trackingStartedByApplication = true
                         controller.setTrackingRate(rate)

@@ -51,6 +51,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -64,10 +65,13 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.indigo.mobileobservatory.R
+import com.indigo.mobileobservatory.mount.MountDirection
+import com.indigo.mobileobservatory.mount.SolarSweepRate
 import com.indigo.mobileobservatory.solar.SolarOutputProduct
 import com.indigo.mobileobservatory.solar.SolarBandingAxis
 import com.indigo.mobileobservatory.solar.SolarReconstructionSettings
@@ -79,6 +83,8 @@ import com.indigo.mobileobservatory.solar.SolarScanTaskRecord
 import com.indigo.mobileobservatory.solar.SolarSourcePolicy
 import com.indigo.mobileobservatory.ui.viewmodel.SolarScanUiState
 import com.indigo.mobileobservatory.ui.viewmodel.SolarScanViewModel
+import com.indigo.mobileobservatory.ui.viewmodel.CameraViewModel
+import com.indigo.mobileobservatory.ui.components.LivePreview
 import com.indigo.mobileobservatory.util.ImageUtils
 import java.io.File
 import java.time.Instant
@@ -88,6 +94,7 @@ import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 
 private enum class SolarTab {
+    HARDWARE,
     SCAN,
     RECONSTRUCT
 }
@@ -99,14 +106,22 @@ internal fun isSolarSourceBusy(selected: File?, recording: File?): Boolean =
 @Composable
 fun SolarScanScreen(
     viewModel: SolarScanViewModel,
+    camera: CameraViewModel,
     onBack: () -> Unit,
     onOpenResult: (File) -> Unit,
     busySource: File? = null
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    var tab by rememberSaveable { mutableStateOf(SolarTab.SCAN) }
+    var tab by rememberSaveable { mutableStateOf(SolarTab.HARDWARE) }
     var tabWasChosen by rememberSaveable { mutableStateOf(false) }
     var confirmSimulation by rememberSaveable { mutableStateOf(false) }
+    DisposableEffect(viewModel) { onDispose { viewModel.cancelHardware() } }
+    val host = LocalView.current
+    DisposableEffect(host, state.hardwareActive) {
+        val previous = host.keepScreenOn
+        if (state.hardwareActive) host.keepScreenOn = true
+        onDispose { if (state.hardwareActive) host.keepScreenOn = previous }
+    }
     LaunchedEffect(state.selectedFile?.absolutePath) {
         if (state.selectedFile != null && !tabWasChosen) tab = SolarTab.RECONSTRUCT
     }
@@ -134,12 +149,19 @@ fun SolarScanScreen(
         ) {
             TabRow(selectedTabIndex = tab.ordinal) {
                 Tab(
+                    selected = tab == SolarTab.HARDWARE,
+                    onClick = { tabWasChosen = true; tab = SolarTab.HARDWARE },
+                    text = { Text(stringResource(R.string.solar_hardware_tab)) }
+                )
+                Tab(
                     selected = tab == SolarTab.SCAN,
+                    enabled = !state.hardwareActive,
                     onClick = { tabWasChosen = true; tab = SolarTab.SCAN },
-                    text = { Text(stringResource(R.string.solar_scan_auto)) }
+                    text = { Text(stringResource(R.string.solar_hardware_simulation_tab)) }
                 )
                 Tab(
                     selected = tab == SolarTab.RECONSTRUCT,
+                    enabled = !state.hardwareActive,
                     onClick = { tabWasChosen = true; tab = SolarTab.RECONSTRUCT },
                     text = { Text(stringResource(R.string.solar_scan_reconstruct)) }
                 )
@@ -151,6 +173,7 @@ fun SolarScanScreen(
                 )
             }
             when (tab) {
+                SolarTab.HARDWARE -> HardwareScanTab(state, viewModel, camera, onOpenResult)
                 SolarTab.SCAN -> ScanTab(
                     state = state,
                     viewModel = viewModel,
@@ -195,6 +218,115 @@ fun SolarScanScreen(
                 TextButton(onClick = { confirmSimulation = false }) {
                     Text(stringResource(android.R.string.cancel))
                 }
+            }
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun HardwareScanTab(
+    state: SolarScanUiState,
+    viewModel: SolarScanViewModel,
+    camera: CameraViewModel,
+    onOpenResult: (File) -> Unit
+) {
+    val preview by camera.previewBitmap.collectAsStateWithLifecycle()
+    val roi by camera.roi.collectAsStateWithLifecycle()
+    val rate by camera.mountSlewRate.collectAsStateWithLifecycle()
+    val motion by camera.mountMotionState.collectAsStateWithLifecycle()
+    val cameraConnection by camera.connectionState.collectAsStateWithLifecycle()
+    val mountConnection by camera.mountConnectionState.collectAsStateWithLifecycle()
+    val mountAccess by camera.mountAccessMode.collectAsStateWithLifecycle()
+    val paused by camera.previewPaused.collectAsStateWithLifecycle()
+    val trials by viewModel.trials.collectAsStateWithLifecycle()
+    val mountAvailable = remember(mountConnection, mountAccess, motion) { camera.canSolarSweep }
+    val ready = preview != null && !paused && cameraConnection is com.indigo.mobileobservatory.camera.ConnectionState.Connected &&
+        mountAvailable && !state.busy && !motion.isActive
+    val canTrial = ready && SolarSweepRate.entries.any { it.mountRate == rate }
+    val paired = trials.size == 2 && trials[0].motion.pairsWith(trials[1].motion)
+    var count by rememberSaveable { mutableStateOf(2) }
+    var confirm by rememberSaveable { mutableStateOf(false) }
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        if (state.hardwareActive) {
+            TaskStatusCard(state, hardware = true)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = viewModel::cancel) { Text(stringResource(R.string.solar_scan_stop)) }
+                if (state.trialMoving) {
+                    Button(onClick = viewModel::finishTrial) { Text(stringResource(R.string.solar_hardware_finish)) }
+                }
+            }
+        }
+        if (preview != null) {
+            LivePreview(
+                bitmap = preview,
+                proposedRoi = roi,
+                sourceRoi = roi,
+                modifier = Modifier.fillMaxWidth().height(190.dp),
+                preferFullWidth = true
+            )
+        }
+        state.message?.let { Text(it) }
+        if (state.hardwareActive) return@Column
+        Text(stringResource(R.string.solar_hardware_instructions))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            for (option in SolarSweepRate.entries) {
+                FilterChip(selected = rate == option.mountRate, onClick = { camera.setMountSlewRate(option.mountRate) },
+                    enabled = ready, label = { Text(stringResource(
+                        if (option == SolarSweepRate.FIND) R.string.solar_hardware_find_rate
+                        else R.string.solar_hardware_fast_rate
+                    )) })
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(enabled = canTrial, onClick = { viewModel.startTrial(camera, MountDirection.WEST) }) {
+                Text(stringResource(R.string.solar_hardware_west))
+            }
+            Button(enabled = canTrial, onClick = { viewModel.startTrial(camera, MountDirection.EAST) }) {
+                Text(stringResource(R.string.solar_hardware_east))
+            }
+        }
+        trials.forEach { trial ->
+            Text(stringResource(
+                R.string.solar_hardware_trial_summary,
+                stringResource(if (trial.motion.direction == MountDirection.WEST) R.string.solar_hardware_west
+                    else R.string.solar_hardware_east),
+                trial.motion.motionMs / 1_000.0,
+                trial.coverage.leftMargin,
+                trial.coverage.rightMargin
+            ))
+        }
+        if (trials.isNotEmpty() && !paired) Text(stringResource(R.string.solar_hardware_pair_required))
+        if (paired) {
+            Text(stringResource(R.string.solar_hardware_count))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for (option in listOf(2, 4, 6)) {
+                    FilterChip(selected = count == option, onClick = { count = option },
+                        enabled = !state.busy, label = { Text(option.toString()) })
+                }
+            }
+        }
+        Button(onClick = { confirm = true }, enabled = canTrial && paired) {
+            Text(stringResource(R.string.solar_hardware_auto))
+        }
+        RecentRuns(state.runs, onOpenResult)
+    }
+    if (confirm) {
+        AlertDialog(
+            onDismissRequest = { confirm = false },
+            title = { Text(stringResource(R.string.solar_hardware_auto)) },
+            text = { Text(stringResource(R.string.solar_hardware_confirm, count)) },
+            confirmButton = {
+                TextButton(enabled = canTrial && paired, onClick = {
+                    confirm = false
+                    viewModel.startReciprocating(camera, count)
+                }) { Text(stringResource(R.string.solar_hardware_start)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirm = false }) { Text(stringResource(android.R.string.cancel)) }
             }
         )
     }
@@ -264,7 +396,7 @@ private fun ScanTab(
 }
 
 @Composable
-private fun TaskStatusCard(state: SolarScanUiState) {
+private fun TaskStatusCard(state: SolarScanUiState, hardware: Boolean = false) {
     if (state.phase == SolarScanPhase.IDLE) return
     Card {
         Row(
@@ -309,9 +441,12 @@ private fun TaskStatusCard(state: SolarScanUiState) {
                 state.currentDirection?.let { direction ->
                     Text(
                         stringResource(
-                            if (direction == com.indigo.mobileobservatory.solar.SolarScanDirection.A_TO_B) {
-                                R.string.solar_scan_direction_a_to_b
-                            } else R.string.solar_scan_direction_b_to_a
+                            when {
+                                hardware && direction.flipVertical -> R.string.solar_hardware_east
+                                hardware -> R.string.solar_hardware_west
+                                direction.flipVertical -> R.string.solar_scan_direction_b_to_a
+                                else -> R.string.solar_scan_direction_a_to_b
+                            }
                         ),
                         style = MaterialTheme.typography.bodySmall
                     )

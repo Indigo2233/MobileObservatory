@@ -172,6 +172,192 @@ fn illuminated_columns(spectrum: &Spectrum, width: usize, height: usize) -> (usi
     (first, last.max(first))
 }
 
+fn trial_coverage(
+    path: &Path,
+    progress: impl FnMut(f32) -> bool,
+) -> Result<[i32; 6], mjsolex::Error> {
+    measure_sweep(SerReader::open(File::open(path)?)?, progress)
+}
+
+fn measure_sweep<R: std::io::Read + std::io::Seek>(
+    mut reader: SerReader<R>,
+    mut progress: impl FnMut(f32) -> bool,
+) -> Result<[i32; 6], mjsolex::Error> {
+    let header = reader.header();
+    let count = header.frames.min(64);
+    if count < 16 || header.trimmed || header.color != mjsolex::ColorMode::Mono {
+        return Err(mjsolex::Error::InvalidSer(
+            "sweep calibration requires a complete monochrome SER with at least 16 frames",
+        ));
+    }
+    let mut windows = Vec::with_capacity(count as usize);
+    for index in 0..count {
+        let start = (u64::from(index) * u64::from(header.frames) / u64::from(count)) as u32;
+        let end = (u64::from(index + 1) * u64::from(header.frames) / u64::from(count)) as u32;
+        let spectrum = Spectrum::average_range(&mut reader, start..end, |value| {
+            progress((index as f32 + value) / (2 * count) as f32)
+        })?;
+        let signal = spectrum
+            .pixels()
+            .iter()
+            .copied()
+            .map(f64::from)
+            .sum::<f64>();
+        windows.push((start, end, signal));
+    }
+    let peak = windows.iter().map(|window| window.2).fold(0., f64::max);
+    let background = windows[0].2.min(windows[windows.len() - 1].2);
+    let contrast = peak - background;
+    if contrast <= (peak * 0.25).max(header.pixel_count() as f64) {
+        return Err(mjsolex::Error::InvalidSer(
+            "sweep signal has insufficient contrast",
+        ));
+    }
+    let on_disk = |window: &(u32, u32, f64)| window.2 > background + 0.06 * contrast;
+    let first = windows
+        .iter()
+        .position(on_disk)
+        .ok_or(mjsolex::Error::NoLine)?;
+    let last = windows
+        .iter()
+        .rposition(on_disk)
+        .ok_or(mjsolex::Error::NoLine)?;
+    if first < 2
+        || last + 2 >= windows.len()
+        || last - first < 3
+        || !windows[first..=last].iter().all(on_disk)
+    {
+        return Err(mjsolex::Error::InvalidSer(
+            "sweep needs continuous disk coverage and blank sky at both ends",
+        ));
+    }
+    let mut left = header.width - 1;
+    let mut right = 0;
+    let mut first_disk = None;
+    let mut end_disk = 0;
+    let blank = Spectrum::average_range(&mut reader, 0..windows[first - 1].1, |_| progress(0.5))?;
+    let mut background_columns = vec![0.0_f64; header.width];
+    for row in blank.pixels().chunks_exact(header.width) {
+        for (sum, value) in background_columns.iter_mut().zip(row) {
+            *sum += f64::from(*value);
+        }
+    }
+    drop(blank);
+    let mut columns = vec![0.0_f64; header.width];
+    for frame in 0..header.frames {
+        if !progress(0.5 + 0.5 * frame as f32 / header.frames as f32) {
+            return Err(mjsolex::Error::Cancelled);
+        }
+        reader.mono_column_sums(frame, &mut columns)?;
+        for (column, background) in columns.iter_mut().zip(&background_columns) {
+            *column -= background;
+        }
+        let threshold = (0.12 * columns.iter().copied().fold(0.0_f64, f64::max))
+            .max(header.height as f64 * 256.0);
+        // The first and last bright windows can straddle a limb. Their interiors
+        // are resolved below by checking continuity between actual bright frames.
+        if let Some(a) = columns.iter().position(|&value| value > threshold) {
+            if first_disk.is_some() && frame != end_disk {
+                return Err(mjsolex::Error::InvalidSer(
+                    "sweep lost usable signal inside the disk",
+                ));
+            }
+            first_disk.get_or_insert(frame);
+            end_disk = frame + 1;
+            left = left.min(a);
+            right = right.max(
+                columns
+                    .iter()
+                    .rposition(|&value| value > threshold)
+                    .unwrap(),
+            );
+        }
+    }
+    if !progress(1.0) {
+        return Err(mjsolex::Error::Cancelled);
+    }
+    let first_disk = first_disk.ok_or(mjsolex::Error::NoLine)?;
+    if right <= left || first_disk > windows[first].1 || end_disk < windows[last].0 {
+        return Err(mjsolex::Error::NoLine);
+    }
+    Ok([
+        header.frames as i32,
+        header.width as i32,
+        first_disk as i32,
+        end_disk as i32,
+        left as i32,
+        right as i32,
+    ])
+}
+
+#[cfg(test)]
+mod sweep_tests {
+    use super::*;
+    use std::io::Cursor;
+
+    fn sweep_ser(
+        first: usize,
+        end: usize,
+        clipped: bool,
+        dim_frame: Option<u8>,
+    ) -> SerReader<Cursor<Vec<u8>>> {
+        let mut bytes = vec![0; 178];
+        bytes[..14].copy_from_slice(b"LUCAM-RECORDER");
+        for (offset, value) in [(22, 1_u32), (26, 40), (30, 8), (34, 8), (38, 640)] {
+            bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        for frame in 0..640 {
+            let active = (first..end).contains(&frame);
+            let columns = if clipped && frame == 300 {
+                0..24
+            } else {
+                8..32
+            };
+            for _ in 0..8 {
+                bytes.extend((0..40).map(|x| {
+                    if active && columns.contains(&x) {
+                        if frame == 300 {
+                            dim_frame.unwrap_or(90)
+                        } else {
+                            90
+                        }
+                    } else {
+                        10
+                    }
+                }));
+            }
+        }
+        SerReader::open(Cursor::new(bytes)).unwrap()
+    }
+
+    #[test]
+    fn measures_slit_margins_with_camera_black_level() {
+        assert_eq!(
+            measure_sweep(sweep_ser(80, 560, false, None), |_| true).unwrap(),
+            [640, 40, 80, 560, 8, 31],
+        );
+        let clipped = measure_sweep(sweep_ser(80, 560, true, None), |_| true).unwrap();
+        assert_eq!(clipped[4], 0);
+    }
+
+    #[test]
+    fn rejects_missing_blank_sky_and_checks_cancel() {
+        assert!(measure_sweep(sweep_ser(0, 560, false, None), |_| true).is_err());
+        assert!(measure_sweep(sweep_ser(80, 640, false, None), |_| true).is_err());
+        assert!(matches!(
+            measure_sweep(sweep_ser(80, 560, false, None), |_| false),
+            Err(mjsolex::Error::Cancelled)
+        ));
+    }
+
+    #[test]
+    fn rejects_dark_or_ambiguous_frames_inside_the_disk() {
+        for intensity in [10, 11] {
+            assert!(measure_sweep(sweep_ser(80, 560, true, Some(intensity)), |_| true).is_err());
+        }
+    }
+}
+
 fn trace_quality(
     spectrum: &Spectrum,
     trace: &Trace,
@@ -787,6 +973,37 @@ pub extern "system" fn Java_com_indigo_mobileobservatory_solar_NativeSolarBridge
             .map_err(|error| mjsolex::Error::Io(std::io::Error::other(error.to_string())))
     }) {
         Ok(value) => value.into_raw(),
+        Err(error) => throw_java(&mut env, error.to_string()),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_indigo_mobileobservatory_solar_NativeSolarBridge_trialCoverage(
+    mut env: JNIEnv,
+    _class: JClass,
+    source: JString,
+    observer: JObject,
+) -> jobject {
+    let path = match env.get_string(&source) {
+        Ok(value) => PathBuf::from(String::from(value)),
+        Err(error) => return throw_java(&mut env, error.to_string()),
+    };
+    let (cancel, progress) = match observer_methods(&mut env, &observer) {
+        Ok(value) => value,
+        Err(error) => return throw_java(&mut env, error),
+    };
+    let result = {
+        let mut callback = observer_callback(&env, &observer, cancel, progress);
+        trial_coverage(&path, &mut callback)
+    };
+    match result {
+        Ok(values) => match env.new_int_array(values.len() as i32).and_then(|array| {
+            env.set_int_array_region(&array, 0, &values)?;
+            Ok(array)
+        }) {
+            Ok(array) => array.into_raw(),
+            Err(error) => throw_java(&mut env, error.to_string()),
+        },
         Err(error) => throw_java(&mut env, error.to_string()),
     }
 }

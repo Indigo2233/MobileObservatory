@@ -1,0 +1,28 @@
+diff --git a/src/ser.rs b/src/ser.rs
+index 32fdc28..339bbf3 100644
+--- a/src/ser.rs
++++ b/src/ser.rs
+@@ -440,6 +440,23 @@ impl<R: Read + Seek> SerReader<R> {
+         &self.observation
+     }
+ 
++    /// Sum monochrome samples along the dispersion axis of one SER frame.
++    pub fn mono_column_sums(&mut self, index: u32, columns: &mut [f64]) -> Result<(), Error> {
++        let header = self.header;
++        if header.color != ColorMode::Mono || columns.len() != header.width {
++            return Err(Error::InvalidSer("invalid monochrome column profile"));
++        }
++        let frame = self.frame(index)?;
++        columns.fill(0.0);
++        for row in 0..header.height {
++            let start = row * header.width;
++            for (column, sum) in columns.iter_mut().enumerate() {
++                *sum += f64::from(header.sample_plane(frame, start + column));
++            }
++        }
++        Ok(())
++    }
++
+     pub(crate) fn frame(&mut self, index: u32) -> Result<&[u8], Error> {
+         self.frame_rows(index, 0..self.header.height)
+     }

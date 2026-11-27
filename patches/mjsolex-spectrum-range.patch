@@ -1,0 +1,43 @@
+diff --git a/src/spectrum.rs b/src/spectrum.rs
+index 28cd87f..83952ff 100644
+--- a/src/spectrum.rs
++++ b/src/spectrum.rs
+@@ -69,22 +69,34 @@ impl Spectrum {
+ 
+     pub fn average<R: Read + Seek>(
+         reader: &mut SerReader<R>,
++        progress: impl FnMut(f32) -> bool,
++    ) -> Result<Self, Error> {
++        let frames = reader.header().frames;
++        Self::average_range(reader, 0..frames, progress)
++    }
++
++    pub fn average_range<R: Read + Seek>(
++        reader: &mut SerReader<R>,
++        frames: std::ops::Range<u32>,
+         mut progress: impl FnMut(f32) -> bool,
+     ) -> Result<Self, Error> {
+         let header = reader.header();
++        if frames.is_empty() || frames.end > header.frames {
++            return Err(Error::InvalidSer("invalid spectrum frame range"));
++        }
+         let mut pixels = Vec::new();
+         pixels.try_reserve_exact(header.pixel_count())?;
+         pixels.resize(header.pixel_count(), 0.);
+-        let count = header
+-            .frames
++        let count = (frames.end - frames.start)
+             .min(AVERAGE_FRAMES)
+             .min((AVERAGE_READ_BUDGET / header.frame_bytes()).max(2) as u32);
+         for i in 0..count {
+             if !progress(i as f32 / count as f32) {
+                 return Err(Error::Cancelled);
+             }
+-            let index = (u64::from(i) * u64::from(header.frames - 1)
+-                / u64::from((count - 1).max(1))) as u32;
++            let index = frames.start
++                + (u64::from(i) * u64::from(frames.end - frames.start - 1)
++                    / u64::from((count - 1).max(1))) as u32;
+             let frame = reader.frame(index)?;
+             header.accumulate(frame, &mut pixels);
+         }

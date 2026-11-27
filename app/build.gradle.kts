@@ -181,6 +181,20 @@ val applyMjsolexCorePatch by tasks.registering(ApplyGitPatch::class) {
     patchFile.set(file("../patches/mjsolex-core-only.patch"))
 }
 
+val applyMjsolexSpectrumRangePatch by tasks.registering(ApplyGitPatch::class) {
+    description = "Adds bounded spectrum averaging for live solar sweep coverage checks."
+    dependsOn(applyMjsolexCorePatch)
+    repository.set(rustMjsolexDirectory)
+    patchFile.set(file("../patches/mjsolex-spectrum-range.patch"))
+}
+
+val applyMjsolexColumnProfilePatch by tasks.registering(ApplyGitPatch::class) {
+    description = "Exposes per-frame monochrome column sums for live solar sweeps."
+    dependsOn(applyMjsolexSpectrumRangePatch)
+    repository.set(rustMjsolexDirectory)
+    patchFile.set(file("../patches/mjsolex-column-profile.patch"))
+}
+
 val buildRustStackAccumulator by tasks.registering(Exec::class) {
     group = "build"
     description = "Builds the Rust deep-sky accumulator for the selected Android ABI."
@@ -300,7 +314,7 @@ val buildRustCalibration by tasks.registering(Exec::class) {
 val buildRustSolarScanCargo by tasks.registering(Exec::class) {
     group = "build"
     description = "Builds the MJSol'Ex Rust reconstruction JNI libraries."
-    dependsOn(applyMjsolexCorePatch)
+    dependsOn(applyMjsolexColumnProfilePatch)
     workingDir(rustSolarScanDirectory)
     inputs.files(
         fileTree(rustSolarScanDirectory) {
@@ -414,7 +428,7 @@ val buildRustCalibrationHost by tasks.registering(Exec::class) {
 val buildRustSolarScanHost by tasks.registering(Exec::class) {
     group = "verification"
     description = "Builds the MJSol'Ex Rust reconstruction core for host JVM tests."
-    dependsOn(applyMjsolexCorePatch)
+    dependsOn(applyMjsolexColumnProfilePatch)
     workingDir(rustSolarScanDirectory)
     inputs.files(
         fileTree(rustSolarScanDirectory) {

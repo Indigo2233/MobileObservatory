@@ -7,6 +7,7 @@ import com.indigo.mobileobservatory.camera.PixelFormat
 import com.indigo.mobileobservatory.media.MediaRename
 import com.indigo.mobileobservatory.media.MediaTrash
 import com.indigo.mobileobservatory.media.MediaUsageRegistry
+import com.indigo.mobileobservatory.mount.MountDirection
 import com.indigo.mobileobservatory.ui.viewmodel.incompleteSimulationSourcesToDelete
 import com.indigo.mobileobservatory.ui.viewmodel.isCurrentSolarPreview
 import com.indigo.mobileobservatory.ui.viewmodel.publishSealedSimulationSource
@@ -40,6 +41,53 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SolarScanFeatureTest {
+    @Test
+    fun trialTimingUsesTheAcceptedFrameIntervals() {
+        val cadence = SolarFrameCadence()
+        repeat(20) { cadence.observe(it * 100_000_000L) }
+        cadence.finishBaseline()
+        cadence.checkContinuous()
+        val timing = cadence.timing(SolarTrialCoverage(20, 40, 3, 18, 8, 31))
+        assertEquals(10.0, timing.framesPerSecond, 0.000001)
+        assertEquals(1_400L, timing.diskCrossingMs)
+    }
+
+    @Test
+    fun trialCadenceRejectsAGapBelowTheLiveFrameWatchdog() {
+        val cadence = SolarFrameCadence()
+        repeat(20) { cadence.observe(it * 100_000_000L) }
+        cadence.finishBaseline()
+        cadence.checkContinuous()
+        cadence.observe(2_100_000_000L)
+        assertThrows(IllegalStateException::class.java) { cadence.checkContinuous() }
+    }
+
+    @Test
+    fun trialPairKeepsDirectionalTimesAndAdjustsForStartOffset() {
+        val east = SolarPoint(-1_100.0, 0.0)
+        val west = SolarPoint(1_100.0, 0.0)
+        val westward = SolarTrialMotion(MountDirection.WEST, east, west, 8_800)
+        val eastward = SolarTrialMotion(MountDirection.EAST, west, east, 8_000)
+
+        assertTrue(westward.pairsWith(eastward))
+        assertEquals(8_960L, westward.adjustedMotionMs(east.copy(west = -1_140.0)))
+        assertEquals(8_000L, eastward.adjustedMotionMs(west))
+        assertFalse(westward.matchesStart(east.copy(north = 31.0)))
+        assertFalse(westward.withinSweep(west.copy(west = 1_146.0)))
+    }
+
+    @Test
+    fun solarRelativeCoordinatesRoundTripAcrossRaWrap() {
+        val date = Instant.parse("2026-03-20T14:48:00Z")
+        val point = SolarPoint(1_250.0, 30.0)
+        val endpoint = point.endpoint(date)
+        val projected = SolarPoint.from(
+            com.indigo.mobileobservatory.mount.MountCoordinates(endpoint.raHours, endpoint.decDegrees), date
+        )
+        assertEquals(point.west, projected.west, 0.000001)
+        assertEquals(point.north, projected.north, 0.000001)
+    }
+
     @Test
     fun preflightRequiresDiskCoverageMarginsAndStorage() {
         val base = configuration()

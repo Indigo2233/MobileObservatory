@@ -8,6 +8,8 @@ import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.indigo.mobileobservatory.R
+import com.indigo.mobileobservatory.media.MediaUsageRegistry
+import com.indigo.mobileobservatory.mount.MountDirection
 import com.indigo.mobileobservatory.recording.MediaCategory
 import com.indigo.mobileobservatory.recording.MediaLibrary
 import com.indigo.mobileobservatory.recording.VideoFileInfo
@@ -36,6 +38,9 @@ import com.indigo.mobileobservatory.solar.SolarNativeObserver
 import com.indigo.mobileobservatory.solar.NativeSolarAnalysis
 import com.indigo.mobileobservatory.solar.NativeSolarPreview
 import com.indigo.mobileobservatory.solar.legPlans
+import com.indigo.mobileobservatory.solar.SolarRoi
+import com.indigo.mobileobservatory.solar.SolarPoint
+import com.indigo.mobileobservatory.solar.reverseSolar
 import com.indigo.mobileobservatory.util.FileLogger
 import java.io.File
 import java.nio.file.AtomicMoveNotSupportedException
@@ -47,10 +52,13 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -75,6 +83,8 @@ data class SolarScanUiState(
     val totalLegs: Int = 0,
     val currentDirection: SolarScanDirection? = null,
     val completedLegs: Int = 0,
+    val hardwareActive: Boolean = false,
+    val trialMoving: Boolean = false,
     val message: String? = null,
     val lastResultDirectory: File? = null
 )
@@ -186,6 +196,191 @@ class SolarScanViewModel(application: Application) : AndroidViewModel(applicatio
     private val sourceDispositionCommit = Any()
     private var previewOperation: Job? = null
     private val previewGeneration = AtomicLong()
+    private var trialFinish: CompletableDeferred<Unit>? = null
+    private var calibratedSetup: SolarCaptureSetup? = null
+    private val _trials = MutableStateFlow<List<SolarCapturedSweep>>(emptyList())
+    internal val trials = _trials.asStateFlow()
+
+    internal fun startTrial(camera: CameraViewModel, direction: MountDirection) {
+        if (_state.value.busy || operation?.isCompleted == false || repository == null) return
+        val finish = CompletableDeferred<Unit>()
+        trialFinish = finish
+        launchHardware(1) {
+            _state.update { it.copy(currentDirection = direction.scanDirection()) }
+            val key = camera.solarCaptureKey()
+            _trials.update { trials -> trials.filter { it.motion.direction != direction } }
+            camera.withSolarMount { mount ->
+                val setup = SolarCaptureSetup(key, mount.revision, mount.rate, mount.pier)
+                if (calibratedSetup != setup) _trials.value = emptyList()
+                calibratedSetup = setup
+                val result = SolarHardwareCapture(camera, setup, mount, ::inspectSweepSpectrum).capture(
+                    direction, null, finish,
+                    onMoving = { _state.update { it.copy(trialMoving = true) } },
+                    onSettling = { _state.update { it.copy(trialMoving = false, phase = SolarScanPhase.SETTLING) } },
+                    onChecking = { _state.update { it.copy(phase = SolarScanPhase.ANALYZING) } }
+                )
+                currentCoroutineContext().ensureActive()
+                _trials.update { it + result }
+                _state.update { it.copy(completedLegs = 1) }
+            }
+            getApplication<Application>().getString(R.string.solar_hardware_trial_saved)
+        }
+    }
+
+    internal fun finishTrial() {
+        if (_state.value.trialMoving) {
+            trialFinish?.complete(Unit)
+            _state.update { it.copy(trialMoving = false) }
+        }
+    }
+
+    internal fun startReciprocating(camera: CameraViewModel, count: Int) {
+        val setup = calibratedSetup ?: return
+        val pair = _trials.value
+        if (count !in 2..6 || pair.size != 2 || !pair[0].motion.pairsWith(pair[1].motion)) return
+        val repository = repository ?: return
+        val settings = _state.value.reconstructionSettings
+        val baseConfiguration = _state.value.configuration
+        launchHardware(count) { observer ->
+            val key = camera.solarCaptureKey()
+            val captures = mutableListOf<SolarCapturedSweep>()
+            val createdAt = Instant.now()
+            camera.withSolarMount { mount ->
+                check(setup == SolarCaptureSetup(key, mount.revision, mount.rate, mount.pier)) {
+                    "The capture or mount configuration changed. Repeat both trials."
+                }
+                val position = SolarPoint.from(mount.read(), Instant.now())
+                var next = checkNotNull(pair.find { it.motion.matchesStart(position) }) {
+                    "Manually return to either calibrated starting position."
+                }.motion.direction
+                val capture = SolarHardwareCapture(camera, setup, mount, ::inspectSweepSpectrum)
+                val reserve = pair.maxOf { it.file.length() }
+                check(reserve > 0 && pair.all { it.file.isFile }) {
+                    "Both calibration SER recordings must still be available."
+                }
+                check(checkNotNull(recordingsDir).usableSpace / reserve / 2 >= count) {
+                    "Insufficient space for the requested SER recordings."
+                }
+                repeat(count) { index ->
+                    val trial = pair.first { it.motion.direction == next }
+                    _state.update {
+                        it.copy(phase = SolarScanPhase.RECORDING, currentLeg = index + 1,
+                            currentDirection = next.scanDirection())
+                    }
+                    captures += capture.capture(next, trial.motion, null,
+                        onMoving = {},
+                        onSettling = { _state.update { it.copy(phase = SolarScanPhase.SETTLING) } },
+                        onChecking = { _state.update { it.copy(phase = SolarScanPhase.ANALYZING) } }
+                    )
+                    _state.update { it.copy(completedLegs = captures.size) }
+                    next = next.reverseSolar()
+                }
+            }
+            val taskId = repository.newTaskId()
+            val staging = repository.createStaging(taskId)
+            try {
+                _state.update { it.copy(phase = SolarScanPhase.RECONSTRUCTING) }
+                reconstructionSettingsSession.markUsed(settings)
+                val legs = MediaUsageRegistry.acquire(captures.map { it.file }, waitForExclusive = false).use {
+                    captures.mapIndexed { index, sweep ->
+                        val direction = sweep.motion.direction.scanDirection()
+                        val legSettings = settings.copy(flipVertical = settings.flipVertical xor direction.flipVertical)
+                        val output = File(staging, "products/leg-${index + 1}").apply { mkdirs() }
+                        val identity = SolarSourceIdentity.of(sweep.file)
+                        val memoryTrace = ReconstructionMemoryTrace(::readSystemMemoryHeadroom)
+                        val native = SolarScanNative.reconstruct(sweep.file, output, legSettings,
+                            memoryTrace.nativeHeadroomBytes(), useChineseWarnings(), object : SolarNativeObserver by observer {
+                                override fun onProgress(value: Float) {
+                                    memoryTrace.sampleFromProgress()
+                                    _state.update { it.copy(progress = (index + value) / count) }
+                                }
+                            })
+                        validateProducts(output, settings.products)
+                        SolarScanLegRecord(index + 1, direction, identity, sweep.coverage.frames, 0,
+                            native.toDomain(sweep.file, legSettings, memoryTrace.summary()),
+                            SolarSourceDispositionState.KEPT, analysis = sweep.analysis, reconstructionSettings = legSettings)
+                    }
+                }
+                File(staging, "coverage.txt").writeText(captures.joinToString("\n") { sweep ->
+                    val motion = sweep.motion
+                    val coverage = sweep.coverage
+                    "${sweep.file.name} ${motion.direction} ${motion.motionMs} ms " +
+                        "start=${motion.start} end=${motion.end} " +
+                        "diskFrames=[${coverage.firstDiskFrame},${coverage.endDiskFrame}) " +
+                        "diskCrossingMs=${sweep.timing.diskCrossingMs} fps=${sweep.timing.framesPerSecond} " +
+                        "left=${coverage.leftMargin} px right=${coverage.rightMargin} px"
+                }, Charsets.UTF_8)
+                val eastToWest = captures.first { it.motion.direction == MountDirection.WEST }
+                val config = baseConfiguration.copy(
+                    endpointA = eastToWest.motion.start.endpoint(eastToWest.startedAt),
+                    endpointB = eastToWest.motion.end.endpoint(eastToWest.startedAt.plusMillis(eastToWest.motion.motionMs)),
+                    scanDurationMs = eastToWest.motion.motionMs,
+                    diskCrossingMs = eastToWest.timing.diskCrossingMs,
+                    frameRate = eastToWest.timing.framesPerSecond,
+                    exposureUs = key.exposureUs.roundToInt().toLong().coerceAtLeast(1),
+                    roi = SolarRoi(key.roi.x, key.roi.y, key.width, key.height),
+                    pixelBytes = key.format.bytesPerPixel,
+                    legCount = count,
+                    continuous = false,
+                    sourcePolicy = SolarSourcePolicy.KEEP,
+                    products = settings.products
+                )
+                val app = getApplication<Application>()
+                if (observer.isCancelled()) throw CancellationException("Solar scan cancelled.")
+                _state.update { it.copy(phase = SolarScanPhase.COMMITTING) }
+                val record = repository.commit(staging, taskId, SolarScanTaskRecord(
+                    taskId, createdAt.toString(), Instant.now().toString(),
+                    app.getString(R.string.solar_hardware_auto), config, legs.first().analysis, settings,
+                    legs, SolarSourcePolicy.KEEP, legs.flatMap { it.reconstruction?.warnings.orEmpty() },
+                    staging
+                ))
+                _state.update { it.copy(lastResultDirectory = record.resultDirectory) }
+            } finally {
+                staging.deleteRecursively()
+            }
+            getApplication<Application>().getString(R.string.solar_scan_message_saved)
+        }
+    }
+
+    private fun MountDirection.scanDirection(): SolarScanDirection =
+        if (this == MountDirection.WEST) SolarScanDirection.A_TO_B else SolarScanDirection.B_TO_A
+
+    private fun inspectSweepSpectrum(file: File, observer: SolarNativeObserver): SolarSpectrumAnalysis =
+        SolarScanNative.analyze(file, observer).toDomain().also {
+            check(it.confidence > 0.0) { "Could not confirm the spectral line in the SER recording." }
+        }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun launchHardware(count: Int, run: suspend (SolarNativeObserver) -> String) {
+        if (_state.value.busy || operation?.isCompleted == false || repository == null) return
+        recoveryTaskId = null
+        _state.update { it.copy(busy = true, hardwareActive = true, message = null, progress = 0f,
+            phase = SolarScanPhase.RECORDING, currentLeg = 1, totalLegs = count, completedLegs = 0,
+            currentDirection = null, lastResultDirectory = null) }
+        operation = viewModelScope.launch(Dispatchers.IO, start = CoroutineStart.ATOMIC) {
+            val job = checkNotNull(coroutineContext[Job])
+            val app = getApplication<Application>()
+            try {
+                startupMaintenance.join()
+                val message = run(operationObserver(job) { })
+                _state.update { it.copy(phase = SolarScanPhase.COMPLETED, message = message, progress = 1f) }
+            } catch (_: CancellationException) {
+                _state.update { it.copy(phase = SolarScanPhase.CANCELLED,
+                    message = app.getString(R.string.solar_hardware_cancelled)) }
+            } catch (error: Exception) {
+                FileLogger.e("SolarScan", "Hardware scan failed", error)
+                _state.update { it.copy(phase = if (job.isActive) SolarScanPhase.FAILED else SolarScanPhase.CANCELLED,
+                    message = app.getString(R.string.solar_hardware_failed, error.message.orEmpty())) }
+            } finally {
+                try {
+                    runCatching { refreshInternal() }
+                } finally {
+                    trialFinish = null
+                    _state.update { it.copy(busy = false, hardwareActive = false, trialMoving = false) }
+                }
+            }
+        }
+    }
 
     private val startupMaintenance = viewModelScope.launch(Dispatchers.IO) {
         val repository = repository ?: return@launch
@@ -870,6 +1065,10 @@ class SolarScanViewModel(application: Application) : AndroidViewModel(applicatio
             }
         }
         running.cancel(CancellationException("User cancelled solar scan"))
+    }
+
+    internal fun cancelHardware() {
+        if (_state.value.hardwareActive) cancel()
     }
 
     private fun sourceDispositionWarnings(legs: List<SolarScanLegRecord>): List<String> = buildList {

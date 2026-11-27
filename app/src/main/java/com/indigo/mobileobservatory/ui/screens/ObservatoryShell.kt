@@ -490,6 +490,7 @@ private fun ObservatoryContent(
         ObservatoryDestination.SOLAR_SCAN -> {
             SolarScanScreen(
                 viewModel = solarScanViewModel,
+                camera = vm,
                 onBack = back,
                 onOpenResult = { file ->
                     onPlayer(file, MediaCategory.RECENT)

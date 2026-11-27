@@ -34,6 +34,7 @@ import com.indigo.mobileobservatory.mount.MountCoordinates
 import com.indigo.mobileobservatory.mount.MountDirection
 import com.indigo.mobileobservatory.mount.MountMotionState
 import com.indigo.mobileobservatory.mount.MountSlewRate
+import com.indigo.mobileobservatory.solar.SolarFrameCadence
 import com.indigo.mobileobservatory.mount.MountTrackingRate
 import com.indigo.mobileobservatory.mount.MountProtocolType
 import com.indigo.mobileobservatory.mount.MountTransportType
@@ -749,6 +750,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val recordDroppedFrames = AtomicLong(0)
     private val recordingLifecycleLock = Any()
     @Volatile private var recordingWriteSession: RecordingWriteSession<FrameData>? = null
+    @Volatile private var solarRecordingCadence: SolarFrameCadence? = null
     @Volatile private var recordingSaveToGallery = false
     private val _recordingFinalizing = MutableStateFlow(false)
     val recordingFinalizing = _recordingFinalizing.asStateFlow()
@@ -2673,6 +2675,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         startExposureTimer()
         cam.startCapture(object : FrameCallback {
             override fun onFrame(frame: FrameData) {
+                val cadence = solarRecordingCadence
+                val deliveredAtNs = if (cadence != null) android.os.SystemClock.elapsedRealtimeNanos() else 0L
                 val input = frame
                 if (!previewEpoch.isCurrent(runEpoch) || cameraManager.activeCamera !== cam) { cam.recycleBuffer(input.data); return }
                 val verifiedRun = cam.scienceCaptureGeneration
@@ -2716,7 +2720,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     val initialTemperature = recordingCaptureTemperature
                     val temperature = calibrationTemperature()
                     if (initialTemperature != null && (temperature == null || kotlin.math.abs(temperature - initialTemperature) > 2.0)) recordingCaptureChanged = true
-                    enqueueRecordingFrame(interpretedFrame)
+                    enqueueRecordingFrame(interpretedFrame, cadence, deliveredAtNs)
                 }
 
                 val processed = softwareBinning.apply(interpretedFrame, traits)
@@ -3184,8 +3188,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    private fun enqueueRecordingFrame(frame: FrameData) = synchronized(recordingEnqueueLock) {
+    private fun enqueueRecordingFrame(
+        frame: FrameData,
+        cadence: SolarFrameCadence? = null,
+        deliveredAtNs: Long = 0L
+    ): Unit = synchronized(recordingEnqueueLock) {
         if (!_isRecording.value) return
+        // A callback from before this recording began cannot provide a sample for it.
+        if (cadence !== solarRecordingCadence) return
         if (recordWriteQueue.remainingCapacity() == 0) { reportRecordingDrop(); return }
         val size = frame.width.toLong() * frame.height * frame.pixelFormat.bytesPerPixel
         if (size > frame.data.size || size > Int.MAX_VALUE) { reportRecordingDrop(); return }
@@ -3194,7 +3204,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (!recordWriteQueue.offer(frame.copy(data = copy))) {
             recordBufferPool.release(copy)
             reportRecordingDrop()
-        }
+        } else cadence?.observe(deliveredAtNs)
     }
 
     private fun canonicalRecordingFrame(frame: FrameData): FrameData {
@@ -3206,7 +3216,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         return RawRecordingNormalizer.normalizeOwnedInPlace(frame, layout.traits)
     }
 
-    private fun startRecordWriteThread() {
+    private fun startRecordWriteThread(solarCadence: SolarFrameCadence? = null) {
         lateinit var session: RecordingWriteSession<FrameData>
         var limitReached = false
         session = RecordingWriteSession(
@@ -3256,7 +3266,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     RecordLimitType.TIME -> _recordingDurationMs.value >= limit.value * 1000L
                     RecordLimitType.NONE -> false
                 }
-                if (shouldStop && !limitReached && !session.hasFailed) {
+                if (solarCadence == null && shouldStop && !limitReached && !session.hasFailed) {
                     limitReached = true
                     synchronized(recordingEnqueueLock) { _isRecording.value = false }
                     recordingSaveToGallery = true
@@ -4084,8 +4094,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun startRecording(): Unit = synchronized(recordingLifecycleLock) {
+    fun startRecording() = startRecording(solarCadence = null)
+
+    private fun startRecording(solarCadence: SolarFrameCadence?): Unit = synchronized(recordingLifecycleLock) {
+        val fmt = if (solarCadence == null) _recordFormat.value else RecordFormat.SER
         val source = cameraManager.activeCamera
+        if (solarCadence != null && (source is SimulatedCamera ||
+                source is com.indigo.mobileobservatory.simulation.VirtualCamera)
+        ) return@synchronized
         FileLogger.i(TAG, "Recording requested format=${_recordFormat.value} camera=${source?.cameraInfo?.name} " +
             "roi=${source?.currentRoi} pixels=${source?.currentPixelFormat} capturing=${source?.isCapturing?.value} " +
             "cfaBusy=${_cameraCfaApplying.value} referenceBusy=${pointingCaptureOwned.get()} " +
@@ -4119,7 +4135,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
         try {
             val cam = cameraManager.activeCamera ?: return
-            if (_recordFormat.value != RecordFormat.MP4 &&
+            if (fmt != RecordFormat.MP4 &&
                 (!cam.recordsLiveViewAsScience || cam.currentPixelFormat == PixelFormat.RGB24)) {
                 _statusMessage.value = app.getString(R.string.dslr_live_view_not_science)
                 return
@@ -4132,7 +4148,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val filterName = currentFilterName()
             val filterPart = if (filterName != null) "-$filterName" else ""
 
-            val fmt = _recordFormat.value
             val rawFormat = CameraCfaLayout.effectiveFormat(cam.currentPixelFormat, _cameraCfa.value)
             val rawRecording = fmt == RecordFormat.SER || fmt == RecordFormat.PSER
             val captureKey = if (rawRecording) currentStackKey()?.rawCaptureKey() else null
@@ -4219,11 +4234,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
 
             recordingStartTime = System.currentTimeMillis()
-            _isRecording.value = true
             _recordingFrameCount.value = 0
             _recordingBytes.value = 0
             _recordingDurationMs.value = 0
             recordDroppedFrames.set(0)
+            synchronized(recordingEnqueueLock) {
+                solarRecordingCadence = solarCadence
+                _isRecording.value = true
+            }
             val bitsInfo = if (fmt == RecordFormat.PSER && !useSERForPser8bit) " ${pixFmt.nativeBits}bit" else ""
             _statusMessage.value = if (useSERForPser8bit) {
                 "REC [SER]: ${file.name} (8bit→SER)"
@@ -4231,18 +4249,80 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 "REC [$effectiveExt$bitsInfo]: ${file.name}"
             }
             FileLogger.i(TAG, "Recording started ($effectiveExt ${pixFmt.name}): ${file.name}")
-            startRecordWriteThread()
+            startRecordWriteThread(solarCadence)
         } catch (e: Throwable) {
             FileLogger.e(TAG, "startRecording failed format=${_recordFormat.value}", e)
             recordingWriteSession?.fail("recording_start_failed", e)
             closeRecordingResources(saveToGallery = false)
             val detail = e.message.orEmpty()
-            _statusMessage.value = if (_recordFormat.value == RecordFormat.MP4) {
+            _statusMessage.value = if (fmt == RecordFormat.MP4) {
                 app.getString(R.string.record_mp4_encoder_failed, detail)
             } else {
                 app.getString(R.string.record_error_detail, detail)
             }
         }
+    }
+
+    internal fun solarCaptureKey(): StackSessionKey {
+        val cam = checkNotNull(cameraManager.activeCamera) { "Connect the science camera." }
+        check(cam !is SimulatedCamera && cam !is com.indigo.mobileobservatory.simulation.VirtualCamera &&
+            cam.isOpen.value && cam.isCapturing.value && !_previewPaused.value
+        ) { "Resume the live science camera preview." }
+        val key = checkNotNull(currentStackKey()?.rawCaptureKey()) {
+            "Wait for the current camera settings and disable auto exposure."
+        }
+        check(key.format.isMono && key.width >= 32 && key.height >= 8) { "Select a monochrome spectral ROI." }
+        return key
+    }
+
+    internal val canSolarSweep: Boolean get() = mountModule.canSolarSweep
+
+    internal suspend fun withSolarMount(operation: suspend (com.indigo.mobileobservatory.mount.SolarMountMotion) -> Unit) {
+        synchronized(guideOperationLock) {
+            check(!_guideRunning.value && !_guideCalibrating.value && !_guideAutoStarting.value &&
+                !guideTasks.busy && auxiliaryCaptureOwned.compareAndSet(false, true)
+            ) { "Stop guiding and wait for any guide or auxiliary task to finish." }
+        }
+        try {
+            mountModule.runSolarMotion(operation)
+        } finally {
+            auxiliaryCaptureOwned.set(false)
+        }
+    }
+
+    internal class SolarSerRecording(
+        val file: File,
+        internal val session: RecordingWriteSession<FrameData>,
+        internal val cadence: SolarFrameCadence,
+        internal val droppedAtStop: AtomicLong = AtomicLong()
+    )
+
+    internal fun startSolarSer(expected: StackSessionKey): SolarSerRecording = synchronized(recordingLifecycleLock) {
+        check(recordingWriteSession == null && currentRecordingFile == null && !_isRecording.value) {
+            "Finish the current recording first."
+        }
+        check(solarCaptureKey() == expected) { "Camera settings changed. Repeat calibration." }
+        val cadence = SolarFrameCadence()
+        startRecording(cadence)
+        val file = checkNotNull(currentRecordingFile) { _statusMessage.value.ifBlank { "Could not start SER recording." } }
+        SolarSerRecording(file, checkNotNull(recordingWriteSession), cadence)
+    }
+
+    internal fun checkSolarSer(recording: SolarSerRecording, expected: StackSessionKey) {
+        check(_isRecording.value && recordingWriteSession === recording.session &&
+            !recording.session.hasFailed && !recordingCaptureChanged && solarCaptureKey() == expected
+        ) { "SER capture stopped or the camera settings changed." }
+    }
+
+    internal suspend fun finishSolarSer(recording: SolarSerRecording) {
+        synchronized(recordingLifecycleLock) {
+            if (recordingWriteSession === recording.session) {
+                closeRecordingResources(saveToGallery = false)
+                recording.droppedAtStop.set(recordDroppedFrames.get())
+            }
+        }
+        val outcome = withTimeout(15_000) { recording.session.awaitCompletion() }
+        check(outcome.succeeded) { outcome.cause?.message ?: outcome.failure.orEmpty() }
     }
 
     fun stopRecording() {
@@ -4255,7 +4335,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         simulatedRecordingEpoch.incrementAndGet()
         simulatedRecordingJob?.cancel(); simulatedRecordingJob = null
         val session = synchronized(recordingLifecycleLock) {
-            synchronized(recordingEnqueueLock) { _isRecording.value = false }
+            synchronized(recordingEnqueueLock) {
+                _isRecording.value = false
+                solarRecordingCadence = null
+            }
             recordingSaveToGallery = recordingSaveToGallery || saveToGallery
             recordingWriteSession?.also {
                 _recordingFinalizing.value = true

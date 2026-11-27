@@ -17,6 +17,7 @@ enum class MountMotionType {
     GOTO,
     HOME,
     RA_MOVE,
+    SOLAR_SWEEP,
     MANUAL
 }
 
