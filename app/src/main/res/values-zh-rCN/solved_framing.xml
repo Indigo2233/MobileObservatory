@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="solved_framing_view">在星图查看构图</string>
+    <string name="solved_framing_frame">本次曝光实测框</string>
+    <string name="solved_framing_camera">拍摄相机</string>
+    <string name="solved_framing_field">%1$.2f° × %2$.2f° · 位置角 %3$.1f°</string>
+    <string name="solved_framing_repeat">移动架台后，请重新拍摄并解析。</string>
+    <string name="solved_framing_back">返回解析结果</string>
+    <string name="solved_framing_apply">应用相机和焦距</string>
+    <string name="solved_framing_confirm">应用</string>
+    <string name="solved_framing_applied">已应用到构图</string>
+    <string name="solved_framing_apply_details">将主镜构图设为 %1$s，画面 %2$d × %3$d 像素，有效像元 %4$.3f µm，解算焦距 %5$.1f mm。</string>
+</resources>

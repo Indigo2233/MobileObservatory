@@ -13,6 +13,7 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
+import com.indigo.mobileobservatory.astrometry.SolvedFrameFraming
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -366,6 +367,9 @@ fun StarMapScreen(
     onTargetSelected: (StarMapTarget) -> Unit = {},
     selectedObservationTarget: StarMapTarget? = null,
     pointingSources: List<FovPointingCandidate> = emptyList(),
+    solvedFraming: SolvedFrameFraming? = null,
+    solvedFramingOpticsApplied: Boolean = false,
+    onApplySolvedFramingOptics: () -> Unit = {},
     opticalPathIds: Map<OpticsTrainId, String> = emptyMap(),
     onOpticalPathInvalidated: (OpticsTrainId, PointingOpticsChange) -> Unit = { _, _ -> },
     onOpenTargets: () -> Unit = {},
@@ -381,6 +385,7 @@ fun StarMapScreen(
 ) {
     var webView by remember { mutableStateOf<WebView?>(null) }
     val foreground = rememberPageForeground()
+    val solvedFieldLabel = stringResource(R.string.solved_framing_frame)
     LaunchedEffect(webView, foreground) {
         webView?.let { view ->
             if (foreground) {
@@ -989,15 +994,17 @@ fun StarMapScreen(
         StarMapFovOverlay.scripts(
             showOverlay = showFovOverlay,
             computation = activeComputation,
-            currentLabel = overlayCurrentLabel,
+            currentLabel = if (solvedFraming != null) solvedFieldLabel else overlayCurrentLabel,
             targetLabel = overlayTargetLabel,
-            alsoZoom = alsoZoom,
-            currentAnchor = currentFovReference?.anchor,
+            alsoZoom = alsoZoom && solvedFraming == null,
+            currentAnchor = solvedFraming?.anchor ?: currentFovReference?.anchor,
             targetAnchor = targetAnchor,
-            showCurrent = currentFovReference != null,
-            currentPositionAngleDeg = currentFovReference?.positionAngleDeg ?: 0.0
+            showCurrent = solvedFraming != null || currentFovReference != null,
+            currentPositionAngleDeg = solvedFraming?.positionAngleDeg ?: currentFovReference?.positionAngleDeg ?: 0.0,
+            currentComputation = solvedFraming?.field ?: activeComputation,
+            showCurrentWhenOverlayHidden = solvedFraming != null
         ).forEach(::evalStarMap)
-        applyTargetFraming(alsoZoom)
+        applyTargetFraming(alsoZoom && solvedFraming == null)
     }
 
     fun setFollowMountEnabled(enabled: Boolean) {
@@ -1271,6 +1278,16 @@ fun StarMapScreen(
         webView?.evaluateJavascript("true;") { acceptViewUpdates = true }
     }
 
+    LaunchedEffect(webView, engineState, solvedFraming, foreground) {
+        val frame = solvedFraming ?: return@LaunchedEffect
+        if (!foreground || engineState !is StarMapEngineState.Ready) return@LaunchedEffect
+        evalStarMap("window.MercStarMap && window.MercStarMap.setFollowMount(false);")
+        centerOnRaDec(frame.anchor.raHours, frame.anchor.decDegrees, frame.anchor.frame, duration = 0)
+        val span = maxOf(requireNotNull(frame.field.rectWidthDeg), requireNotNull(frame.field.rectHeightDeg)) * 1.5
+        evalStarMap("window.MercStarMap && window.MercStarMap.setFovDegrees($span,0);")
+        overlaysVisible = true
+    }
+
     LaunchedEffect(webViewSession, engineState) {
         if (engineState !is StarMapEngineState.Loading) return@LaunchedEffect
         delay(StarMapLoadRules.READY_TIMEOUT_MS)
@@ -1416,6 +1433,7 @@ fun StarMapScreen(
         overlayCurrentLabel,
         overlayTargetLabel,
         currentFovReference,
+        solvedFraming,
         mountCoordinates,
         mountConnected,
         cameraPixelSizeUm,
@@ -1429,7 +1447,7 @@ fun StarMapScreen(
     ) {
         if (engineState !is StarMapEngineState.Ready) return@LaunchedEffect
         evalStarMap(
-            "window.MercStarMap && window.MercStarMap.setFollowMount(${if (followMount) "true" else "false"});"
+            "window.MercStarMap && window.MercStarMap.setFollowMount(${followMount && solvedFraming == null});"
         )
         // Zoom once when the sheet is open so the frame fills the view; otherwise
         // only redraw overlays so pan/zoom the user already set stays put.
@@ -1472,11 +1490,11 @@ fun StarMapScreen(
     }
 
     val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(phoneOrientation, lifecycleOwner, foreground, followPhone, engineState, webView, resolvedObserverSite) {
+    DisposableEffect(phoneOrientation, lifecycleOwner, foreground, followPhone, engineState, webView, resolvedObserverSite, solvedFraming) {
         var registered = false
         phoneFollowHasSample = false
         fun updateSubscription() {
-            val shouldRun = foreground && followPhone && engineState is StarMapEngineState.Ready &&
+            val shouldRun = foreground && followPhone && solvedFraming == null && engineState is StarMapEngineState.Ready &&
                 webView != null && lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
             if (shouldRun && !registered) {
                 registered = phoneOrientation.start(resolvedObserverSite) { direction, utcMs ->
@@ -1535,7 +1553,8 @@ fun StarMapScreen(
         if (!overlaysVisible) interaction = interaction.copy(panel = StarMapCornerPanel.NONE)
     }
 
-    BoxWithConstraints(modifier = Modifier.fillMaxSize().pointerInput(Unit) {
+    val mapContent: @Composable (Modifier) -> Unit = { mapModifier ->
+    BoxWithConstraints(modifier = mapModifier.pointerInput(Unit) {
         // Observe, without consuming, all Compose/WebView presses. A live press/scroll
         // cancels the idle coroutine; release starts a complete new interval.
         awaitPointerEventScope {
@@ -1687,7 +1706,7 @@ fun StarMapScreen(
                         )
                     }
                 }
-                if (showFovOverlay && activeComputation?.hasOverlay == true || followMount || followInterrupted) {
+                if (solvedFraming == null && (showFovOverlay && activeComputation?.hasOverlay == true || followMount || followInterrupted)) {
                     Card {
                         Column {
                         Text(pointingSourceCaption,
@@ -2281,6 +2300,18 @@ fun StarMapScreen(
                     .fillMaxWidth()
                     .padding(12.dp)
             )
+        }
+    }
+
+    }
+    Column(Modifier.fillMaxSize()) {
+        mapContent(Modifier.weight(1f).fillMaxWidth())
+        if (solvedFraming != null) {
+            Card(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)) {
+                Column(Modifier.padding(8.dp)) {
+                    SolvedFramingControls(solvedFraming, solvedFramingOpticsApplied, onApplySolvedFramingOptics, onBack)
+                }
+            }
         }
     }
 

@@ -42,6 +42,7 @@ import com.indigo.mobileobservatory.astrometry.FitsSolveHintReader
 import com.indigo.mobileobservatory.astrometry.FitsSolveHints
 import com.indigo.mobileobservatory.astrometry.PlateSolveOptics
 import com.indigo.mobileobservatory.astrometry.PlateSolveResult
+import com.indigo.mobileobservatory.astrometry.SolvedFrameFraming
 import com.indigo.mobileobservatory.astro.OpticsEquipment
 import com.indigo.mobileobservatory.camera.CameraInfo
 import com.indigo.mobileobservatory.mount.MountCoordinates
@@ -65,6 +66,7 @@ fun PlateSolveScreen(
     recordingsDir: File? = null,
     capturesDir: File? = null,
     excludeFile: File? = null,
+    onViewFraming: ((SolvedFrameFraming) -> Unit)? = null,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -99,6 +101,7 @@ fun PlateSolveScreen(
     var solving by remember { mutableStateOf(false) }
     var solveJob by remember { mutableStateOf<Job?>(null) }
     var result by remember { mutableStateOf<PlateSolveResult?>(null) }
+    var solvedFraming by remember(initialFile) { mutableStateOf<SolvedFrameFraming?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var showLog by remember { mutableStateOf(false) }
     var useMountHint by remember(mountCoordinates) { mutableStateOf(mountCoordinates != null) }
@@ -111,6 +114,7 @@ fun PlateSolveScreen(
     fun selectImage(file: File) {
         selectedPath = file.absolutePath
         result = null
+        solvedFraming = null
         error = null
         autoSolveAttempted = true
     }
@@ -199,6 +203,8 @@ fun PlateSolveScreen(
         val pixel = pixelSizeText.toFloatOrNull()?.takeIf { it > 0f }
         val fallbackPixel = inputPixel
         val fallbackHeight = catalogHeight
+        val currentFrame = autoSolve && file == initialFile
+        val cameraLabel = cameraInfo?.name?.takeIf(String::isNotBlank) ?: context.getString(R.string.solved_framing_camera)
         prefs.edit().apply {
             focal?.let { putFloat("plate_focal_length_mm", it) }
             pixel?.let { putFloat("plate_pixel_size_um", it) }
@@ -208,6 +214,7 @@ fun PlateSolveScreen(
             solving = true
             error = null
             result = null
+            solvedFraming = null
             try {
                 val hints = withContext(Dispatchers.IO) { FitsSolveHintReader.read(file) }
                 val scalePixel = PlateSolveOptics.pixelSizeForImage(hints, fallbackPixel)
@@ -233,7 +240,11 @@ fun PlateSolveScreen(
                             solved.arcsecPerPixel,
                             hints.binning
                         )
-                    )
+                    ).also { solvedResult ->
+                        if (currentFrame && onViewFraming != null && selectedPath == file.absolutePath) {
+                            solvedFraming = SolvedFrameFraming.fromCurrentFrame(solvedResult, hints, cameraLabel)
+                        }
+                    }
                 } else {
                     PlateSolveResult(false, context.getString(R.string.plate_solve_need_optics))
                 }
@@ -411,6 +422,16 @@ fun PlateSolveScreen(
 
             result?.let { solveResult ->
                 ResultCard(solveResult, showLog, onToggleLog = { showLog = !showLog })
+            }
+        }
+        val framing = solvedFraming
+        if (framing != null && !solving && onViewFraming != null) {
+            Button(
+                onClick = { onViewFraming(framing) },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
+                    .testTag("plate-solve-view-framing")
+            ) {
+                Text(stringResource(R.string.solved_framing_view))
             }
         }
     }

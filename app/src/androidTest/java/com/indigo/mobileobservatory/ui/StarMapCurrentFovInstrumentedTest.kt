@@ -11,6 +11,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.indigo.mobileobservatory.BuildConfig
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.astro.*
+import com.indigo.mobileobservatory.astrometry.SolvedFrameFraming
 import com.indigo.mobileobservatory.camera.Roi
 import com.indigo.mobileobservatory.mount.MountCoordinates
 import com.indigo.mobileobservatory.pointing.PointingMountCapabilities
@@ -38,6 +39,7 @@ class StarMapCurrentFovInstrumentedTest {
     private val readable = mutableStateOf(true)
     private val sources = mutableStateOf<List<FovPointingCandidate>>(emptyList())
     private val offsetCrop = mutableStateOf(false)
+    private val solvedFraming = mutableStateOf<SolvedFrameFraming?>(null)
     private val target = StarMapTarget("Fixed FOV target", 5.01, 20.01, "J2000", 74.0)
     private fun relevant(key: String) = key.startsWith("star_map_") || key == StarMapOpticsPrefs.PLATE_FOCAL_LENGTH_MM
 
@@ -119,7 +121,8 @@ class StarMapCurrentFovInstrumentedTest {
             cameraGeometry = ConnectedOpticsGeometry.fromSensorRoi(2.9f, 3840, 2160,
                 if (offsetCrop.value) Roi(1200, 500, 1000, 1000) else Roi(0, 0, 3840, 2160), 1, "test-camera"),
             cameraPixelSizeUm = 2.9f, cameraFrameWidthPx = 3840, cameraFrameHeightPx = 2160,
-            selectedObservationTarget = target, pointingSources = sources.value, pointingUtcNow = { clock }) } }
+            selectedObservationTarget = target, pointingSources = sources.value, pointingUtcNow = { clock },
+            solvedFraming = solvedFraming.value) } }
         compose.waitUntil(45_000) {
             compose.mainClock.advanceTimeBy(32)
             compose.onAllNodesWithText(context.getString(R.string.star_map_use_center)).fetchSemanticsNodes().isNotEmpty()
@@ -177,6 +180,29 @@ class StarMapCurrentFovInstrumentedTest {
         compose.runOnIdle { connected.value = false }
         val disconnected = awaitState { it.getJSONObject("current").getString("display") == "none" }
         assertEquals("block", disconnected.getJSONObject("target").getString("display"))
+    }
+
+    @Test fun solvedExposureDrawsItsOwnFrameWithoutAMountAndKeepsTheTarget() {
+        connected.value = false
+        coordinates.value = null
+        start()
+        val frame = SolvedFrameFraming(
+            FovSkyAnchor(5.005, 20.005, "J2000"),
+            FovComputation(FovInstrumentMode.SENSOR, rectWidthDeg = 2.4, rectHeightDeg = 1.2),
+            38.0, null, "Test camera", null, null
+        )
+        compose.runOnIdle { solvedFraming.value = frame }
+        val measured = awaitState {
+            !it.isNull("currentArgs") && it.getJSONArray("currentArgs").getDouble(7) == 38.0 &&
+                it.getJSONObject("current").getString("points").isNotBlank() &&
+                it.getJSONObject("current").getBoolean("inside") && !it.isNull("targetArgs")
+        }
+        assertEquals(2.4, measured.getJSONArray("currentArgs").getDouble(0), 0.0)
+        assertEquals(1.2, measured.getJSONArray("currentArgs").getDouble(1), 0.0)
+        assertEquals(5.005, measured.getJSONArray("currentArgs").getDouble(4), 0.0)
+        assertEquals(5.01, measured.getJSONArray("targetArgs").getDouble(3), 0.0)
+        assertTrue(measured.getJSONObject("current").getString("text")
+            .contains(context.getString(R.string.solved_framing_frame)))
     }
 
     @Test fun validOpticalPositionWinsAndUnknownAngleOrGeometryStillShowsAReference() {

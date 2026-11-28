@@ -17,12 +17,16 @@ import com.indigo.mobileobservatory.ui.components.*
 import com.indigo.mobileobservatory.ui.viewmodel.CameraViewModel
 import com.indigo.mobileobservatory.BuildConfig
 import com.indigo.mobileobservatory.R
+import com.indigo.mobileobservatory.astrometry.SolvedFrameFraming
 import com.indigo.mobileobservatory.sequence.SequenceFeature
 import com.indigo.mobileobservatory.astro.FovPointingCandidate
 import com.indigo.mobileobservatory.astro.OpticsTrainId
 import com.indigo.mobileobservatory.astro.PointingOpticsChange
 import com.indigo.mobileobservatory.astro.ConnectedOpticsGeometry
 import com.indigo.mobileobservatory.astro.ObserverSite
+import com.indigo.mobileobservatory.astro.PointingOpticsConfiguration
+import com.indigo.mobileobservatory.astro.StarMapOpticsPrefs
+import com.indigo.mobileobservatory.astro.UserOpticsCatalog
 import com.indigo.mobileobservatory.pointing.PhoneSiteProvider
 import kotlinx.coroutines.CancellationException
 import androidx.compose.ui.window.Dialog
@@ -36,6 +40,7 @@ internal fun SkyWorkspaceScreen(viewModel: CameraViewModel, selectedTarget: Star
     onTargets: () -> Unit, onPreparation: () -> Unit, onPushTo: (StarMapTarget) -> Unit,
     onTargetSelected: (StarMapTarget) -> Unit, onBack: () -> Unit,
     pointingSources: List<FovPointingCandidate> = emptyList(),
+    solvedFraming: SolvedFrameFraming? = null,
     opticalPathIds: Map<OpticsTrainId, String> = emptyMap(),
     onOpticalPathInvalidated: (OpticsTrainId, PointingOpticsChange) -> Unit = { _, _ -> }) {
     val mountCoordinates by viewModel.mountCoordinates.collectAsStateWithPageLifecycle()
@@ -61,6 +66,27 @@ internal fun SkyWorkspaceScreen(viewModel: CameraViewModel, selectedTarget: Star
         viewModel.pointingOpticsConfiguration().primaryGeometry
     }
     val context = LocalContext.current
+    var opticsApplied by remember(solvedFraming) { mutableStateOf(false) }
+    val applyFramingOptics = {
+        val current = viewModel.pointingOpticsConfiguration()
+        solvedFraming?.updatedPrimaryOptics(current)?.let { updated ->
+            val prefs = context.getSharedPreferences("mobile_observatory", android.content.Context.MODE_PRIVATE)
+            val snapshot = StarMapOpticsPrefs.primaryFramingSnapshot(updated.primary)
+            with(prefs.edit()) {
+                snapshot.strings.forEach { (key, value) -> putString(key, value) }
+                snapshot.bools.forEach { (key, value) -> putBoolean(key, value) }
+                putString(UserOpticsCatalog.CAMERAS_KEY, UserOpticsCatalog.formatCameras(updated.cameras))
+                putBoolean(PointingOpticsConfiguration.confirmationKey(OpticsTrainId.PRIMARY),
+                    OpticsTrainId.PRIMARY in updated.confirmedTrains)
+                apply()
+            }
+            current.changeTo(updated, OpticsTrainId.PRIMARY)?.let {
+                onOpticalPathInvalidated(OpticsTrainId.PRIMARY, it)
+            }
+            opticsApplied = true
+        }
+        Unit
+    }
     val savedSite = rememberSavedObserverSite()
     val observerSite = savedSite?.site ?: mountSite?.let { ObserverSite(it.latitudeDeg, it.longitudeDeg) }
     val observerSiteLabel = stringResource(when {
@@ -163,6 +189,9 @@ internal fun SkyWorkspaceScreen(viewModel: CameraViewModel, selectedTarget: Star
                         onPushTo = onPushTo,
                         selectedObservationTarget = selectedTarget,
                         pointingSources = pointingSources,
+                        solvedFraming = solvedFraming,
+                        solvedFramingOpticsApplied = opticsApplied,
+                        onApplySolvedFramingOptics = applyFramingOptics,
                         opticalPathIds = opticalPathIds,
                         onOpticalPathInvalidated = onOpticalPathInvalidated,
                         onBack = onBack
@@ -183,6 +212,15 @@ internal fun SkyWorkspaceScreen(viewModel: CameraViewModel, selectedTarget: Star
             }, onDismiss = { pendingGoto = null })
         }
         Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            if (solvedFraming != null) {
+                SolvedFramingControls(solvedFraming, opticsApplied, applyFramingOptics, onBack)
+                val targetField = remember(opticsRevision, connectionState, roi, appBinning) {
+                    val prefs = context.getSharedPreferences("mobile_observatory", android.content.Context.MODE_PRIVATE)
+                    val active = StarMapOpticsPrefs.loadActive(com.indigo.mobileobservatory.astro.AndroidOpticsPrefs(prefs))
+                    viewModel.pointingOpticsConfiguration().computation(active)
+                }
+                NativeSolvedFraming(solvedFraming, selectedTarget, targetField, Modifier.fillMaxWidth().weight(1f))
+            } else {
             Text(stringResource(R.string.star_map), style = MaterialTheme.typography.titleLarge)
             FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton(onClick = { showOptics = true }) { Text(stringResource(R.string.wf_optics_title)) }
@@ -208,6 +246,7 @@ internal fun SkyWorkspaceScreen(viewModel: CameraViewModel, selectedTarget: Star
             TargetLibraryContent(onGuideTo = { obj -> onPushTo(StarMapTarget("${obj.id} · ${obj.name}", obj.raHours, obj.decDeg, "J2000")) },
                 onSelectTarget = { obj -> onTargetSelected(StarMapTarget("${obj.id} · ${obj.name}", obj.raHours, obj.decDeg, "J2000")) },
                 showSequenceActions = false, modifier = Modifier.weight(1f))
+            }
         }
         androidx.activity.compose.BackHandler(enabled = pageForeground && pendingGoto != null) { pendingGoto = null }
     }

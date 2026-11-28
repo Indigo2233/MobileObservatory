@@ -137,15 +137,16 @@ class ObservingUiWiringTest {
     }
 
     @Test
-    fun starMapPushesOnlyTheActiveTrainOverlay() {
+    fun starMapUsesTheActiveTrainAndTheSolvedExposureOverlay() {
         val starMap = read(
             "src/main/java/com/indigo/mobileobservatory/ui/screens/StarMapScreen.kt"
         )
         assertTrue(starMap.contains("StarMapFovOverlay.scripts"))
         assertTrue(starMap.contains("computation = activeComputation"))
-        assertTrue(starMap.contains("currentLabel = overlayCurrentLabel"))
+        assertTrue(starMap.contains("currentLabel = if (solvedFraming != null) solvedFieldLabel else overlayCurrentLabel"))
         assertTrue(starMap.contains("targetLabel = overlayTargetLabel"))
-        assertTrue(starMap.contains("currentAnchor = currentFovReference?.anchor"))
+        assertTrue(starMap.contains("currentAnchor = solvedFraming?.anchor ?: currentFovReference?.anchor"))
+        assertTrue(starMap.contains("currentComputation = solvedFraming?.field ?: activeComputation"))
         assertTrue(starMap.contains("targetAnchor = targetAnchor"))
         assertTrue(starMap.contains("StarMapFovOverlay.targetSensorFramingScripts"))
         assertTrue(starMap.contains("FovSkyAnchor("))

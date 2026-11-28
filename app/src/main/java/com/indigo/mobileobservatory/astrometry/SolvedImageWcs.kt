@@ -2,6 +2,7 @@ package com.indigo.mobileobservatory.astrometry
 
 import com.indigo.mobileobservatory.astro.EquatorialCoordinates
 import com.indigo.mobileobservatory.pointing.SkyDirection
+import com.indigo.mobileobservatory.pointing.SkyPose
 import kotlin.math.*
 
 data class ImagePoint(val x: Double, val y: Double) {
@@ -21,6 +22,27 @@ class SolvedImageWcs private constructor(
     fun direction(point: ImagePoint): EquatorialCoordinates {
         val p = wcs.direction((point.x + .5) * gridWidth / width + .5, (point.y + .5) * gridHeight / height + .5)
         return EquatorialCoordinates(p.raDeg, p.decDeg)
+    }
+
+    internal data class CenteredFootprint(
+        val center: SkyDirection,
+        val widthDeg: Double,
+        val heightDeg: Double,
+        val positionAngleDeg: Double
+    )
+
+    internal fun centeredFootprint(): CenteredFootprint {
+        val x = (width - 1) / 2.0
+        val y = (height - 1) / 2.0
+        val center = direction(ImagePoint(x, y)).let { SkyDirection(it.raDeg, it.decDeg) }
+        val base = SkyPose.fromSolution(center, 0.0)
+        fun ray(px: Double, py: Double) = direction(ImagePoint(px, py)).let { SkyDirection(it.raDeg, it.decDeg).vector() }
+        val imageUp = ray(x, y - 1)
+        return CenteredFootprint(
+            center, ray(-0.5, y).angleDeg(ray(width - 0.5, y)),
+            ray(x, -0.5).angleDeg(ray(x, height - 0.5)),
+            (Math.toDegrees(atan2(imageUp.dot(base.right), imageUp.dot(base.up))) + 360.0) % 360.0
+        )
     }
     companion object {
         fun parse(header: Map<String, String>, width: Int, height: Int): SolvedImageWcs? = runCatching {

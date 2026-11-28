@@ -26,6 +26,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.indigo.mobileobservatory.BuildConfig
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.astrometry.PlateSolveOptics
+import com.indigo.mobileobservatory.astrometry.SolvedFrameFraming
 import com.indigo.mobileobservatory.astro.EquatorialEpoch
 import com.indigo.mobileobservatory.astro.EquatorialCoordinates
 import com.indigo.mobileobservatory.camera.ConnectionState
@@ -45,6 +46,30 @@ private val NavigationSaver = listSaver<ObservatoryNavigation, String>(
 private val TargetSaver = listSaver<StarMapTarget?, String>(
     save = { target -> target?.let { listOf(it.name, it.raHours.toString(), it.decDegrees.toString(), it.frame, it.positionAngleDeg.toString()) } ?: emptyList() },
     restore = { if (it.isEmpty()) null else StarMapTarget(it[0], it[1].toDouble(), it[2].toDouble(), it[3], it[4].toDouble()) })
+private val SolvedFramingSaver = listSaver<SolvedFrameFraming?, Any>(
+    save = { value ->
+        value?.let {
+            listOf(it.anchor.raHours, it.anchor.decDegrees, requireNotNull(it.field.rectWidthDeg),
+                requireNotNull(it.field.rectHeightDeg), it.positionAngleDeg, it.exposureStartedAt?.toString().orEmpty(),
+                it.cameraName, it.sensor?.pixelSizeUm ?: 0.0, it.sensor?.widthPx ?: 0, it.sensor?.heightPx ?: 0,
+                it.focalLengthMm ?: 0.0)
+        }.orEmpty()
+    },
+    restore = { values ->
+        if (values.isEmpty()) null else {
+            val cameraName = values[6] as String
+            val pitch = values[7] as Double
+            SolvedFrameFraming(
+                com.indigo.mobileobservatory.astro.FovSkyAnchor(values[0] as Double, values[1] as Double, "J2000"),
+                com.indigo.mobileobservatory.astro.FovComputation(com.indigo.mobileobservatory.astro.FovInstrumentMode.SENSOR,
+                    rectWidthDeg = values[2] as Double, rectHeightDeg = values[3] as Double),
+                values[4] as Double, (values[5] as String).takeIf(String::isNotEmpty)?.let(Instant::parse),
+                cameraName, if (pitch > 0) com.indigo.mobileobservatory.astro.SensorSpec("", cameraName, pitch,
+                    values[8] as Int, values[9] as Int) else null,
+                (values[10] as Double).takeIf { it > 0 }
+            )
+        }
+    })
 
 private fun frozenTaskTarget(target: StarMapTarget?): StarMapTarget? = target?.let {
     if (EquatorialEpoch.isJ2000(it.frame)) it else {
@@ -61,6 +86,7 @@ fun CameraScreen(viewModel: CameraViewModel, redNightMode: Boolean = false,
                  onMediaNavigationConsumed: (Long) -> Unit = {}) {
     var navigation by rememberSaveable(stateSaver = NavigationSaver) { mutableStateOf(ObservatoryNavigation()) }
     var target by rememberSaveable(stateSaver = TargetSaver) { mutableStateOf<StarMapTarget?>(null) }
+    var solvedFraming by rememberSaveable(stateSaver = SolvedFramingSaver) { mutableStateOf<SolvedFrameFraming?>(null) }
     var quickDevice by rememberSaveable { mutableStateOf<String?>(null) }
     var playerFile by rememberSaveable { mutableStateOf<String?>(null) }
     var playerCategory by rememberSaveable { mutableStateOf(MediaCategory.RECENT) }
@@ -128,6 +154,7 @@ fun CameraScreen(viewModel: CameraViewModel, redNightMode: Boolean = false,
             parent.pages.last().argument?.let { viewModel.stacking.open(StackMode.valueOf(it)) }
         }
         navigation = parent
+        if (old?.destination == ObservatoryDestination.SOLVED_FRAMING) solvedFraming = null
         old?.let { savedScreens.removeState("page-${it.id}") }
     }
     val selectNow: (ObservatoryWorkspace) -> Unit = { workspace ->
@@ -194,7 +221,7 @@ fun CameraScreen(viewModel: CameraViewModel, redNightMode: Boolean = false,
         }
     }
     val pushTo: (StarMapTarget) -> Unit = { selected -> chooseTarget(selected); open(ObservatoryDestination.PUSH_TO) }
-    val showRoot = navigation.current == null
+    val showRoot = navigation.current == null || navigation.current == ObservatoryDestination.SOLVED_FRAMING
     RememberAppOrientation(when {
         navigation.current in listOf(ObservatoryDestination.PLAYER, ObservatoryDestination.STACK) -> AppOrientationMode.SENSOR
         navigation.current == ObservatoryDestination.GUIDE -> AppOrientationMode.LANDSCAPE
@@ -245,14 +272,18 @@ fun CameraScreen(viewModel: CameraViewModel, redNightMode: Boolean = false,
                     ObservatoryWorkspace.entries.filter { it in workspaceStacks }.forEach { owner ->
                     key(owner) {
                     val stack = workspaceStacks.getValue(owner)
-                    val retainedPages = listOf<ObservatoryPage?>(null) + stack
+                    val retainedPages = listOf<ObservatoryPage?>(null) +
+                        stack.filterNot { it.destination == ObservatoryDestination.SOLVED_FRAMING }
                     retainedPages.forEach { page ->
                         val screenKey = page?.let { "page-${it.id}" } ?: "workspace-${owner.name}"
                         key(screenKey) {
                             val pageNavigation = navigation.copy(workspace = owner,
                                 pages = if (page == null) emptyList() else stack.takeWhile { it.id != page.id } + page,
                                 suspendedPages = navigation.workspaceStacks - owner)
-                            val visible = owner == navigation.workspace && page == navigation.pages.lastOrNull()
+                            val showFraming = owner == ObservatoryWorkspace.STAR_MAP && page == null &&
+                                stack.lastOrNull()?.destination == ObservatoryDestination.SOLVED_FRAMING
+                            val visible = owner == navigation.workspace &&
+                                (page == navigation.pages.lastOrNull() || showFraming)
                             ObservatoryPageHost(visible) {
                                 savedScreens.SaveableStateProvider(screenKey) {
                                     ObservatoryContent(viewModel, solarScanViewModel, pageNavigation, target,
@@ -262,6 +293,14 @@ fun CameraScreen(viewModel: CameraViewModel, redNightMode: Boolean = false,
                                         redNightMode, open, back, select, chooseTarget, pushTo, openStack,
                                         onCurrentFrameSolve = { file ->
                                             performOpen(ObservatoryDestination.PLATE_SOLVE, file.absolutePath, "current-frame")
+                                        },
+                                        solvedFraming = solvedFraming.takeIf { showFraming },
+                                        onViewFraming = { framing ->
+                                            solvedFraming = framing
+                                            val prior = navigation.allPages
+                                            navigation = navigation.viewSolvedFraming()
+                                            prior.filter { old -> navigation.allPages.none { it.id == old.id } }
+                                                .forEach { savedScreens.removeState("page-${it.id}") }
                                         },
                                         onPlayer = { file, category -> playerFile = file?.absolutePath; playerCategory = category; open(ObservatoryDestination.PLAYER) },
                                         onDeviceControl = { key -> quickDevice = key })
@@ -298,6 +337,8 @@ private fun ObservatoryContent(
     open: (ObservatoryDestination) -> Unit, back: () -> Unit, select: (ObservatoryWorkspace) -> Unit,
     chooseTarget: (StarMapTarget) -> Unit, pushTo: (StarMapTarget) -> Unit, openStack: (StackMode) -> Unit,
     onCurrentFrameSolve: (File) -> Unit,
+    solvedFraming: SolvedFrameFraming?,
+    onViewFraming: (SolvedFrameFraming) -> Unit,
     onPlayer: (File?, MediaCategory) -> Unit,
     onDeviceControl: (String) -> Unit
 ) {
@@ -377,6 +418,7 @@ private fun ObservatoryContent(
             recordingsDir = vm.getRecordingsDir(),
             capturesDir = vm.getCapturesDir(),
             excludeFile = vm.getActiveRecordingFile(),
+            onViewFraming = onViewFraming.takeIf { navigation.pages.lastOrNull()?.category == "current-frame" },
             onBack = back
         )
         ObservatoryDestination.POLAR_ALIGNMENT -> {
@@ -497,6 +539,7 @@ private fun ObservatoryContent(
                 busySource = vm.getActiveRecordingFile()
             )
         }
+        ObservatoryDestination.SOLVED_FRAMING -> Unit // The star-map root displays this task in its existing renderer.
         null -> when (navigation.workspace) {
             ObservatoryWorkspace.CAPTURE -> CaptureWorkspaceScreen(vm,
                 onPlateSolve = { open(ObservatoryDestination.PLATE_SOLVE) },
@@ -509,6 +552,7 @@ private fun ObservatoryContent(
                 onTargets = { open(ObservatoryDestination.TARGETS) },
                 onPreparation = { open(ObservatoryDestination.PREPARATION) }, onPushTo = pushTo,
                 onTargetSelected = chooseTarget, onBack = back, pointingSources = pointingSources,
+                solvedFraming = solvedFraming,
                 opticalPathIds = mapOf(com.indigo.mobileobservatory.astro.OpticsTrainId.PRIMARY to "primary",
                     com.indigo.mobileobservatory.astro.OpticsTrainId.SECONDARY to "secondary"),
                 onOpticalPathInvalidated = { train, reason -> vm.pointingRepository.invalidateOpticalPath(train.prefValue(), reason.name) })

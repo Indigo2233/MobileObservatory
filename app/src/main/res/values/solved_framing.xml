@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="solved_framing_view">View framing in star map</string>
+    <string name="solved_framing_frame">Solved exposure</string>
+    <string name="solved_framing_camera">Capture camera</string>
+    <string name="solved_framing_field">%1$.2f° × %2$.2f° · position angle %3$.1f°</string>
+    <string name="solved_framing_repeat">Solve a new exposure after moving the mount.</string>
+    <string name="solved_framing_back">Back to plate solve</string>
+    <string name="solved_framing_apply">Apply camera and focal length</string>
+    <string name="solved_framing_confirm">Apply</string>
+    <string name="solved_framing_applied">Applied to framing</string>
+    <string name="solved_framing_apply_details">Set primary framing to %1$s, %2$d × %3$d pixels, %4$.3f µm per image pixel, and a measured focal length of %5$.1f mm.</string>
+</resources>

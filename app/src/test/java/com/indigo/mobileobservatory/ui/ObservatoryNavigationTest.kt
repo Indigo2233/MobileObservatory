@@ -7,6 +7,19 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ObservatoryNavigationTest {
+    @Test fun solvedFramingReturnsToTheSolvePageAndKeepsThePriorSkyTask() {
+        val sky = ObservatoryNavigation().select(STAR_MAP).open(TARGETS)
+        val solve = sky.select(CAPTURE).open(PLATE_SOLVE, "/frame.fits", "current-frame")
+        val framing = solve.viewSolvedFraming()
+        assertEquals(STAR_MAP, framing.workspace)
+        assertEquals(SOLVED_FRAMING, framing.current)
+        assertEquals(sky.pages, framing.pages.dropLast(1))
+        val returned = ObservatoryNavigation.restore(framing.save()).back()
+        assertEquals(CAPTURE, returned.workspace)
+        assertEquals(solve.pages, returned.pages)
+        assertEquals(sky.pages, returned.workspaceStacks.getValue(STAR_MAP))
+    }
+
     @Test fun backWalksPreparationAndPreservesOriginThenReturnsToCapture() {
         val root = ObservatoryNavigation().select(STAR_MAP)
         val preparation = root.open(PREPARATION)

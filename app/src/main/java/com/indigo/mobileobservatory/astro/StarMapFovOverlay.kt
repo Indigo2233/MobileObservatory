@@ -66,18 +66,22 @@ object StarMapFovOverlay {
         currentAnchor: FovSkyAnchor? = null,
         targetAnchor: FovSkyAnchor? = null,
         showCurrent: Boolean = currentAnchor != null,
-        currentPositionAngleDeg: Double? = null
+        currentPositionAngleDeg: Double? = null,
+        currentComputation: FovComputation? = computation,
+        showCurrentWhenOverlayHidden: Boolean = false
     ): List<String> {
         val clearTarget = "window.MercStarMap && window.MercStarMap.clearTargetFovOverlay();"
         val clearCurrent = "window.MercStarMap && window.MercStarMap.clearCurrentFovOverlay();"
-        if (!showOverlay || computation == null || !computation.hasOverlay) {
-            return listOf(clearCurrent, clearTarget)
-        }
-        val setCurrent = if (showCurrent && currentAnchor != null)
-            setter("Current", computation, currentLabel, alsoZoom, currentAnchor, currentPositionAngleDeg)
+        val showTarget = showOverlay && computation?.hasOverlay == true
+        val showCurrentField = (showOverlay || showCurrentWhenOverlayHidden) &&
+            showCurrent && currentAnchor != null && currentComputation?.hasOverlay == true
+        val setCurrent = if (showCurrentField)
+            setter("Current", requireNotNull(currentComputation), currentLabel, alsoZoom, currentAnchor, currentPositionAngleDeg)
         else clearCurrent
-        val setTarget = setter("Target", computation, targetLabel, alsoZoom = false, targetAnchor)
-        return listOf(setCurrent, setTarget) + if (alsoZoom && !showCurrent)
+        val setTarget = if (showTarget)
+            setter("Target", requireNotNull(computation), targetLabel, alsoZoom = false, targetAnchor)
+        else clearTarget
+        return listOf(setCurrent, setTarget) + if (alsoZoom && !showCurrentField && showTarget)
             listOf("window.MercStarMap && window.MercStarMap.zoomToTargetFov();") else emptyList()
     }
 

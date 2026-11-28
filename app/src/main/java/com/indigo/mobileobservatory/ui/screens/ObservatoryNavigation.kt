@@ -5,7 +5,7 @@ enum class ObservatoryWorkspace { STAR_MAP, CAPTURE, MEDIA, EQUIPMENT, TOOLS }
 
 enum class ObservatoryDestination {
     SETTINGS, PREPARATION, POINTING_SETUP, AUXILIARY_CALIBRATION, TARGETS, PUSH_TO, PUSH_TO_AUXILIARY, PHONE_DEBUG,
-    PLATE_SOLVE, POLAR_ALIGNMENT, GUIDE, STACK, PLAYER, SEQUENCE, SOLAR_SCAN
+    PLATE_SOLVE, SOLVED_FRAMING, POLAR_ALIGNMENT, GUIDE, STACK, PLAYER, SEQUENCE, SOLAR_SCAN
 }
 
 data class ObservatoryPage(val id: Int, val destination: ObservatoryDestination,
@@ -44,7 +44,19 @@ data class ObservatoryNavigation(
         return if (current == destination && pages.lastOrNull()?.argument == argument && pages.lastOrNull()?.category == category) this
         else copy(pages = pages + ObservatoryPage(nextId, destination, argument, category), nextId = nextId + 1)
     }
+
+    fun viewSolvedFraming(): ObservatoryNavigation {
+        val sky = select(ObservatoryWorkspace.STAR_MAP)
+        val existing = sky.pages.indexOfLast { it.destination == ObservatoryDestination.SOLVED_FRAMING }
+        val base = if (existing >= 0) sky.copy(pages = sky.pages.take(existing)) else sky
+        return base.open(ObservatoryDestination.SOLVED_FRAMING, category = workspace.name)
+    }
+
     fun back(): ObservatoryNavigation = when {
+        current == ObservatoryDestination.SOLVED_FRAMING -> {
+            val origin = ObservatoryWorkspace.entries.firstOrNull { it.name == pages.last().category } ?: workspace
+            copy(pages = pages.dropLast(1)).select(origin)
+        }
         pages.isNotEmpty() -> copy(pages = pages.dropLast(1))
         workspace != ObservatoryWorkspace.CAPTURE -> select(ObservatoryWorkspace.CAPTURE)
         else -> this

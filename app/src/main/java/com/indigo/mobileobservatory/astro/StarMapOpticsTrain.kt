@@ -199,6 +199,12 @@ object StarMapOpticsPrefs {
         )
     }
 
+    fun primaryFramingSnapshot(primary: OpticsTrainConfig): OpticsPrefWrite {
+        val strings = mutableMapOf(ACTIVE_TRAIN to OpticsTrainId.PRIMARY.prefValue())
+        putTrain(strings, primary.copy(id = OpticsTrainId.PRIMARY))
+        return OpticsPrefWrite(strings, mapOf(SHOW_OVERLAY to true))
+    }
+
     private fun loadTrain(id: OpticsTrainId, prefs: OpticsPrefReader): OpticsTrainConfig {
         val keys = keysFor(id)
         val mode = if (prefs.getString(keys.mode, "SENSOR") == "EYEPIECE") {

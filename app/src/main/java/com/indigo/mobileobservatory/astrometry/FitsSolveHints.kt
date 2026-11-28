@@ -2,6 +2,8 @@ package com.indigo.mobileobservatory.astrometry
 
 import com.indigo.mobileobservatory.util.FitsHeaderParser
 import java.io.File
+import java.time.Instant
+import java.time.format.DateTimeParseException
 
 data class FitsSolveHints(
     val width: Int = 0,
@@ -9,7 +11,9 @@ data class FitsSolveHints(
     val pixelSizeUm: Double? = null,
     val focalLengthMm: Double? = null,
     val binning: Int = 1,
-    val fovHeightDeg: Double? = null
+    val fovHeightDeg: Double? = null,
+    val instrumentName: String? = null,
+    val exposureStartedAt: Instant? = null
 )
 
 object FitsSolveHintReader {
@@ -37,6 +41,10 @@ object FitsSolveHintReader {
             } else {
                 null
             }
-        return FitsSolveHints(width, height, pixelSize, focal, binning.coerceAtLeast(1), fovHeight)
+        val started = header["DATE-OBS"]?.let {
+            try { Instant.parse(it) } catch (_: DateTimeParseException) { null }
+        }
+        return FitsSolveHints(width, height, pixelSize, focal, binning.coerceAtLeast(1), fovHeight,
+            header["INSTRUME"]?.takeIf { it.isNotBlank() && !it.equals("Camera", ignoreCase = true) }, started)
     }
 }
