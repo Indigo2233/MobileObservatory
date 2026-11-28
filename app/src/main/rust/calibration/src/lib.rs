@@ -227,7 +227,7 @@ fn calibrate_channels<const CHANNELS: usize, const HAS_SUBTRACTION: bool, const 
             };
             for x in 0..row_samples {
                 let input_index = input_start + x;
-                if input_index % 16384 == 0 && input_index != input_start && cancel() {
+                if input_index.is_multiple_of(16384) && input_index != input_start && cancel() {
                     return CANCELLED;
                 }
                 let input = *src.add(input_index);
