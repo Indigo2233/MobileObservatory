@@ -56,6 +56,16 @@ internal object RoiEditing {
     fun fullFrame(limits: RoiEditingLimits): Roi =
         Roi(0, 0, limits.sensorWidth.coerceAtLeast(1), limits.sensorHeight.coerceAtLeast(1))
 
+    fun fitSpectralStrip(strip: Roi, source: Roi, limits: RoiEditingLimits): Roi {
+        val top = alignDown(strip.y, limits.offsetYStep)
+        val bottom = strip.y + strip.height
+        val height = alignUp(maxOf(limits.minHeight, bottom - top), limits.heightStep)
+        val aligned = normalize(strip.copy(y = top, height = height), limits)
+        val proposed = source.copy(y = aligned.y, height = aligned.height)
+        // Keep the sampled area if the sensor edge prevents enclosing the strip on the ROI grid.
+        return proposed.takeIf { it.y <= strip.y && it.y + it.height >= bottom } ?: source
+    }
+
     fun resizeWidth(roi: Roi, requestedWidth: Int, limits: RoiEditingLimits): Roi {
         val (minWidth, maxWidth) = sizeBounds(
             limits.sensorWidth,

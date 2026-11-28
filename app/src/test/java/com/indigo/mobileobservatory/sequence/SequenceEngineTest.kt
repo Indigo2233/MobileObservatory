@@ -1,5 +1,6 @@
 package com.indigo.mobileobservatory.sequence
 
+import com.indigo.mobileobservatory.mount.MountMotionStopped
 import com.indigo.mobileobservatory.sequence.catalog.SequenceCatalog
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
@@ -10,6 +11,80 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SequenceEngineTest {
+
+    @Test
+    fun mountStopPausesAndRetriesTheInterruptedInstruction() = runTest {
+        val port = RecordingPort()
+        val engine = SequenceEngine(port)
+        port.beforeExposure = { index ->
+            if (index == 1) {
+                engine.control.pauseForMountStop()
+                throw MountMotionStopped()
+            }
+        }
+        val job = launch { engine.run(sample()) }
+        testScheduler.advanceUntilIdle()
+        assertTrue(engine.control.isPaused)
+        assertTrue(port.finishedExposures.isEmpty())
+        engine.control.resume()
+        job.join()
+        assertEquals(SequencePhase.Completed, engine.state.phase)
+        assertEquals(listOf(120.0, 120.0, 30.0), port.finishedExposures)
+    }
+
+    @Test
+    fun missingTargetAltitudeFailsBeforeExposure() = runTest {
+        val port = RecordingPort()
+        val engine = SequenceEngine(port, world = ClockWorld())
+        val state = engine.run(sequenceRoot(listOf(targetContainer("target", 1.0, 30.0))))
+        assertEquals(SequencePhase.Failed, state.phase)
+        assertTrue(state.message.orEmpty().contains("observing site"))
+        assertTrue(port.exposures.isEmpty())
+    }
+
+    @Test
+    fun standaloneAltitudeConditionsUseTheirOwnCoordinates() = runTest {
+        val desired = 10.5 to -0.5
+        val world = object : SequenceWorld {
+            override fun altitudeDeg(target: Pair<Double, Double>?): Double? = 50.0.takeIf { target == desired }
+        }
+        for (name in listOf("AltitudeCondition", "AboveHorizonCondition")) {
+            val root = sample()
+            val start = root.childItems().first { it.className == "StartAreaContainer" }
+            val condition = SequenceCatalog.create(name)
+            condition.fields["HasDsoParent"] = NinaValue.Bool(false)
+            val data = (condition.fields.getValue("Data") as NinaValue.Obj).node
+            data.fields["Coordinates"] = NinaValue.Obj(NinaNode(
+                "NINA.Astrometry.InputCoordinates, NINA.Astrometry", null,
+                linkedMapOf(
+                    "RAHours" to NinaValue.Num(10.0, true),
+                    "RAMinutes" to NinaValue.Num(30.0, true),
+                    "DecDegrees" to NinaValue.Num(0.0, true),
+                    "DecMinutes" to NinaValue.Num(30.0, true),
+                    "NegativeDec" to NinaValue.Bool(true)
+                )
+            ))
+            val exposure = SequenceCatalog.create("TakeExposure")
+            val once = SequenceCatalog.create("LoopCondition")
+            putExpression(once.fields, "Iterations", 1.0, "condition-once")
+            start.fields["Conditions"] = NinaValue.Collection("", null, listOf(NinaValue.Obj(once), NinaValue.Obj(condition)))
+            start.fields["Items"] = NinaValue.Collection("", null, listOf(NinaValue.Obj(exposure)))
+
+            val port = RecordingPort()
+            val state = SequenceEngine(port, world = world).run(root)
+            assertEquals(name, SequencePhase.Completed, state.phase)
+            assertEquals(name, 4, port.finishedExposures.size)
+        }
+    }
+
+    @Test
+    fun missingSolarAltitudeFailsBeforeExposure() = runTest {
+        val port = RecordingPort()
+        val state = SequenceEngine(port, world = ClockWorld()).run(sunLimited())
+        assertEquals(SequencePhase.Failed, state.phase)
+        assertTrue(state.message.orEmpty().contains("Solar altitude"))
+        assertTrue(port.exposures.isEmpty())
+    }
 
     @Test
     fun `simple exposure loops call the filter and the camera once per frame`() = runTest {

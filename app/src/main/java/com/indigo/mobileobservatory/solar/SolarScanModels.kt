@@ -26,11 +26,25 @@ enum class SolarSourcePolicy {
     DELETE_AFTER_COMMIT
 }
 
-enum class SolarOutputProduct {
-    DISPLAY_PNG,
-    LINEAR_FITS,
-    LINEAR_PNG
+enum class SolarOutputProduct(val nativeMask: Int) {
+    DISPLAY_PNG(1),
+    LINEAR_FITS(4),
+    LINEAR_PNG(2),
+    ENHANCED_PNG(8),
+    NEGATIVE_PNG(16),
+    ECLIPSE_PNG(32),
+    HYDROGEN_PNG(64),
+    CALCIUM_PNG(128),
+    HELIUM_PNG(256),
+    DOPPLER_PNG(512);
+
+    val bytesPerPixelEstimate: Int get() = when (this) {
+        HYDROGEN_PNG, CALCIUM_PNG, HELIUM_PNG, DOPPLER_PNG -> 3
+        else -> 2
+    }
 }
+
+data class SolarLineSeed(val column: Int, val row: Int)
 
 enum class SolarScanPhase {
     IDLE,
@@ -123,17 +137,9 @@ data class SolarScanConfiguration(
     val requiredBytes: Long get() {
         val source = serBytesPerLeg.toDouble() * legCount
         val outputPixels = roi.width.toDouble() * framesPerLeg
-        val output = outputPixels * when {
-            products.contains(SolarOutputProduct.LINEAR_PNG) &&
-                products.contains(SolarOutputProduct.DISPLAY_PNG) -> 4.0
-            products.contains(SolarOutputProduct.LINEAR_PNG) ||
-                products.contains(SolarOutputProduct.DISPLAY_PNG) -> 2.0
-            else -> 0.0
-        } * legCount
-        val fits = if (products.contains(SolarOutputProduct.LINEAR_FITS)) {
-            outputPixels * 2.0 * legCount + 8.0 * 2_880.0 * legCount
-        } else 0.0
-        return saturatedLong(source + output + fits)
+        val output = outputPixels * products.sumOf { it.bytesPerPixelEstimate } * legCount
+        val fitsOverhead = if (SolarOutputProduct.LINEAR_FITS in products) 8.0 * 2_880.0 * legCount else 0.0
+        return saturatedLong(source + output + fitsOverhead)
     }
     fun directionForLeg(legIndex: Int): SolarScanDirection {
         require(legIndex >= 0)
@@ -448,12 +454,27 @@ data class SolarReconstructionSettings(
     val products: Set<SolarOutputProduct> = setOf(
         SolarOutputProduct.DISPLAY_PNG,
         SolarOutputProduct.LINEAR_FITS
-    )
+    ),
+    val correctDisk: Boolean = true,
+    val invertProminences: Boolean = false,
+    val prominenceStrength: Int = 100,
+    val wavelengthAngstrom: Double = 0.0,
+    val dispersionAngstromPerPixel: Double = 0.0,
+    val wingOffsetPixels: Double = 2.0,
+    val cropFactor: Double? = null
 ) {
+    val hasRequiredDispersion: Boolean
+        get() = SolarOutputProduct.DOPPLER_PNG !in products || dispersionAngstromPerPixel != 0.0
+
     init {
         require(lineShiftPixels.isFinite())
         require(rotationDegrees % 90 == 0 && rotationDegrees in 0..270)
         require(frameStride in 1..64)
+        require(prominenceStrength in 1..100)
+        require(wavelengthAngstrom.isFinite() && wavelengthAngstrom >= 0.0)
+        require(dispersionAngstromPerPixel.isFinite())
+        require(wingOffsetPixels.isFinite() && wingOffsetPixels >= 0.5)
+        require(cropFactor == null || cropFactor in 1.0..2.0)
         require(products.isNotEmpty())
     }
 }
@@ -552,8 +573,16 @@ data class SolarReconstructionSummary(
     val corrections: SolarCorrectionReport = SolarCorrectionReport(),
     val memory: SolarMemorySampleSummary? = null,
     val integrity: Map<SolarOutputProduct, SolarProductIntegrity> = emptyMap(),
-    val completedAtUtc: String = Instant.now().toString()
-)
+    val completedAtUtc: String = Instant.now().toString(),
+    val extraProducts: Map<SolarOutputProduct, String> = emptyMap()
+) {
+    fun pathFor(product: SolarOutputProduct): String? = when (product) {
+        SolarOutputProduct.DISPLAY_PNG -> displayPng
+        SolarOutputProduct.LINEAR_PNG -> linearPng
+        SolarOutputProduct.LINEAR_FITS -> linearFits
+        else -> extraProducts[product]
+    }
+}
 
 fun angularSeparationDeg(a: SolarScanEndpoint, b: SolarScanEndpoint): Double {
     val raA = Math.toRadians(a.raHours * 15.0)

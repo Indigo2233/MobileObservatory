@@ -8,9 +8,7 @@ import com.indigo.mobileobservatory.media.MediaRename
 import com.indigo.mobileobservatory.media.MediaTrash
 import com.indigo.mobileobservatory.media.MediaUsageRegistry
 import com.indigo.mobileobservatory.mount.MountDirection
-import com.indigo.mobileobservatory.ui.viewmodel.incompleteSimulationSourcesToDelete
 import com.indigo.mobileobservatory.ui.viewmodel.isCurrentSolarPreview
-import com.indigo.mobileobservatory.ui.viewmodel.publishSealedSimulationSource
 import com.indigo.mobileobservatory.ui.viewmodel.SolarReconstructionSettingsSession
 import com.indigo.mobileobservatory.ui.screens.isSolarSourceBusy
 import com.indigo.mobileobservatory.util.FitsHeaderParser
@@ -41,6 +39,35 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SolarScanFeatureTest {
+    @Test
+    fun dopplerOutputRequiresSignedDispersion() {
+        val settings = SolarReconstructionSettings(products = setOf(SolarOutputProduct.DOPPLER_PNG))
+        assertFalse(settings.hasRequiredDispersion)
+        assertTrue(settings.copy(dispersionAngstromPerPixel = -0.1).hasRequiredDispersion)
+        assertTrue(settings.copy(dispersionAngstromPerPixel = 0.1).hasRequiredDispersion)
+        assertTrue(SolarReconstructionSettings().hasRequiredDispersion)
+    }
+    @Test
+    fun largeCaptureRoiKeepsEveryWavelengthRow() = directory { root ->
+        val width = 4096
+        val height = 2049
+        val line = 1023
+        val pixels = ByteArray(width * height) { index -> if (index / width == line) 30 else 160.toByte() }
+        val frame = SolarScanNative.spectralRoiInput(FrameData(pixels, width, height, PixelFormat.MONO8, 0, 0))
+        assertEquals(width / 2, frame.width)
+        assertEquals(height, frame.height)
+        val file = File(root, "live-spectrum.ser")
+        val writer = SERWriter(file)
+        try {
+            writer.open(frame.width, frame.height, frame.pixelFormat)
+            writer.writeFrame(frame)
+        } finally {
+            writer.close()
+        }
+        val result = SolarScanNative.analyze(file, testObserver)
+        assertEquals(line.toDouble(), result.traceConstant, 1.0)
+    }
+
     @Test
     fun sweepBatchIdSurvivesIndependentManifestCommits() = directory { root ->
         val repository = SolarScanRepository(File(root, "recordings"), File(root, "captures"))
@@ -330,7 +357,11 @@ class SolarScanFeatureTest {
                     val value = if (x < 2 || x >= width - 2) {
                         0
                     } else {
-                        val line = if (y == height / 2) 900 else 3_400
+                        val line = when (y) {
+                            height / 2 -> 900
+                            height / 4 -> 1_500
+                            else -> 3_400
+                        }
                         (line + (x + frame) % 9).coerceAtMost(4_095)
                     }
                     val index = (y * width + x) * 2
@@ -353,11 +384,20 @@ class SolarScanFeatureTest {
         assertTrue(analysis.trace.illuminatedFirst >= 2)
         assertTrue(analysis.trace.illuminatedLast <= width - 3)
         assertTrue(analysis.validColumns >= 80)
+        val secondarySeed = SolarLineSeed(width / 2, height / 4)
+        val secondary = SolarScanNative.analyze(file, testObserver, secondarySeed)
+        assertEquals(height / 4.0, secondary.traceConstant, 1.0)
+        assertTrue(secondary.roiTop <= height / 4)
+        assertTrue(secondary.roiTop + secondary.roiHeight > height / 4)
+        val settings = SolarReconstructionSettings(
+            wavelengthAngstrom = 6562.8,
+            dispersionAngstromPerPixel = -0.1,
+            products = setOf(SolarOutputProduct.LINEAR_FITS, SolarOutputProduct.ENHANCED_PNG,
+                SolarOutputProduct.NEGATIVE_PNG, SolarOutputProduct.DOPPLER_PNG)
+        )
         val reconstruction = nativeReconstruct(
             source = file,
-            settings = SolarReconstructionSettings(
-                products = setOf(SolarOutputProduct.LINEAR_FITS)
-            ),
+            settings = settings,
             outputDirectory = File(root, "products").apply { mkdirs() }
         )
         assertEquals(width, reconstruction.width)
@@ -367,6 +407,25 @@ class SolarScanFeatureTest {
         val header = FitsHeaderParser.read(fits)
         assertEquals(width.toString(), header["NAXIS1"])
         assertEquals("12", header["NAXIS2"])
+        for (product in settings.products - SolarOutputProduct.LINEAR_FITS) {
+            val png = File(checkNotNull(reconstruction.pathFor(product)))
+            assertEquals(0x89, png.inputStream().use { it.read() })
+        }
+        val adjacent = SolarScanNative.reconstruct(
+            file, File(root, "adjacent"), SolarReconstructionSettings(
+                products = setOf(SolarOutputProduct.LINEAR_FITS)
+            ), 4L * 1024 * 1024 * 1024, false, testObserver, secondarySeed
+        )
+        assertFalse(fits.readBytes().drop(2_880).toByteArray().contentEquals(
+            File(checkNotNull(adjacent.linearFits)).readBytes().drop(2_880).toByteArray()
+        ))
+        val outOfRange = SolarScanNative.reconstruct(
+            file, File(root, "out-of-range"), settings.copy(
+                products = setOf(SolarOutputProduct.DOPPLER_PNG), wingOffsetPixels = height.toDouble()
+            ), 4L * 1024 * 1024 * 1024, false, testObserver
+        )
+        assertTrue(outOfRange.additionalPaths.all { it == null })
+        assertTrue(outOfRange.warnings.any { it.contains("Doppler", ignoreCase = true) })
     }
 
     @Test
@@ -539,8 +598,13 @@ class SolarScanFeatureTest {
                 correctPeriodicOscillation = true
             ),
             flat = SolarFlatSettings(synthetic = true, syntheticStrength = 73),
+            wavelengthAngstrom = 6562.8,
+            dispersionAngstromPerPixel = -0.12,
+            wingOffsetPixels = 2.5,
+            cropFactor = 1.2,
             products = setOf(SolarOutputProduct.DISPLAY_PNG)
         )
+        val lineSeed = SolarLineSeed(3, 2)
         val corrections = SolarCorrectionReport(
             geometryApplied = true,
             bandingApplied = SolarBandingAxis.HORIZONTAL,
@@ -590,7 +654,8 @@ class SolarScanFeatureTest {
                     droppedFrames = 0,
                     reconstruction = summary,
                     sourceDisposition = SolarSourceDispositionState.KEPT,
-                    reconstructionSettings = settings
+                    reconstructionSettings = settings,
+                    lineSeed = lineSeed
                 )
             ),
             sourcePolicy = SolarSourcePolicy.KEEP,
@@ -602,6 +667,7 @@ class SolarScanFeatureTest {
         val restored = checkNotNull(repository.readTask(committed.resultDirectory))
         assertEquals(settings, restored.reconstructionSettings)
         assertEquals(settings, restored.legs.single().reconstructionSettings)
+        assertEquals(lineSeed, restored.legs.single().lineSeed)
         assertEquals(corrections, restored.legs.single().reconstruction!!.corrections)
         assertEquals(memory, restored.legs.single().reconstruction!!.memory)
         assertEquals(
@@ -1512,11 +1578,16 @@ class SolarScanFeatureTest {
             chinese = false,
             observer = testObserver
         )
+        val extra = SolarOutputProduct.entries.filter { it.nativeMask >= 8 }
+            .zip(native.additionalPaths.asList())
+            .mapNotNull { (product, path) -> path?.let { product to it } }
+            .toMap()
         return SolarReconstructionSummary(
             source = source.name,
             displayPng = native.displayPng,
             linearPng = native.linearPng,
             linearFits = native.linearFits,
+            extraProducts = extra,
             width = native.width,
             height = native.height,
             frameStride = native.frameStride,
@@ -1550,6 +1621,7 @@ class SolarScanFeatureTest {
                     SolarOutputProduct.DISPLAY_PNG -> checkNotNull(native.displayPng)
                     SolarOutputProduct.LINEAR_PNG -> checkNotNull(native.linearPng)
                     SolarOutputProduct.LINEAR_FITS -> checkNotNull(native.linearFits)
+                    else -> extra.getValue(product)
                 }
                 SolarProductIntegrity.of(File(path))
             }

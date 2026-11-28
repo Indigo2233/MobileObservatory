@@ -144,7 +144,7 @@ internal class FrameSnapshotRequests<T> {
     }
 
     /** Keep the request visible during copying so pause can still cancel it. */
-    fun fulfill(accept: () -> Boolean, snapshot: () -> T) {
+    fun fulfill(accept: () -> Boolean, snapshot: (owner: String) -> T) {
         val request = synchronized(lock) {
             current?.takeIf { it.result.isActive && !it.copying && !it.satisfied && accept() }
                 ?.also {
@@ -153,7 +153,7 @@ internal class FrameSnapshotRequests<T> {
                 }
         } ?: return
         try {
-            val owned = snapshot()
+            val owned = snapshot(request.owner)
             synchronized(lock) {
                 if (current === request) {
                     request.result.complete(owned)

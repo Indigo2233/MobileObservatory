@@ -12,6 +12,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+internal class MountMotionStopped : CancellationException("Mount motion was stopped")
+
 enum class MountMotionType {
     IDLE,
     GOTO,

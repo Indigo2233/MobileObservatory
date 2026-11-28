@@ -15,8 +15,8 @@ use mjsolex::pipeline::{
     View,
 };
 use mjsolex::{
-    BandingAxis, DisplaySettings, Framing, PhysicalFlat, ScanSettings, SerReader, Spectrum,
-    Stretch, Trace,
+    BandingAxis, DisplaySettings, Framing, PhysicalFlat, Product, ScanSettings, SerReader,
+    Spectrum, Stretch, Trace,
 };
 
 const ANALYSIS_CLASS: &str = "com/indigo/mobileobservatory/solar/NativeSolarAnalysis";
@@ -62,16 +62,32 @@ struct ReconstructionData {
     oscillation_amplitude: Option<f64>,
     synthetic_flat_strength: Option<u8>,
     physical_flat_applied: bool,
+    additional_paths: Vec<Option<String>>,
+}
+
+const EXTRA_PRODUCTS: [(i32, Product, bool, &str); 7] = [
+    (8, Product::Gray, true, "enhanced"),
+    (16, Product::Negative, false, "negative"),
+    (32, Product::Eclipse, false, "eclipse"),
+    (64, Product::Hydrogen, false, "halpha-color"),
+    (128, Product::Calcium, false, "calcium-color"),
+    (256, Product::Helium, false, "helium-color"),
+    (512, Product::Doppler, false, "doppler"),
+];
+
+fn line_seed(column: i32, row: i32) -> Option<(usize, usize)> {
+    (column >= 0 && row >= 0).then_some((column as usize, row as usize))
 }
 
 fn analysis(
     path: &Path,
+    seed: Option<(usize, usize)>,
     mut progress: impl FnMut(f32) -> bool,
 ) -> Result<AnalysisData, mjsolex::Error> {
     let mut reader = SerReader::open(File::open(path)?)?;
     let header = reader.header();
     let spectrum = Spectrum::average(&mut reader, |value| progress(value * 0.7))?;
-    let trace = spectrum.fit_line(None)?;
+    let trace = spectrum.fit_line(seed)?;
     if !progress(0.8) {
         return Err(mjsolex::Error::Cancelled);
     }
@@ -439,6 +455,14 @@ fn reconstruction(
     scan_jagged: bool,
     synthetic_flat_strength: i32,
     flat_source: Option<&Path>,
+    correct_disk: bool,
+    invert_prominences: bool,
+    prominence_strength: i32,
+    wavelength: f64,
+    dispersion: f64,
+    wing_offset: f64,
+    crop_factor: f64,
+    seed: Option<(usize, usize)>,
     chinese: bool,
     mut progress: impl FnMut(f32) -> bool,
 ) -> Result<ReconstructionData, mjsolex::Error> {
@@ -482,7 +506,7 @@ fn reconstruction(
     let mut analysis_reader = SerReader::open(File::open(source)?)?;
     let header = analysis_reader.header();
     let spectrum = Spectrum::average(&mut analysis_reader, |value| progress(value * 0.12))?;
-    let trace = spectrum.fit_line(None)?;
+    let trace = spectrum.fit_line(seed)?;
     let fwhm = spectrum.line_profile(trace).fit.map(|fit| fit.fwhm);
     let physical_flat = flat_source
         .map(|path| {
@@ -500,15 +524,15 @@ fn reconstruction(
         .transpose()?;
     let reconstruction_start = if physical_flat.is_some() { 0.20 } else { 0.12 };
     let options = ReconstructionOptions {
-        wavelength: 0.0,
-        dispersion: None,
+        wavelength,
+        dispersion: (dispersion != 0.0).then_some(dispersion),
         shift,
         stride,
         memory: memory_headroom
             .map_or_else(ProcessingMemory::default, ProcessingMemory::with_headroom),
-        doppler: false,
-        wing_offset: 0.0,
-        palettes: [false; 3],
+        doppler: products & 512 != 0,
+        wing_offset,
+        palettes: [products & 64 != 0, products & 128 != 0, products & 256 != 0],
         processing: ProcessingOptions {
             scan: ScanSettings {
                 banding,
@@ -516,19 +540,19 @@ fn reconstruction(
                 oscillation: scan_oscillation,
                 jagged: scan_jagged,
             },
-            correct_disk: true,
+            correct_disk,
             synthetic_strength: synthetic_flat.unwrap_or(100),
             framing: Framing {
                 flip_x: flip_h,
                 flip_y: flip_v,
                 rotation_deg: rotation,
-                crop_factor: None,
+                crop_factor: (crop_factor != 0.0).then_some(crop_factor),
             },
-            enhance: false,
-            negative: false,
-            eclipse: false,
-            invert_prominences: false,
-            prominence_strength: 100,
+            enhance: products & 8 != 0,
+            negative: products & 16 != 0,
+            eclipse: products & 32 != 0,
+            invert_prominences,
+            prominence_strength: prominence_strength.clamp(1, 100) as u8,
         },
         synthetic_flat: synthetic_flat.is_some(),
         physical_flat,
@@ -594,6 +618,24 @@ fn reconstruction(
     let fits = (products & 4 != 0)
         .then(|| write_export(&images, output, Export::Fits, &format!("{stem}-linear.fit")))
         .transpose()?;
+    let mut additional_paths = Vec::with_capacity(EXTRA_PRODUCTS.len());
+    for (bit, product, enhanced, suffix) in EXTRA_PRODUCTS {
+        if !progress(0.98) {
+            return Err(mjsolex::Error::Cancelled);
+        }
+        let view = View { product, enhanced };
+        let path = (products & bit != 0 && images.views().any(|available| available == view))
+            .then(|| {
+                write_export(
+                    &images,
+                    output,
+                    Export::Display(view, DisplaySettings::default()),
+                    &format!("{stem}-{suffix}.png"),
+                )
+            })
+            .transpose()?;
+        additional_paths.push(path);
+    }
     if !progress(1.0) {
         return Err(mjsolex::Error::Cancelled);
     }
@@ -621,6 +663,7 @@ fn reconstruction(
         oscillation_amplitude,
         synthetic_flat_strength: metadata.synthetic_flat_strength,
         physical_flat_applied: metadata.flat_file.is_some(),
+        additional_paths,
     })
 }
 
@@ -814,6 +857,17 @@ fn reconstruction_object<'local>(
     let display = optional_string(env, data.display_png)?;
     let linear = optional_string(env, data.linear_png)?;
     let fits = optional_string(env, data.linear_fits)?;
+    let paths = env.new_object_array(
+        data.additional_paths.len() as i32,
+        "java/lang/String",
+        JObject::null(),
+    )?;
+    for (index, path) in data.additional_paths.into_iter().enumerate() {
+        if let Some(path) = path {
+            let value = env.new_string(path)?;
+            env.set_object_array_element(&paths, index as i32, &value)?;
+        }
+    }
     let string_class = env.find_class("java/lang/String")?;
     let warnings: JObjectArray<'_> =
         env.new_object_array(data.warnings.len() as i32, string_class, JObject::null())?;
@@ -830,7 +884,7 @@ fn reconstruction_object<'local>(
     };
     env.new_object(
         class,
-        "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;IIII[Ljava/lang/String;ZIIZZDDIZ)V",
+        "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;IIII[Ljava/lang/String;ZIIZZDDIZ[Ljava/lang/String;)V",
         &[
             JValue::Object(&display),
             JValue::Object(&linear),
@@ -849,6 +903,7 @@ fn reconstruction_object<'local>(
             JValue::Double(data.oscillation_amplitude.unwrap_or(0.0)),
             JValue::Int(data.synthetic_flat_strength.map_or(0, i32::from)),
             JValue::Bool(u8::from(data.physical_flat_applied)),
+            JValue::Object(&paths),
         ],
     )
 }
@@ -886,6 +941,8 @@ pub extern "system" fn Java_com_indigo_mobileobservatory_solar_NativeSolarBridge
     mut env: JNIEnv,
     _class: JClass,
     source: JString,
+    column: i32,
+    row: i32,
     observer: JObject,
 ) -> jobject {
     let path = match env.get_string(&source) {
@@ -898,7 +955,7 @@ pub extern "system" fn Java_com_indigo_mobileobservatory_solar_NativeSolarBridge
     };
     let result = {
         let mut callback = observer_callback(&env, &observer, cancel, progress);
-        analysis(&path, &mut callback)
+        analysis(&path, line_seed(column, row), &mut callback)
     };
     match result.and_then(|data| {
         analysis_object(&mut env, data)
@@ -960,6 +1017,15 @@ pub extern "system" fn Java_com_indigo_mobileobservatory_solar_NativeSolarBridge
     scan_jagged: bool,
     synthetic_flat_strength: i32,
     flat_source: JString,
+    correct_disk: bool,
+    invert_prominences: bool,
+    prominence_strength: i32,
+    wavelength: f64,
+    dispersion: f64,
+    wing_offset: f64,
+    crop_factor: f64,
+    seed_column: i32,
+    seed_row: i32,
     chinese: bool,
     observer: JObject,
 ) -> jobject {
@@ -1006,6 +1072,14 @@ pub extern "system" fn Java_com_indigo_mobileobservatory_solar_NativeSolarBridge
             scan_jagged,
             synthetic_flat_strength,
             flat_source.as_deref(),
+            correct_disk,
+            invert_prominences,
+            prominence_strength,
+            wavelength,
+            dispersion,
+            wing_offset,
+            crop_factor,
+            line_seed(seed_column, seed_row),
             chinese,
             &mut callback,
         )

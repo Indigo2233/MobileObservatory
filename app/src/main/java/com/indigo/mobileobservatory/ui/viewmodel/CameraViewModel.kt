@@ -46,6 +46,7 @@ import com.indigo.mobileobservatory.astro.ObserverSite
 import com.indigo.mobileobservatory.mount.SkyWatcherEquatorialMath
 import com.indigo.mobileobservatory.sequence.AutofocusRun
 import com.indigo.mobileobservatory.sequence.DeviceUnavailable
+import com.indigo.mobileobservatory.sequence.SequenceFeature
 import com.indigo.mobileobservatory.sequence.SequenceEditorMode
 import com.indigo.mobileobservatory.sequence.SequenceMosaicPlan
 import com.indigo.mobileobservatory.sequence.SequenceEphemeris
@@ -609,6 +610,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val guideRunning: StateFlow<Boolean> = _guideRunning.asStateFlow()
     @Volatile private var guideStarLost = false
     private var guideDitherOffset = 0f to 0f // Guarded by guideOperationLock, in guide-camera pixels.
+    private var pendingDitherSince: Long? = null // Guarded by guideOperationLock.
 
     private val _guideCalibrating = MutableStateFlow(false)
     val guideCalibrating: StateFlow<Boolean> = _guideCalibrating.asStateFlow()
@@ -1472,7 +1474,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         raHours: Double,
         decDeg: Double,
         frame: String = "JNOW",
-        toleranceArcmin: Double = PrecisionGotoMath.TOLERANCE_ARCMIN
+        toleranceArcmin: Double = PrecisionGotoMath.TOLERANCE_ARCMIN,
+        ownerToken: String? = null
     ): Boolean {
         if (connectionState.value !is ConnectionState.Connected) {
             return mountModule.rejectPrecisionGoto(name, app.getString(R.string.precision_goto_need_camera))
@@ -1495,12 +1498,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             raHours = jnowRa,
             decDeg = jnowDec,
             toleranceArcmin = PrecisionGotoMath.clampToleranceArcmin(toleranceArcmin),
+            ownerToken = ownerToken,
             captureAndSolve = { hint ->
                 check(cameraManager.activeCamera === camera) { app.getString(R.string.wfp_configuration_changed) }
                 captureAndSolveForPrecisionGoto(hint, options)
             }
         )
     }
+
+    internal suspend fun stopSequenceCenter(ownerToken: String) = mountModule.stopOwnedPrecisionGoto(ownerToken)
 
     private suspend fun captureAndSolveForPrecisionGoto(hint: MountCoordinates?, options: SolveCaptureSettings = precisionSolveSettings()): MountCoordinates = precisionSolveMutex.withLock {
         _virtualObservation.value?.let { session ->
@@ -1613,6 +1619,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     suspend fun ensureMountTracking() = mountModule.ensureMountTracking()
     fun stopMountMotion() {
         _mountStopSignal.value += 1L
+        if (SequenceFeature.ENABLED && sequenceRuntime.running()) sequenceRuntime.pauseForMountStop()
         stopGuideOperations()
         _guideStatus.value = app.getString(R.string.guiding_stopped)
         mountModule.stopMountMotion()
@@ -2053,23 +2060,47 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     internal suspend fun ditherSequenceAndWait(radiusPx: Double) {
         require(radiusPx.isFinite() && radiusPx >= 0)
         if (radiusPx == 0.0) return
-        val started = synchronized(guideOperationLock) {
+        val (previousOffset, started) = synchronized(guideOperationLock) {
             if (!guideLocked()) throw DeviceUnavailable("guide lock")
+            val previous = guideDitherOffset
             val angle = Math.random() * 2.0 * Math.PI
             val radius = kotlin.math.sqrt(Math.random()) * radiusPx
             guideDitherOffset = (kotlin.math.cos(angle) * radius).toFloat() to (kotlin.math.sin(angle) * radius).toFloat()
-            android.os.SystemClock.elapsedRealtime()
+            val now = android.os.SystemClock.elapsedRealtime()
+            pendingDitherSince = now
+            previous to now
         }
-        val deadline = started + maxOf(60_000L, (_guideExposureUs.value / 1000).toLong() * 8)
+        try {
+            awaitPendingDither(requireGuiding = true)
+        } catch (cancelled: CancellationException) {
+            synchronized(guideOperationLock) {
+                if (pendingDitherSince == started && _guideRunning.value) {
+                    guideTasks.cancel()
+                    guideDitherOffset = previousOffset
+                    resetGuideAlgorithmState()
+                    pendingDitherSince = android.os.SystemClock.elapsedRealtime()
+                }
+            }
+            throw cancelled
+        }
+    }
+
+    internal suspend fun awaitPendingDither(requireGuiding: Boolean = false) {
+        val deadline = android.os.SystemClock.elapsedRealtime() + maxOf(60_000L, (_guideExposureUs.value / 1000).toLong() * 8)
         while (android.os.SystemClock.elapsedRealtime() < deadline) {
-            if (!_guideRunning.value) throw DeviceUnavailable("guiding stopped")
             val settled = synchronized(guideOperationLock) {
-                guideLocked() && !guideTasks.busy && com.indigo.mobileobservatory.guide.ditherHasSettled(
-                    _guideHistory.value, started, _guideMinMovePx.value, _guideDecMinMovePx.value)
+                if (requireGuiding && !_guideRunning.value) throw DeviceUnavailable("guiding stopped")
+                val started = pendingDitherSince ?: return
+                val stable = !guideTasks.busy && (!_guideRunning.value || guideLocked() &&
+                    com.indigo.mobileobservatory.guide.ditherHasSettled(
+                        _guideHistory.value, started, _guideMinMovePx.value, _guideDecMinMovePx.value))
+                if (stable) pendingDitherSince = null
+                stable
             }
             if (settled) return
             delay(200)
         }
+        if (requireGuiding && guideLocked()) error("Guide dither did not settle")
         throw DeviceUnavailable("Guide dither did not settle")
     }
 
@@ -2753,13 +2784,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 }
 
                 val processed = softwareBinning.apply(interpretedFrame, traits)
-                if (processed.data !== interpretedFrame.data) cam.recycleBuffer(interpretedFrame.data)
                 if (!previewEpoch.isCurrent(runEpoch)) {
+                    if (processed.data !== interpretedFrame.data) cam.recycleBuffer(interpretedFrame.data)
                     runRecycler(processed.data)
                     return
                 }
 
-                fulfillFrameSnapshot(processed, traits, runEpoch)
+                fulfillFrameSnapshot(interpretedFrame, processed, traits, runEpoch)
+                if (processed.data !== interpretedFrame.data) cam.recycleBuffer(interpretedFrame.data)
 
                 // Retain the science frame behind the picture on screen. A still is
                 // written from this frame, so a long exposure saves the exposure the
@@ -4171,7 +4203,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
             val roi = cam.currentRoi
             val ts = winJuposTimestamp()
-            val target = CaptureTargetNames.canonical(_targetName.value)
+            val target = if (solarCadence != null) "Sun" else CaptureTargetNames.canonical(_targetName.value)
             val info = cam.cameraInfo
             val cameraShort = (info?.sensorName ?: info?.name)?.replace(" ", "")?.take(20) ?: "Camera"
             val filterName = currentFilterName()
@@ -4302,6 +4334,51 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
         check(key.format.isMono && key.width >= 32 && key.height >= 8) { "Select a monochrome spectral ROI." }
         return key
+    }
+
+    internal suspend fun recommendSolarRoi(): Roi = withContext(Dispatchers.IO) {
+        val camera = checkNotNull(cameraManager.activeCamera)
+        val key = solarCaptureKey()
+        val generation = camera.scienceCaptureGeneration
+        check(!_isRecording.value && !_recordingFinalizing.value && !_roiApplying.value)
+        val snapshot = checkNotNull(awaitFrameSnapshotWithTraits(5_000, "solar_roi")) {
+            app.getString(R.string.capture_snapshot_pending)
+        }
+        val frame = snapshot.frame
+        check(frame.captureGeneration == generation && frame.pixelFormat.isMono &&
+            frame.width == key.width && frame.height == key.height &&
+            snapshot.traits?.alignment == com.indigo.mobileobservatory.stacking.SampleAlignment.RIGHT)
+        val file = File.createTempFile("solar-roi-", ".ser", app.cacheDir)
+        try {
+            val spectrum = com.indigo.mobileobservatory.solar.SolarScanNative.spectralRoiInput(frame)
+            val writer = SERWriter(file)
+            try {
+                writer.open(spectrum.width, spectrum.height, spectrum.pixelFormat)
+                writer.writeFrame(spectrum)
+            } finally {
+                writer.close()
+            }
+            val job = currentCoroutineContext()[Job]
+            val analysis = com.indigo.mobileobservatory.solar.SolarScanNative.analyze(
+                file, object : com.indigo.mobileobservatory.solar.SolarNativeObserver {
+                    override fun isCancelled() = job?.isActive == false
+                    override fun onProgress(value: Float) = Unit
+                }
+            )
+            currentCoroutineContext().ensureActive()
+            check(cameraManager.activeCamera === camera && camera.scienceCaptureGeneration == generation &&
+                solarCaptureKey() == key && !_isRecording.value && !_recordingFinalizing.value && !_roiApplying.value)
+            check(analysis.confidence > 0 && analysis.validColumns >= 8) {
+                app.getString(R.string.solar_capture_line_missing)
+            }
+            val source = key.roi
+            val top = (analysis.roiTop.toLong() * source.height / frame.height).toInt()
+            val end = (analysis.roiTop + analysis.roiHeight).toLong() * source.height
+            val bottom = ((end + frame.height - 1) / frame.height).toInt()
+            source.copy(y = source.y + top, height = bottom - top)
+        } finally {
+            file.delete()
+        }
     }
 
     internal val canSolarSweep: Boolean get() = mountModule.canSolarSweep
@@ -5174,7 +5251,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun sequenceTargetAltitude(coordinates: Pair<Double, Double>?, instant: Instant = Instant.now()): Double? {
         val site = mountSite.value ?: return null
-        val target = coordinates ?: sequenceRuntime.observingTarget()
+        val target = coordinates ?: return null
         return CoordinateTransform.j2000ToTopocentric(
             coordinates = EquatorialCoordinates(target.first * 15.0, target.second),
             instant = instant,
@@ -5415,8 +5492,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    private fun fulfillFrameSnapshot(frame: FrameData, traits: PixelTraits?, runEpoch: Long) {
-        frameSnapshots.fulfill(accept = { previewEpoch.isCurrent(runEpoch) && !_previewPaused.value }) {
+    private fun fulfillFrameSnapshot(cameraFrame: FrameData, processed: FrameData, traits: PixelTraits?, runEpoch: Long) {
+        frameSnapshots.fulfill(accept = { previewEpoch.isCurrent(runEpoch) && !_previewPaused.value }) { owner ->
+            val frame = if (owner == "solar_roi") cameraFrame else processed
             CameraCfaLayout.ownedSnapshot(frame, traits)
         }
     }

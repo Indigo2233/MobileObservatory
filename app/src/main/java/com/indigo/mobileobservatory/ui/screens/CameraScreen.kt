@@ -253,6 +253,8 @@ internal fun CaptureWorkspaceScreen(
     fun updateDraftRoi(next: Roi) {
         draftRoi = RoiEditing.clamp(next, roiLimits)
     }
+    var findingSolarRoi by remember { mutableStateOf(false) }
+    var solarRoiError by remember(roi, connectedCameraIdentity, roiSyncRevision) { mutableStateOf(false) }
 
     Column(
                 modifier = Modifier
@@ -537,6 +539,37 @@ internal fun CaptureWorkspaceScreen(
                         fillWidth = true,
                         captureSettingsOnly = portrait,
                         roiBudgetControls = { StackRoiControls(viewModel) },
+                        roiDraftControls = {
+                            if (supportsHostRoi && !simulated) {
+                                TextButton(
+                                    enabled = !findingSolarRoi && !roiApplying && !isRecording && !previewPaused,
+                                    onClick = {
+                                        val previousDraft = draftRoi
+                                        findingSolarRoi = true
+                                        solarRoiError = false
+                                        scope.launch {
+                                            try {
+                                                val proposed = viewModel.recommendSolarRoi()
+                                                if (draftRoi == previousDraft) {
+                                                    updateDraftRoi(RoiEditing.fitSpectralStrip(proposed, roi, roiLimits))
+                                                }
+                                            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                                                throw cancelled
+                                            } catch (_: Exception) {
+                                                solarRoiError = true
+                                            } finally {
+                                                findingSolarRoi = false
+                                            }
+                                        }
+                                    }
+                                ) {
+                                    Text(stringResource(if (findingSolarRoi) R.string.solar_scan_phase_analyzing
+                                        else R.string.solar_capture_find_roi))
+                                }
+                                if (solarRoiError) Text(stringResource(R.string.solar_capture_line_missing),
+                                    color = MaterialTheme.colorScheme.error)
+                            }
+                        },
                         exposureUs = exposureUs,
                         gain = gain,
                         gainWriteInProgress = gainWriteInProgress,

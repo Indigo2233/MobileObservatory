@@ -153,22 +153,20 @@ internal fun MediaImageInspection(
             FilterChip(selected = histogramVisible, onClick = { histogramVisible = !histogramVisible }, label = { Text(stringResource(R.string.media_inspect_histogram)) })
             FilterChip(selected = clippingVisible, onClick = { clippingVisible = !clippingVisible }, label = { Text(stringResource(R.string.media_inspect_clipping)) })
         }
-        if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
-        if (nativeError) Text(stringResource(R.string.media_inspect_native_failed), color = colors.onImage, style = MaterialTheme.typography.bodySmall)
-        if (analysisError || histogramError) Text(stringResource(R.string.media_edit_memory), color = colors.onImage, style = MaterialTheme.typography.bodySmall)
         Box(Modifier.weight(1f).fillMaxWidth().clipToBounds().onSizeChanged { viewport = it }) {
             Canvas(Modifier.fillMaxSize().semantics { contentDescription = description }
-                .pointerInput(fit, originalWidth, originalHeight) {
+                .pointerInput(originalWidth, originalHeight) {
                     detectTransformGestures { centroid, pan, scaleChange, _ ->
+                        val gestureFit = minOf(size.width.toFloat() / originalWidth, size.height.toFloat() / originalHeight)
                         val old = zoom
-                        zoom = (zoom * scaleChange).coerceIn(.5f, maxOf(12f, 4f / fit))
+                        zoom = (zoom * scaleChange).coerceIn(.5f, maxOf(12f, 4f / gestureFit))
                         val ratio = zoom / old
                         val center = Offset(size.width / 2f, size.height / 2f)
                         val shifted = centroid - center
                         panX = ((panX * size.width - shifted.x) * ratio + shifted.x + pan.x) / size.width
                         panY = ((panY * size.height - shifted.y) * ratio + shifted.y + pan.y) / size.height
-                        val maxX = (originalWidth * fit * zoom / size.width - 1f).coerceAtLeast(0f) / 2f
-                        val maxY = (originalHeight * fit * zoom / size.height - 1f).coerceAtLeast(0f) / 2f
+                        val maxX = (originalWidth * gestureFit * zoom / size.width - 1f).coerceAtLeast(0f) / 2f
+                        val maxY = (originalHeight * gestureFit * zoom / size.height - 1f).coerceAtLeast(0f) / 2f
                         panX = panX.coerceIn(-maxX, maxX); panY = panY.coerceIn(-maxY, maxY)
                         if (zoom > 1.25f) nativeRequested = true
                     }
@@ -193,6 +191,13 @@ internal fun MediaImageInspection(
                 clipping?.let { overlay -> clipRect(left = if (compare) size.width * divider else 0f) { draw(overlay) } }
                 if (compare && before != null) drawLine(colors.onImage, Offset(size.width * divider, 0f), Offset(size.width * divider, size.height), 2.dp.toPx())
                 overlay?.invoke(this, Offset(offset.x.toFloat(), offset.y.toFloat()), IntSize(width, height))
+            }
+            if (loading) LinearProgressIndicator(Modifier.align(Alignment.TopCenter).fillMaxWidth())
+            Column(Modifier.align(Alignment.TopStart).padding(8.dp)) {
+                if (nativeError) Text(stringResource(R.string.media_inspect_native_failed),
+                    color = colors.onImage, style = MaterialTheme.typography.bodySmall)
+                if (analysisError || histogramError) Text(stringResource(R.string.media_edit_memory),
+                    color = colors.onImage, style = MaterialTheme.typography.bodySmall)
             }
             Text(if (native?.first == region && region != null && (!compare || nativeBefore?.first == region)) "${(fit * zoom * 100).roundToInt()}%" else stringResource(R.string.media_inspect_preview),
                 Modifier.align(Alignment.BottomEnd).padding(8.dp), color = colors.onImage, style = MaterialTheme.typography.labelSmall)

@@ -57,7 +57,7 @@ class CameraCfaDialogInstrumentedTest {
                 CameraPreviewTools(
                     connected = true, showPanel = true, showOverlayPanel = true,
                     focusAssistEnabled = false, showCenterMarker = false,
-                    lp750Enabled = lp750, lp750Available = true, selectedTarget = null,
+                    lp750Enabled = lp750, lp750Available = true, selectedTarget = "Menkalinan",
                     currentFrameSolveBusy = false, onFitToView = {}, onTogglePanel = {},
                     onToggleOverlay = {}, onToggleFocusAssist = {}, onToggleCenterMarker = {},
                     onToggleLp750 = { lp750 = it }, onSolveCurrentFrame = { solveOpened = true },
@@ -66,6 +66,7 @@ class CameraCfaDialogInstrumentedTest {
             }
         }
         compose.onNodeWithContentDescription(context.getString(R.string.camera_preview_tools)).performClick()
+        compose.onNodeWithText("Menkalinan").assertIsDisplayed()
         compose.onNodeWithText(context.getString(R.string.wf_choose_target)).assertIsDisplayed().performClick()
         assertTrue(targetOpened)
         compose.onNodeWithContentDescription(context.getString(R.string.camera_preview_tools)).performClick()

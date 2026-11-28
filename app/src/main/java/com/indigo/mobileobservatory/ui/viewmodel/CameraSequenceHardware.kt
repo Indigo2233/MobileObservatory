@@ -5,6 +5,7 @@ import com.indigo.mobileobservatory.camera.CameraEnvironmentControlCapable
 import com.indigo.mobileobservatory.camera.CameraUsbBandwidthCapable
 import com.indigo.mobileobservatory.guide.GuideCalibrationState
 import com.indigo.mobileobservatory.mount.MountConnectionState
+import com.indigo.mobileobservatory.mount.MountMotionStopped
 import com.indigo.mobileobservatory.mount.MountTrackingRate
 import com.indigo.mobileobservatory.accessories.cover.CoverState
 import com.indigo.mobileobservatory.accessories.cover.CalibratorState
@@ -15,13 +16,18 @@ import com.indigo.mobileobservatory.sequence.DeviceUnavailable
 import com.indigo.mobileobservatory.sequence.SequenceHardware
 import com.indigo.mobileobservatory.sequence.SessionFrame
 import java.io.File
+import java.util.UUID
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 
 class CameraSequenceHardware(
     private val viewModel: CameraViewModel
 ) : SequenceHardware {
+    override suspend fun awaitExposureReady() = viewModel.awaitPendingDither()
+
     override suspend fun takeExposure(
         seconds: Double,
         gain: Int,
@@ -99,17 +105,26 @@ class CameraSequenceHardware(
     }
 
     override suspend fun center(raHours: Double, decDeg: Double) {
-        val started = viewModel.startPrecisionGoto("sequence", raHours, decDeg, "J2000")
-        if (!started) throw DeviceUnavailable("center")
+        val ownerToken = UUID.randomUUID().toString()
+        val previous = viewModel.precisionGotoProgress.value
+        val started = viewModel.startPrecisionGoto("sequence", raHours, decDeg, "J2000", ownerToken = ownerToken)
+        if (!started) throw DeviceUnavailable(viewModel.precisionGotoProgress.value.message.ifBlank { "center" })
         try {
-            awaitDevice("center", 300_000, { viewModel.mountConnectionState.value is MountConnectionState.Connected }) {
-                val progress = viewModel.precisionGotoProgress.value
-                !progress.isActive && progress.phase != PrecisionGotoPhase.IDLE && !viewModel.mountMotionState.value.isActive
+            val deadline = SystemClock.elapsedRealtime() + 300_000
+            while (viewModel.mountMotionState.value.ownerToken == ownerToken) {
+                check(SystemClock.elapsedRealtime() < deadline) { "Center timed out" }
+                delay(200)
             }
             val progress = viewModel.precisionGotoProgress.value
-            if (progress.phase != PrecisionGotoPhase.SUCCEEDED) throw DeviceUnavailable(progress.message.ifBlank { "center" })
+            if (viewModel.mountConnectionState.value !is MountConnectionState.Connected ||
+                viewModel.cameraManager.activeCamera?.isOpen?.value != true
+            ) throw DeviceUnavailable(progress.message.ifBlank { "Center device disconnected" })
+            if (progress === previous || progress.isActive || progress.phase == PrecisionGotoPhase.CANCELLED) {
+                throw MountMotionStopped()
+            }
+            check(progress.phase == PrecisionGotoPhase.SUCCEEDED) { progress.message.ifBlank { "Center failed" } }
         } finally {
-            if (viewModel.precisionGotoProgress.value.isActive) viewModel.stopMountMotion()
+            withContext(NonCancellable) { viewModel.stopSequenceCenter(ownerToken) }
         }
     }
 

@@ -4,6 +4,9 @@ import com.indigo.mobileobservatory.camera.FrameData
 import com.indigo.mobileobservatory.camera.PixelFormat
 import com.indigo.mobileobservatory.recording.SERWriter
 import java.io.File
+import java.nio.file.StandardCopyOption
+import java.nio.file.Files
+import java.nio.file.AtomicMoveNotSupportedException
 import kotlin.math.PI
 import kotlin.math.exp
 import kotlin.math.floor
@@ -132,5 +135,44 @@ object SolarScanSimulator {
             bytes[index * 2 + 1] = (value ushr 8).toByte()
         }
         return bytes
+    }
+}
+
+internal fun incompleteSimulationSourcesToDelete(
+    createdSources: Collection<File>,
+    sealedSources: Collection<File>
+): List<File> = createdSources.filter { it.exists() && it !in sealedSources }
+
+internal fun publishSealedSimulationSource(
+    partial: File,
+    destination: File,
+    readIdentity: (File, String) -> SolarSourceIdentity = { file, name -> SolarSourceIdentity.of(file, name) }
+): SolarSourceIdentity {
+    require(partial.isFile) { "Simulation source was not finalized." }
+    require(!destination.exists()) { "Simulation source already exists." }
+    check(destination.parentFile?.isDirectory == true || destination.parentFile?.mkdirs() == true)
+    val identity = try {
+        readIdentity(partial, destination.name)
+    } catch (failure: Exception) {
+        try {
+            moveSealedSimulationSource(partial, destination)
+        } catch (publishFailure: Exception) {
+            failure.addSuppressed(publishFailure)
+        }
+        throw failure
+    }
+    moveSealedSimulationSource(partial, destination)
+    return identity
+}
+
+private fun moveSealedSimulationSource(partial: File, destination: File) {
+    try {
+        Files.move(
+            partial.toPath(),
+            destination.toPath(),
+            StandardCopyOption.ATOMIC_MOVE
+        )
+    } catch (_: AtomicMoveNotSupportedException) {
+        Files.move(partial.toPath(), destination.toPath())
     }
 }

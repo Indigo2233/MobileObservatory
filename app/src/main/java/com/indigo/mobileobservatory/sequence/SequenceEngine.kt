@@ -1,6 +1,9 @@
 package com.indigo.mobileobservatory.sequence
 
+import com.indigo.mobileobservatory.mount.MountMotionStopped
+
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.currentCoroutineContext
@@ -48,11 +51,15 @@ class SequenceStopped : CancellationException("sequence stopped")
 
 class SequenceSkipToEnd : CancellationException("skip to sequence end")
 
+internal class SequenceInstructionSkipped : CancellationException("instruction skipped")
+
 class SequenceControl {
     private val paused = AtomicBoolean(false)
+    private val mountStops = AtomicLong()
     private val skip = AtomicBoolean(false)
     private var skipOwner: NinaNode? = null
     private var promptOwner: NinaNode? = null
+    private val activeInstructions = linkedSetOf<NinaNode>()
     private val holdForSkip = AtomicBoolean(false)
     private val skipToEnd = AtomicBoolean(false)
     @Volatile private var stopped = false
@@ -61,6 +68,14 @@ class SequenceControl {
     val isPaused: Boolean get() = paused.get()
     val isStopped: Boolean get() = stopped
     val requiresSkip: Boolean get() = holdForSkip.get()
+    internal val mountStopRevision: Long get() = mountStops.get()
+
+    internal fun pauseForMountStop() {
+        synchronized(this) {
+            pause()
+            mountStops.incrementAndGet()
+        }
+    }
 
     fun pause() {
         synchronized(this) {
@@ -80,10 +95,22 @@ class SequenceControl {
 
     fun requestSkip() {
         synchronized(this) {
-            skipOwner = promptOwner
+            skipOwner = promptOwner ?: activeInstructions.lastOrNull()
             skip.set(true)
             holdForSkip.set(false)
             if (paused.compareAndSet(true, false)) gate.complete(Unit)
+        }
+    }
+
+    internal fun instructionStarted(node: NinaNode) = synchronized(this) {
+        activeInstructions.add(node)
+    }
+
+    internal fun instructionFinished(node: NinaNode) = synchronized(this) {
+        activeInstructions.remove(node)
+        if (skipOwner === node) {
+            skipOwner = null
+            skip.set(false)
         }
     }
 
@@ -114,8 +141,19 @@ class SequenceControl {
         }
     }
 
-    fun consumeSkip(node: NinaNode): Boolean = synchronized(this) {
-        (skipOwner == null || skipOwner === node) && skip.compareAndSet(true, false)
+    internal fun canDispatch(node: NinaNode): Boolean = synchronized(this) {
+        if (stopped) throw SequenceStopped()
+        if (skipToEnd.get()) throw SequenceSkipToEnd()
+        if (consumeSkip(node)) throw SequenceInstructionSkipped()
+        !paused.get()
+    }
+
+    fun consumeSkip(node: NinaNode): Boolean = consumeSkip(node) { }
+
+    internal fun consumeSkip(node: NinaNode, onSkip: () -> Unit): Boolean = synchronized(this) {
+        val skipped = (skipOwner == null || skipOwner === node) && skip.compareAndSet(true, false)
+        if (skipped) onSkip()
+        skipped
     }
 
     internal fun setPromptOwner(node: NinaNode?) = synchronized(this) { promptOwner = node }
@@ -132,6 +170,7 @@ class SequenceControl {
             skip.set(false)
             skipOwner = null
             promptOwner = null
+            activeInstructions.clear()
             holdForSkip.set(false)
             skipToEnd.set(false)
             stopped = false
@@ -154,6 +193,8 @@ class SequenceControl {
 class GuideLost : Exception("guide lost")
 
 class DeviceUnavailable(message: String) : Exception(message)
+
+private class AltitudeUnavailable(message: String) : Exception(message)
 
 class SequenceStorageFailure(cause: Exception) : Exception(cause.message, cause)
 
@@ -263,6 +304,9 @@ class SequenceEngine(
         } catch (_: SequenceStopped) {
             currentNodeId = null
             commit(snapshot(SequencePhase.Stopped))
+        } catch (missing: AltitudeUnavailable) {
+            currentNodeId = null
+            commit(snapshot(SequencePhase.Failed, message = missing.message))
         }
         return state
     }
@@ -396,21 +440,44 @@ class SequenceEngine(
                 loopAllows(condition, done)
             }
         }
+        if (!loopOk) return false
         val limitOk = limits.all { condition ->
             if (condition.className == "TimeCondition") world.nowMillis() < (clockDeadlines[condition] ?: Long.MIN_VALUE)
-            else limitAllows(condition, liveSignals(condition), containerStartedAt[container] ?: world.nowMillis())
+            else {
+                val signals = liveSignals(condition)
+                val unavailable = when (condition.className) {
+                    "AltitudeCondition", "AboveHorizonCondition" -> if (signals.altitudeDeg == null)
+                        "Target altitude unavailable. Set the observing site and target coordinates." else null
+                    "SunAltitudeCondition" -> if (signals.sunAltitudeDeg == null)
+                        "Solar altitude unavailable. Set the observing site." else null
+                    "MoonAltitudeCondition" -> if (signals.moonAltitudeDeg == null)
+                        "Lunar altitude unavailable. Set the observing site." else null
+                    else -> null
+                }
+                if (unavailable != null) throw AltitudeUnavailable(unavailable)
+                limitAllows(condition, signals, containerStartedAt[container] ?: world.nowMillis())
+            }
         }
-        val self = loopOk && limitOk
-        val parent = parents[container] ?: return self
-        return self && canContinue(parent)
+        val parent = parents[container] ?: return limitOk
+        return limitOk && canContinue(parent)
     }
 
     private suspend fun executeInstruction(node: NinaNode): Outcome {
+        control.instructionStarted(node)
+        try {
+            return runInstructionAttempts(node)
+        } finally {
+            control.instructionFinished(node)
+        }
+    }
+
+    private suspend fun runInstructionAttempts(node: NinaNode): Outcome {
         currentNodeId = node.id
         status[node] = EntityStatus.RUNNING
         val attempts = (node.intField("Attempts") ?: 1).coerceAtLeast(1)
         var attempt = 0
         while (attempt < attempts) {
+            val mountStopRevision = control.mountStopRevision
             control.checkpoint()
             if (control.consumeSkip(node)) {
                 status[node] = EntityStatus.SKIPPED
@@ -429,11 +496,10 @@ class SequenceEngine(
                                 job.cancel()
                                 break
                             }
-                            if (control.consumeSkip(node)) {
+                            if (control.consumeSkip(node) {
                                 skippedByUser.set(true)
                                 job.cancel()
-                                break
-                            }
+                            }) break
                             val parent = parents[node]
                             if (parent != null && !canContinue(parent)) {
                                 conditionBroke.set(true)
@@ -475,7 +541,7 @@ class SequenceEngine(
             } catch (cancelled: CancellationException) {
                 if (control.isStopped) throw SequenceStopped()
                 if (control.peekSkipToEnd()) throw SequenceSkipToEnd()
-                if (skippedByUser.get()) {
+                if (skippedByUser.get() || cancelled is SequenceInstructionSkipped) {
                     status[node] = EntityStatus.SKIPPED
                     return Outcome.Continue
                 }
@@ -484,7 +550,10 @@ class SequenceEngine(
                     return Outcome.SkipRest
                 }
                 currentCoroutineContext().ensureActive()
+                if (cancelled is MountMotionStopped && control.mountStopRevision != mountStopRevision) continue
                 throw SequenceStopped()
+            } catch (missing: AltitudeUnavailable) {
+                throw missing
             } catch (storage: SequenceStorageFailure) {
                 throw storage
             } catch (failure: Exception) {
@@ -533,7 +602,10 @@ class SequenceEngine(
 
     private fun liveSignals(node: NinaNode): SequenceSignals {
         val now = world.nowMillis()
-        val target = inheritedTarget(node)
+        val target = when (node.className) {
+            "AltitudeCondition", "AboveHorizonCondition" -> altitudeConditionTarget(node)
+            else -> inheritedTarget(node)
+        }
         return SequenceSignals(
             nowMillis = now,
             altitudeDeg = world.altitudeDeg(target),
@@ -617,6 +689,8 @@ class SequenceEngine(
                 throw skipEnd
             } catch (cancelled: CancellationException) {
                 throw cancelled
+            } catch (missing: AltitudeUnavailable) {
+                throw missing
             } catch (storage: SequenceStorageFailure) {
                 throw storage
             } catch (failure: Exception) {
@@ -644,6 +718,18 @@ class SequenceEngine(
     private fun inheritedTarget(node: NinaNode): Pair<Double, Double>? {
         val target = targetContainer(node) ?: return null
         return (dsoRaHours(target) ?: return null) to (dsoDecDegrees(target) ?: return null)
+    }
+
+    private fun altitudeConditionTarget(node: NinaNode): Pair<Double, Double>? {
+        val hasDsoParent = (node.fields["HasDsoParent"] as? NinaValue.Bool)?.value
+        if (hasDsoParent == true) return inheritedTarget(node)
+        val data = (node.fields["Data"] as? NinaValue.Obj)?.node
+        val coordinates = (data?.fields?.get("Coordinates") as? NinaValue.Obj)?.node
+            ?: (node.fields["Coordinates"] as? NinaValue.Obj)?.node
+        if (coordinates == null) return if (hasDsoParent == false) null else inheritedTarget(node)
+        val ra = coordinateRaHours(coordinates) ?: return null
+        val dec = coordinateDecDegrees(coordinates) ?: return null
+        return (ra to dec).takeIf { ra in 0.0..24.0 && dec in -90.0..90.0 }
     }
 
     internal fun targetContainer(node: NinaNode): NinaNode? {

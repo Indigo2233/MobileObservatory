@@ -184,7 +184,14 @@ fun CameraPreviewTools(
                         }
                     )
                     DropdownMenuItem(
-                        text = { Text(selectedTarget ?: stringResource(R.string.wf_choose_target)) },
+                        text = {
+                            Column {
+                                Text(stringResource(R.string.wf_choose_target))
+                                if (!selectedTarget.isNullOrBlank()) {
+                                    Text(selectedTarget, style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                        },
                         onClick = { menuOpen = false; onChooseTarget() },
                         leadingIcon = { Icon(Icons.Default.Star, contentDescription = null) }
                     )

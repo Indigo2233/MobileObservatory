@@ -99,7 +99,8 @@ data class SolarScanLegRecord(
     val analysis: SolarSpectrumAnalysis? = null,
     val reconstructionSettings: SolarReconstructionSettings? = null,
     val sourceDispositionCancelled: Boolean = false,
-    val sourceMissing: Boolean = false
+    val sourceMissing: Boolean = false,
+    val lineSeed: SolarLineSeed? = null
 )
 
 data class SolarScanTaskRecord(
@@ -497,11 +498,7 @@ class SolarScanRepository(
         fun invalidProduct(product: SolarOutputProduct) =
             failed("result_product_invalid:${product.name.lowercase()}")
         for (product in settings.products) {
-            val path = when (product) {
-                SolarOutputProduct.DISPLAY_PNG -> reconstruction.displayPng
-                SolarOutputProduct.LINEAR_PNG -> reconstruction.linearPng
-                SolarOutputProduct.LINEAR_FITS -> reconstruction.linearFits
-            }
+            val path = reconstruction.pathFor(product)
             if (path.isNullOrBlank()) return invalidProduct(product)
             val file = runCatching { File(path).canonicalFile }.getOrNull()
                 ?: return invalidProduct(product)
@@ -577,9 +574,8 @@ class SolarScanRepository(
         height: Int
     ): Boolean = runCatching {
         when (product) {
-            SolarOutputProduct.DISPLAY_PNG,
-            SolarOutputProduct.LINEAR_PNG -> validatePng(file, width, height)
             SolarOutputProduct.LINEAR_FITS -> validateFits(file, width, height)
+            else -> validatePng(file, width, height)
         }
     }.getOrDefault(false)
 
@@ -728,6 +724,9 @@ class SolarScanRepository(
                     if (leg.sourceMissing) put("sourceMissing", true)
                     put("failure", leg.failure)
                     leg.analysis?.let { put("analysis", analysisJson(it)) }
+                    leg.lineSeed?.let { seed ->
+                        put("lineSeed", JSONObject().put("column", seed.column).put("row", seed.row))
+                    }
                     leg.reconstructionSettings?.let {
                         put("reconstructionSettings", reconstructionSettingsJson(it))
                     }
@@ -749,6 +748,9 @@ class SolarScanRepository(
                             put("displayPng", summary.displayPng)
                             put("linearPng", summary.linearPng)
                             put("linearFits", summary.linearFits)
+                            if (summary.extraProducts.isNotEmpty()) put("extraProducts", JSONObject().apply {
+                                summary.extraProducts.forEach { (product, path) -> put(product.name, path) }
+                            })
                             put("width", summary.width)
                             put("height", summary.height)
                             put("frameStride", summary.frameStride)
@@ -801,7 +803,10 @@ class SolarScanRepository(
                     reconstruction = leg.reconstruction?.copy(
                         displayPng = relocate(leg.reconstruction.displayPng),
                         linearPng = relocate(leg.reconstruction.linearPng),
-                        linearFits = relocate(leg.reconstruction.linearFits)
+                        linearFits = relocate(leg.reconstruction.linearFits),
+                        extraProducts = leg.reconstruction.extraProducts.mapNotNull { (product, path) ->
+                            relocate(path)?.let { product to it }
+                        }.toMap()
                     )
                 )
             },
@@ -856,7 +861,13 @@ class SolarScanRepository(
                                     maxIntervalMs = memory.optLong("maxIntervalMs", 0L)
                                 )
                             },
-                            completedAtUtc = value.getString("completedAtUtc")
+                            completedAtUtc = value.getString("completedAtUtc"),
+                            extraProducts = value.optJSONObject("extraProducts")?.let { paths ->
+                                paths.keys().asSequence().mapNotNull { name ->
+                                    val product = runCatching { SolarOutputProduct.valueOf(name) }.getOrNull()
+                                    product?.let { it to paths.getString(name) }
+                                }.toMap()
+                            }.orEmpty()
                         )
                     },
                     sourceDisposition = SolarSourceDispositionState.valueOf(leg.getString("sourceDisposition")),
@@ -876,6 +887,9 @@ class SolarScanRepository(
                         )
                     },
                     analysis = leg.optJSONObject("analysis")?.let(::parseAnalysis),
+                    lineSeed = leg.optJSONObject("lineSeed")?.let {
+                        SolarLineSeed(it.getInt("column"), it.getInt("row"))
+                    },
                     reconstructionSettings = leg.optJSONObject("reconstructionSettings")
                         ?.let(::parseReconstructionSettings)
                 )
@@ -908,6 +922,13 @@ class SolarScanRepository(
             put("flipVertical", settings.flipVertical)
             put("rotationDegrees", settings.rotationDegrees)
             put("frameStride", settings.frameStride)
+            put("correctDisk", settings.correctDisk)
+            put("invertProminences", settings.invertProminences)
+            put("prominenceStrength", settings.prominenceStrength)
+            put("wavelengthAngstrom", settings.wavelengthAngstrom)
+            put("dispersionAngstromPerPixel", settings.dispersionAngstromPerPixel)
+            put("wingOffsetPixels", settings.wingOffsetPixels)
+            settings.cropFactor?.let { put("cropFactor", it) }
             put("products", JSONArray(settings.products.map { it.name }))
             put("scanCorrection", JSONObject().apply {
                 put("bandingAxis", settings.scanCorrection.bandingAxis.name)
@@ -933,6 +954,13 @@ class SolarScanRepository(
             flipVertical = json.getBoolean("flipVertical"),
             rotationDegrees = json.getInt("rotationDegrees"),
             frameStride = json.getInt("frameStride"),
+            correctDisk = json.optBoolean("correctDisk", true),
+            invertProminences = json.optBoolean("invertProminences", false),
+            prominenceStrength = json.optInt("prominenceStrength", 100),
+            wavelengthAngstrom = json.optDouble("wavelengthAngstrom", 0.0),
+            dispersionAngstromPerPixel = json.optDouble("dispersionAngstromPerPixel", 0.0),
+            wingOffsetPixels = json.optDouble("wingOffsetPixels", 2.0),
+            cropFactor = json.optNullableDouble("cropFactor"),
             scanCorrection = scan?.let {
                 SolarScanCorrectionSettings(
                     bandingAxis = runCatching {

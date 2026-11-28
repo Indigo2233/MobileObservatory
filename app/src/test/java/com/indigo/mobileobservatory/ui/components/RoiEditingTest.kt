@@ -7,6 +7,14 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class RoiEditingTest {
+    @Test
+    fun spectralStripAlignmentPreservesBothEdges() {
+        val source = Roi(0, 0, 6422, 4386)
+        val limits = RoiEditingLimits(6422, 4386, 32, 8, 8, 8, 2, 2)
+        val strip = source.copy(y = 11, height = 16)
+        assertEquals(source.copy(y = 10, height = 24), RoiEditing.fitSpectralStrip(strip, source, limits))
+    }
+
     private val toupcamLimits = RoiEditingLimits(
         sensorWidth = 3840,
         sensorHeight = 2160,

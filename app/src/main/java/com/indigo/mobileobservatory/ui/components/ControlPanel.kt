@@ -151,7 +151,8 @@ fun ControlPanel(
     modifier: Modifier = Modifier,
     fillWidth: Boolean = false,
     captureSettingsOnly: Boolean = false,
-    roiBudgetControls: (@Composable () -> Unit)? = null
+    roiBudgetControls: (@Composable () -> Unit)? = null,
+    roiDraftControls: (@Composable () -> Unit)? = null
 ) {
     val exposureMin by exposureMinFlow.collectAsStateWithPageLifecycle()
     val exposureMax by exposureMaxFlow.collectAsStateWithPageLifecycle()
@@ -1016,6 +1017,7 @@ fun ControlPanel(
                 }
 
                 roiBudgetControls?.invoke()
+                roiDraftControls?.invoke()
                 var manualRoi by rememberSaveable { mutableStateOf(false) }
                 if (roiBudgetControls != null) TextButton(onClick = { manualRoi = !manualRoi }) {
                     Text(stringResource(R.string.stack_roi_manual))
@@ -1118,6 +1120,7 @@ fun ControlPanel(
                     }
                 }
 
+                }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1136,7 +1139,6 @@ fun ControlPanel(
                         Spacer(Modifier.width(6.dp))
                         Text(stringResource(R.string.roi_apply_current), fontSize = 11.sp)
                     }
-                }
                 }
             }
         }

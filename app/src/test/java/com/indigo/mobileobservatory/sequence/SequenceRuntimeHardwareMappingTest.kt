@@ -14,6 +14,112 @@ import org.junit.Test
 
 class SequenceRuntimeHardwareMappingTest {
     @Test
+    fun skipPreventsQueuedHomeFromSendingACommand() = runTest {
+        val finish = CompletableDeferred<Unit>()
+        var homeCalls = 0
+        val hardware = object : SequenceHardware by RecordingSequenceHardware() {
+            override suspend fun takeExposure(seconds: Double, gain: Int, offset: Int, destDir: File,
+                binning: Int, imageType: String): SessionFrame {
+                finish.await()
+                return SessionFrame("test.fits", null, seconds, null)
+            }
+
+            override suspend fun goHome() { homeCalls++ }
+        }
+        val directory = Files.createTempDirectory("sequence-skip-queue").toFile()
+        try {
+            val runtime = SequenceRuntime(directory, directory, this, hardware)
+            val capture = launch(start = CoroutineStart.UNDISPATCHED) {
+                runtime.execute(SequenceCatalog.create("TakeExposure"), "TakeExposure")
+            }
+            val home = launch(start = CoroutineStart.UNDISPATCHED) {
+                runtime.execute(SequenceCatalog.create("FindHome"), "FindHome")
+            }
+            runtime.pauseForMountStop()
+            finish.complete(Unit)
+            testScheduler.advanceUntilIdle()
+            runtime.skip()
+            capture.join()
+            home.join()
+            assertTrue(home.isCancelled)
+            assertEquals(0, homeCalls)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun exposureRechecksPauseAndGuideLockAfterSettling() = runTest {
+        val settled = CompletableDeferred<Unit>()
+        val recording = RecordingSequenceHardware()
+        var exposureCalls = 0
+        val hardware = object : SequenceHardware by recording {
+            override suspend fun awaitExposureReady() { settled.await() }
+
+            override suspend fun takeExposure(seconds: Double, gain: Int, offset: Int, destDir: File,
+                binning: Int, imageType: String): SessionFrame {
+                exposureCalls++
+                return SessionFrame("test.fits", null, seconds, null)
+            }
+        }
+        val directory = Files.createTempDirectory("sequence-dither-pause").toFile()
+        try {
+            val runtime = SequenceRuntime(directory, directory, this, hardware)
+            runtime.execute(SequenceCatalog.create("StartGuiding"), "StartGuiding")
+            val failure = CompletableDeferred<Throwable?>()
+            val capture = launch(start = CoroutineStart.UNDISPATCHED) {
+                failure.complete(runCatching {
+                    runtime.execute(SequenceCatalog.create("TakeExposure"), "TakeExposure")
+                }.exceptionOrNull())
+            }
+            runtime.pauseForMountStop()
+            recording.guideEnabled = false
+            settled.complete(Unit)
+            testScheduler.advanceUntilIdle()
+            assertTrue(!capture.isCompleted)
+            assertEquals(0, exposureCalls)
+            runtime.resume()
+            capture.join()
+            assertTrue(failure.await() is GuideLost)
+            assertEquals(0, exposureCalls)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun queuedOpticalCommandWaitsForResumeAfterMountStop() = runTest {
+        val finish = CompletableDeferred<Unit>()
+        val recording = RecordingSequenceHardware()
+        val hardware = object : SequenceHardware by recording {
+            override suspend fun takeExposure(seconds: Double, gain: Int, offset: Int, destDir: File,
+                binning: Int, imageType: String): SessionFrame {
+                finish.await()
+                return SessionFrame("test.fits", null, seconds, null)
+            }
+        }
+        val directory = Files.createTempDirectory("sequence-stop-queue").toFile()
+        try {
+            val runtime = SequenceRuntime(directory, directory, this, hardware)
+            val capture = launch(start = CoroutineStart.UNDISPATCHED) {
+                runtime.execute(SequenceCatalog.create("TakeExposure"), "TakeExposure")
+            }
+            val home = launch(start = CoroutineStart.UNDISPATCHED) {
+                runtime.execute(SequenceCatalog.create("FindHome"), "FindHome")
+            }
+            runtime.pauseForMountStop()
+            finish.complete(Unit)
+            testScheduler.advanceUntilIdle()
+            assertTrue(capture.isCompleted)
+            assertTrue(!home.isCompleted)
+            runtime.resume()
+            home.join()
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun parallelTrackingAndGuidingCommandsWaitForTheExposure() = runTest {
         val finish = CompletableDeferred<Unit>()
         val hardware = object : SequenceHardware by RecordingSequenceHardware() {

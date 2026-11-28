@@ -15,6 +15,7 @@ import com.indigo.mobileobservatory.recording.MediaLibrary
 import com.indigo.mobileobservatory.recording.VideoFileInfo
 import com.indigo.mobileobservatory.sequence.SequenceEphemeris
 import com.indigo.mobileobservatory.solar.SolarOutputProduct
+import com.indigo.mobileobservatory.solar.SolarLineSeed
 import com.indigo.mobileobservatory.solar.SolarBandingAxis
 import com.indigo.mobileobservatory.solar.SolarCorrectionReport
 import com.indigo.mobileobservatory.solar.SolarMemorySampleSummary
@@ -23,10 +24,7 @@ import com.indigo.mobileobservatory.solar.SolarScanConfiguration
 import com.indigo.mobileobservatory.solar.SolarScanDirection
 import com.indigo.mobileobservatory.solar.SolarScanLegRecord
 import com.indigo.mobileobservatory.solar.SolarScanPhase
-import com.indigo.mobileobservatory.solar.SolarScanPreflight
-import com.indigo.mobileobservatory.solar.SolarScanPreflightEvaluator
 import com.indigo.mobileobservatory.solar.SolarScanRepository
-import com.indigo.mobileobservatory.solar.SolarScanSimulator
 import com.indigo.mobileobservatory.solar.SolarScanTaskRecord
 import com.indigo.mobileobservatory.solar.SolarScanNative
 import com.indigo.mobileobservatory.solar.SolarSourceDispositionState
@@ -37,18 +35,13 @@ import com.indigo.mobileobservatory.solar.SolarReconstructionSummary
 import com.indigo.mobileobservatory.solar.SolarNativeObserver
 import com.indigo.mobileobservatory.solar.NativeSolarAnalysis
 import com.indigo.mobileobservatory.solar.NativeSolarPreview
-import com.indigo.mobileobservatory.solar.legPlans
 import com.indigo.mobileobservatory.solar.SolarRoi
 import com.indigo.mobileobservatory.solar.SolarPoint
 import com.indigo.mobileobservatory.solar.SOLAR_REPEAT_SWEEP_COUNTS
 import com.indigo.mobileobservatory.solar.reverseSolar
 import com.indigo.mobileobservatory.util.FileLogger
 import java.io.File
-import java.nio.file.AtomicMoveNotSupportedException
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
 import java.time.Instant
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.cos
 import kotlin.math.roundToInt
@@ -73,9 +66,9 @@ data class SolarScanUiState(
     val sourceWidth: Int = 0,
     val sourceHeight: Int = 0,
     val analysis: SolarSpectrumAnalysis? = null,
+    val lineSeed: SolarLineSeed? = null,
     val configuration: SolarScanConfiguration,
     val reconstructionSettings: SolarReconstructionSettings = SolarReconstructionSettings(),
-    val preflight: SolarScanPreflight,
     val runs: List<SolarScanTaskRecord> = emptyList(),
     val busy: Boolean = false,
     val progress: Float = 0f,
@@ -87,47 +80,8 @@ data class SolarScanUiState(
     val hardwareActive: Boolean = false,
     val trialMoving: Boolean = false,
     val message: String? = null,
-    val lastResultDirectory: File? = null
+    val lastReconstruction: SolarScanTaskRecord? = null
 )
-
-internal fun incompleteSimulationSourcesToDelete(
-    createdSources: Collection<File>,
-    sealedSources: Collection<File>
-): List<File> = createdSources.filter { it.exists() && it !in sealedSources }
-
-internal fun publishSealedSimulationSource(
-    partial: File,
-    destination: File,
-    readIdentity: (File, String) -> SolarSourceIdentity = { file, name -> SolarSourceIdentity.of(file, name) }
-): SolarSourceIdentity {
-    require(partial.isFile) { "Simulation source was not finalized." }
-    require(!destination.exists()) { "Simulation source already exists." }
-    check(destination.parentFile?.isDirectory == true || destination.parentFile?.mkdirs() == true)
-    val identity = try {
-        readIdentity(partial, destination.name)
-    } catch (failure: Exception) {
-        try {
-            moveSealedSimulationSource(partial, destination)
-        } catch (publishFailure: Exception) {
-            failure.addSuppressed(publishFailure)
-        }
-        throw failure
-    }
-    moveSealedSimulationSource(partial, destination)
-    return identity
-}
-
-private fun moveSealedSimulationSource(partial: File, destination: File) {
-    try {
-        Files.move(
-            partial.toPath(),
-            destination.toPath(),
-            StandardCopyOption.ATOMIC_MOVE
-        )
-    } catch (_: AtomicMoveNotSupportedException) {
-        Files.move(partial.toPath(), destination.toPath())
-    }
-}
 
 internal fun isCurrentSolarPreview(
     selected: File?,
@@ -184,7 +138,6 @@ class SolarScanViewModel(application: Application) : AndroidViewModel(applicatio
         SolarScanUiState(
             configuration = preparedConfiguration,
             reconstructionSettings = initialReconstruction,
-            preflight = preflight(preparedConfiguration),
             message = if (repository == null) application.getString(
                 R.string.solar_scan_message_storage_unavailable
             ) else null
@@ -192,9 +145,6 @@ class SolarScanViewModel(application: Application) : AndroidViewModel(applicatio
     )
     val state: StateFlow<SolarScanUiState> = _state.asStateFlow()
     private var operation: Job? = null
-    @Volatile private var recoveryTaskId: String? = null
-    private val simulationStopRequested = AtomicBoolean()
-    private val sourceDispositionCommit = Any()
     private var previewOperation: Job? = null
     private val previewGeneration = AtomicLong()
     private var trialFinish: CompletableDeferred<Unit>? = null
@@ -236,12 +186,15 @@ class SolarScanViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     internal fun startReciprocating(camera: CameraViewModel, count: Int) {
+        val current = _state.value
+        if (current.busy || operation?.isCompleted == false) return
+        if (!checkReconstructionSettings(current.reconstructionSettings)) return
         val setup = calibratedSetup ?: return
         val pair = _trials.value
         if (count !in SOLAR_REPEAT_SWEEP_COUNTS || pair.size != 2 || !pair[0].motion.pairsWith(pair[1].motion)) return
         val repository = repository ?: return
-        val settings = _state.value.reconstructionSettings
-        val baseConfiguration = _state.value.configuration
+        val settings = current.reconstructionSettings
+        val baseConfiguration = current.configuration
         launchHardware(count) { observer ->
             val key = camera.solarCaptureKey()
             val captures = mutableListOf<SolarCapturedSweep>()
@@ -310,7 +263,6 @@ class SolarScanViewModel(application: Application) : AndroidViewModel(applicatio
                                     _state.update { it.copy(progress = (index + value) / count) }
                                 }
                             })
-                        validateProducts(output, settings.products)
                         SolarScanLegRecord(number, direction, identity, sweep.coverage.frames, 0,
                             native.toDomain(sweep.file, legSettings, memoryTrace.summary()),
                             SolarSourceDispositionState.KEPT, analysis = sweep.analysis, reconstructionSettings = legSettings)
@@ -336,13 +288,12 @@ class SolarScanViewModel(application: Application) : AndroidViewModel(applicatio
                         diskCrossingMs = sweep.timing.diskCrossingMs,
                         frameRate = sweep.timing.framesPerSecond
                     )
-                    val record = repository.commit(staging, taskId, SolarScanTaskRecord(
+                    repository.commit(staging, taskId, SolarScanTaskRecord(
                         taskId, sweep.startedAt.toString(), Instant.now().toString(),
                         app.getString(R.string.solar_hardware_leg_result, number, count), legConfig, sweep.analysis, settings,
                         listOf(leg), SolarSourcePolicy.KEEP, leg.reconstruction?.warnings.orEmpty(),
                         staging, batchId = batchId
                     ))
-                    _state.update { it.copy(lastResultDirectory = record.resultDirectory) }
                 } finally {
                     staging.deleteRecursively()
                 }
@@ -362,10 +313,9 @@ class SolarScanViewModel(application: Application) : AndroidViewModel(applicatio
     @OptIn(ExperimentalCoroutinesApi::class)
     private fun launchHardware(count: Int, run: suspend (SolarNativeObserver) -> String) {
         if (_state.value.busy || operation?.isCompleted == false || repository == null) return
-        recoveryTaskId = null
         _state.update { it.copy(busy = true, hardwareActive = true, message = null, progress = 0f,
             phase = SolarScanPhase.RECORDING, currentLeg = 1, totalLegs = count, completedLegs = 0,
-            currentDirection = null, lastResultDirectory = null) }
+            currentDirection = null) }
         operation = viewModelScope.launch(Dispatchers.IO, start = CoroutineStart.ATOMIC) {
             val job = checkNotNull(coroutineContext[Job])
             val app = getApplication<Application>()
@@ -400,7 +350,7 @@ class SolarScanViewModel(application: Application) : AndroidViewModel(applicatio
                 storageMounted = {
                     Environment.getExternalStorageState(checkNotNull(capturesDir)) == Environment.MEDIA_MOUNTED
                 },
-                activeTaskId = { recoveryTaskId }
+                activeTaskId = { null }
             )
             repository.reconcilePendingDispositions()
             refreshInternal()
@@ -434,6 +384,8 @@ class SolarScanViewModel(application: Application) : AndroidViewModel(applicatio
                 sourceWidth = 0,
                 sourceHeight = 0,
                 analysis = null,
+                lineSeed = null,
+                lastReconstruction = null,
                 message = null
             )
         }
@@ -492,10 +444,9 @@ class SolarScanViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    fun analyzeSelected() {
+    fun analyzeSelected(seed: SolarLineSeed? = null) {
         val file = _state.value.selectedFile ?: return
         if (_state.value.busy || operation?.isCompleted == false) return
-        recoveryTaskId = null
         _state.update {
             it.copy(
                 busy = true,
@@ -514,11 +465,13 @@ class SolarScanViewModel(application: Application) : AndroidViewModel(applicatio
                     file,
                     operationObserver(operationJob) { value ->
                         _state.update { it.copy(progress = value) }
-                    }
+                    },
+                    seed
                 ).toDomain()
                 _state.update {
                     it.copy(
                         analysis = analysis,
+                        lineSeed = seed,
                         busy = false,
                         progress = 1f,
                         phase = SolarScanPhase.IDLE,
@@ -568,17 +521,8 @@ class SolarScanViewModel(application: Application) : AndroidViewModel(applicatio
     fun reconstructSelected() {
         val current = _state.value
         val file = current.selectedFile ?: return
-        val analysis = current.analysis ?: run {
-            _state.update {
-                it.copy(
-                    message = getApplication<Application>().getString(
-                        R.string.solar_scan_message_analysis_required
-                    )
-                )
-            }
-            return
-        }
         if (current.busy || operation?.isCompleted == false) return
+        if (!checkReconstructionSettings(current.reconstructionSettings)) return
         val repository = repository ?: run {
             _state.update {
                 it.copy(
@@ -589,12 +533,12 @@ class SolarScanViewModel(application: Application) : AndroidViewModel(applicatio
             }
             return
         }
-        recoveryTaskId = null
         _state.update {
             it.copy(
                 busy = true,
                 progress = 0f,
                 phase = SolarScanPhase.RECONSTRUCTING,
+                lastReconstruction = null,
                 currentLeg = 0,
                 totalLegs = 0,
                 currentDirection = null,
@@ -605,9 +549,14 @@ class SolarScanViewModel(application: Application) : AndroidViewModel(applicatio
             val operationJob = checkNotNull(coroutineContext[Job])
             val taskId = repository.newTaskId()
             var staging: File? = null
+            var sourceLease: AutoCloseable? = null
             try {
                 startupMaintenance.join()
+                sourceLease = MediaUsageRegistry.acquire(file, waitForExclusive = false)
                 val identity = SolarSourceIdentity.of(file)
+                val analysis = current.analysis ?: SolarScanNative.analyze(
+                    file, operationObserver(operationJob) { }, current.lineSeed
+                ).toDomain()
                 reconstructionSettingsSession.markUsed(current.reconstructionSettings)
                 staging = repository.createStaging(taskId)
                 val output = File(staging, "products").apply { mkdirs() }
@@ -621,21 +570,23 @@ class SolarScanViewModel(application: Application) : AndroidViewModel(applicatio
                     observer = operationObserver(operationJob) { value ->
                         memoryTrace.sampleFromProgress()
                         _state.update { it.copy(progress = value) }
-                    }
+                    },
+                    seed = current.lineSeed
                 )
                 val summary = native.toDomain(
                     file,
                     current.reconstructionSettings,
                     memoryTrace.summary()
                 )
-                validateProducts(output, current.reconstructionSettings.products)
                 ensureActive(operationJob, "Solar reconstruction cancelled.")
                 val record = SolarScanTaskRecord(
                     id = taskId,
                     createdAtUtc = Instant.now().toString(),
                     completedAtUtc = Instant.now().toString(),
                     title = file.nameWithoutExtension,
-                    configuration = current.configuration.copy(roi = analysis.suggestedRoi),
+                    configuration = current.configuration.copy(
+                        roi = SolarRoi(width = analysis.trace.width, height = current.sourceHeight.coerceAtLeast(analysis.suggestedRoi.bottom))
+                    ),
                     analysis = analysis,
                     reconstructionSettings = current.reconstructionSettings,
                     legs = listOf(
@@ -648,7 +599,8 @@ class SolarScanViewModel(application: Application) : AndroidViewModel(applicatio
                             reconstruction = summary,
                             sourceDisposition = SolarSourceDispositionState.KEPT,
                             analysis = analysis,
-                            reconstructionSettings = current.reconstructionSettings
+                            reconstructionSettings = current.reconstructionSettings,
+                            lineSeed = current.lineSeed
                         )
                     ),
                     sourcePolicy = SolarSourcePolicy.KEEP,
@@ -662,12 +614,13 @@ class SolarScanViewModel(application: Application) : AndroidViewModel(applicatio
                 _state.update {
                     it.copy(
                         busy = false,
+                        analysis = analysis,
                         progress = 1f,
                         phase = SolarScanPhase.COMPLETED,
                         message = getApplication<Application>().getString(
                             R.string.solar_scan_message_saved
                         ),
-                        lastResultDirectory = committed.resultDirectory
+                        lastReconstruction = committed.record
                     )
                 }
             } catch (cancelled: CancellationException) {
@@ -707,401 +660,30 @@ class SolarScanViewModel(application: Application) : AndroidViewModel(applicatio
                     )
                 }
             } finally {
+                sourceLease?.close()
                 staging?.deleteRecursively()
             }
         }
     }
 
-    @OptIn(ExperimentalCoroutinesApi::class)
-    fun runSimulation() {
-        val current = _state.value
-        if (current.busy || operation?.isCompleted == false) return
-        val repository = repository ?: run {
-            _state.update {
-                it.copy(
-                    message = getApplication<Application>().getString(
-                        R.string.solar_scan_message_storage_unavailable
-                    )
-                )
-            }
-            return
-        }
-        val configuration = current.configuration.copy(
-            roi = com.indigo.mobileobservatory.solar.SolarRoi(
-                width = current.configuration.roi.width.coerceIn(32, 512),
-                height = current.configuration.roi.height.coerceIn(12, 96)
-            ),
-            pixelBytes = 2,
-            legCount = current.configuration.legCount.coerceAtLeast(2)
-        )
-        val report = preflight(configuration)
-        saveConfiguration(configuration)
-        _state.update { it.copy(configuration = configuration, preflight = report) }
-        if (!report.canStart) {
-            _state.update {
-                it.copy(
-                    message = getApplication<Application>().getString(
-                        R.string.solar_scan_message_preflight
-                    )
-                )
-            }
-            return
-        }
-        val taskId = repository.newTaskId()
-        val permitTaskId = taskId.takeIf { configuration.sourcePolicy != SolarSourcePolicy.KEEP }
-        recoveryTaskId = permitTaskId
-        if (permitTaskId != null) {
-            try {
-                repository.authorizeDispositionRecovery(permitTaskId)
-            } catch (failure: Exception) {
-                recoveryTaskId = null
-                _state.update {
-                    it.copy(
-                        phase = SolarScanPhase.FAILED,
-                        message = getApplication<Application>().getString(
-                            R.string.solar_scan_message_simulation_failed,
-                            failure.message.orEmpty()
-                        )
-                    )
-                }
-                return
-            }
-        }
-        simulationStopRequested.set(false)
-        _state.update {
-            it.copy(
-                busy = true,
-                progress = 0f,
-                phase = SolarScanPhase.PREFLIGHT,
-                currentLeg = 0,
-                totalLegs = configuration.legCountToRun(),
-                currentDirection = null,
-                completedLegs = 0,
-                message = null
-            )
-        }
-        // Even an immediate STOP must reach the cancellation handler and clear busy.
-        operation = viewModelScope.launch(Dispatchers.IO, start = CoroutineStart.ATOMIC) {
-            val operationJob = checkNotNull(coroutineContext[Job])
-            var staging: File? = null
-            val createdSources = mutableListOf<File>()
-            val sealedSources = mutableSetOf<File>()
-            var publishedResult: File? = null
-            var finalRecord: SolarScanTaskRecord? = null
-            var recoveryClosed = false
-            val stopRequested = { simulationStopRequested.get() }
-            val checkDispositionActive = {
-                ensureActive(operationJob, "Solar simulation cancelled.")
-                if (simulationStopRequested.get() || _state.value.phase == SolarScanPhase.STOPPING) {
-                    throw CancellationException("Solar simulation cancelled.")
-                }
-            }
-            try {
-                startupMaintenance.join()
-                checkDispositionActive()
-                reconstructionSettingsSession.markUsed(current.reconstructionSettings)
-                staging = repository.createStaging(taskId)
-                val products = File(staging, "products").apply { mkdirs() }
-                val plans = configuration.legPlans()
-                val legs = mutableListOf<SolarScanLegRecord>()
-                var analyzed: SolarSpectrumAnalysis? = null
-                for ((index, plan) in plans.withIndex()) {
-                    checkDispositionActive()
-                    val source = File(
-                        File(checkNotNull(recordingsDir), "SER"),
-                        "$taskId-${plan.outputName}.ser"
-                    )
-                    source.parentFile?.mkdirs()
-                    val partialSource = File(source.parentFile, ".${source.name}.partial")
-                    createdSources += partialSource
-                    _state.update {
-                        it.copy(
-                            phase = SolarScanPhase.RECORDING,
-                            currentLeg = plan.number,
-                            totalLegs = plans.size,
-                            currentDirection = plan.direction
-                        )
-                    }
-                    val simulation = SolarScanSimulator.generate(
-                        destination = partialSource,
-                        configuration = configuration,
-                        direction = plan.direction,
-                        seed = 0x534F4C4152L + index,
-                        cancelCheck = checkDispositionActive
-                    )
-                    sealedSources += partialSource
-                    val sealedSource = repository.markSimulationSourceComplete(partialSource)
-                    val sourceIdentity = publishSealedSimulationSource(sealedSource, source)
-                    val analysis = SolarScanNative.analyze(
-                        source,
-                        operationObserver(operationJob, stopRequested) { value ->
-                            _state.update {
-                                it.copy(progress = (index + value * 0.2f) / plans.size)
-                            }
-                        }
-                    ).toDomain()
-                    if (analyzed == null) analyzed = analysis
-                    _state.update { it.copy(phase = SolarScanPhase.RECONSTRUCTING) }
-                    val legOutput = File(products, plan.outputName).apply { mkdirs() }
-                    val legSettings = current.reconstructionSettings.copy(
-                        flipVertical = current.reconstructionSettings.flipVertical xor
-                            plan.direction.flipVertical
-                    )
-                    val memoryTrace = ReconstructionMemoryTrace(::readSystemMemoryHeadroom)
-                    val native = SolarScanNative.reconstruct(
-                        source = source,
-                        outputDirectory = legOutput,
-                        settings = legSettings,
-                        memoryHeadroomBytes = memoryTrace.nativeHeadroomBytes(),
-                        chinese = useChineseWarnings(),
-                        observer = operationObserver(operationJob, stopRequested) { value ->
-                            memoryTrace.sampleFromProgress()
-                            _state.update {
-                                it.copy(progress = (index + 0.2f + value * 0.8f) / plans.size)
-                            }
-                        }
-                    )
-                    val summary = native.toDomain(
-                        source,
-                        legSettings,
-                        memoryTrace.summary()
-                    )
-                    validateProducts(legOutput, current.reconstructionSettings.products)
-                    legs += SolarScanLegRecord(
-                        number = plan.number,
-                        direction = plan.direction,
-                        source = sourceIdentity,
-                        recordingFrames = simulation.frames,
-                        droppedFrames = 0,
-                        reconstruction = summary,
-                        sourceDisposition = SolarSourceDispositionState.KEPT,
-                        coverage = simulation.coverage,
-                        analysis = analysis,
-                        reconstructionSettings = legSettings
-                    )
-                    _state.update { it.copy(completedLegs = legs.size) }
-                }
-                ensureActive(operationJob, "Solar simulation cancelled.")
-                File(staging, "coverage.txt").writeText(
-                    buildString {
-                        appendLine("solar-scan simulation coverage")
-                        appendLine("task=${taskId}")
-                        for (leg in legs) {
-                            val coverage = leg.coverage ?: continue
-                            appendLine(
-                                "leg=${leg.number} direction=${leg.direction.name} " +
-                                    "frames=${leg.recordingFrames} " +
-                                    "firstContact=${"%.5f".format(coverage.firstContactFraction)} " +
-                                    "lastContact=${"%.5f".format(coverage.lastContactFraction)} " +
-                                    "startBlankArcsec=${"%.2f".format(coverage.startBlankArcsec)} " +
-                                    "endBlankArcsec=${"%.2f".format(coverage.endBlankArcsec)} " +
-                                    "stableCoverage=${"%.5f".format(coverage.stableCoverageFraction)} " +
-                                    "accelerationOverlap=${coverage.accelerationOverlapsDisk} " +
-                                    "decelerationOverlap=${coverage.decelerationOverlapsDisk}"
-                            )
-                        }
-                    },
-                    Charsets.UTF_8
-                )
-                val record = SolarScanTaskRecord(
-                    id = taskId,
-                    createdAtUtc = Instant.now().toString(),
-                    completedAtUtc = Instant.now().toString(),
-                    title = "太阳线扫仿真",
-                    configuration = configuration,
-                    analysis = analyzed,
-                    reconstructionSettings = current.reconstructionSettings,
-                    legs = legs,
-                    sourcePolicy = configuration.sourcePolicy,
-                    warnings = buildList {
-                        if (configuration.sourcePolicy != SolarSourcePolicy.KEEP) {
-                            add(
-                                getApplication<Application>().getString(
-                                    R.string.solar_scan_warning_source_disposed
-                                )
-                            )
-                        }
-                    },
-                    resultDirectory = staging
-                )
-                checkDispositionActive()
-                _state.update { it.copy(phase = SolarScanPhase.COMMITTING) }
-                val committed = repository.commit(staging, taskId, record)
-                staging = null
-                publishedResult = committed.resultDirectory
-                val committedRecord = committed.record
-                finalRecord = repository.disposeCommittedSources(
-                    committedRecord,
-                    dispositionWarnings = ::sourceDispositionWarnings,
-                    onRecoveryClosed = { recoveryClosed = true },
-                    commitDisposition = { mutate ->
-                        synchronized(sourceDispositionCommit) {
-                            checkDispositionActive()
-                        }
-                        // Admission above is the commit point. Only admitted mutations may finish after STOP.
-                        mutate()
-                    },
-                    checkActive = checkDispositionActive
-                )
-                refreshInternal()
-
-                while (true) {
-                    val before = _state.value
-                    checkDispositionActive()
-                    val completed = before.copy(
-                        busy = false,
-                        progress = 1f,
-                        phase = SolarScanPhase.COMPLETED,
-                        currentLeg = plans.size,
-                        completedLegs = plans.size,
-                        message = getApplication<Application>().getString(
-                            R.string.solar_scan_message_simulation_complete
-                        ),
-                        lastResultDirectory = committed.resultDirectory
-                    )
-                    if (_state.compareAndSet(before, completed)) break
-                }
-            } catch (cancelled: CancellationException) {
-                val saveFailure = finalRecord?.let { record ->
-                    runCatching {
-                        repository.keepPendingSourcesAfterStop(
-                            record,
-                            onRecoveryClosed = { recoveryClosed = true }
-                        )
-                    }.exceptionOrNull()
-                }
-                if (saveFailure != null) {
-                    FileLogger.e("SolarScan", "Could not save source retention after STOP", saveFailure)
-                }
-                if (publishedResult != null) {
-                    runCatching { refreshInternal() }.onFailure { error ->
-                        FileLogger.e("SolarScan", "Could not refresh cancelled simulation results", error)
-                    }
-                }
-                _state.update {
-                    it.copy(
-                        busy = false,
-                        progress = 0f,
-                        phase = if (saveFailure == null) SolarScanPhase.CANCELLED else SolarScanPhase.FAILED,
-                        lastResultDirectory = publishedResult ?: it.lastResultDirectory,
-                        message = if (saveFailure == null) getApplication<Application>().getString(
-                            R.string.solar_scan_message_simulation_cancelled
-                        ) else getApplication<Application>().getString(
-                            if (recoveryClosed) R.string.solar_scan_message_stop_save_failed
-                            else R.string.solar_scan_message_stop_retention_unconfirmed,
-                            saveFailure.message.orEmpty()
-                        )
-                    )
-                }
-            } catch (error: Throwable) {
-                val failedRecoveryRevocation = if (publishedResult == null && permitTaskId != null) {
-                    runCatching { repository.revokeRecoveryPermit(permitTaskId) }.exceptionOrNull()
-                } else null
-                if (failedRecoveryRevocation != null) {
-                    FileLogger.e("SolarScan", "Could not revoke recovery for unpublished results", failedRecoveryRevocation)
-                }
-                if (publishedResult != null || sealedSources.isNotEmpty()) {
-                    runCatching { refreshInternal() }.onFailure { refreshFailure ->
-                        FileLogger.e("SolarScan", "Could not refresh failed simulation results", refreshFailure)
-                    }
-                }
-                if ((!operationJob.isActive || simulationStopRequested.get()) && publishedResult == null &&
-                    failedRecoveryRevocation == null
-                ) {
-                    _state.update {
-                        it.copy(
-                            busy = false,
-                            progress = 0f,
-                            phase = SolarScanPhase.CANCELLED,
-                            message = getApplication<Application>().getString(
-                                R.string.solar_scan_message_simulation_cancelled
-                            )
-                        )
-                    }
-                    return@launch
-                }
-                _state.update {
-                    it.copy(
-                        busy = false,
-                        progress = 0f,
-                        phase = SolarScanPhase.FAILED,
-                        lastResultDirectory = publishedResult ?: it.lastResultDirectory,
-                        message = getApplication<Application>().getString(
-                            when {
-                                operationJob.isActive && !simulationStopRequested.get() ->
-                                    R.string.solar_scan_message_simulation_failed
-                                recoveryClosed -> R.string.solar_scan_message_stop_save_failed
-                                else -> R.string.solar_scan_message_stop_retention_unconfirmed
-                            },
-                            error.message.orEmpty()
-                        )
-                    )
-                }
-            } finally {
-                if (publishedResult == null && permitTaskId != null) {
-                    runCatching { repository.revokeRecoveryPermit(permitTaskId) }.onFailure {
-                        FileLogger.e("SolarScan", "Could not remove unused source recovery permit", it)
-                    }
-                }
-                staging?.deleteRecursively()
-                incompleteSimulationSourcesToDelete(createdSources, sealedSources)
-                    .forEach(File::delete)
-            }
-        }
+    private fun checkReconstructionSettings(settings: SolarReconstructionSettings): Boolean {
+        if (settings.hasRequiredDispersion) return true
+        val message = getApplication<Application>().getString(R.string.solar_reconstruct_doppler_hint)
+        _state.update { it.copy(message = message) }
+        return false
     }
 
     fun cancel() {
         val running = operation ?: return
         if (!_state.value.busy || running.isCompleted) return
-        synchronized(sourceDispositionCommit) {
-            simulationStopRequested.set(true)
-        }
         _state.update {
             if (it.busy && running.isActive) it.copy(phase = SolarScanPhase.STOPPING) else it
-        }
-        // Revoke on the caller thread: the worker can be blocked in native code or file IO.
-        recoveryTaskId?.let { taskId ->
-            val repository = checkNotNull(repository)
-            runCatching { repository.revokeRecoveryPermit(taskId) }.onFailure { failure ->
-                FileLogger.e("SolarScan", "Could not revoke source recovery at STOP", failure)
-                val message = getApplication<Application>().getString(
-                    R.string.solar_scan_message_stop_retention_unconfirmed,
-                    failure.message.orEmpty()
-                )
-                _state.update {
-                    if (it.phase == SolarScanPhase.STOPPING) it.copy(message = message) else it
-                }
-            }
         }
         running.cancel(CancellationException("User cancelled solar scan"))
     }
 
     internal fun cancelHardware() {
         if (_state.value.hardwareActive) cancel()
-    }
-
-    private fun sourceDispositionWarnings(legs: List<SolarScanLegRecord>): List<String> = buildList {
-        val application = getApplication<Application>()
-        if (legs.any { it.sourceDisposition == SolarSourceDispositionState.FAILED }) {
-            add(application.getString(R.string.solar_scan_warning_source_disposition_failed))
-        }
-        if (legs.any { leg ->
-                leg.coverage?.let { it.accelerationOverlapsDisk || it.decelerationOverlapsDisk } == true
-            }
-        ) {
-            add(application.getString(R.string.solar_scan_warning_coverage))
-        }
-    }
-
-    fun updateConfiguration(transform: (SolarScanConfiguration) -> SolarScanConfiguration) {
-        _state.update { current ->
-            val next = transform(current.configuration)
-            saveConfiguration(next)
-            current.copy(
-                configuration = next,
-                preflight = preflight(next)
-            )
-        }
     }
 
     fun updateReconstruction(transform: (SolarReconstructionSettings) -> SolarReconstructionSettings) {
@@ -1112,7 +694,6 @@ class SolarScanViewModel(application: Application) : AndroidViewModel(applicatio
             it.copy(
                 reconstructionSettings = next,
                 configuration = configuration,
-                preflight = preflight(configuration)
             )
         }
     }
@@ -1130,17 +711,6 @@ class SolarScanViewModel(application: Application) : AndroidViewModel(applicatio
         val runs = repository?.listTasks().orEmpty()
         _state.update { it.copy(files = files, runs = runs) }
     }
-
-    private fun preflight(configuration: SolarScanConfiguration): SolarScanPreflight =
-        SolarScanPreflightEvaluator.evaluate(
-            configuration = configuration,
-            availableBytes = minOf(
-                recordingsDir?.usableSpace ?: 0L,
-                capturesDir?.usableSpace ?: 0L
-            ),
-            calibratedForCurrentMount = false,
-            supportedPixelBytes = setOf(1, 2)
-        )
 
     private fun defaultConfiguration(): SolarScanConfiguration {
         val now = Instant.now()
@@ -1190,6 +760,13 @@ class SolarScanViewModel(application: Application) : AndroidViewModel(applicatio
             .putBoolean("flip_vertical", settings.flipVertical)
             .putInt("rotation", settings.rotationDegrees)
             .putInt("frame_stride", settings.frameStride)
+            .putBoolean("correct_disk", settings.correctDisk)
+            .putBoolean("invert_prominences", settings.invertProminences)
+            .putInt("prominence_strength", settings.prominenceStrength)
+            .putString("wavelength_angstrom", settings.wavelengthAngstrom.toString())
+            .putString("dispersion_angstrom_per_pixel", settings.dispersionAngstromPerPixel.toString())
+            .putString("wing_offset_pixels", settings.wingOffsetPixels.toString())
+            .putString("crop_factor", settings.cropFactor?.toString())
             .putString("scan_banding", settings.scanCorrection.bandingAxis.name)
             .putInt("scan_banding_width", settings.scanCorrection.bandingWidthPixels ?: 0)
             .putBoolean("scan_align_rows", settings.scanCorrection.alignScanRows)
@@ -1251,6 +828,13 @@ class SolarScanViewModel(application: Application) : AndroidViewModel(applicatio
             flipVertical = preferences.getBoolean("flip_vertical", false),
             rotationDegrees = preferences.getInt("rotation", 0),
             frameStride = preferences.getInt("frame_stride", 1),
+            correctDisk = preferences.getBoolean("correct_disk", true),
+            invertProminences = preferences.getBoolean("invert_prominences", false),
+            prominenceStrength = preferences.getInt("prominence_strength", 100),
+            wavelengthAngstrom = preferences.getString("wavelength_angstrom", null)?.toDoubleOrNull() ?: 0.0,
+            dispersionAngstromPerPixel = preferences.getString("dispersion_angstrom_per_pixel", null)?.toDoubleOrNull() ?: 0.0,
+            wingOffsetPixels = preferences.getString("wing_offset_pixels", null)?.toDoubleOrNull() ?: 2.0,
+            cropFactor = preferences.getString("crop_factor", null)?.toDoubleOrNull(),
             scanCorrection = com.indigo.mobileobservatory.solar.SolarScanCorrectionSettings(
                 bandingAxis = preferences.getString("scan_banding", null)
                     ?.let {
@@ -1325,22 +909,29 @@ class SolarScanViewModel(application: Application) : AndroidViewModel(applicatio
         settings: SolarReconstructionSettings,
         memory: SolarMemorySampleSummary
     ): SolarReconstructionSummary {
+        val extra = SolarOutputProduct.entries.filter { it.nativeMask >= 8 }
+            .zip(additionalPaths.asList()).mapNotNull { (product, path) -> path?.let { product to it } }.toMap()
         val paths = mapOf(
             SolarOutputProduct.DISPLAY_PNG to displayPng,
             SolarOutputProduct.LINEAR_PNG to linearPng,
             SolarOutputProduct.LINEAR_FITS to linearFits
-        )
+        ) + extra
+        val missing = settings.products - paths.filterValues { path ->
+            path != null && File(path).let { it.isFile && it.length() > 0 }
+        }.keys
+        check(missing.isEmpty()) {
+            getApplication<Application>().getString(R.string.solar_scan_missing_products, missing.joinToString()) +
+                warnings.joinToString(separator = "\n", prefix = "\n")
+        }
         val integrity = settings.products.associateWith { product ->
-            val path = checkNotNull(paths[product]) {
-                "Required solar result ${product.name} is missing."
-            }
-            com.indigo.mobileobservatory.solar.SolarProductIntegrity.of(File(path))
+            com.indigo.mobileobservatory.solar.SolarProductIntegrity.of(File(checkNotNull(paths[product])))
         }
         return SolarReconstructionSummary(
             source = source.name,
             displayPng = displayPng,
             linearPng = linearPng,
             linearFits = linearFits,
+            extraProducts = extra,
             width = width,
             height = height,
             frameStride = frameStride,
@@ -1424,25 +1015,4 @@ class SolarScanViewModel(application: Application) : AndroidViewModel(applicatio
         getApplication<Application>().resources.configuration.locales[0].language
             .startsWith("zh", ignoreCase = true)
 
-    private fun validateProducts(directory: File, products: Set<SolarOutputProduct>) {
-        val files = directory.listFiles().orEmpty().filter { it.isFile }
-        check(files.isNotEmpty() && files.all { it.length() > 0L }) {
-            "Solar result products were not finalized."
-        }
-        if (SolarOutputProduct.DISPLAY_PNG in products) {
-            check(files.any { it.name.endsWith("-display.png") && it.length() > 0L }) {
-                "The solar display PNG is missing."
-            }
-        }
-        if (SolarOutputProduct.LINEAR_PNG in products) {
-            check(files.any { it.name.endsWith("-linear.png") && it.length() > 0L }) {
-                "The solar linear PNG is missing."
-            }
-        }
-        if (SolarOutputProduct.LINEAR_FITS in products) {
-            check(files.any { it.extension.equals("fit", true) && it.length() > 0L }) {
-                "The solar linear FITS is missing."
-            }
-        }
-    }
 }

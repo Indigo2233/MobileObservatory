@@ -1004,7 +1004,7 @@ class MountModule(
                 operation(owner)
                 completion.complete(Unit)
             } catch (cancelled: CancellationException) {
-                completion.cancel(cancelled)
+                completion.cancel(MountMotionStopped())
                 throw cancelled
             } finally { _mountBusy.value = false }
         }
@@ -1016,7 +1016,7 @@ class MountModule(
                 val ownerWatcher = launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
                     motionState.first { it.ownerToken != owner }
                     if (!completion.isCompleted) {
-                        completion.cancel(CancellationException("Mount task was stopped"))
+                        completion.cancel(MountMotionStopped())
                     }
                 }
                 try {
@@ -1047,6 +1047,7 @@ class MountModule(
         decDeg: Double,
         maxIterations: Int = PrecisionGotoMath.MAX_ITERATIONS,
         toleranceArcmin: Double = PrecisionGotoMath.TOLERANCE_ARCMIN,
+        ownerToken: String? = null,
         captureAndSolve: suspend (hint: MountCoordinates?) -> MountCoordinates
     ): Boolean {
         if (!controller.isConnected) {
@@ -1058,11 +1059,14 @@ class MountModule(
             state = MountMotionState(
                 type = MountMotionType.GOTO,
                 label = "Precision GOTO $name",
-                holdStop = true
+                holdStop = true,
+                ownerToken = ownerToken
             ),
             onError = { error ->
                 val message = error.message ?: "Precision GOTO failed"
-                _mountConnectionState.value = MountConnectionState.Error(message)
+                if (ownerToken == null || !controller.isConnected) {
+                    _mountConnectionState.value = MountConnectionState.Error(message)
+                }
                 _mountMoveStatus.value = message
                 _statusMessage.value = message
                 _mountBusy.value = false
@@ -1209,6 +1213,13 @@ class MountModule(
             rejectPrecisionGoto(name, "Stop the current mount motion before precision GOTO")
         }
         return started
+    }
+
+    internal suspend fun stopOwnedPrecisionGoto(ownerToken: String) {
+        if (motionRunner.stop(ownerToken) && _precisionGotoProgress.value.isActive) {
+            _precisionGotoProgress.value = _precisionGotoProgress.value.copy(
+                phase = PrecisionGotoPhase.CANCELLED, message = "Pointing cancelled")
+        }
     }
 
     private fun publishPrecisionProgress(

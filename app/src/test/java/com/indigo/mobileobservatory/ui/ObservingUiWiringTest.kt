@@ -812,14 +812,12 @@ class ObservingUiWiringTest {
     @Test
     fun solarTasksWaitForStartupMaintenanceBeforeTouchingTaskFiles() {
         val viewModel = read("src/main/java/com/indigo/mobileobservatory/ui/viewmodel/SolarScanViewModel.kt")
-        for (entry in listOf("fun reconstructSelected()", "fun runSimulation()")) {
-            val operation = viewModel.substringAfter(entry).substringBefore("\n    fun ")
-            val wait = operation.indexOf("startupMaintenance.join()")
-            assertTrue(wait >= 0 && wait < operation.indexOf("repository.createStaging("))
-            if (entry.contains("reconstructSelected")) {
-                assertTrue(wait < operation.indexOf("SolarSourceIdentity.of("))
-            }
-        }
+        val manual = viewModel.substringAfter("fun reconstructSelected()").substringBefore("\n    fun ")
+        val manualWait = manual.indexOf("startupMaintenance.join()")
+        assertTrue(manualWait in 0 until manual.indexOf("SolarSourceIdentity.of("))
+        assertTrue(manualWait < manual.indexOf("repository.createStaging("))
+        val hardware = viewModel.substringAfter("private fun launchHardware(").substringBefore("\n    fun ")
+        assertTrue(hardware.indexOf("startupMaintenance.join()") in 0 until hardware.indexOf("run(operationObserver("))
     }
 
     private fun read(relative: String): String {

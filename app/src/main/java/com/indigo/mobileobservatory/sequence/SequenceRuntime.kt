@@ -7,6 +7,8 @@ import java.nio.file.StandardCopyOption
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -68,6 +70,8 @@ data class AutofocusRun(
 )
 
 interface SequenceHardware {
+    suspend fun awaitExposureReady() = Unit
+
     suspend fun takeExposure(
         seconds: Double,
         gain: Int,
@@ -428,6 +432,15 @@ class SequenceRuntime(
 
     fun pause() {
         control.pause()
+        publishPause()
+    }
+
+    internal fun pauseForMountStop() {
+        control.pauseForMountStop()
+        publishPause()
+    }
+
+    private fun publishPause() {
         if (_state.value.phase == SequencePhase.Running) {
             _state.value = _state.value.copy(phase = SequencePhase.Paused)
         }
@@ -443,20 +456,42 @@ class SequenceRuntime(
 
     override suspend fun execute(instruction: NinaNode, className: String) {
         // These instructions share the optical path and must not change it during a frame.
-        if (className in opticalInstructions) {
-            opticalPathMutex.withLock { executeHardware(instruction, className) }
-        } else executeHardware(instruction, className)
+        if (className !in opticalInstructions) {
+            awaitDispatch(instruction)
+            executeHardware(instruction, className)
+            return
+        }
+        while (true) {
+            control.checkpoint()
+            opticalPathMutex.withLock {
+                if (control.canDispatch(instruction)) {
+                    currentCoroutineContext().ensureActive()
+                    executeHardware(instruction, className)
+                    return
+                }
+            }
+        }
+    }
+
+    private suspend fun awaitDispatch(instruction: NinaNode) {
+        do {
+            control.checkpoint()
+        } while (!control.canDispatch(instruction))
+        currentCoroutineContext().ensureActive()
     }
 
     private suspend fun executeHardware(instruction: NinaNode, className: String) {
         val target = instructionCoordinates(instruction)
         when (className) {
             "TakeExposure" -> {
-                if (guidingWanted && !hardware.guidingLocked()) throw GuideLost()
                 val bin = (instruction.fields["Binning"] as? NinaValue.Obj)?.node
                 val x = bin?.intField("X") ?: 1
                 if (x < 1 || (bin?.intField("Y") ?: x) != x) throw DeviceUnavailable("Square binning required")
                 val dir = sessionDir ?: sessionsDir
+                if (guidingWanted && !hardware.guidingLocked()) throw GuideLost()
+                hardware.awaitExposureReady()
+                awaitDispatch(instruction)
+                if (guidingWanted && !hardware.guidingLocked()) throw GuideLost()
                 val frame = hardware.takeExposure(
                     seconds = expressionNumber(instruction, "ExposureTime") ?: 1.0,
                     gain = (expressionNumber(instruction, "Gain") ?: -1.0).toInt(),

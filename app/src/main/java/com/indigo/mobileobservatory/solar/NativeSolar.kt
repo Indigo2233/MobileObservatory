@@ -1,6 +1,7 @@
 package com.indigo.mobileobservatory.solar
 
 import java.io.File
+import com.indigo.mobileobservatory.camera.FrameData
 
 interface SolarNativeObserver {
     fun isCancelled(): Boolean
@@ -48,11 +49,34 @@ data class NativeSolarReconstruction(
     val oscillationPeriodPixels: Double,
     val oscillationAmplitudePixels: Double,
     val syntheticFlatStrength: Int,
-    val physicalFlatApplied: Boolean
+    val physicalFlatApplied: Boolean,
+    val additionalPaths: Array<String?>
 )
 
 internal object SolarScanNative {
     const val UNKNOWN_SYSTEM_MEMORY_HEADROOM = -1L
+    private const val MAX_SER_FRAME_PIXELS = 8 * 1024 * 1024
+
+    /** Reduce only the spatial axis to fit the MJSol'Ex SER reader's frame limit. */
+    fun spectralRoiInput(frame: FrameData): FrameData {
+        require(frame.pixelFormat.isMono && frame.width >= 32 && frame.height in 8..16_384)
+        val maxColumns = minOf(MAX_SER_FRAME_PIXELS / frame.height, 16_384)
+        if (frame.width <= maxColumns) return frame
+        val step = (frame.width - 1) / maxColumns + 1
+        val width = (frame.width - 1) / step + 1
+        val bytesPerPixel = frame.bytesPerPixel
+        val data = ByteArray(width * frame.height * bytesPerPixel)
+        for (row in 0 until frame.height) {
+            val sourceRow = row * frame.width * bytesPerPixel
+            val outputRow = row * width * bytesPerPixel
+            for (column in 0 until width) {
+                val source = sourceRow + column * step * bytesPerPixel
+                val output = outputRow + column * bytesPerPixel
+                frame.data.copyInto(data, output, source, source + bytesPerPixel)
+            }
+        }
+        return frame.copy(data = data, width = width)
+    }
 
     private val loaded: Boolean = runCatching {
         System.loadLibrary("solar_scan_jni")
@@ -66,9 +90,9 @@ internal object SolarScanNative {
         }
     }
 
-    fun analyze(source: File, observer: SolarNativeObserver): NativeSolarAnalysis {
+    fun analyze(source: File, observer: SolarNativeObserver, seed: SolarLineSeed? = null): NativeSolarAnalysis {
         check(loaded) { "Solar Rust library is unavailable." }
-        return checkNotNull(NativeSolarBridge.analyze(source.absolutePath, observer)) {
+        return checkNotNull(NativeSolarBridge.analyze(source.absolutePath, seed?.column ?: -1, seed?.row ?: -1, observer)) {
             "Solar Rust library returned no analysis."
         }
     }
@@ -86,16 +110,11 @@ internal object SolarScanNative {
         settings: SolarReconstructionSettings,
         memoryHeadroomBytes: Long,
         chinese: Boolean,
-        observer: SolarNativeObserver
+        observer: SolarNativeObserver,
+        seed: SolarLineSeed? = null
     ): NativeSolarReconstruction {
         check(loaded) { "Solar Rust library is unavailable." }
-        val products = settings.products.fold(0) { mask, product ->
-            mask or when (product) {
-                SolarOutputProduct.DISPLAY_PNG -> 1
-                SolarOutputProduct.LINEAR_PNG -> 2
-                SolarOutputProduct.LINEAR_FITS -> 4
-            }
-        }
+        val products = settings.products.fold(0) { mask, product -> mask or product.nativeMask }
         return checkNotNull(
             NativeSolarBridge.reconstruct(
                 source.absolutePath,
@@ -118,6 +137,15 @@ internal object SolarScanNative {
                 settings.scanCorrection.alignScanRows,
                 if (settings.flat.synthetic) settings.flat.syntheticStrength else 0,
                 settings.flat.physicalSourcePath.orEmpty(),
+                settings.correctDisk,
+                settings.invertProminences,
+                settings.prominenceStrength,
+                settings.wavelengthAngstrom,
+                settings.dispersionAngstromPerPixel,
+                settings.wingOffsetPixels,
+                settings.cropFactor ?: 0.0,
+                seed?.column ?: -1,
+                seed?.row ?: -1,
                 chinese,
                 observer
             )
@@ -127,7 +155,7 @@ internal object SolarScanNative {
 
 private object NativeSolarBridge {
     external fun preview(sourcePath: String, observer: SolarNativeObserver): NativeSolarPreview?
-    external fun analyze(sourcePath: String, observer: SolarNativeObserver): NativeSolarAnalysis?
+    external fun analyze(sourcePath: String, column: Int, row: Int, observer: SolarNativeObserver): NativeSolarAnalysis?
     external fun trialCoverage(sourcePath: String, observer: SolarNativeObserver): IntArray?
     external fun reconstruct(
         sourcePath: String,
@@ -145,6 +173,15 @@ private object NativeSolarBridge {
         scanJagged: Boolean,
         syntheticFlatStrength: Int,
         flatSourcePath: String,
+        correctDisk: Boolean,
+        invertProminences: Boolean,
+        prominenceStrength: Int,
+        wavelengthAngstrom: Double,
+        dispersionAngstromPerPixel: Double,
+        wingOffsetPixels: Double,
+        cropFactor: Double,
+        seedColumn: Int,
+        seedRow: Int,
         chinese: Boolean,
         observer: SolarNativeObserver
     ): NativeSolarReconstruction?

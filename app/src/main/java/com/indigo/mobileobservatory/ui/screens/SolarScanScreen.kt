@@ -1,6 +1,7 @@
 package com.indigo.mobileobservatory.ui.screens
 
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -8,7 +9,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -24,7 +25,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
@@ -60,10 +60,13 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.input.KeyboardType
@@ -74,15 +77,12 @@ import com.indigo.mobileobservatory.mount.MountDirection
 import com.indigo.mobileobservatory.mount.SolarSweepRate
 import com.indigo.mobileobservatory.solar.SOLAR_REPEAT_SWEEP_COUNTS
 import com.indigo.mobileobservatory.solar.SolarOutputProduct
+import com.indigo.mobileobservatory.solar.SolarLineSeed
 import com.indigo.mobileobservatory.solar.SolarBandingAxis
 import com.indigo.mobileobservatory.solar.SolarReconstructionSettings
-import com.indigo.mobileobservatory.solar.SolarScanIssue
-import com.indigo.mobileobservatory.solar.SolarScanIssueCode
-import com.indigo.mobileobservatory.solar.SolarScanIssueSeverity
 import com.indigo.mobileobservatory.solar.SolarScanPhase
 import com.indigo.mobileobservatory.solar.SolarScanTaskRecord
 import com.indigo.mobileobservatory.solar.SolarScanLegRecord
-import com.indigo.mobileobservatory.solar.SolarSourcePolicy
 import com.indigo.mobileobservatory.ui.viewmodel.SolarScanUiState
 import com.indigo.mobileobservatory.ui.viewmodel.SolarScanViewModel
 import com.indigo.mobileobservatory.ui.viewmodel.CameraViewModel
@@ -97,7 +97,6 @@ import kotlin.math.roundToLong
 
 private enum class SolarTab {
     HARDWARE,
-    SCAN,
     RECONSTRUCT
 }
 
@@ -116,7 +115,6 @@ fun SolarScanScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     var tab by rememberSaveable { mutableStateOf(SolarTab.HARDWARE) }
     var tabWasChosen by rememberSaveable { mutableStateOf(false) }
-    var confirmSimulation by rememberSaveable { mutableStateOf(false) }
     DisposableEffect(viewModel) { onDispose { viewModel.cancelHardware() } }
     val host = LocalView.current
     DisposableEffect(host, state.hardwareActive) {
@@ -156,12 +154,6 @@ fun SolarScanScreen(
                     text = { Text(stringResource(R.string.solar_hardware_tab)) }
                 )
                 Tab(
-                    selected = tab == SolarTab.SCAN,
-                    enabled = !state.hardwareActive,
-                    onClick = { tabWasChosen = true; tab = SolarTab.SCAN },
-                    text = { Text(stringResource(R.string.solar_hardware_simulation_tab)) }
-                )
-                Tab(
                     selected = tab == SolarTab.RECONSTRUCT,
                     enabled = !state.hardwareActive,
                     onClick = { tabWasChosen = true; tab = SolarTab.RECONSTRUCT },
@@ -176,16 +168,6 @@ fun SolarScanScreen(
             }
             when (tab) {
                 SolarTab.HARDWARE -> HardwareScanTab(state, viewModel, camera, onOpenResult)
-                SolarTab.SCAN -> ScanTab(
-                    state = state,
-                    viewModel = viewModel,
-                    onRun = {
-                        if (state.configuration.sourcePolicy == SolarSourcePolicy.KEEP) {
-                            viewModel.runSimulation()
-                        } else confirmSimulation = true
-                    },
-                    onOpenResult = onOpenResult
-                )
                 SolarTab.RECONSTRUCT -> ReconstructionTab(
                     state,
                     viewModel,
@@ -194,34 +176,6 @@ fun SolarScanScreen(
                 )
             }
         }
-    }
-    if (confirmSimulation) {
-        AlertDialog(
-            onDismissRequest = { confirmSimulation = false },
-            title = { Text(stringResource(R.string.solar_scan_source_policy)) },
-            text = {
-                Text(
-                    when (state.configuration.sourcePolicy) {
-                        SolarSourcePolicy.TRASH_AFTER_SEVEN_DAYS ->
-                            stringResource(R.string.solar_scan_trash_confirm)
-                        SolarSourcePolicy.DELETE_AFTER_COMMIT ->
-                            stringResource(R.string.solar_scan_delete_confirm)
-                        SolarSourcePolicy.KEEP -> stringResource(R.string.solar_scan_keep_source)
-                    }
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmSimulation = false
-                    viewModel.runSimulation()
-                }) { Text(stringResource(R.string.solar_scan_simulate)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmSimulation = false }) {
-                    Text(stringResource(android.R.string.cancel))
-                }
-            }
-        )
     }
 }
 
@@ -249,7 +203,7 @@ private fun HardwareScanTab(
     val paired = trials.size == 2 && trials[0].motion.pairsWith(trials[1].motion)
     var countText by rememberSaveable { mutableStateOf("2") }
     val count = countText.toIntOrNull()?.takeIf { it in SOLAR_REPEAT_SWEEP_COUNTS }
-    val canRepeat = canTrial && paired && count != null
+    val canRepeat = canTrial && paired && count != null && state.reconstructionSettings.hasRequiredDispersion
     var confirm by rememberSaveable { mutableStateOf(false) }
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -276,6 +230,7 @@ private fun HardwareScanTab(
         state.message?.let { Text(it) }
         if (state.hardwareActive) return@Column
         Text(stringResource(R.string.solar_hardware_instructions))
+        Text(stringResource(R.string.solar_hardware_manual_hint), style = MaterialTheme.typography.bodySmall)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             for (option in SolarSweepRate.entries) {
                 FilterChip(selected = rate == option.mountRate, onClick = { camera.setMountSlewRate(option.mountRate) },
@@ -333,6 +288,9 @@ private fun HardwareScanTab(
                 }
             }
         }
+        if (!state.reconstructionSettings.hasRequiredDispersion) {
+            Text(stringResource(R.string.solar_reconstruct_doppler_hint), color = MaterialTheme.colorScheme.error)
+        }
         Button(onClick = { confirm = true }, enabled = canRepeat) {
             Text(stringResource(R.string.solar_hardware_auto))
         }
@@ -353,69 +311,6 @@ private fun HardwareScanTab(
                 TextButton(onClick = { confirm = false }) { Text(stringResource(android.R.string.cancel)) }
             }
         )
-    }
-}
-
-@Composable
-private fun ScanTab(
-    state: SolarScanUiState,
-    viewModel: SolarScanViewModel,
-    onRun: () -> Unit,
-    onOpenResult: (File) -> Unit
-) {
-    Column(
-        Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Text(stringResource(R.string.solar_scan_hint), style = MaterialTheme.typography.bodyMedium)
-        Surface(
-            color = MaterialTheme.colorScheme.secondaryContainer,
-            shape = RoundedCornerShape(999.dp)
-        ) {
-            Text(
-                stringResource(R.string.solar_scan_simulation_badge),
-                Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                style = MaterialTheme.typography.labelMedium
-            )
-        }
-        TaskStatusCard(state)
-        ScanConfigurationCard(state, viewModel)
-        PreflightCard(state)
-        state.message?.let { message ->
-            Surface(
-                color = if (state.phase == SolarScanPhase.FAILED ||
-                    state.phase == SolarScanPhase.CANCELLED
-                ) MaterialTheme.colorScheme.errorContainer
-                else MaterialTheme.colorScheme.secondaryContainer,
-                shape = MaterialTheme.shapes.medium
-            ) {
-                Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(message, Modifier.weight(1f))
-                    TextButton(onClick = viewModel::dismissMessage) { Text(stringResource(R.string.close)) }
-                }
-            }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(
-                onClick = onRun,
-                enabled = !state.busy && state.preflight.canStart
-            ) {
-                Icon(Icons.Default.AutoAwesome, null)
-                Spacer(Modifier.width(8.dp))
-                Text(stringResource(R.string.solar_scan_simulate))
-            }
-            if (state.busy) {
-                TextButton(onClick = viewModel::cancel) {
-                    Icon(Icons.Default.Stop, null)
-                    Spacer(Modifier.width(6.dp))
-                    Text(stringResource(R.string.solar_scan_stop))
-                }
-            }
-        }
-        RecentRuns(state.runs, onOpenResult)
     }
 }
 
@@ -481,230 +376,6 @@ private fun TaskStatusCard(state: SolarScanUiState, hardware: Boolean = false) {
 }
 
 @Composable
-@OptIn(ExperimentalMaterial3Api::class)
-private fun ScanConfigurationCard(
-    state: SolarScanUiState,
-    viewModel: SolarScanViewModel
-) {
-    val configuration = state.configuration
-    val enabled = !state.busy
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(stringResource(R.string.solar_scan_configuration), style = MaterialTheme.typography.titleMedium)
-            Text(stringResource(R.string.solar_scan_endpoint_a), style = MaterialTheme.typography.labelLarge)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SolarNumberField(
-                    stringResource(R.string.solar_scan_ra_hours),
-                    configuration.endpointA.raHours,
-                    Modifier.weight(1f),
-                    enabled = enabled
-                ) { value ->
-                    if (value in 0.0..24.0) viewModel.updateConfiguration {
-                        it.copy(endpointA = it.endpointA.copy(raHours = value))
-                    }
-                }
-                SolarNumberField(
-                    stringResource(R.string.solar_scan_dec_degrees),
-                    configuration.endpointA.decDegrees,
-                    Modifier.weight(1f),
-                    enabled = enabled
-                ) { value ->
-                    if (value in -90.0..90.0) viewModel.updateConfiguration {
-                        it.copy(endpointA = it.endpointA.copy(decDegrees = value))
-                    }
-                }
-            }
-            Text(stringResource(R.string.solar_scan_endpoint_b), style = MaterialTheme.typography.labelLarge)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SolarNumberField(
-                    stringResource(R.string.solar_scan_ra_hours),
-                    configuration.endpointB.raHours,
-                    Modifier.weight(1f),
-                    enabled = enabled
-                ) { value ->
-                    if (value in 0.0..24.0) viewModel.updateConfiguration {
-                        it.copy(endpointB = it.endpointB.copy(raHours = value))
-                    }
-                }
-                SolarNumberField(
-                    stringResource(R.string.solar_scan_dec_degrees),
-                    configuration.endpointB.decDegrees,
-                    Modifier.weight(1f),
-                    enabled = enabled
-                ) { value ->
-                    if (value in -90.0..90.0) viewModel.updateConfiguration {
-                        it.copy(endpointB = it.endpointB.copy(decDegrees = value))
-                    }
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SolarNumberField(
-                    stringResource(R.string.solar_scan_duration),
-                    configuration.scanDurationMs / 1_000.0,
-                    Modifier.weight(1f),
-                    enabled = enabled
-                ) { value ->
-                    val milliseconds = (value * 1_000.0).roundToLong()
-                    if (milliseconds > 0) viewModel.updateConfiguration {
-                        it.copy(scanDurationMs = milliseconds)
-                    }
-                }
-                SolarNumberField(
-                    stringResource(R.string.solar_scan_crossing),
-                    configuration.diskCrossingMs / 1_000.0,
-                    Modifier.weight(1f),
-                    enabled = enabled
-                ) { value ->
-                    val milliseconds = (value * 1_000.0).roundToLong()
-                    if (milliseconds > 0) viewModel.updateConfiguration {
-                        it.copy(diskCrossingMs = milliseconds)
-                    }
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SolarNumberField(
-                    stringResource(R.string.solar_scan_rate),
-                    configuration.frameRate,
-                    Modifier.weight(1f),
-                    enabled = enabled
-                ) { value ->
-                    if (value > 0.0) viewModel.updateConfiguration { it.copy(frameRate = value) }
-                }
-                SolarNumberField(
-                    stringResource(R.string.solar_scan_exposure_ms),
-                    configuration.exposureUs / 1_000.0,
-                    Modifier.weight(1f),
-                    enabled = enabled
-                ) { value ->
-                    val microseconds = (value * 1_000.0).roundToLong()
-                    if (microseconds > 0) viewModel.updateConfiguration {
-                        it.copy(exposureUs = microseconds)
-                    }
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SolarNumberField(
-                    stringResource(R.string.solar_scan_disk_diameter),
-                    configuration.diskDiameterArcsec,
-                    Modifier.weight(1f),
-                    enabled = enabled
-                ) { value ->
-                    if (value > 0.0) viewModel.updateConfiguration { it.copy(diskDiameterArcsec = value) }
-                }
-                SolarNumberField(
-                    stringResource(R.string.solar_scan_position_uncertainty),
-                    configuration.positionUncertaintyArcsec,
-                    Modifier.weight(1f),
-                    enabled = enabled
-                ) { value ->
-                    if (value >= 0.0) viewModel.updateConfiguration {
-                        it.copy(positionUncertaintyArcsec = value)
-                    }
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SolarNumberField(
-                    stringResource(R.string.solar_scan_start_blank),
-                    configuration.startBlankArcsec,
-                    Modifier.weight(1f),
-                    enabled = enabled
-                ) { value ->
-                    if (value >= 0.0) viewModel.updateConfiguration { it.copy(startBlankArcsec = value) }
-                }
-                SolarNumberField(
-                    stringResource(R.string.solar_scan_end_blank),
-                    configuration.endBlankArcsec,
-                    Modifier.weight(1f),
-                    enabled = enabled
-                ) { value ->
-                    if (value >= 0.0) viewModel.updateConfiguration { it.copy(endBlankArcsec = value) }
-                }
-            }
-            SolarNumberField(
-                stringResource(R.string.solar_scan_legs),
-                configuration.legCount.toDouble(),
-                Modifier.fillMaxWidth(),
-                enabled = enabled
-            ) { value ->
-                if (value >= 1.0 && value <= 9_999.0) viewModel.updateConfiguration {
-                    it.copy(legCount = value.toInt())
-                }
-            }
-            Text(stringResource(R.string.solar_scan_source_policy), style = MaterialTheme.typography.labelLarge)
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                SolarSourcePolicy.entries.forEach { policy ->
-                    FilterChip(
-                        selected = configuration.sourcePolicy == policy,
-                        onClick = {
-                            viewModel.updateConfiguration { it.copy(sourcePolicy = policy) }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = enabled,
-                        label = {
-                            Text(
-                                stringResource(
-                                    when (policy) {
-                                        SolarSourcePolicy.KEEP -> R.string.solar_scan_keep_source
-                                        SolarSourcePolicy.TRASH_AFTER_SEVEN_DAYS -> R.string.solar_scan_trash_source
-                                        SolarSourcePolicy.DELETE_AFTER_COMMIT -> R.string.solar_scan_delete_source
-                                    }
-                                )
-                            )
-                        }
-                    )
-                }
-            }
-            Text(
-                stringResource(
-                    R.string.solar_scan_estimates,
-                    configuration.framesPerLeg.toString(),
-                    configuration.angularStepArcsec,
-                    configuration.exposureBlurArcsec
-                ),
-                style = MaterialTheme.typography.bodySmall
-            )
-            Text(
-                stringResource(
-                    R.string.solar_scan_storage,
-                    ImageUtils.formatFileSize(configuration.requiredBytes)
-                ),
-                style = MaterialTheme.typography.bodySmall
-            )
-        }
-    }
-}
-
-@Composable
-private fun PreflightCard(state: SolarScanUiState) {
-    val issues = state.preflight.issues
-    Card(
-        colors = CardDefaults.cardColors(
-            containerColor = if (state.preflight.canStart) {
-                MaterialTheme.colorScheme.secondaryContainer
-            } else MaterialTheme.colorScheme.errorContainer
-        )
-    ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(stringResource(R.string.solar_scan_preflight), style = MaterialTheme.typography.titleSmall)
-            Text(
-                stringResource(
-                    if (state.preflight.canStart) R.string.solar_scan_ready else R.string.solar_scan_blocked
-                ),
-                style = MaterialTheme.typography.bodyMedium
-            )
-            issues.forEach { issue ->
-                Text(
-                    text = issueText(issue),
-                    color = if (issue.severity == SolarScanIssueSeverity.ERROR) {
-                        MaterialTheme.colorScheme.error
-                    } else MaterialTheme.colorScheme.onSecondaryContainer
-                )
-            }
-        }
-    }
-}
-
-@Composable
 private fun RecentRuns(runs: List<SolarScanTaskRecord>, onOpenResult: (File) -> Unit) {
     Text(stringResource(R.string.solar_scan_recent_runs), style = MaterialTheme.typography.titleMedium)
     if (runs.isEmpty()) {
@@ -717,7 +388,6 @@ private fun RecentRuns(runs: List<SolarScanTaskRecord>, onOpenResult: (File) -> 
             RecentHardwareBatch(group, onOpenResult)
             return@forEach
         }
-        val result = run.legs.firstNotNullOfOrNull(::solarResultFile)
         Card {
             Row(
                 Modifier.fillMaxWidth().padding(12.dp),
@@ -764,21 +434,29 @@ private fun RecentRuns(runs: List<SolarScanTaskRecord>, onOpenResult: (File) -> 
                         )
                     }
                 }
-                TextButton(
-                    onClick = { if (result != null) onOpenResult(result) },
-                    enabled = result != null
-                ) { Text(stringResource(R.string.solar_scan_open_result)) }
             }
+            run.legs.forEach { leg -> SolarResultProducts(leg, onOpenResult) }
         }
     }
 }
 
-private fun solarResultFile(leg: SolarScanLegRecord): File? {
-    val result = leg.reconstruction ?: return null
-    return sequenceOf(result.displayPng, result.linearPng, result.linearFits)
-        .filterNotNull()
-        .map(::File)
-        .firstOrNull(File::isFile)
+@Composable
+private fun SolarResultProducts(leg: SolarScanLegRecord, onOpenResult: (File) -> Unit) {
+    val result = leg.reconstruction ?: return
+    val products = SolarOutputProduct.entries.mapNotNull { product ->
+        val file = result.pathFor(product)?.let(::File)?.takeIf(File::isFile)
+        file?.let { product to it }
+    }
+    products.chunked(2).forEach { row ->
+        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
+            row.forEach { (product, file) ->
+                TextButton(onClick = { onOpenResult(file) }, modifier = Modifier.weight(1f)) {
+                    Text(stringResource(solarProductLabel(product)))
+                }
+            }
+            if (row.size == 1) Spacer(Modifier.weight(1f))
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -810,12 +488,14 @@ private fun RecentHardwareBatch(group: List<SolarScanTaskRecord>, onOpenResult: 
             text = {
                 LazyColumn(Modifier.heightIn(max = 420.dp)) {
                     items(group.sortedBy { it.legs.firstOrNull()?.number }, key = { it.id }) { run ->
-                        val result = run.legs.firstNotNullOfOrNull(::solarResultFile)
                         Column {
-                            TextButton(enabled = result != null, onClick = {
-                                showResults = false
-                                if (result != null) onOpenResult(result)
-                            }) { Text(run.title) }
+                            Text(run.title, style = MaterialTheme.typography.titleSmall)
+                            run.legs.forEach { leg ->
+                                SolarResultProducts(leg) { file ->
+                                    showResults = false
+                                    onOpenResult(file)
+                                }
+                            }
                             run.warnings.forEach { warning ->
                                 Text(
                                     warning,
@@ -885,15 +565,21 @@ private fun ReconstructionTab(
                 }
             }
         }
-        state.preview?.let {
-            SpectrumPreview(state)
-            Button(
-                onClick = viewModel::analyzeSelected,
-                enabled = !state.busy && state.selectedFile != null && !selectedBusy
-            ) {
-                Icon(Icons.Default.AutoAwesome, null)
-                Spacer(Modifier.width(8.dp))
-                Text(stringResource(R.string.solar_scan_find_line))
+        if (state.preview != null) Card {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(stringResource(R.string.solar_reconstruct_spectrum), style = MaterialTheme.typography.titleMedium)
+                SpectrumPreview(state, enabled = !state.busy && !selectedBusy, onSelect = viewModel::analyzeSelected)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(stringResource(R.string.solar_reconstruct_pick_line),
+                        Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                    TextButton(enabled = !state.busy && !selectedBusy, onClick = { viewModel.analyzeSelected() }) {
+                        Text(stringResource(R.string.solar_reconstruct_reset_line))
+                    }
+                }
+                SolarNumberField(stringResource(R.string.solar_scan_offset),
+                    state.reconstructionSettings.lineShiftPixels, Modifier.fillMaxWidth(), !state.busy) { value ->
+                    viewModel.updateReconstruction { it.copy(lineShiftPixels = value) }
+                }
             }
         }
         if (selectedBusy) {
@@ -909,7 +595,6 @@ private fun ReconstructionTab(
                     Text("${stringResource(R.string.solar_scan_confidence)}: ${"%.1f".format(analysis.confidence * 100)}%")
                     Text("${stringResource(R.string.solar_scan_line_depth)}: ${"%.1f".format(analysis.lineDepth * 100)}%")
                     Text("${stringResource(R.string.solar_scan_valid_columns)}: ${analysis.validColumns}")
-                    Text("${stringResource(R.string.solar_scan_suggested_roi)}: ${analysis.suggestedRoi.height}px")
                 }
             }
         }
@@ -927,8 +612,8 @@ private fun ReconstructionTab(
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
                 onClick = viewModel::reconstructSelected,
-                enabled = !state.busy && state.selectedFile != null &&
-                    state.analysis != null && !selectedBusy
+                enabled = !state.busy && state.selectedFile != null && state.preview != null && !selectedBusy &&
+                    state.reconstructionSettings.hasRequiredDispersion
             ) {
                 Icon(Icons.Default.Image, null)
                 Spacer(Modifier.width(8.dp))
@@ -947,13 +632,11 @@ private fun ReconstructionTab(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.outline
         )
-        state.lastResultDirectory?.let { directory ->
-            val result = directory.walkTopDown().firstOrNull {
-                it.isFile && (it.extension in setOf("png", "fit", "fits"))
-            }
-            if (result != null) {
-                TextButton(onClick = { onOpenResult(result) }) {
-                    Text(stringResource(R.string.solar_scan_open_result))
+        state.lastReconstruction?.let { result ->
+            Card {
+                result.legs.forEach { leg -> SolarResultProducts(leg, onOpenResult) }
+                result.warnings.forEach { warning ->
+                    Text(warning, Modifier.padding(12.dp), color = MaterialTheme.colorScheme.error)
                 }
             }
         }
@@ -961,46 +644,48 @@ private fun ReconstructionTab(
 }
 
 @Composable
-private fun SpectrumPreview(state: SolarScanUiState) {
+private fun SpectrumPreview(state: SolarScanUiState, enabled: Boolean, onSelect: (SolarLineSeed) -> Unit) {
     val bitmap = state.preview ?: return
     val sourceHeight = state.sourceHeight.takeIf { it > 0 } ?: bitmap.height
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .aspectRatio(bitmap.width.toFloat() / bitmap.height.coerceAtLeast(1))
-            .background(Color.Black)
-    ) {
-        Image(
-            bitmap = bitmap.asImageBitmap(),
-            contentDescription = stringResource(R.string.solar_scan_source),
-            modifier = Modifier.fillMaxSize()
-        )
-        val primary = MaterialTheme.colorScheme.primary
-        val warning = MaterialTheme.colorScheme.error
-        state.analysis?.let { analysis ->
-            androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
-                val width = size.width
-                val height = size.height
-                val path = Path()
-                for (x in 0 until analysis.trace.width) {
-                    val px = (x.toFloat() / (analysis.trace.width - 1).coerceAtLeast(1)) * width
-                    val py = (
-                        analysis.trace.rowAt(x).toFloat() /
-                            (sourceHeight.coerceAtLeast(2) - 1)
-                        ) * height
-                    if (x == 0) path.moveTo(px, py) else path.lineTo(px, py)
+    val sourceWidth = state.sourceWidth.takeIf { it > 0 } ?: bitmap.width
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height((maxWidth * (bitmap.height.toFloat() / bitmap.width)).coerceIn(88.dp, 220.dp))
+                .clipToBounds()
+                .background(Color.Black)
+                .pointerInput(enabled, sourceWidth, sourceHeight, onSelect) {
+                    if (enabled) detectTapGestures { position ->
+                        val x = (position.x * sourceWidth / size.width).toInt().coerceIn(0, sourceWidth - 1)
+                        val y = (position.y * sourceHeight / size.height).toInt().coerceIn(0, sourceHeight - 1)
+                        onSelect(SolarLineSeed(x, y))
+                    }
                 }
-                drawPath(path, primary, style = Stroke(width = 2.5f))
-                val top = analysis.suggestedRoi.y.toFloat() /
-                    sourceHeight.coerceAtLeast(1) * height
-                val bottom = analysis.suggestedRoi.bottom.toFloat() /
-                    sourceHeight.coerceAtLeast(1) * height
-                drawRect(
-                    color = warning,
-                    topLeft = androidx.compose.ui.geometry.Offset(0f, top),
-                    size = androidx.compose.ui.geometry.Size(width, (bottom - top).coerceAtLeast(1f)),
-                    style = Stroke(width = 1.5f)
-                )
+        ) {
+            Image(
+                bitmap = bitmap.asImageBitmap(),
+                contentDescription = stringResource(R.string.solar_scan_source),
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.FillBounds
+            )
+            val primary = MaterialTheme.colorScheme.primary
+            val secondary = MaterialTheme.colorScheme.tertiary
+            state.analysis?.let { analysis ->
+                androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
+                    val width = size.width
+                    val height = size.height
+                    fun tracePath(offset: Double): Path = Path().apply {
+                        for (x in 0 until analysis.trace.width) {
+                            val px = (x + 0.5f) / sourceWidth * width
+                            val py = ((analysis.trace.rowAt(x) + offset + 0.5) / sourceHeight * height).toFloat()
+                            if (x == 0) moveTo(px, py) else lineTo(px, py)
+                        }
+                    }
+                    drawPath(tracePath(0.0), primary, style = Stroke(width = 2.5f))
+                    val offset = state.reconstructionSettings.lineShiftPixels
+                    if (offset != 0.0) drawPath(tracePath(offset), secondary, style = Stroke(width = 2.5f))
+                }
             }
         }
     }
@@ -1014,55 +699,91 @@ private fun ReconstructionSettingsCard(
 ) {
     val settings = state.reconstructionSettings
     val enabled = !state.busy
+    var advanced by rememberSaveable { mutableStateOf(false) }
+    var calibration by rememberSaveable { mutableStateOf(false) }
     Card {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(stringResource(R.string.solar_scan_products), style = MaterialTheme.typography.titleMedium)
-            SolarOutputProduct.entries.forEach { product ->
+            SolarOutputProduct.entries.chunked(2).forEach { row ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    row.forEach { product ->
+                        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = product in settings.products, onCheckedChange = { checked ->
+                                val next = if (checked) settings.products + product else settings.products - product
+                                if (next.isNotEmpty()) viewModel.updateReconstruction { it.copy(products = next) }
+                            }, enabled = enabled)
+                            Text(stringResource(solarProductLabel(product)), style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            }
+            val doppler = SolarOutputProduct.DOPPLER_PNG in settings.products
+            TextButton(onClick = { calibration = !calibration }, enabled = !doppler) {
+                Text(stringResource(R.string.solar_reconstruct_calibration))
+                Text(if (calibration || doppler) " −" else " +")
+            }
+            if (calibration || doppler) {
+                SolarNumberField(stringResource(R.string.solar_reconstruct_wavelength),
+                    settings.wavelengthAngstrom, Modifier.fillMaxWidth(), enabled) { value ->
+                    if (value >= 0) viewModel.updateReconstruction { it.copy(wavelengthAngstrom = value) }
+                }
+                SolarNumberField(stringResource(R.string.solar_reconstruct_dispersion),
+                    settings.dispersionAngstromPerPixel, Modifier.fillMaxWidth(), enabled) { value ->
+                    viewModel.updateReconstruction { it.copy(dispersionAngstromPerPixel = value) }
+                }
+                if (doppler) {
+                    SolarNumberField(stringResource(R.string.solar_reconstruct_wing_offset),
+                        settings.wingOffsetPixels, Modifier.fillMaxWidth(), enabled) { value ->
+                        if (value >= 0.5) viewModel.updateReconstruction { it.copy(wingOffsetPixels = value) }
+                    }
+                    Text(stringResource(R.string.solar_reconstruct_doppler_hint), style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            TextButton(onClick = { advanced = !advanced }) {
+                Text(stringResource(R.string.solar_scan_correction))
+                Text(if (advanced) " −" else " +")
+            }
+            if (!advanced) return@Column
+            SolarNumberField(stringResource(R.string.solar_scan_stretch), settings.frameStride.toDouble(),
+                Modifier.fillMaxWidth(), enabled) { value ->
+                if (value in 1.0..64.0 && value % 1.0 == 0.0) {
+                    viewModel.updateReconstruction { it.copy(frameStride = value.toInt()) }
+                }
+            }
+            SolarNumberField(stringResource(R.string.solar_reconstruct_crop_factor), settings.cropFactor ?: 0.0,
+                Modifier.fillMaxWidth(), enabled) { value ->
+                if (value == 0.0 || value in 1.0..2.0) {
+                    viewModel.updateReconstruction { it.copy(cropFactor = value.takeIf { it > 0 }) }
+                }
+            }
+            SolarNumberField(
+                stringResource(R.string.solar_reconstruct_rotation), settings.rotationDegrees.toDouble(),
+                Modifier.fillMaxWidth(), enabled
+            ) { value ->
+                if (value in 0.0..270.0 && value % 90.0 == 0.0) {
+                    viewModel.updateReconstruction { it.copy(rotationDegrees = value.toInt()) }
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(checked = settings.correctDisk, enabled = enabled, onCheckedChange = { checked ->
+                    viewModel.updateReconstruction { it.copy(correctDisk = checked) }
+                })
+                Text(stringResource(R.string.solar_reconstruct_correct_disk))
+            }
+            if (SolarOutputProduct.NEGATIVE_PNG in settings.products) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(
-                        checked = product in settings.products,
-                        onCheckedChange = { checked ->
-                            val next = if (checked) settings.products + product
-                            else settings.products - product
-                            if (next.isNotEmpty()) viewModel.updateReconstruction {
-                                it.copy(products = next)
-                            }
-                        },
-                        enabled = enabled
-                    )
-                    Text(
-                        stringResource(
-                            when (product) {
-                                SolarOutputProduct.DISPLAY_PNG -> R.string.solar_scan_display_png
-                                SolarOutputProduct.LINEAR_PNG -> R.string.solar_scan_linear_png
-                                SolarOutputProduct.LINEAR_FITS -> R.string.solar_scan_linear_fits
-                            }
-                        )
-                    )
+                    Checkbox(checked = settings.invertProminences, enabled = enabled, onCheckedChange = { checked ->
+                        viewModel.updateReconstruction { it.copy(invertProminences = checked) }
+                    })
+                    Text(stringResource(R.string.solar_reconstruct_invert_prominences))
+                }
+                SolarNumberField(stringResource(R.string.solar_reconstruct_prominence_strength),
+                    settings.prominenceStrength.toDouble(), enabled = enabled) { strength ->
+                    if (strength in 1.0..100.0) viewModel.updateReconstruction {
+                        it.copy(prominenceStrength = strength.toInt())
+                    }
                 }
             }
-            SolarNumberField(
-                stringResource(R.string.solar_scan_offset),
-                settings.lineShiftPixels,
-                Modifier.fillMaxWidth(),
-                enabled = enabled
-            ) { value ->
-                if (value.isFinite()) viewModel.updateReconstruction { it.copy(lineShiftPixels = value) }
-            }
-            SolarNumberField(
-                stringResource(R.string.solar_scan_stretch),
-                settings.frameStride.toDouble(),
-                Modifier.fillMaxWidth(),
-                enabled = enabled
-            ) { value ->
-                if (value in 1.0..64.0) viewModel.updateReconstruction {
-                    it.copy(frameStride = value.toInt())
-                }
-            }
-            Text(
-                stringResource(R.string.solar_scan_correction),
-                style = MaterialTheme.typography.titleSmall
-            )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(
                     selected = settings.scanCorrection.bandingAxis == SolarBandingAxis.OFF,
@@ -1317,6 +1038,19 @@ private fun PhysicalFlatPicker(
     }
 }
 
+private fun solarProductLabel(product: SolarOutputProduct): Int = when (product) {
+    SolarOutputProduct.DISPLAY_PNG -> R.string.solar_scan_display_png
+    SolarOutputProduct.LINEAR_PNG -> R.string.solar_scan_linear_png
+    SolarOutputProduct.LINEAR_FITS -> R.string.solar_scan_linear_fits
+    SolarOutputProduct.ENHANCED_PNG -> R.string.solar_product_enhanced
+    SolarOutputProduct.NEGATIVE_PNG -> R.string.solar_product_negative
+    SolarOutputProduct.ECLIPSE_PNG -> R.string.solar_product_eclipse
+    SolarOutputProduct.HYDROGEN_PNG -> R.string.solar_product_hydrogen
+    SolarOutputProduct.CALCIUM_PNG -> R.string.solar_product_calcium
+    SolarOutputProduct.HELIUM_PNG -> R.string.solar_product_helium
+    SolarOutputProduct.DOPPLER_PNG -> R.string.solar_product_doppler
+}
+
 @Composable
 private fun SolarNumberField(
     label: String,
@@ -1342,42 +1076,6 @@ private fun SolarNumberField(
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
         modifier = modifier
     )
-}
-
-@Composable
-private fun issueText(issue: SolarScanIssue): String = when (issue.code) {
-    SolarScanIssueCode.INVALID_END -> stringResource(R.string.solar_scan_issue_endpoint)
-    SolarScanIssueCode.INVALID_DURATION -> stringResource(R.string.solar_scan_issue_duration)
-    SolarScanIssueCode.INVALID_CROSSING -> stringResource(R.string.solar_scan_issue_crossing)
-    SolarScanIssueCode.INVALID_FRAME_RATE -> stringResource(R.string.solar_scan_issue_rate)
-    SolarScanIssueCode.TOO_MANY_FRAMES -> stringResource(
-        R.string.solar_scan_issue_frames,
-        issue.actual ?: 0.0,
-        issue.required ?: 0.0
-    )
-    SolarScanIssueCode.INVALID_LEG_COUNT -> stringResource(R.string.solar_scan_issue_legs)
-    SolarScanIssueCode.INVALID_EXPOSURE -> stringResource(R.string.solar_scan_issue_blur, issue.actual ?: 0.0)
-    SolarScanIssueCode.INVALID_ROI -> stringResource(R.string.solar_scan_issue_roi)
-    SolarScanIssueCode.SOURCE_TOO_SHORT -> stringResource(R.string.solar_scan_issue_source_short)
-    SolarScanIssueCode.OUTSIDE_MARGIN_SHORT -> stringResource(
-        R.string.solar_scan_issue_margin,
-        issue.actual ?: 0.0,
-        issue.required ?: 0.0
-    )
-    SolarScanIssueCode.EXPOSURE_BLUR -> stringResource(
-        R.string.solar_scan_issue_blur,
-        issue.actual ?: 0.0
-    )
-    SolarScanIssueCode.FRAME_RATE_LOW -> stringResource(
-        R.string.solar_scan_issue_fps,
-        issue.actual ?: 0.0
-    )
-    SolarScanIssueCode.STORAGE_LOW -> stringResource(
-        R.string.solar_scan_issue_storage,
-        ImageUtils.formatFileSize((issue.required ?: 0.0).roundToLong())
-    )
-    SolarScanIssueCode.NO_CALIBRATION -> stringResource(R.string.solar_scan_issue_calibration)
-    SolarScanIssueCode.UNSUPPORTED_PIXEL_FORMAT -> stringResource(R.string.solar_scan_issue_format)
 }
 
 private fun formatNumber(value: Double): String =
