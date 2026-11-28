@@ -290,74 +290,6 @@ fn measure_sweep<R: std::io::Read + std::io::Seek>(
     ])
 }
 
-#[cfg(test)]
-mod sweep_tests {
-    use super::*;
-    use std::io::Cursor;
-
-    fn sweep_ser(
-        first: usize,
-        end: usize,
-        clipped: bool,
-        dim_frame: Option<u8>,
-    ) -> SerReader<Cursor<Vec<u8>>> {
-        let mut bytes = vec![0; 178];
-        bytes[..14].copy_from_slice(b"LUCAM-RECORDER");
-        for (offset, value) in [(22, 1_u32), (26, 40), (30, 8), (34, 8), (38, 640)] {
-            bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
-        }
-        for frame in 0..640 {
-            let active = (first..end).contains(&frame);
-            let columns = if clipped && frame == 300 {
-                0..24
-            } else {
-                8..32
-            };
-            for _ in 0..8 {
-                bytes.extend((0..40).map(|x| {
-                    if active && columns.contains(&x) {
-                        if frame == 300 {
-                            dim_frame.unwrap_or(90)
-                        } else {
-                            90
-                        }
-                    } else {
-                        10
-                    }
-                }));
-            }
-        }
-        SerReader::open(Cursor::new(bytes)).unwrap()
-    }
-
-    #[test]
-    fn measures_slit_margins_with_camera_black_level() {
-        assert_eq!(
-            measure_sweep(sweep_ser(80, 560, false, None), |_| true).unwrap(),
-            [640, 40, 80, 560, 8, 31],
-        );
-        let clipped = measure_sweep(sweep_ser(80, 560, true, None), |_| true).unwrap();
-        assert_eq!(clipped[4], 0);
-    }
-
-    #[test]
-    fn rejects_missing_blank_sky_and_checks_cancel() {
-        assert!(measure_sweep(sweep_ser(0, 560, false, None), |_| true).is_err());
-        assert!(measure_sweep(sweep_ser(80, 640, false, None), |_| true).is_err());
-        assert!(matches!(
-            measure_sweep(sweep_ser(80, 560, false, None), |_| false),
-            Err(mjsolex::Error::Cancelled)
-        ));
-    }
-
-    #[test]
-    fn rejects_dark_or_ambiguous_frames_inside_the_disk() {
-        for intensity in [10, 11] {
-            assert!(measure_sweep(sweep_ser(80, 560, true, Some(intensity)), |_| true).is_err());
-        }
-    }
-}
-
 fn trace_quality(
     spectrum: &Spectrum,
     trace: &Trace,
@@ -1084,5 +1016,73 @@ pub extern "system" fn Java_com_indigo_mobileobservatory_solar_NativeSolarBridge
     }) {
         Ok(value) => value.into_raw(),
         Err(error) => throw_java(&mut env, error.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod sweep_tests {
+    use super::*;
+    use std::io::Cursor;
+
+    fn sweep_ser(
+        first: usize,
+        end: usize,
+        clipped: bool,
+        dim_frame: Option<u8>,
+    ) -> SerReader<Cursor<Vec<u8>>> {
+        let mut bytes = vec![0; 178];
+        bytes[..14].copy_from_slice(b"LUCAM-RECORDER");
+        for (offset, value) in [(22, 1_u32), (26, 40), (30, 8), (34, 8), (38, 640)] {
+            bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        for frame in 0..640 {
+            let active = (first..end).contains(&frame);
+            let columns = if clipped && frame == 300 {
+                0..24
+            } else {
+                8..32
+            };
+            for _ in 0..8 {
+                bytes.extend((0..40).map(|x| {
+                    if active && columns.contains(&x) {
+                        if frame == 300 {
+                            dim_frame.unwrap_or(90)
+                        } else {
+                            90
+                        }
+                    } else {
+                        10
+                    }
+                }));
+            }
+        }
+        SerReader::open(Cursor::new(bytes)).unwrap()
+    }
+
+    #[test]
+    fn measures_slit_margins_with_camera_black_level() {
+        assert_eq!(
+            measure_sweep(sweep_ser(80, 560, false, None), |_| true).unwrap(),
+            [640, 40, 80, 560, 8, 31],
+        );
+        let clipped = measure_sweep(sweep_ser(80, 560, true, None), |_| true).unwrap();
+        assert_eq!(clipped[4], 0);
+    }
+
+    #[test]
+    fn rejects_missing_blank_sky_and_checks_cancel() {
+        assert!(measure_sweep(sweep_ser(0, 560, false, None), |_| true).is_err());
+        assert!(measure_sweep(sweep_ser(80, 640, false, None), |_| true).is_err());
+        assert!(matches!(
+            measure_sweep(sweep_ser(80, 560, false, None), |_| false),
+            Err(mjsolex::Error::Cancelled)
+        ));
+    }
+
+    #[test]
+    fn rejects_dark_or_ambiguous_frames_inside_the_disk() {
+        for intensity in [10, 11] {
+            assert!(measure_sweep(sweep_ser(80, 560, true, Some(intensity)), |_| true).is_err());
+        }
     }
 }
