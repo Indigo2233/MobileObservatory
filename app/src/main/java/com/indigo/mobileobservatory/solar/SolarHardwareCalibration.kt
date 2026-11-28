@@ -29,6 +29,7 @@ internal data class SolarPoint(val west: Double, val north: Double) {
 internal const val SOLAR_ENDPOINT_TOLERANCE = 45.0
 internal const val SOLAR_NORTH_TOLERANCE = 30.0
 internal const val SOLAR_MAX_TRIAL_MS = 12_000L
+internal val SOLAR_REPEAT_SWEEP_COUNTS = 2..SolarScanPreflightEvaluator.MAX_LEGS
 internal const val SOLAR_MAX_WEST_OFFSET = 2_100.0
 internal val SOLAR_EAST_OR_WEST_START = 1_000.0..1_900.0
 

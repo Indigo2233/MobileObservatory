@@ -72,6 +72,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.mount.MountDirection
 import com.indigo.mobileobservatory.mount.SolarSweepRate
+import com.indigo.mobileobservatory.solar.SOLAR_REPEAT_SWEEP_COUNTS
 import com.indigo.mobileobservatory.solar.SolarOutputProduct
 import com.indigo.mobileobservatory.solar.SolarBandingAxis
 import com.indigo.mobileobservatory.solar.SolarReconstructionSettings
@@ -245,7 +246,9 @@ private fun HardwareScanTab(
         mountAvailable && !state.busy && !motion.isActive
     val canTrial = ready && SolarSweepRate.entries.any { it.mountRate == rate }
     val paired = trials.size == 2 && trials[0].motion.pairsWith(trials[1].motion)
-    var count by rememberSaveable { mutableStateOf(2) }
+    var countText by rememberSaveable { mutableStateOf("2") }
+    val count = countText.toIntOrNull()?.takeIf { it in SOLAR_REPEAT_SWEEP_COUNTS }
+    val canRepeat = canTrial && paired && count != null
     var confirm by rememberSaveable { mutableStateOf(false) }
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -301,26 +304,42 @@ private fun HardwareScanTab(
         }
         if (trials.isNotEmpty() && !paired) Text(stringResource(R.string.solar_hardware_pair_required))
         if (paired) {
-            Text(stringResource(R.string.solar_hardware_count))
+            OutlinedTextField(
+                value = countText,
+                onValueChange = { countText = it },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !state.busy,
+                singleLine = true,
+                isError = countText.isNotEmpty() && count == null,
+                label = { Text(stringResource(R.string.solar_hardware_count)) },
+                supportingText = {
+                    Text(stringResource(
+                        R.string.solar_hardware_count_range,
+                        SOLAR_REPEAT_SWEEP_COUNTS.first,
+                        SOLAR_REPEAT_SWEEP_COUNTS.last
+                    ))
+                },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+            )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 for (option in listOf(2, 4, 6)) {
-                    FilterChip(selected = count == option, onClick = { count = option },
+                    FilterChip(selected = count == option, onClick = { countText = option.toString() },
                         enabled = !state.busy, label = { Text(option.toString()) })
                 }
             }
         }
-        Button(onClick = { confirm = true }, enabled = canTrial && paired) {
+        Button(onClick = { confirm = true }, enabled = canRepeat) {
             Text(stringResource(R.string.solar_hardware_auto))
         }
         RecentRuns(state.runs, onOpenResult)
     }
-    if (confirm) {
+    if (confirm && count != null) {
         AlertDialog(
             onDismissRequest = { confirm = false },
             title = { Text(stringResource(R.string.solar_hardware_auto)) },
             text = { Text(stringResource(R.string.solar_hardware_confirm, count)) },
             confirmButton = {
-                TextButton(enabled = canTrial && paired, onClick = {
+                TextButton(enabled = canRepeat, onClick = {
                     confirm = false
                     viewModel.startReciprocating(camera, count)
                 }) { Text(stringResource(R.string.solar_hardware_start)) }

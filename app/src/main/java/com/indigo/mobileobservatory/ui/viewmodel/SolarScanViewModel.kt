@@ -40,6 +40,7 @@ import com.indigo.mobileobservatory.solar.NativeSolarPreview
 import com.indigo.mobileobservatory.solar.legPlans
 import com.indigo.mobileobservatory.solar.SolarRoi
 import com.indigo.mobileobservatory.solar.SolarPoint
+import com.indigo.mobileobservatory.solar.SOLAR_REPEAT_SWEEP_COUNTS
 import com.indigo.mobileobservatory.solar.reverseSolar
 import com.indigo.mobileobservatory.util.FileLogger
 import java.io.File
@@ -237,7 +238,7 @@ class SolarScanViewModel(application: Application) : AndroidViewModel(applicatio
     internal fun startReciprocating(camera: CameraViewModel, count: Int) {
         val setup = calibratedSetup ?: return
         val pair = _trials.value
-        if (count !in 2..6 || pair.size != 2 || !pair[0].motion.pairsWith(pair[1].motion)) return
+        if (count !in SOLAR_REPEAT_SWEEP_COUNTS || pair.size != 2 || !pair[0].motion.pairsWith(pair[1].motion)) return
         val repository = repository ?: return
         val settings = _state.value.reconstructionSettings
         val baseConfiguration = _state.value.configuration
