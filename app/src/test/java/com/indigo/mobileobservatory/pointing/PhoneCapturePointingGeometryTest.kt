@@ -38,6 +38,8 @@ class PhoneCapturePointingGeometryTest {
         assertNotEquals(geometry, metadata.pointingGeometry(1200, 800, false, true))
         assertNotEquals(geometry, metadata.pointingGeometry(1200, 800, true, false))
         assertNotEquals(geometry, metadata.pointingGeometry(1190, 800, true, true))
+        assertTrue(geometry.intrinsicsFingerprint.hasCurrentPhoneImageAxes())
+        assertFalse(geometry.intrinsicsFingerprint.substringBeforeLast('/').hasCurrentPhoneImageAxes())
     }
 
     @Test fun virtualOpticalAxesApplyTheMeasuredExtrinsicAndUnknownMirrorHasNoImuPrior() {

@@ -39,8 +39,8 @@ class ImuAssistedWideFieldSolverTest {
             val x = dot(direction, basis.first) / denominator
             val y = dot(direction, basis.second) / denominator
             ExtractedStar(
-                x = (((x / tan(Math.toRadians(fovWidth / 2.0))) + 1.0) * width / 2.0).toFloat(),
-                y = ((1.0 - y / tan(Math.toRadians(fovHeight / 2.0))) * height / 2.0).toFloat(),
+                x = ((1.0 - x / tan(Math.toRadians(fovWidth / 2.0))) * width / 2.0 - 0.5).toFloat(),
+                y = ((1.0 - y / tan(Math.toRadians(fovHeight / 2.0))) * height / 2.0 - 0.5).toFloat(),
                 peak = 1000f - index,
                 flux = 500f,
                 snr = 100f - index,

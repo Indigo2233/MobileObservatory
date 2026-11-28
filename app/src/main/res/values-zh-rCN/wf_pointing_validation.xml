@@ -29,4 +29,19 @@
     <string name="wf_push_field_confirm">采用此视场</string>
     <string name="wf_push_field_camera_conservative">相机角度尚未标定时，按内接圆保守验证入框。</string>
     <string name="wf_push_verification_rejected">画面已解析，仍需新的指向验证。</string>
+    <string name="push_to_preview_image">星野照片与候选星点</string>
+    <string name="push_to_preview_candidates">%1$d 个候选星点</string>
+    <string name="push_to_preview_solved">星野已解析。校准相机后可开始推镜。</string>
+    <string name="push_to_waiting_site">正在获取观测地点…</string>
+    <string name="push_to_permissions_needed">拍摄星野需要相机和定位权限。</string>
+    <string name="push_to_grant_permissions">授予权限</string>
+    <string name="push_to_refresh_lenses">刷新镜头列表</string>
+    <string name="push_to_recalibrate_axes">手机图像坐标已更新，请重新校准手机与镜筒。</string>
+    <string name="push_to_diagnostic_solved">星野已解析。</string>
+    <string name="push_to_solve_details">查看板解详情</string>
+    <string name="push_to_hide_solve_details">收起板解详情</string>
+    <string name="push_to_fail_few_stars_single">星点太少。请对准开阔天空，并保持镜筒静止。</string>
+    <string name="push_to_diagnostic_frames">使用曝光帧数：%1$d</string>
+    <string name="push_to_partial_burst">请求 %2$d 张曝光，使用了 %1$d 张。部分画面无法对齐。</string>
+    <string name="push_to_mirror_burst_fallback">本次使用 1 张曝光。镜面光路连拍对齐需要匹配的标定和带曝光时间的传感器姿态。</string>
 </resources>

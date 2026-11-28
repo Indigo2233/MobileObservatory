@@ -1,12 +1,8 @@
 package com.indigo.mobileobservatory.ui.screens
 
 import android.app.Activity
-import android.graphics.Bitmap
-import android.graphics.Color as AndroidColor
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -46,7 +42,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.stringResource
@@ -61,6 +56,7 @@ import com.indigo.mobileobservatory.camera.PhoneCameraCapability
 import com.indigo.mobileobservatory.camera.PhoneLensRole
 import com.indigo.mobileobservatory.camera.PhoneManualExposure
 import com.indigo.mobileobservatory.camera.PhoneSkyCapture
+import com.indigo.mobileobservatory.camera.PhoneSkyCaptureResult
 import com.indigo.mobileobservatory.camera.PhoneSkyCaptureStore
 import com.indigo.mobileobservatory.permissions.AppSettingsNavigator
 import com.indigo.mobileobservatory.permissions.CameraPermissionPolicy
@@ -71,8 +67,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
-import kotlin.math.max
-import kotlin.math.min
 
 private const val GO_MIN_STARS = 15
 private const val GO_MIN_LIMITING_MAG = 5.5f
@@ -91,7 +85,7 @@ fun PhoneCameraDebugScreen(onBack: () -> Unit) {
     var status by remember { mutableStateOf("") }
     var capabilityText by remember { mutableStateOf("") }
     var extraction by remember { mutableStateOf<StarExtractionResult?>(null) }
-    var preview by remember { mutableStateOf<Bitmap?>(null) }
+    var capture by remember { mutableStateOf<PhoneSkyCaptureResult?>(null) }
     var busy by remember { mutableStateOf(false) }
     var lastSavePath by remember { mutableStateOf<String?>(null) }
     var storageUsage by remember { mutableLongStateOf(0L) }
@@ -397,10 +391,7 @@ fun PhoneCameraDebugScreen(onBack: () -> Unit) {
                                     )
                                 }
                                 extraction = stars
-                                preview = withContext(Dispatchers.Default) {
-                                    stretchPreview(result.frame.data, result.frame.width, result.frame.height, result.frame.pixelFormat.bytesPerPixel)
-                                        .also { drawStars(it, stars) }
-                                }
+                                capture = result
 
                                 val fitsFile = File(dir, "$stamp.fits")
                                 withContext(Dispatchers.IO) {
@@ -518,15 +509,8 @@ fun PhoneCameraDebugScreen(onBack: () -> Unit) {
                 }
             }
 
-            preview?.let { bmp ->
-                Image(
-                    bitmap = bmp.asImageBitmap(),
-                    contentDescription = null,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(220.dp)
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
-                )
+            capture?.let {
+                PhoneSkyPreview(it.frame, extraction, it.metadata.sensorOrientation, Modifier.height(220.dp))
             }
 
             extraction?.let { ext ->
@@ -548,53 +532,5 @@ fun PhoneCameraDebugScreen(onBack: () -> Unit) {
                 )
             }
         }
-    }
-}
-
-private fun stretchPreview(data: ByteArray, width: Int, height: Int, bpp: Int): Bitmap {
-    val sample = FloatArray(min(4096, width * height / 16))
-    var n = 0
-    for (y in 0 until height step 8) {
-        for (x in 0 until width step 8) {
-            if (n >= sample.size) break
-            sample[n++] = readPixel(data, width, x, y, bpp)
-        }
-    }
-    sample.sort(0, n)
-    val lo = sample[(n * 0.05).toInt().coerceIn(0, n - 1)]
-    val hi = sample[(n * 0.995).toInt().coerceIn(0, n - 1)].coerceAtLeast(lo + 1f)
-    val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.RGB_565)
-    val row = IntArray(width)
-    for (y in 0 until height) {
-        for (x in 0 until width) {
-            val v = ((readPixel(data, width, x, y, bpp) - lo) / (hi - lo) * 255f)
-                .toInt().coerceIn(0, 255)
-            row[x] = AndroidColor.rgb(v, v, v)
-        }
-        bmp.setPixels(row, 0, width, 0, y, width, 1)
-    }
-    return bmp
-}
-
-private fun drawStars(bitmap: Bitmap, result: StarExtractionResult) {
-    val canvas = android.graphics.Canvas(bitmap)
-    val paint = android.graphics.Paint().apply {
-        color = AndroidColor.RED
-        style = android.graphics.Paint.Style.STROKE
-        strokeWidth = max(1f, bitmap.width / 400f)
-        isAntiAlias = true
-    }
-    val r = max(3f, bitmap.width / 200f)
-    for (star in result.stars.take(80)) {
-        canvas.drawCircle(star.x, star.y, r, paint)
-    }
-}
-
-private fun readPixel(data: ByteArray, width: Int, x: Int, y: Int, bpp: Int): Float {
-    val i = (y * width + x) * bpp
-    return if (bpp >= 2) {
-        ((data[i].toInt() and 0xFF) or ((data[i + 1].toInt() and 0xFF) shl 8)).toFloat()
-    } else {
-        (data[i].toInt() and 0xFF).toFloat()
     }
 }

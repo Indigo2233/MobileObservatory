@@ -83,8 +83,8 @@ class WideFieldSolverTest {
         val stars = imagedStars.mapIndexed { index, star ->
             val local = localCoordinates(centerRa, centerDec, star.raDeg, star.decDeg)
             ExtractedStar(
-                x = (((local.first / local.third) / tan(Math.toRadians(fovWidth / 2.0)) + 1.0) * width / 2.0).toFloat(),
-                y = ((1.0 - (local.second / local.third) / tan(Math.toRadians(fovHeight / 2.0))) * height / 2.0).toFloat(),
+                x = ((1.0 - (local.first / local.third) / tan(Math.toRadians(fovWidth / 2.0))) * width / 2.0 - 0.5).toFloat(),
+                y = ((1.0 - (local.second / local.third) / tan(Math.toRadians(fovHeight / 2.0))) * height / 2.0 - 0.5).toFloat(),
                 peak = 1000f - index, flux = 500f, snr = 100f - index, background = 10f
             )
         }

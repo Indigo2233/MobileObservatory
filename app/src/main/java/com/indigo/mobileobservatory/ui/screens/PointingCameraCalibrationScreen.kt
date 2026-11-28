@@ -23,6 +23,7 @@ import com.indigo.mobileobservatory.R
 import com.indigo.mobileobservatory.astro.*
 import com.indigo.mobileobservatory.astrometry.D50Manager
 import com.indigo.mobileobservatory.camera.*
+import com.indigo.mobileobservatory.pointing.hasCurrentPhoneImageAxes
 import com.indigo.mobileobservatory.pointing.*
 import com.indigo.mobileobservatory.ui.viewmodel.CameraViewModel
 import kotlinx.coroutines.*
@@ -484,8 +485,13 @@ private fun calibrationLensLabel(context: android.content.Context, camera: Phone
 
 @Composable internal fun PointingRelationshipSummary(value: OpticalCalibration, sourceName: String) {
     Text(stringResource(R.string.wfc_relationship, sourceName), style = MaterialTheme.typography.titleSmall)
-    Text(stringResource(if (value.valid) R.string.wfc_relationship_valid else R.string.wfc_relationship_invalid),
-        color = if (value.valid) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error)
+    val oldPhoneAxes = value.source.deviceId == "phone" && !value.sourceIntrinsicsFingerprint.hasCurrentPhoneImageAxes()
+    val valid = value.valid && !oldPhoneAxes
+    Text(stringResource(when {
+        oldPhoneAxes -> R.string.push_to_recalibrate_axes
+        valid -> R.string.wfc_relationship_valid
+        else -> R.string.wfc_relationship_invalid
+    }), color = if (valid) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error)
 }
 
 @Composable private fun PointingPairDetails(pair: CalibrationPair, mount: Pair<Double, Double>?, fit: OpticalCalibration?) {

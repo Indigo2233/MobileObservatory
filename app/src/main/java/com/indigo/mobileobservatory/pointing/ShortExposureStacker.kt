@@ -154,7 +154,7 @@ object ShortExposureStacker {
     }
 
     private fun basisRight(attitude: BurstAttitude): Direction3 =
-        attitude.imageUp.cross(attitude.opticalAxis).unit() * if (attitude.mirrored) -1.0 else 1.0
+        attitude.opticalAxis.cross(attitude.imageUp).unit() * if (attitude.mirrored) -1.0 else 1.0
 
     /** Same Double operations as materialized warp, evaluated directly while stacking. */
     private class WarpSampler(private val width: Int, private val height: Int,

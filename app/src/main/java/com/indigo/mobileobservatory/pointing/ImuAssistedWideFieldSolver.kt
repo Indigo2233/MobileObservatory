@@ -70,8 +70,8 @@ internal object ImuAssistedWideFieldSolver {
 
         val imagePoints = imageStars.map { star ->
             Point2(
-                ((star.x / frameWidth) * 2.0 - 1.0) * tan(Math.toRadians(fovWidthDeg / 2.0)),
-                (1.0 - (star.y / frameHeight) * 2.0) * tan(Math.toRadians(fovHeightDeg / 2.0))
+                (1.0 - (star.x + 0.5) / frameWidth * 2.0) * tan(Math.toRadians(fovWidthDeg / 2.0)),
+                (1.0 - (star.y + 0.5) / frameHeight * 2.0) * tan(Math.toRadians(fovHeightDeg / 2.0))
             )
         }
         var best: Candidate? = null

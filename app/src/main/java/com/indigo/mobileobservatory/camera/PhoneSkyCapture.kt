@@ -19,6 +19,7 @@ import android.media.ImageReader
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.Looper
 import android.util.Range
 import android.util.Size
 import android.view.Surface
@@ -27,6 +28,7 @@ import com.indigo.mobileobservatory.pointing.LensCalibrationCoordinateDomain
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.Executor
@@ -206,7 +208,7 @@ class PhoneSkyCapture(private val context: Context) {
 
         try {
             val openStart = System.nanoTime()
-            device = openCamera(openId, handler)
+            device = openCamera(openId)
             val physicalId = capability.logicalParentId?.let { capability.cameraId }
             session = createSession(device, reader.surface, physicalId, handler)
             val sessionOpenLatencyMs = (System.nanoTime() - openStart) / 1_000_000
@@ -446,12 +448,16 @@ class PhoneSkyCapture(private val context: Context) {
         return PhoneMonoFrameConverter.chooseStreamIndex(sizes.map { it.width to it.height }, maxLongSide)?.let(sizes::get)
     }
 
-    private suspend fun openCamera(cameraId: String, handler: Handler): CameraDevice =
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private suspend fun openCamera(cameraId: String): CameraDevice =
         suspendCancellableCoroutine { cont ->
+            // The capture thread may quit while Camera2 is still opening the device.
+            // Keep this callback deliverable so a late camera can be closed.
+            val callbackHandler = Handler(Looper.getMainLooper())
             try {
                 manager.openCamera(cameraId, object : CameraDevice.StateCallback() {
                     override fun onOpened(camera: CameraDevice) {
-                        if (cont.isActive) cont.resume(camera)
+                        cont.resume(camera) { camera.close() }
                     }
 
                     override fun onDisconnected(camera: CameraDevice) {
@@ -467,15 +473,15 @@ class PhoneSkyCapture(private val context: Context) {
                             cont.resumeWithException(IllegalStateException("Camera error $error"))
                         }
                     }
-                }, handler)
+                }, callbackHandler)
             } catch (e: SecurityException) {
                 cont.resumeWithException(e)
             } catch (e: CameraAccessException) {
                 cont.resumeWithException(e)
             }
-            cont.invokeOnCancellation { /* device closed in outer finally */ }
         }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
     private suspend fun createSession(
         device: CameraDevice,
         surface: Surface,
@@ -484,7 +490,7 @@ class PhoneSkyCapture(private val context: Context) {
     ): CameraCaptureSession = suspendCancellableCoroutine { cont ->
         val callback = object : CameraCaptureSession.StateCallback() {
             override fun onConfigured(session: CameraCaptureSession) {
-                if (cont.isActive) cont.resume(session)
+                cont.resume(session) { session.close() }
             }
 
             override fun onConfigureFailed(session: CameraCaptureSession) {
@@ -558,6 +564,7 @@ class PhoneSkyCapture(private val context: Context) {
         }
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
     private suspend fun stillCapture(
         device: CameraDevice,
         session: CameraCaptureSession,
@@ -588,8 +595,16 @@ class PhoneSkyCapture(private val context: Context) {
             exposureNs
         }
         builder.set(CaptureRequest.SENSOR_FRAME_DURATION, frameDuration)
-        // Infinity focus: 0.0f diopters.
-        builder.set(CaptureRequest.LENS_FOCUS_DISTANCE, 0f)
+        if (chars.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE)?.let { it > 0f } == true) {
+            builder.set(CaptureRequest.LENS_FOCUS_DISTANCE, 0f)
+        }
+        // Keep the analysis image and Camera2 geometry in the native sensor orientation.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            chars.get(CameraCharacteristics.SCALER_AVAILABLE_ROTATE_AND_CROP_MODES)
+                ?.contains(CaptureRequest.SCALER_ROTATE_AND_CROP_NONE) == true
+        ) {
+            builder.set(CaptureRequest.SCALER_ROTATE_AND_CROP, CaptureRequest.SCALER_ROTATE_AND_CROP_NONE)
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
             chars.get(CameraCharacteristics.DISTORTION_CORRECTION_AVAILABLE_MODES)
                 ?.contains(CaptureRequest.DISTORTION_CORRECTION_MODE_OFF) == true
@@ -621,14 +636,23 @@ class PhoneSkyCapture(private val context: Context) {
         fun tryComplete() {
             val img = image
             val res = result
-            if (img != null && res != null && cont.isActive) {
-                cont.resume(img to res)
+            if (img != null && res != null) {
+                image = null
+                result = null
+                reader.setOnImageAvailableListener(null, null)
+                if (cont.isActive) cont.resume(img to res) { img.close() } else img.close()
             }
         }
 
         reader.setOnImageAvailableListener({ r ->
             try {
-                image = r.acquireNextImage()
+                val next = r.acquireNextImage() ?: return@setOnImageAvailableListener
+                if (!cont.isActive) {
+                    next.close()
+                    return@setOnImageAvailableListener
+                }
+                image?.close()
+                image = next
                 tryComplete()
             } catch (e: Exception) {
                 if (cont.isActive) cont.resumeWithException(e)

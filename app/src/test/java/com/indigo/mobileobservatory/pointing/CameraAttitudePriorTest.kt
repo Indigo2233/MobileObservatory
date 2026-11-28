@@ -47,10 +47,12 @@ class CameraAttitudePriorTest {
         )
         val upright = CameraAttitudePrior.imageAxesEnu(matrix, sensorOrientationDeg = 0)
         assertTrue(upright.opticalAxis.angleDeg(Direction3(0.0, 0.0, 1.0)) < 1e-6)
-        assertTrue(upright.imageUp.angleDeg(Direction3(0.0, 1.0, 0.0)) < 1e-6)
+        assertTrue(upright.imageUp.angleDeg(Direction3(0.0, -1.0, 0.0)) < 1e-6)
+        assertTrue(upright.imageRight.angleDeg(Direction3(1.0, 0.0, 0.0)) < 1e-6)
 
         val rotated = CameraAttitudePrior.imageAxesEnu(matrix, sensorOrientationDeg = 90)
         assertTrue(rotated.imageUp.angleDeg(Direction3(1.0, 0.0, 0.0)) < 1e-6)
+        assertTrue(rotated.imageRight.angleDeg(Direction3(0.0, 1.0, 0.0)) < 1e-6)
     }
 
     @Test

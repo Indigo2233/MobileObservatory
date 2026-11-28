@@ -61,8 +61,8 @@ class WideFieldPositionAngleTest {
             val v = doubleArrayOf(cos(dec) * cos(ra), cos(dec) * sin(ra), sin(dec))
             val tx = dot(v, east) / dot(v, center); val ty = dot(v, north) / dot(v, center)
             val x = tx * cos(theta) - ty * sin(theta); val y = tx * sin(theta) + ty * cos(theta)
-            ExtractedStar(((x / tan(Math.toRadians(fovW / 2)) + 1) * width / 2).toFloat(),
-                ((1 - y / tan(Math.toRadians(fovH / 2))) * height / 2).toFloat(), 1000f - i, 500f, 100f - i, 10f)
+            ExtractedStar(((1 - x / tan(Math.toRadians(fovW / 2))) * width / 2 - 0.5).toFloat(),
+                ((1 - y / tan(Math.toRadians(fovH / 2))) * height / 2 - 0.5).toFloat(), 1000f - i, 500f, 100f - i, 10f)
         }
         return WideFieldSolveRequest(StarExtractionResult(stars, 32, 5f, null, 10f, 1f), width, height,
             fovW, fovH, instant, site, PhoneBrightStarCatalog.of(catalog))

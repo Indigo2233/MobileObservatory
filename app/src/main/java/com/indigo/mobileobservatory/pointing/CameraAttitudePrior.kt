@@ -46,8 +46,8 @@ internal object CameraAttitudePrior {
      *
      * The buffer used by star extraction is sensor-native (not display-rotated).
      * `SENSOR_ORIENTATION` is the clockwise rotation that would make that buffer upright
-     * in the device's natural portrait orientation; the same angle maps device +X/+Y onto
-     * image +X (right) / +Y (down). Matcher +Y is image-up, i.e. the opposite of image-down.
+     * in the device's natural orientation. Apply the inverse to express the sensor-native
+     * image axes in device coordinates. A rear camera looks along device -Z.
      */
     fun imageAxesEnu(rotationMatrix: FloatArray, sensorOrientationDeg: Int): CameraImageAxes {
         require(rotationMatrix.size >= 9) { "Rotation matrix must contain 9 elements" }
@@ -58,8 +58,8 @@ internal object CameraAttitudePrior {
         val cos = cos(theta)
         val sin = sin(theta)
         val opticalAxis = (deviceZ * -1.0).unit()
-        val imageRight = (deviceX * cos + deviceY * sin).unit()
-        val imageUp = opticalAxis.cross(imageRight).unit()
+        val imageRight = (deviceX * cos - deviceY * sin).unit()
+        val imageUp = imageRight.cross(opticalAxis).unit()
         return CameraImageAxes(opticalAxis, imageRight, imageUp)
     }
 

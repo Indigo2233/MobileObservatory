@@ -61,6 +61,48 @@ class WideFieldStarExtractorTest {
         assertTrue(result.stars.none { hypotDist(it.x, it.y, 48f, 48f) < 3f })
     }
 
+    @Test
+    fun measuresFaintStarsOnCloudGradientAndRejectsAnEdgeAndHotPixel() {
+        val width = 160
+        val height = 128
+        val cx = 76.35
+        val cy = 82.65
+        val pixels = FloatArray(width * height) { index ->
+            val x = index % width
+            val y = index / width
+            val cloudySky = 70 + 0.85 * y + 0.28 * x
+            val star = 18 * kotlin.math.exp(-((x - cx) * (x - cx) + (y - cy) * (y - cy)) / 1.8)
+            if (y >= 112) 250f else (cloudySky + star).toInt().toFloat()
+        }
+        pixels[48 * width + 48] = 255f
+        val result = WideFieldStarExtractor.extract(pixels, width, height)
+
+        assertEquals(1, result.stars.size)
+        assertEquals(cx, result.stars.single().x.toDouble(), 0.2)
+        assertEquals(cy, result.stars.single().y.toDouble(), 0.2)
+    }
+
+    @Test
+    fun keepsOneAduWingsWhenMeasuringAnUndersampledStar() {
+        val width = 64
+        val pixels = FloatArray(width * width) { 80f }
+        val center = 32
+        for (dy in -1..1) {
+            for (dx in -1..1) {
+                pixels[(center + dy) * width + center + dx] += when (dx * dx + dy * dy) {
+                    0 -> 10f
+                    1 -> 3f
+                    else -> 1f
+                }
+            }
+        }
+
+        val star = WideFieldStarExtractor.extract(pixels, width, width).stars.single()
+        assertEquals(center.toFloat(), star.x, 0.01f)
+        assertEquals(center.toFloat(), star.y, 0.01f)
+        assertEquals(1.0f, star.roundness, 0.01f)
+    }
+
     private fun paintStar(pixels: FloatArray, width: Int, cx: Int, cy: Int, peak: Float) {
         for (dy in -3..3) {
             for (dx in -3..3) {

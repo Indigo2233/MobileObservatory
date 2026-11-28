@@ -39,7 +39,8 @@ data class PhoneSkySolveResult(
     val inputFrameCount: Int = 1,
     val observation: OpticalObservation? = null,
     val exposureMotionDeg: Double? = null,
-    val handEyeSample: HandEyeSample? = null
+    val handEyeSample: HandEyeSample? = null,
+    val mirrorBurstFallback: Boolean = false
 ) {
     init {
         require(inputFrameCount >= 0)
@@ -281,8 +282,9 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
         cameraId: String? = null,
         preferRaw: Boolean = true,
         burstFrameCount: Int = 1,
+        updateLivePointing: Boolean = true,
         onProgress: (PhoneSkySolveStage) -> Unit = {},
-        onCapture: (FrameData, StarExtractionResult, Int) -> Unit = { _, _, _ -> },
+        onCapture: (frame: FrameData, stars: StarExtractionResult, sensorOrientation: Int) -> Unit = { _, _, _ -> },
         onBurstProgress: (completed: Int, total: Int) -> Unit = { _, _ -> },
         mirrored: Boolean = false,
         installationRevision: Long = 0,
@@ -296,9 +298,9 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
 
         return try {
             updateSensorSampling(SystemClock.elapsedRealtime())
-            observerSite = site
+            if (updateLivePointing) observerSite = site
             val requestedLens = cameraId ?: "default"
-            cameraId?.let { lens ->
+            cameraId?.takeIf { updateLivePointing }?.let { lens ->
                 runCatching { com.indigo.mobileobservatory.camera.PhoneCameraCapability.enumerateBackCameras(appContext)
                     .firstOrNull { it.cameraId == lens } }.getOrNull()?.let { prepareLens(requestedLens, it.sensorOrientation) }
             }
@@ -319,8 +321,9 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
                 )
             }
             val capture = burst.first
-            val captureOrientationMatches = lastSensorOrientationDeg == capture.metadata.sensorOrientation
-            if (!captureOrientationMatches) prepareLens(requestedLens, capture.metadata.sensorOrientation)
+            val captureOrientationMatches = activeLensKey == requestedLens &&
+                lastSensorOrientationDeg == capture.metadata.sensorOrientation
+            if (updateLivePointing && !captureOrientationMatches) prepareLens(requestedLens, capture.metadata.sensorOrientation)
             val captureIdentity = capture.metadata.pointingIdentity(installationRevision, opticsRevision)
             val captureGeometry = capture.metadata.pointingGeometry(capture.frame.width, capture.frame.height, capture.usedRaw, mirrored)
             require(burst.captures.all { item ->
@@ -336,7 +339,7 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
             val firstStamp = capture.metadata.observationStamp
             val poses = burst.captures.map { item ->
                 val stamp = item.metadata.observationStamp ?: return@map null
-                if (firstStamp == null || !stamp.compatibleClock(firstStamp)) return@map null
+                if (!captureOrientationMatches || firstStamp == null || !stamp.compatibleClock(firstStamp)) return@map null
                 attitudeTimeline.sampleElapsed(stamp.elapsedMidpointMs)?.opticalPoseForCapture(mirrored, extrinsic)?.let { pose ->
                     BurstAttitude(Direction3(pose.forward.x, pose.forward.y, pose.forward.z),
                         Direction3(pose.up.x, pose.up.y, pose.up.z), mirrored)
@@ -347,12 +350,14 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
             val canAlignMirrorBurst = !mirrored || (extrinsic != null && poses.all { it != null } &&
                 capture.fovWidthDeg?.let { it > 1.0 } == true && capture.fovHeightDeg?.let { it > 1.0 } == true)
             val includedCaptures = if (canAlignMirrorBurst) burst.captures else listOf(capture)
+            val mirrorBurstFallback = mirrored && burstFrameCount > 1 && includedCaptures.size == 1
             val lastStamp = includedCaptures.last().metadata.observationStamp
             val exposureMotion = if (firstStamp != null && lastStamp != null) attitudeTimeline.motionDuring(
                 firstStamp.elapsedMidpointMs - firstStamp.exposureDurationMs / 2,
                 lastStamp.elapsedMidpointMs + lastStamp.exposureDurationMs / 2) else null
-            val exposurePose = firstStamp?.let { attitudeTimeline.sampleElapsed(it.elapsedMidpointMs) }
-            lastSensorOrientationDeg = capture.metadata.sensorOrientation
+            val exposurePose = firstStamp?.takeIf { captureOrientationMatches }?.let {
+                attitudeTimeline.sampleElapsed(it.elapsedMidpointMs)
+            }
             val stacked = withContext(Dispatchers.Default) {
                 ShortExposureStacker.stack(
                     frames = includedCaptures.map { it.frame },
@@ -388,9 +393,9 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
                 sampledFootprint = capture.metadata.solveFootprint
             )
             val solveExtraction = if (!mirrored) correctedExtraction else correctedExtraction.copy(
-                stars = correctedExtraction.stars.map { it.copy(x = stacked.frame.width - it.x) })
+                stars = correctedExtraction.stars.map { it.copy(x = stacked.frame.width - 1 - it.x) })
             val extractionNanos = System.nanoTime() - extractionStarted
-            onCapture(stacked.frame, extraction, stacked.inputFrameCount)
+            onCapture(stacked.frame, extraction, capture.metadata.sensorOrientation)
             if (stacked.rejectedMotionFrames >= (burst.captures.size + 1) / 2 &&
                 extraction.stars.size < 8
             ) {
@@ -408,7 +413,8 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
                     frame = stacked.frame,
                     extraction = extraction,
                     cameraLabel = capture.capability.displayLabel,
-                    inputFrameCount = stacked.inputFrameCount
+                    inputFrameCount = stacked.inputFrameCount,
+                    mirrorBurstFallback = mirrorBurstFallback
                 )
             }
             withContext(Dispatchers.IO) {
@@ -469,7 +475,8 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
                     frame = stacked.frame,
                     extraction = extraction,
                     cameraLabel = capture.capability.displayLabel,
-                    inputFrameCount = stacked.inputFrameCount
+                    inputFrameCount = stacked.inputFrameCount,
+                    mirrorBurstFallback = mirrorBurstFallback
                 )
             } else {
                 val stamp = capture.metadata.observationStamp
@@ -487,7 +494,7 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
                         acquisitionDeviceId = "phone/${captureIdentity.physicalLensId}",
                         plateScaleDegPerPixel = localSolve.arcsecPerPixel?.div(3600.0))
                 } else null
-                if (opticalObservation != null && midSnapshot != null && capturedSensorSession == sensorSessionRevision) {
+                if (updateLivePointing && opticalObservation != null && midSnapshot != null && capturedSensorSession == sensorSessionRevision) {
                     alignment.align(opticalObservation, midSnapshot, site, matchedHandEye)
                     anchorHandEyeUncertaintyDeg = matchedHandEye?.uncertaintyDeg ?: 0.0
                     publish(rawDirection ?: midSnapshot.opticalAxis, System.currentTimeMillis())
@@ -509,7 +516,8 @@ class PhoneSkyAttitudeSource(context: Context) : SkyAttitudeSource, SensorEventL
                     handEyeSample = if (opticalObservation != null && midSnapshot?.elapsedMs != null) midSnapshot.imuPose()?.let {
                         HandEyeSample(opticalObservation, it, midSnapshot.timestampMs, midSnapshot.elapsedMs, site,
                             "$sensorStreamIdentity:$capturedSensorSession")
-                    } else null
+                    } else null,
+                    mirrorBurstFallback = mirrorBurstFallback
                 )
             }
         } catch (cancel: kotlinx.coroutines.CancellationException) {

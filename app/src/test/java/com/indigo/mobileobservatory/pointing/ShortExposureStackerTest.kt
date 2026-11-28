@@ -50,6 +50,22 @@ class ShortExposureStackerTest {
         }
     }
 
+    @Test fun afterTurningCameraRightItsCenterStarMovesRightWhenWarpedBack() {
+        val width = 101
+        val height = 81
+        val pixels = ByteArray(width * height)
+        pixels[height / 2 * width + width / 2] = 100
+        val frame = FrameData(pixels, width, height, PixelFormat.MONO8, 1, 1)
+        val up = Direction3(0.0, 1.0, 0.0)
+        val reference = BurstAttitude(Direction3(0.0, 0.0, -1.0), up)
+        val angle = Math.toRadians(3.0)
+        val turnedRight = BurstAttitude(Direction3(sin(angle), 0.0, -cos(angle)), up)
+        val warped = ShortExposureStacker.warp(frame, turnedRight, reference, 60.0, 46.0)
+
+        val expectedX = (width / 2.0 - 0.5 + tan(angle) / tan(Math.toRadians(30.0)) * width / 2).roundToInt()
+        assertEquals(100.toByte(), warped.data[height / 2 * width + expectedX])
+    }
+
     @Test fun aCommonWorldRotationCancelsFromExtrinsicOpticalBurstAlignment() {
         val x = pose(SkyVector(1.0, -2.0, 1.0), 127.0)
         val imu0 = pose(SkyVector(0.0, 1.0, 0.0), 0.0)

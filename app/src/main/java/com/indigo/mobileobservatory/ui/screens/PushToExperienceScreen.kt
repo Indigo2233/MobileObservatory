@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.SystemClock
 import android.view.HapticFeedbackConstants
 import android.view.WindowManager
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -15,7 +16,6 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -35,6 +35,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -79,9 +80,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.PopupProperties
 import com.indigo.mobileobservatory.R
@@ -109,6 +108,7 @@ import com.indigo.mobileobservatory.pointing.PointingRepository
 import com.indigo.mobileobservatory.pointing.PointingEstimate
 import com.indigo.mobileobservatory.pointing.OpticalIdentity
 import com.indigo.mobileobservatory.pointing.ImageParity
+import com.indigo.mobileobservatory.pointing.hasCurrentPhoneImageAxes
 import com.indigo.mobileobservatory.pointing.PushToVerificationSession
 import com.indigo.mobileobservatory.pointing.PushToVerificationState
 import com.indigo.mobileobservatory.pointing.VerificationPhase
@@ -171,6 +171,7 @@ fun PushToScreen(
     }
     var currentFix by remember { mutableStateOf<SkyAttitudeFix?>(null) }
     var site by remember { mutableStateOf<ObserverSite?>(null) }
+    var siteFailure by remember { mutableStateOf<String?>(null) }
     val sharedSite = rememberSavedObserverSite()
     LaunchedEffect(sharedSite?.site) { sharedSite?.site?.let { site = it } }
     var cameras by remember { mutableStateOf<List<PhoneCameraCapability>>(emptyList()) }
@@ -182,16 +183,20 @@ fun PushToScreen(
     var preferRaw by rememberSaveable { mutableStateOf(true) }
     var burstFrameCount by rememberSaveable { mutableFloatStateOf(1f) }
     var cameraMenuOpen by remember { mutableStateOf(false) }
-    var settingsExpanded by rememberSaveable { mutableStateOf(false) }
     var solving by remember { mutableStateOf(false) }
     var sessionArmed by remember { mutableStateOf(false) }
     var motionPhase by remember { mutableStateOf(MotionPhase.STILL) }
     var captureDue by remember { mutableStateOf(true) }
-    var lastSolveEndedMs by remember { mutableStateOf(0L) }
     var status by remember { mutableStateOf("") }
+    var diagnosticStatus by remember { mutableStateOf("") }
+    var showDiagnostic by remember { mutableStateOf(false) }
+    var showDiagnosticDetails by remember { mutableStateOf(false) }
+    var diagnosticSolution by remember { mutableStateOf<WideFieldSolveResult?>(null) }
+    var verificationFailure by remember { mutableStateOf("") }
     var capturedFrame by remember { mutableStateOf<FrameData?>(null) }
     var extraction by remember { mutableStateOf<StarExtractionResult?>(null) }
-    var skySolution by remember { mutableStateOf<WideFieldSolveResult?>(null) }
+    var captureOrientation by remember { mutableStateOf(0) }
+    var showSettings by rememberSaveable { mutableStateOf(false) }
     var needsSingleFrameVerification by remember { mutableStateOf(false) }
     var eyepieceFov by rememberSaveable { mutableFloatStateOf(1.5f) }
     var previousProximity by remember { mutableStateOf<GuidanceProximity?>(null) }
@@ -205,7 +210,6 @@ fun PushToScreen(
     var fieldHeight by rememberSaveable { mutableStateOf("1.0") }
     var fieldDialog by remember { mutableStateOf(false) }
     var opticsDialog by rememberSaveable { mutableStateOf(false) }
-    var fieldAdvanced by rememberSaveable { mutableStateOf(false) }
     var localOptics by remember { mutableStateOf(com.indigo.mobileobservatory.astro.PointingOpticsConfiguration.load(
         com.indigo.mobileobservatory.astro.AndroidOpticsPrefs(opticsPrefs))) }
     val workingOptics = opticsConfiguration ?: localOptics
@@ -217,9 +221,11 @@ fun PushToScreen(
     fun lensMatchesSelection(key: String): Boolean = if (configuredCamera?.isPhysicalSubCamera == true)
         key == selectedLensKey else configuredCamera?.let { key.startsWith("${it.openableCameraId}/") } == true
     val actualLensKey = source.latestObservation?.identity?.physicalLensId?.takeIf(::lensMatchesSelection)
-    val matchingCalibration = relationships.filter { it.valid && it.source.deviceId == "phone" &&
+    val lensRelationships = relationships.filter { it.valid && it.source.deviceId == "phone" &&
         lensMatchesSelection(it.source.physicalLensId) && (actualLensKey == null || it.source.physicalLensId == actualLensKey) &&
-        it.target == opticalAxis }.maxByOrNull { it.version }
+        it.target == opticalAxis }
+    val matchingCalibration = lensRelationships.filter { it.sourceIntrinsicsFingerprint.hasCurrentPhoneImageAxes() }.maxByOrNull { it.version }
+    val needsAxesRecalibration = matchingCalibration == null && lensRelationships.isNotEmpty()
     fun calibrationIdentity(value: com.indigo.mobileobservatory.pointing.OpticalCalibration) =
         "${value.id}:${value.version}:${value.source}:${value.sourceParity}:${value.sourceIntrinsicsFingerprint}"
     val calibrationKey = matchingCalibration?.let(::calibrationIdentity).orEmpty()
@@ -268,6 +274,12 @@ fun PushToScreen(
         return field.copy(altitudeUpRollDeg = Math.toDegrees(kotlin.math.atan2(offsets.first, offsets.second)))
     }
     LaunchedEffect(targetName, selectedRaHours, selectedDecDeg, selectedCameraId, preferRaw, calibrationKey, configuredField) {
+        solveJob?.cancel()
+        verificationFailure = ""
+        showDiagnostic = false
+        diagnosticSolution = null
+        capturedFrame = null
+        extraction = null
         calibrationMismatch = false
         verification.setTask(taskSignature(), calibrationKey)
         verificationState = verification.tick(SystemClock.elapsedRealtime())
@@ -353,12 +365,14 @@ fun PushToScreen(
 
     fun loadSite() {
         if (!PhoneSiteProvider.canResolveSite(context)) return
+        siteFailure = null
         scope.launch {
             try {
                 site = PhoneSiteProvider.currentSite(context)
-                if (status.isBlank()) status = context.getString(R.string.push_to_live_ready)
-            } catch (t: Throwable) {
-                status = t.message ?: context.getString(R.string.phone_location_failed)
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (t: Exception) {
+                siteFailure = t.message ?: context.getString(R.string.phone_location_failed)
             }
         }
     }
@@ -529,25 +543,34 @@ fun PushToScreen(
         }
     }
 
-    fun startSolve(auto: Boolean, forceSingleFrame: Boolean = auto) {
+    fun startSolve(auto: Boolean, forceSingleFrame: Boolean = auto, diagnostic: Boolean = false) {
         val observer = site ?: return
         val camera = selectedCamera ?: return
-        if (solving) return
+        if (solving || (auto && showDiagnostic)) return
         val elapsed = SystemClock.elapsedRealtime()
         verification.setTask(taskSignature(), calibrationKey)
         verification.observeMotion(source.motionGate.motionEpoch, source.motionGate.phase, elapsed)
-        if (!auto) { verification.retry(elapsed); source.requestVerification() }
-        val ticket = verification.beginCapture(elapsed, allowMovingDebug = !auto && !source.available) ?: return
+        if (!auto && !diagnostic) { verification.retry(elapsed); source.requestVerification() }
+        val ticket = if (diagnostic) {
+            null
+        } else {
+            verification.beginCapture(elapsed, allowMovingDebug = !auto && !source.available) ?: return
+        }
+        val captureEpoch = source.motionGate.motionEpoch
         val requestedSignature = taskSignature()
         val captureCalibration = matchingCalibration
         val captureHandEye = handEyes.filter { captureCalibration != null && it.valid && it.source == captureCalibration.source &&
             it.geometry.parity == captureCalibration.sourceParity &&
             it.geometry.intrinsicsFingerprint == captureCalibration.sourceIntrinsicsFingerprint }.maxByOrNull { it.version }
-        source.motionGate.consumeAutoCapture()
+        if (ticket != null) source.motionGate.consumeAutoCapture()
         captureDue = source.motionGate.autoCaptureDue
         solving = true
         capturedFrame = null
         extraction = null
+        diagnosticStatus = ""
+        diagnosticSolution = null
+        showDiagnosticDetails = false
+        showDiagnostic = diagnostic
         needsSingleFrameVerification = false
         solveJob = scope.launch {
             try {
@@ -568,6 +591,7 @@ fun PushToScreen(
                 opticsRevision = captureCalibration?.source?.opticsRevision ?: 0,
                 preferRaw = preferRaw,
                 burstFrameCount = attempt.burstFrameCount,
+                updateLivePointing = !diagnostic,
                 onProgress = { stage ->
                     status = context.getString(
                         when (stage) {
@@ -578,14 +602,10 @@ fun PushToScreen(
                         }
                     )
                 },
-                onCapture = { frame, stars, count ->
+                onCapture = { frame, stars, orientation ->
                     capturedFrame = frame
                     extraction = stars
-                    status = if (count > 1) {
-                        context.getString(R.string.push_to_stage_stacked, count)
-                    } else {
-                        context.getString(R.string.push_to_stage_extracting)
-                    }
+                    captureOrientation = orientation
                 },
                 onBurstProgress = { completed, total ->
                     status = context.getString(
@@ -596,8 +616,8 @@ fun PushToScreen(
                 }
             )
             while (!result.success) {
-                if (ticket.taskGeneration != verification.state.taskGeneration ||
-                    ticket.motionEpoch != source.motionGate.motionEpoch || requestedSignature != taskSignature()) break
+                if (captureEpoch != source.motionGate.motionEpoch || requestedSignature != taskSignature() ||
+                    (ticket != null && ticket.taskGeneration != verification.state.taskGeneration)) break
                 val next = PhoneSolveCaptureLadder.next(
                     current = attempt,
                     failure = result.skySolution?.failure,
@@ -610,15 +630,16 @@ fun PushToScreen(
                 ) ?: break
                 attempt = next
                 attemptIndex++
-                exposureSeconds = attempt.exposureSeconds.toFloat()
-                burstFrameCount = attempt.burstFrameCount.toFloat()
-                if (attempt.iso == PhoneManualExposure.ISO_AUTO) {
-                    autoIso = true
-                } else {
-                    autoIso = false
-                    iso = attempt.iso.toFloat()
+                if (!diagnostic) {
+                    exposureSeconds = attempt.exposureSeconds.toFloat()
+                    autoIso = attempt.iso == PhoneManualExposure.ISO_AUTO
+                    if (!autoIso) iso = attempt.iso.toFloat()
                 }
-                status = context.getString(R.string.push_to_retrying, attempt.burstFrameCount)
+                status = if (attempt.burstFrameCount > 1) {
+                    context.getString(R.string.push_to_retrying, attempt.burstFrameCount)
+                } else {
+                    context.getString(R.string.push_to_stage_capturing)
+                }
                 result = source.captureAndSolve(
                     site = observer,
                     exposureSeconds = attempt.exposureSeconds,
@@ -630,6 +651,7 @@ fun PushToScreen(
                     opticsRevision = captureCalibration?.source?.opticsRevision ?: 0,
                     preferRaw = preferRaw,
                     burstFrameCount = attempt.burstFrameCount,
+                    updateLivePointing = !diagnostic,
                     onProgress = { stage ->
                         status = context.getString(
                             when (stage) {
@@ -640,9 +662,10 @@ fun PushToScreen(
                             }
                         )
                     },
-                    onCapture = { frame, stars, _ ->
+                    onCapture = { frame, stars, orientation ->
                         capturedFrame = frame
                         extraction = stars
+                        captureOrientation = orientation
                     },
                     onBurstProgress = { completed, total ->
                         status = context.getString(
@@ -655,15 +678,17 @@ fun PushToScreen(
             }
             capturedFrame = result.frame ?: capturedFrame
             extraction = result.extraction ?: extraction
-            skySolution = result.skySolution
-            needsSingleFrameVerification = result.requiresSingleFrameVerification
+            needsSingleFrameVerification = !diagnostic && result.requiresSingleFrameVerification
             val observation = result.observation
             val relation = observation?.let { repository.relationshipFor(it, opticalAxis) }
             val absolute = if (observation != null && relation != null) relation.estimate(observation, opticalAxis) else null
-            val currentTask = requestedSignature == taskSignature() && ticket.taskGeneration == verification.state.taskGeneration &&
-                ticket.motionEpoch == source.motionGate.motionEpoch
+            val sameTask = requestedSignature == taskSignature() &&
+                (ticket == null || ticket.taskGeneration == verification.state.taskGeneration)
+            val captureMoved = captureEpoch != source.motionGate.motionEpoch
+            val currentTask = sameTask && !captureMoved
             var accepted = false
-            if (observation != null && relation != null && absolute != null && currentTask) {
+            if (ticket != null && observation != null && relation != null && absolute != null &&
+                currentTask) {
                 val instant = Instant.ofEpochMilli(observation.stamp.utcMidpointMs)
                 val measuredAxis = CoordinateTransform.j2000ToTopocentric(
                     EquatorialCoordinates(absolute.direction.raDeg, absolute.direction.decDeg), instant, observer, null)
@@ -683,36 +708,44 @@ fun PushToScreen(
                     axisEstimate = repository.publish(observation, opticalAxis)
                     calibrationMismatch = false
                 }
-            } else {
-                if (observation != null && relation == null) { calibrationMismatch = true; axisEstimate = null }
+            } else if (ticket != null) {
+                if (currentTask && observation != null && relation == null) { calibrationMismatch = true; axisEstimate = null }
                 verification.fail(ticket, SystemClock.elapsedRealtime(), if (result.success) "observation_not_usable" else "solve_failed")
             }
             verificationState = verification.tick(SystemClock.elapsedRealtime())
-            status = if (result.success) {
-                context.getString(
-                    R.string.push_to_solve_success,
-                    result.extraction?.stars?.size ?: 0
-                )
-            } else if (result.skySolution?.failure == com.indigo.mobileobservatory.pointing.WideFieldSolveFailure.RESOURCE_LIMIT) {
-                result.message
-            } else {
-                context.getString(
-                    PushToSolveCopy.messageRes(
-                        result.skySolution?.failure,
-                        result.extraction?.stars?.size ?: 0
-                    )
-                )
+            status = when {
+                accepted -> ""
+                diagnostic && result.success -> context.getString(R.string.push_to_diagnostic_solved)
+                result.requiresSingleFrameVerification -> context.getString(R.string.wfp_burst_image_only)
+                result.success && captureCalibration == null -> context.getString(R.string.push_to_preview_solved)
+                result.success -> context.getString(R.string.wf_push_verification_rejected)
+                result.skySolution?.failure == com.indigo.mobileobservatory.pointing.WideFieldSolveFailure.RESOURCE_LIMIT ->
+                    result.message
+                else -> {
+                    val message = PushToSolveCopy.messageRes(result.skySolution?.failure, result.extraction?.stars?.size ?: 0)
+                    context.getString(if (message == R.string.push_to_fail_few_stars && !diagnostic)
+                        R.string.push_to_fail_few_stars_single else message)
+                }
             }
-            persistCaptureSettings(camera.cameraId)
-            if (result.success) settingsExpanded = false
-            if (result.success && !accepted) status = context.getString(if (result.requiresSingleFrameVerification)
-                R.string.wfp_burst_image_only else R.string.wf_push_verification_rejected)
-            source.motionGate.notifyCaptureFinished(ticket.motionEpoch, success = accepted)
-            lastSolveEndedMs = SystemClock.elapsedRealtime()
+            if (diagnostic) {
+                val frames = when {
+                    result.mirrorBurstFallback -> context.getString(R.string.push_to_mirror_burst_fallback)
+                    result.inputFrameCount > 0 && result.inputFrameCount < attempt.burstFrameCount ->
+                        context.getString(R.string.push_to_partial_burst, result.inputFrameCount, attempt.burstFrameCount)
+                    result.inputFrameCount > 0 -> context.getString(R.string.push_to_diagnostic_frames, result.inputFrameCount)
+                    else -> null
+                }
+                diagnosticStatus = listOfNotNull(status.takeIf { it.isNotBlank() }, frames).joinToString("\n")
+                diagnosticSolution = result.skySolution?.takeIf { it.success }
+            } else if (sameTask) {
+                verificationFailure = if (captureMoved) context.getString(R.string.push_to_fail_motion) else status
+            }
+            if (!diagnostic) persistCaptureSettings(camera.cameraId)
+            if (ticket != null) source.motionGate.notifyCaptureFinished(ticket.motionEpoch, success = accepted)
             captureDue = source.motionGate.autoCaptureDue
             solving = false
             } catch (cancel: CancellationException) {
-                verification.fail(ticket, SystemClock.elapsedRealtime(), "capture_cancelled")
+                if (ticket != null) verification.fail(ticket, SystemClock.elapsedRealtime(), "capture_cancelled")
                 throw cancel
             } finally {
                 solving = false
@@ -724,6 +757,7 @@ fun PushToScreen(
 
     LaunchedEffect(
         sessionArmed,
+        showDiagnostic,
         pageVisible,
         readyToCapture,
         motionPhase,
@@ -734,19 +768,27 @@ fun PushToScreen(
         calibrationKey,
         configuredField
     ) {
-        if (!pageVisible || !sessionArmed || !readyToCapture || matchingCalibration == null ||
+        if (!pageVisible || showDiagnostic || !sessionArmed || !readyToCapture || matchingCalibration == null ||
             calibrationMismatch || configuredField == null || !source.available || !verificationState.needsReference ||
             verificationState.phase == VerificationPhase.RETRY_LIMIT) return@LaunchedEffect
         startSolve(auto = true)
     }
 
+    val calibrationNeeded = matchingCalibration == null || calibrationMismatch
+    val canCaptureNow = cameraPermissionGranted && readyToCapture && (motionPhase == MotionPhase.STILL || !source.available)
     val usagePrompt = when {
-        matchingCalibration == null || calibrationMismatch -> stringResource(R.string.wf_push_calibration_needed)
+        solving -> status.ifBlank { stringResource(R.string.wf_push_verifying) }
+        needsPermissions -> stringResource(R.string.push_to_permissions_needed)
+        site == null && siteFailure != null -> siteFailure.orEmpty()
+        needsAxesRecalibration -> stringResource(R.string.push_to_recalibrate_axes)
+        calibrationNeeded && selectedCamera == null && status.isNotBlank() -> status
+        calibrationNeeded -> stringResource(R.string.wf_push_calibration_needed)
+        site == null -> stringResource(R.string.push_to_waiting_site)
         configuredField == null -> stringResource(R.string.wf_push_field_unknown)
+        onTarget -> stringResource(R.string.wf_push_verified)
+        needsSingleFrameVerification && status.isNotBlank() -> status
         verificationState.phase == VerificationPhase.RETRY_LIMIT -> stringResource(R.string.wf_push_retry_limit)
         verificationState.phase == VerificationPhase.BACKOFF -> stringResource(R.string.wf_push_retry_wait)
-        solving -> stringResource(R.string.wf_push_verifying)
-        onTarget -> stringResource(R.string.wf_push_verified)
         motionPhase == MotionPhase.MOVING && hasAxisEstimate -> stringResource(R.string.push_to_keep_pushing)
         motionPhase == MotionPhase.MOVING -> stringResource(R.string.push_to_waiting_still)
         hasAxisEstimate -> stringResource(R.string.wf_push_estimated)
@@ -807,33 +849,19 @@ fun PushToScreen(
                 burstFrameCount = it
                 persistCaptureSettings(selectedCameraId)
             },
-            expanded = settingsExpanded,
-            collapsible = true,
-            onExpandedChanged = { settingsExpanded = it }
+            expanded = true,
+            collapsible = false,
+            onExpandedChanged = {}
         )
     }
-    val mainContent: @Composable (Modifier, Boolean) -> Unit = { modifier, includeSettings ->
-        if (hasAxisEstimate && site != null) {
-            Column(modifier) {
-                PushToNightChart(
-                    currentAltDeg = axisHorizontal!!.altitudeDeg,
-                    currentAzDeg = axisHorizontal.azimuthDeg,
-                    targetAltDeg = targetAlt,
-                    targetAzDeg = targetAz,
-                    site = site!!,
-                    instant = now,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(0.52f)
-                        .padding(horizontal = 12.dp, vertical = 4.dp)
-                )
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(0.35f)
-                        .padding(horizontal = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+    val mainContent: @Composable (Modifier) -> Unit = { modifier ->
+        BoxWithConstraints(modifier) {
+            val reticleHeight = (maxHeight * 0.55f).coerceIn(130.dp, 245.dp)
+            Column(
+                Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (hasAxisEstimate && !showDiagnostic) {
                     SseReticle(
                         cmd = guidance,
                         deltaAlt = animatedAlt.toDouble(),
@@ -841,176 +869,120 @@ fun PushToScreen(
                         eyepieceFovDeg = eyepieceFov.toDouble(),
                         color = guidanceColor(guidance.proximity),
                         pulseAlpha = 0.85f,
-                        modifier = Modifier.weight(1f).fillMaxSize()
+                        modifier = Modifier.fillMaxWidth().height(reticleHeight)
                     )
-                    Column(
-                        modifier = Modifier.weight(0.8f).padding(8.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
+                    if (!onTarget) {
+                        Text(moveLabel, color = guidanceColor(guidance.proximity),
+                            style = MaterialTheme.typography.titleLarge)
                         Text(
-                            usagePrompt,
-                            color = guidanceColor(guidance.proximity),
-                            style = MaterialTheme.typography.headlineSmall,
-                            fontWeight = FontWeight.Bold,
-                            textAlign = TextAlign.Center
-                        )
-                        if (!onTarget) {
-                            Text(
-                                moveLabel,
-                                color = guidanceColor(guidance.proximity),
-                                style = MaterialTheme.typography.titleMedium,
-                                textAlign = TextAlign.Center
-                            )
-                        }
-                        Text(
-                            stringResource(
-                                R.string.push_to_distance_remaining,
-                                PushToGuidance.formatDegrees(guidance.separationDeg)
-                            ),
-                            color = Color(0xFFBCAAA4),
-                            fontFamily = FontFamily.Monospace
+                            stringResource(R.string.push_to_distance_remaining,
+                                PushToGuidance.formatDegrees(guidance.separationDeg)),
+                            color = Color(0xFFBCAAA4), style = MaterialTheme.typography.bodyMedium
                         )
                     }
-                }
-            }
-        } else {
-            Column(
-                modifier = modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Text(
-                    usagePrompt,
-                    color = Color(0xFFFFCC80),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
-                )
-                skySolution?.takeIf { it.success }?.let { solution ->
-                    Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF10201D))) {
-                        Text(
-                            stringResource(
-                                R.string.push_to_solution_summary,
-                                solution.raDeg ?: 0.0,
-                                solution.decDeg ?: 0.0,
-                                solution.rotationDeg ?: 0.0,
-                                solution.fovWidthDeg ?: 0.0,
-                                solution.fovHeightDeg ?: 0.0
-                            ),
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                            color = Color(0xFFB2DFDB),
-                            style = MaterialTheme.typography.bodySmall
+                    val observer = site
+                    val axis = axisHorizontal
+                    if (observer != null && axis != null) {
+                        PushToNightChart(
+                            currentAltDeg = axis.altitudeDeg,
+                            currentAzDeg = axis.azimuthDeg,
+                            targetAltDeg = targetAlt,
+                            targetAzDeg = targetAz,
+                            site = observer,
+                            instant = now,
+                            modifier = Modifier.fillMaxWidth().height(156.dp)
                         )
-                        if (!source.plateSolved) {
-                            Text(
-                                stringResource(R.string.push_to_photo_only),
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                color = Color(0xFFFFCC80),
-                                style = MaterialTheme.typography.labelSmall
-                            )
-                        }
                     }
-                }
-                capturedFrame?.let { frame ->
-                    val starCount = extraction?.stars?.size ?: 0
-                    Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF120909))) {
-                        PhoneSkyPreview(frame, extraction, Modifier.padding(4.dp))
+                } else {
+                    capturedFrame?.let { frame ->
+                        val count = extraction?.stars?.size ?: 0
+                        PhoneSkyPreview(frame, extraction, captureOrientation, Modifier.height(reticleHeight))
                         Text(
-                            stringResource(
-                                if (starCount >= 15) R.string.push_to_star_count else R.string.push_to_star_count_low,
-                                starCount
-                            ),
-                            modifier = Modifier.padding(8.dp),
-                            color = if (starCount >= 15) Color(0xFF80CBC4) else Color(0xFFFFAB91),
-                            style = MaterialTheme.typography.bodySmall
+                            stringResource(R.string.push_to_preview_candidates, count),
+                            color = Color(0xFFBCAAA4), style = MaterialTheme.typography.bodySmall
                         )
-                        if (starCount < 15 && burstFrameCount.toInt() < 16 && !solving) {
-                            TextButton(onClick = {
-                                val next = PhoneManualExposure.BURST_PRESETS
-                                    .firstOrNull { it > burstFrameCount.toInt() } ?: 16
-                                burstFrameCount = next.toFloat()
-                                persistCaptureSettings(selectedCameraId)
-                            }) {
-                                Text(stringResource(R.string.push_to_bump_burst), color = NightRed)
+                    }
+                    if (showDiagnostic && !solving) {
+                        if (diagnosticStatus.isNotBlank()) {
+                            Text(diagnosticStatus, color = Color(0xFFFFCC80), style = MaterialTheme.typography.bodyMedium)
+                        }
+                        diagnosticSolution?.let { solution ->
+                            TextButton(onClick = { showDiagnosticDetails = !showDiagnosticDetails }) {
+                                Text(stringResource(if (showDiagnosticDetails) R.string.push_to_hide_solve_details
+                                    else R.string.push_to_solve_details), color = NightRed)
+                            }
+                            if (showDiagnosticDetails) {
+                                val ra = solution.raDeg
+                                val dec = solution.decDeg
+                                val angle = solution.rotationDeg
+                                val width = solution.fovWidthDeg
+                                val height = solution.fovHeightDeg
+                                if (ra != null && dec != null && angle != null && width != null && height != null) {
+                                    Text(stringResource(R.string.push_to_solution_summary, ra, dec, angle, width, height),
+                                        color = Color(0xFFBCAAA4), style = MaterialTheme.typography.bodySmall)
+                                }
                             }
                         }
                     }
                 }
-                if (includeSettings) captureSettings()
             }
         }
     }
+    fun closeDiagnostic() {
+        solveJob?.cancel()
+        showDiagnostic = false
+        capturedFrame = null
+        extraction = null
+    }
+    BackHandler(enabled = showDiagnostic) { closeDiagnostic() }
+
     val actions: @Composable () -> Unit = {
-        if (status.isNotBlank()) {
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
             Text(
-                status,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 3.dp),
-                color = Color(0xFFBCAAA4),
-                style = MaterialTheme.typography.labelSmall,
-                textAlign = TextAlign.Center,
-                maxLines = 3
+                if (showDiagnostic && !solving) stringResource(R.string.wf_push_phone_debug) else usagePrompt,
+                color = if (onTarget && !showDiagnostic) Color(0xFF80CBC4) else Color(0xFFFFCC80),
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.testTag("push-task-status")
             )
-        }
-        if (needsSingleFrameVerification && !solving) {
-            TextButton(onClick = { startSolve(auto = false, forceSingleFrame = true) }, enabled = readyToCapture) {
-                Text(stringResource(R.string.wfp_verify_single_frame))
+            if (!solving && !onTarget && !showDiagnostic && verificationFailure.isNotBlank() &&
+                verificationFailure != usagePrompt) {
+                Text(verificationFailure, color = Color(0xFFFFAB91), style = MaterialTheme.typography.bodySmall)
             }
-        }
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (matchingCalibration == null || calibrationMismatch) {
-                FilledTonalButton(onClick = onCalibration, modifier = Modifier.weight(1f)) {
-                    Text(stringResource(R.string.wf_push_calibrate))
-                }
-            } else TextButton(onClick = onCalibration, modifier = Modifier.weight(1f)) {
-                Text(stringResource(R.string.wf_push_calibrate))
+            val action = when {
+                solving -> null
+                showDiagnostic -> R.string.close
+                needsPermissions -> R.string.push_to_grant_permissions
+                site == null && siteFailure != null -> R.string.retry
+                calibrationNeeded -> R.string.wf_push_calibrate
+                site == null -> null
+                configuredField == null -> R.string.wf_optics_title
+                needsSingleFrameVerification -> R.string.wfp_verify_single_frame
+                !onTarget -> R.string.push_to_resolve
+                else -> null
             }
-            TextButton(onClick = { opticsDialog = true }, enabled = verificationField == null, modifier = Modifier.weight(1f)) {
-                Text(stringResource(R.string.wf_optics_title))
-            }
-        }
-        TextButton(onClick = { fieldAdvanced = !fieldAdvanced }, modifier = Modifier.padding(horizontal = 16.dp)) {
-            Text(stringResource(R.string.wf_optics_advanced_field))
-        }
-        if (fieldAdvanced) Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            TextButton(onClick = { fieldDialog = true }, enabled = verificationField == null) {
-                Text(stringResource(R.string.wf_push_field))
-            }
-            if (fieldConfirmed) TextButton(onClick = { fieldConfirmed = false }) {
-                Text(stringResource(R.string.wf_optics_use_shared))
-            }
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            FilledTonalButton(
-                enabled = readyToCapture && (motionPhase == MotionPhase.STILL || !source.available),
-                modifier = Modifier.weight(1f),
-                onClick = { startSolve(auto = false) }
-            ) {
-                Text(
-                    stringResource(
-                        when {
-                            solving -> R.string.push_to_solving
-                            matchingCalibration == null || calibrationMismatch -> R.string.wf_push_phone_debug
-                            else -> R.string.push_to_resolve
+            action?.let { label ->
+                FilledTonalButton(
+                    modifier = Modifier.fillMaxWidth().testTag("push-primary-action"),
+                    enabled = (label != R.string.push_to_resolve && label != R.string.wfp_verify_single_frame) || canCaptureNow,
+                    onClick = {
+                        when (label) {
+                            R.string.push_to_grant_permissions -> permissionLauncher.launch(arrayOf(
+                                Manifest.permission.ACCESS_FINE_LOCATION,
+                                Manifest.permission.ACCESS_COARSE_LOCATION,
+                                Manifest.permission.CAMERA
+                            ))
+                            R.string.close -> closeDiagnostic()
+                            R.string.retry -> loadSite()
+                            R.string.wf_push_calibrate -> onCalibration()
+                            R.string.wf_optics_title -> opticsDialog = true
+                            R.string.wfp_verify_single_frame -> startSolve(auto = false, forceSingleFrame = true)
+                            else -> startSolve(auto = false, forceSingleFrame = true)
                         }
-                    )
-                )
-            }
-            if (needsPermissions) {
-                TextButton(onClick = {
-                    permissionLauncher.launch(
-                        arrayOf(
-                            Manifest.permission.ACCESS_FINE_LOCATION,
-                            Manifest.permission.ACCESS_COARSE_LOCATION,
-                            Manifest.permission.CAMERA
-                        )
-                    )
-                }) {
-                    Text(stringResource(R.string.push_to_permissions), color = NightRed)
-                }
+                    }
+                ) { Text(stringResource(label)) }
             }
         }
     }
@@ -1025,342 +997,79 @@ fun PushToScreen(
                     navigationIconContentColor = NightRed
                 ),
                 title = {
-                    Column {
-                        Text(targetName, maxLines = 1, fontWeight = FontWeight.Bold,
-                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                            modifier = Modifier.testTag("push-task-target"))
-                        Text(
-                            stringResource(
-                                if (hasAxisEstimate) R.string.push_to_step_guiding
-                                else R.string.push_to_step_setup
-                            ),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (onTarget) Color(0xFF80CBC4) else Color(0xFFFFCC80)
-                        )
-                    }
+                    Text(targetName, maxLines = 1, fontWeight = FontWeight.Bold,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        modifier = Modifier.testTag("push-task-target"))
                 },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = { if (showDiagnostic) closeDiagnostic() else onBack() }) {
                         Icon(Icons.Default.ArrowBack, stringResource(R.string.back))
                     }
                 },
                 actions = {
-                    onAuxiliaryGuide?.let { open -> TextButton(onClick = open) { Text(stringResource(R.string.wfp_source_auxiliary), color = NightRed) } }
                     TextButton(onClick = { showTargetSheet = true }) {
                         Text(stringResource(R.string.push_to_change_target), color = NightRed)
+                    }
+                    IconButton(onClick = { showSettings = true }, modifier = Modifier.testTag("push-settings")) {
+                        Icon(Icons.Default.Settings, stringResource(R.string.settings), tint = NightRed)
                     }
                 }
             )
         }
     ) { padding ->
-        BoxWithConstraints(Modifier.fillMaxSize()) {
-        val useWideLayout = maxWidth >= 520.dp && maxWidth > maxHeight
-        if (useWideLayout) {
-            PushToAdaptiveLayout(
-                modifier = Modifier.fillMaxSize().padding(padding).background(NightBlack),
-                settingsInMain = false,
-                workflow = {
-                    WorkflowStrip(
-                        targetReady = targetHorizontal != null,
-                        cameraReady = selectedCamera != null,
-                        solved = hasAxisEstimate,
-                        onTarget = onTarget
-                    )
-                },
-                main = mainContent,
-                settings = captureSettings,
-                actions = actions
-            )
-        } else {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .background(NightBlack)
+        PushToAdaptiveLayout(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            main = mainContent,
+            actions = actions
+        )
+    }
+
+    if (showSettings) {
+        ModalBottomSheet(
+            onDismissRequest = { showSettings = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            containerColor = NightBlack,
+            contentColor = NightRed
         ) {
-            WorkflowStrip(
-                targetReady = targetHorizontal != null,
-                cameraReady = selectedCamera != null,
-                solved = hasAxisEstimate,
-                onTarget = onTarget
-            )
-
-            if (hasAxisEstimate && site != null) {
-                PushToNightChart(
-                    currentAltDeg = axisHorizontal!!.altitudeDeg,
-                    currentAzDeg = axisHorizontal.azimuthDeg,
-                    targetAltDeg = targetAlt,
-                    targetAzDeg = targetAz,
-                    site = site!!,
-                    instant = now,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(0.52f)
-                        .padding(horizontal = 12.dp, vertical = 4.dp)
-                )
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(0.35f)
-                        .padding(horizontal = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically
+            Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(bottom = 16.dp)) {
+                captureSettings()
+                if (selectedCamera == null && !needsPermissions) {
+                    TextButton(onClick = { loadCameras() }) {
+                        Text(stringResource(R.string.push_to_refresh_lenses), color = NightRed)
+                    }
+                }
+                TextButton(
+                    onClick = { showSettings = false; startSolve(auto = false, diagnostic = true) },
+                    enabled = canCaptureNow
                 ) {
-                    SseReticle(
-                        cmd = guidance,
-                        deltaAlt = animatedAlt.toDouble(),
-                        deltaAz = animatedAz.toDouble(),
-                        eyepieceFovDeg = eyepieceFov.toDouble(),
-                        color = guidanceColor(guidance.proximity),
-                        pulseAlpha = 0.85f,
-                        modifier = Modifier.weight(1f).fillMaxSize()
-                    )
-                    Column(
-                        modifier = Modifier.weight(0.8f).padding(8.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            usagePrompt,
-                            color = guidanceColor(guidance.proximity),
-                            style = MaterialTheme.typography.headlineSmall,
-                            fontWeight = FontWeight.Bold,
-                            textAlign = TextAlign.Center
-                        )
-                        if (!onTarget) {
-                            Text(
-                                moveLabel,
-                                color = guidanceColor(guidance.proximity),
-                                style = MaterialTheme.typography.titleMedium,
-                                textAlign = TextAlign.Center
-                            )
-                        }
-                        Text(
-                            stringResource(
-                                R.string.push_to_distance_remaining,
-                                PushToGuidance.formatDegrees(guidance.separationDeg)
-                            ),
-                            color = Color(0xFFBCAAA4),
-                            fontFamily = FontFamily.Monospace
-                        )
-                    }
+                    Text(stringResource(R.string.wf_push_phone_debug), color = NightRed)
                 }
-            } else {
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .verticalScroll(rememberScrollState())
-                        .padding(horizontal = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                if (onTarget) TextButton(
+                    onClick = { showSettings = false; startSolve(auto = false, forceSingleFrame = true) },
+                    enabled = canCaptureNow
                 ) {
-                    Text(
-                        usagePrompt,
-                        color = Color(0xFFFFCC80),
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                    skySolution?.takeIf { it.success }?.let { solution ->
-                        Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF10201D))) {
-                            Text(
-                                stringResource(
-                                    R.string.push_to_solution_summary,
-                                    solution.raDeg ?: 0.0,
-                                    solution.decDeg ?: 0.0,
-                                    solution.rotationDeg ?: 0.0,
-                                    solution.fovWidthDeg ?: 0.0,
-                                    solution.fovHeightDeg ?: 0.0
-                                ),
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                color = Color(0xFFB2DFDB),
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                            if (!source.plateSolved) {
-                                Text(
-                                    stringResource(R.string.push_to_photo_only),
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                    color = Color(0xFFFFCC80),
-                                    style = MaterialTheme.typography.labelSmall
-                                )
-                            }
-                        }
+                    Text(stringResource(R.string.push_to_resolve), color = NightRed)
+                }
+                TextButton(onClick = { showSettings = false; onCalibration() }) {
+                    Text(stringResource(R.string.wf_push_calibrate), color = NightRed)
+                }
+                if (verificationField == null) {
+                    TextButton(onClick = { showSettings = false; opticsDialog = true }) {
+                        Text(stringResource(R.string.wf_optics_title), color = NightRed)
                     }
-                    capturedFrame?.let { frame ->
-                        val starCount = extraction?.stars?.size ?: 0
-                        Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF120909))) {
-                            PhoneSkyPreview(frame, extraction, Modifier.padding(4.dp))
-                            Text(
-                                stringResource(
-                                    if (starCount >= 15) R.string.push_to_star_count
-                                    else R.string.push_to_star_count_low,
-                                    starCount
-                                ),
-                                modifier = Modifier.padding(8.dp),
-                                color = if (starCount >= 15) Color(0xFF80CBC4) else Color(0xFFFFAB91),
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                            if (starCount < 15 && burstFrameCount.toInt() < 16 && !solving) {
-                                TextButton(onClick = {
-                                    val next = PhoneManualExposure.BURST_PRESETS
-                                        .firstOrNull { it > burstFrameCount.toInt() } ?: 16
-                                    burstFrameCount = next.toFloat()
-                                    persistCaptureSettings(selectedCameraId)
-                                }) {
-                                    Text(stringResource(R.string.push_to_bump_burst), color = NightRed)
-                                }
-                            }
-                        }
+                    TextButton(onClick = { showSettings = false; fieldDialog = true }) {
+                        Text(stringResource(R.string.wf_optics_advanced_field), color = NightRed)
                     }
-                    CaptureSettingsCard(
-                        cameras = cameras,
-                        selectedCamera = selectedCamera,
-                        cameraMenuOpen = cameraMenuOpen,
-                        onCameraMenuChange = { cameraMenuOpen = it },
-                        onCameraSelected = {
-                            applyCameraDefaults(it)
-                            persistCaptureSettings(it.cameraId)
-                            cameraMenuOpen = false
-                        },
-                        exposureSeconds = exposureSeconds,
-                        onExposureChanged = {
-                            exposureSeconds = it
-                        },
-                        onContinuousChangeFinished = { persistCaptureSettings(selectedCameraId) },
-                        iso = iso,
-                        onIsoChanged = {
-                            iso = it
-                        },
-                        autoIso = autoIso,
-                        onAutoIsoChanged = {
-                            autoIso = it
-                            persistCaptureSettings(selectedCameraId)
-                        },
-                        preferRaw = preferRaw,
-                        onPreferRawChanged = {
-                            preferRaw = it
-                            persistCaptureSettings(selectedCameraId)
-                        },
-                        burstFrameCount = burstFrameCount,
-                        onBurstFrameCountChanged = {
-                            burstFrameCount = it
-                            persistCaptureSettings(selectedCameraId)
-                        },
-                        expanded = settingsExpanded,
-                        collapsible = true,
-                        onExpandedChanged = { settingsExpanded = it }
-                    )
-                }
-            }
-
-            if (hasAxisEstimate) {
-                CaptureSettingsCard(
-                    cameras = cameras,
-                    selectedCamera = selectedCamera,
-                    cameraMenuOpen = cameraMenuOpen,
-                    onCameraMenuChange = { cameraMenuOpen = it },
-                    onCameraSelected = {
-                        applyCameraDefaults(it)
-                        persistCaptureSettings(it.cameraId)
-                        cameraMenuOpen = false
-                    },
-                    exposureSeconds = exposureSeconds,
-                    onExposureChanged = {
-                        exposureSeconds = it
-                    },
-                    onContinuousChangeFinished = { persistCaptureSettings(selectedCameraId) },
-                    iso = iso,
-                    onIsoChanged = {
-                        iso = it
-                    },
-                    autoIso = autoIso,
-                    onAutoIsoChanged = {
-                        autoIso = it
-                        persistCaptureSettings(selectedCameraId)
-                    },
-                    preferRaw = preferRaw,
-                    onPreferRawChanged = {
-                        preferRaw = it
-                        persistCaptureSettings(selectedCameraId)
-                    },
-                    burstFrameCount = burstFrameCount,
-                    onBurstFrameCountChanged = {
-                        burstFrameCount = it
-                        persistCaptureSettings(selectedCameraId)
-                    },
-                    expanded = settingsExpanded,
-                    collapsible = true,
-                    onExpandedChanged = { settingsExpanded = it }
-                )
-            }
-
-            if (status.isNotBlank()) {
-                Text(
-                    status,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 3.dp),
-                    color = Color(0xFFBCAAA4),
-                    style = MaterialTheme.typography.labelSmall,
-                    textAlign = TextAlign.Center,
-                    maxLines = 3
-                )
-            }
-            if (needsSingleFrameVerification && !solving) {
-                TextButton(onClick = { startSolve(auto = false, forceSingleFrame = true) }, enabled = readyToCapture) {
-                    Text(stringResource(R.string.wfp_verify_single_frame))
-                }
-            }
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (matchingCalibration == null || calibrationMismatch) {
-                    FilledTonalButton(onClick = onCalibration, modifier = Modifier.weight(1f)) {
-                        Text(stringResource(R.string.wf_push_calibrate))
+                    if (fieldConfirmed) TextButton(onClick = { fieldConfirmed = false }) {
+                        Text(stringResource(R.string.wf_optics_use_shared), color = NightRed)
                     }
-                } else TextButton(onClick = onCalibration, modifier = Modifier.weight(1f)) {
-                    Text(stringResource(R.string.wf_push_calibrate))
                 }
-                TextButton(onClick = { opticsDialog = true }, enabled = verificationField == null, modifier = Modifier.weight(1f)) {
-                    Text(stringResource(R.string.wf_optics_title))
-                }
-            }
-            TextButton(onClick = { fieldAdvanced = !fieldAdvanced }, modifier = Modifier.padding(horizontal = 16.dp)) {
-                Text(stringResource(R.string.wf_optics_advanced_field))
-            }
-            if (fieldAdvanced) Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = { fieldDialog = true }, enabled = verificationField == null) {
-                    Text(stringResource(R.string.wf_push_field))
-                }
-                if (fieldConfirmed) TextButton(onClick = { fieldConfirmed = false }) { Text(stringResource(R.string.wf_optics_use_shared)) }
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                FilledTonalButton(
-                    enabled = readyToCapture && (motionPhase == MotionPhase.STILL || !source.available),
-                    modifier = Modifier.weight(1f),
-                    onClick = { startSolve(auto = false) }
-                ) {
-                    Text(
-                        stringResource(
-                            when {
-                                solving -> R.string.push_to_solving
-                                matchingCalibration == null || calibrationMismatch -> R.string.wf_push_phone_debug
-                                else -> R.string.push_to_resolve
-                            }
-                        )
-                    )
-                }
-                if (needsPermissions) {
-                    TextButton(onClick = {
-                        permissionLauncher.launch(
-                            arrayOf(
-                                Manifest.permission.ACCESS_FINE_LOCATION,
-                                Manifest.permission.ACCESS_COARSE_LOCATION,
-                                Manifest.permission.CAMERA
-                            )
-                        )
-                    }) {
-                        Text(stringResource(R.string.push_to_permissions), color = NightRed)
+                onAuxiliaryGuide?.let { open ->
+                    TextButton(onClick = { showSettings = false; open() }) {
+                        Text(stringResource(R.string.wfp_source_auxiliary), color = NightRed)
                     }
                 }
             }
-        }
-        }
         }
     }
     if (opticsDialog) PointingOpticsConfigurationSheet(workingOptics.primaryGeometry, workingOptics.secondaryGeometry,
@@ -1409,71 +1118,27 @@ fun PushToScreen(
 }
 
 @Composable
-private fun WorkflowStrip(
-    targetReady: Boolean,
-    cameraReady: Boolean,
-    solved: Boolean,
-    onTarget: Boolean
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(8.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        WorkflowChip("1", stringResource(R.string.push_to_workflow_target), targetReady)
-        WorkflowChip("2", stringResource(R.string.push_to_workflow_camera), solved || cameraReady)
-        WorkflowChip("3", stringResource(R.string.push_to_workflow_solve), solved)
-        WorkflowChip("4", stringResource(R.string.push_to_workflow_push), onTarget)
-    }
-}
-
-@Composable
 internal fun PushToAdaptiveLayout(
     modifier: Modifier = Modifier,
-    settingsInMain: Boolean,
-    workflow: @Composable () -> Unit,
-    main: @Composable (Modifier, Boolean) -> Unit,
-    settings: @Composable () -> Unit,
+    main: @Composable (Modifier) -> Unit,
     actions: @Composable () -> Unit
 ) {
     BoxWithConstraints(modifier) {
         val wide = maxWidth >= 520.dp && maxWidth > maxHeight
         if (wide) {
             Row(Modifier.fillMaxSize().testTag("push-layout-wide")) {
-                Column(Modifier.weight(0.58f).fillMaxHeight()) {
-                    workflow()
-                    main(Modifier.weight(1f), false)
-                }
-                Column(
-                    Modifier
-                        .weight(0.42f)
-                        .fillMaxHeight()
-                        .verticalScroll(rememberScrollState())
-                        .padding(bottom = 6.dp)
-                ) {
-                    settings()
+                main(Modifier.weight(0.62f).fillMaxHeight())
+                Column(Modifier.weight(0.38f).fillMaxHeight().verticalScroll(rememberScrollState())) {
                     actions()
                 }
             }
         } else {
             Column(Modifier.fillMaxSize().testTag("push-layout-standard")) {
-                workflow()
-                main(Modifier.weight(1f), settingsInMain)
-                if (!settingsInMain) settings()
+                main(Modifier.weight(1f))
                 actions()
             }
         }
     }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun WorkflowChip(number: String, label: String, complete: Boolean) {
-    FilterChip(
-        selected = complete,
-        onClick = {},
-        enabled = false,
-        label = { Text("$number  $label") }
-    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -1499,6 +1164,7 @@ internal fun CaptureSettingsCard(
     collapsible: Boolean,
     onExpandedChanged: (Boolean) -> Unit
 ) {
+    BackHandler(enabled = cameraMenuOpen) { onCameraMenuChange(false) }
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
         colors = CardDefaults.cardColors(containerColor = Color(0xFF120909)),

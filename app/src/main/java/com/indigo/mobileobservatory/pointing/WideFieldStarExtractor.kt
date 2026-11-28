@@ -2,6 +2,7 @@ package com.indigo.mobileobservatory.pointing
 
 import com.indigo.mobileobservatory.camera.FrameData
 import com.indigo.mobileobservatory.camera.PixelFormat
+import kotlin.math.abs
 import kotlin.math.log10
 import kotlin.math.max
 import kotlin.math.min
@@ -30,19 +31,18 @@ data class StarExtractionResult(
     val backgroundSigma: Float
 )
 
-/**
- * Wide-field star finder for phone sky frames (M0 go/no-go).
- * Background: tile median; detections: local maxima above median + k·σ with 3×3 centroid.
- */
+/** Finds compact point sources in sensor-native pixel coordinates (integer pixel centers). */
 object WideFieldStarExtractor {
     private const val DEFAULT_GRID = 32
     private const val SIGMA_K = 5f
     private const val MIN_SEPARATION_PX = 8f
-    private const val CENTROID_RADIUS = 2
-    private const val SHAPE_RADIUS = 4
+    private const val BACKGROUND_RADIUS = 4
+    private const val STAR_RADIUS = BACKGROUND_RADIUS - 1
+    // The phone's averaged RAW and YUV values are quantized to whole ADU.
+    private const val MINIMUM_NOISE_ADU = 1f
     private const val MINIMUM_ROUNDNESS = 0.38f
     private const val MINIMUM_SIZE_PX = 1.15f
-    private const val MAXIMUM_SIZE_PX = 18f
+    private const val MAXIMUM_SIZE_PX = 4.5f
     private const val SPREAD_COLUMNS = 4
     private const val SPREAD_ROWS = 3
 
@@ -56,73 +56,62 @@ object WideFieldStarExtractor {
         fovWidthDeg: Double? = null,
         fovHeightDeg: Double? = null
     ): StarExtractionResult {
-        require(pixels.size >= width * height) { "pixel buffer too small" }
-        if (width < gridCellPx * 2 || height < gridCellPx * 2) {
-            return StarExtractionResult(emptyList(), gridCellPx, sigmaK, null, 0f, 0f)
+        require(width > 0 && height > 0 && width.toLong() * height <= pixels.size) {
+            "Invalid image dimensions or pixel buffer"
+        }
+        val cell = gridCellPx.coerceIn(16, 128)
+        if (width <= 2 * BACKGROUND_RADIUS || height <= 2 * BACKGROUND_RADIUS) {
+            return StarExtractionResult(emptyList(), cell, sigmaK, null, 0f, 0f)
         }
 
-        val cell = gridCellPx.coerceIn(16, 128)
         val gridW = (width + cell - 1) / cell
         val gridH = (height + cell - 1) / cell
-        val medians = FloatArray(gridW * gridH)
+        val noise = FloatArray(gridW * gridH)
+        val backgrounds = FloatArray(noise.size)
         val scratch = FloatArray(cell * cell)
-
         for (gy in 0 until gridH) {
             for (gx in 0 until gridW) {
+                val cellIndex = gy * gridW + gx
                 val x0 = gx * cell
                 val y0 = gy * cell
                 val x1 = min(width, x0 + cell)
                 val y1 = min(height, y0 + cell)
                 var n = 0
-                for (y in y0 until y1) {
+                for (y in y0 until y1 step 3) {
+                    for (x in x0 until x1 step 3) scratch[n++] = pixels[y * width + x]
+                }
+                backgrounds[cellIndex] = medianOf(scratch, n)
+                n = 0
+                for (y in y0 until y1 step 3) {
                     val row = y * width
-                    for (x in x0 until x1) {
-                        scratch[n++] = pixels[row + x]
+                    for (x in max(2, x0) until min(width - 2, x1) step 3) {
+                        // A symmetric difference removes first-order sky gradients.
+                        scratch[n++] = abs(pixels[row + x] - (pixels[row + x - 2] + pixels[row + x + 2]) / 2)
                     }
                 }
-                medians[gy * gridW + gx] = medianOf(scratch, n)
+                // Convert median absolute deviation of the difference to pixel noise.
+                noise[cellIndex] = (medianOf(scratch, n) * (1.4826f / sqrt(1.5f))).coerceAtLeast(MINIMUM_NOISE_ADU)
             }
         }
 
-        var bgSum = 0.0
-        var bgSumSq = 0.0
-        var bgN = 0
-        val residuals = FloatArray(min(4096, width * height / 64))
-        var residualN = 0
-        for (y in 0 until height step 8) {
-            for (x in 0 until width step 8) {
-                val bg = sampleBackground(medians, gridW, gridH, cell, x, y)
-                val v = pixels[y * width + x]
-                val r = v - bg
-                bgSum += bg
-                bgSumSq += bg * bg
-                bgN++
-                if (residualN < residuals.size) {
-                    residuals[residualN++] = r
-                }
-            }
-        }
-        val backgroundMedian = if (bgN > 0) (bgSum / bgN).toFloat() else 0f
-        val sigma = robustSigma(residuals, residualN).coerceAtLeast(1e-3f)
-        val thresholdDelta = sigmaK * sigma
-
+        val radius = BACKGROUND_RADIUS
         val candidates = ArrayList<ExtractedStar>(256)
-        for (y in 2 until height - 2) {
-            for (x in 2 until width - 2) {
+        for (y in radius until height - radius) {
+            val gridRow = y / cell * gridW
+            for (x in radius until width - radius) {
                 val idx = y * width + x
-                val v = pixels[idx]
-                val bg = sampleBackground(medians, gridW, gridH, cell, x, y)
-                if (v < bg + thresholdDelta) continue
-                if (v < pixels[idx - 1] || v < pixels[idx + 1] ||
-                    v < pixels[idx - width] || v < pixels[idx + width]
-                ) {
-                    continue
-                }
-                val (cx, cy, flux) = centroid(pixels, width, height, x, y, bg)
-                val (roundness, sizePx) = shape(pixels, width, height, cx, cy, bg)
-                if (roundness < MINIMUM_ROUNDNESS || sizePx < MINIMUM_SIZE_PX || sizePx > MAXIMUM_SIZE_PX) continue
-                val snr = ((v - bg) / sigma).coerceAtLeast(0f)
-                candidates += ExtractedStar(cx, cy, v, flux, snr, bg, roundness, sizePx)
+                val peak = pixels[idx]
+                // Break equal-value plateaus consistently in scan order.
+                if (peak <= pixels[idx - 1] || peak < pixels[idx + 1] ||
+                    peak <= pixels[idx - width] || peak < pixels[idx + width] ||
+                    peak <= pixels[idx - width - 1] || peak <= pixels[idx - width + 1] ||
+                    peak < pixels[idx + width - 1] || peak < pixels[idx + width + 1]
+                ) continue
+                val sigma = noise[gridRow + x / cell]
+                val axialBackground = (pixels[idx - radius] + pixels[idx + radius] +
+                    pixels[idx - radius * width] + pixels[idx + radius * width]) / 4
+                if (peak - axialBackground < 2 * sigma) continue
+                measureStar(pixels, width, x, y, sigma, sigmaK)?.let(candidates::add)
             }
         }
 
@@ -146,8 +135,8 @@ object WideFieldStarExtractor {
             gridCellPx = cell,
             sigmaThreshold = sigmaK,
             estimatedLimitingMagnitude = limiting,
-            backgroundMedian = backgroundMedian,
-            backgroundSigma = sigma
+            backgroundMedian = medianOf(backgrounds, backgrounds.size),
+            backgroundSigma = medianOf(noise, noise.size)
         )
     }
 
@@ -208,103 +197,84 @@ object WideFieldStarExtractor {
         return m.coerceIn(0f, 12f)
     }
 
-    private fun sampleBackground(
-        medians: FloatArray,
-        gridW: Int,
-        gridH: Int,
-        cell: Int,
-        x: Int,
-        y: Int
-    ): Float {
-        val gx = (x / cell).coerceIn(0, gridW - 1)
-        val gy = (y / cell).coerceIn(0, gridH - 1)
-        return medians[gy * gridW + gx]
-    }
-
-    private fun centroid(
+    private fun measureStar(
         pixels: FloatArray,
         width: Int,
-        height: Int,
         x: Int,
         y: Int,
-        background: Float
-    ): Triple<Float, Float, Float> {
-        var wSum = 0.0
+        tileSigma: Float,
+        sigmaK: Float
+    ): ExtractedStar? {
+        val radius = BACKGROUND_RADIUS
+        var sum = 0.0
+        var sumSquared = 0.0
         var xSum = 0.0
         var ySum = 0.0
-        val r = CENTROID_RADIUS
-        for (yy in max(0, y - r)..min(height - 1, y + r)) {
-            for (xx in max(0, x - r)..min(width - 1, x + r)) {
-                val w = (pixels[yy * width + xx] - background).toDouble().coerceAtLeast(0.0)
-                wSum += w
-                xSum += xx * w
-                ySum += yy * w
+        for (dy in -radius..radius) {
+            val row = (y + dy) * width + x
+            val step = if (abs(dy) == radius) 1 else 2 * radius
+            for (dx in -radius..radius step step) {
+                val value = pixels[row + dx].toDouble()
+                sum += value
+                sumSquared += value * value
+                xSum += dx * value
+                ySum += dy * value
             }
         }
-        if (wSum <= 1e-6) return Triple(x.toFloat(), y.toFloat(), 0f)
-        return Triple((xSum / wSum).toFloat(), (ySum / wSum).toFloat(), wSum.toFloat())
-    }
+        // Fit a tilted background plane to the square perimeter. Its residual also
+        // raises the threshold near structured backgrounds such as text and foliage.
+        val n = 8 * radius
+        val axisSumSquared = 2 * radius * radius * (2 * radius + 1) +
+            2 * (radius - 1) * radius * (2 * radius - 1) / 3
+        val background = sum / n
+        val slopeX = xSum / axisSumSquared
+        val slopeY = ySum / axisSumSquared
+        val variance = (sumSquared - sum * background - xSum * slopeX - ySum * slopeY) / n
+        val sigma = max(tileSigma.toDouble(), sqrt(variance.coerceAtLeast(0.0)))
+        val peak = pixels[y * width + x]
+        val contrast = peak - background
+        if (contrast < sigmaK * sigma) return null
 
-    private fun shape(
-        pixels: FloatArray,
-        width: Int,
-        height: Int,
-        cx: Float,
-        cy: Float,
-        background: Float
-    ): Pair<Float, Float> {
-        var wSum = 0.0
-        var xx = 0.0
-        var yy = 0.0
-        var xy = 0.0
-        val r = SHAPE_RADIUS
-        val x0 = max(0, cx.toInt() - r)
-        val x1 = min(width - 1, cx.toInt() + r)
-        val y0 = max(0, cy.toInt() - r)
-        val y1 = min(height - 1, cy.toInt() + r)
-        for (y in y0..y1) {
-            val row = y * width
-            for (x in x0..x1) {
-                val w = (pixels[row + x] - background).toDouble().coerceAtLeast(0.0)
-                if (w <= 0.0) continue
-                val dx = x - cx
-                val dy = y - cy
-                wSum += w
-                xx += w * dx * dx
-                yy += w * dy * dy
-                xy += w * dx * dy
+        val minSignal = max(sigma, contrast * 0.08)
+        var flux = 0.0
+        var mx = 0.0
+        var my = 0.0
+        var mxx = 0.0
+        var myy = 0.0
+        var mxy = 0.0
+        for (dy in -STAR_RADIUS..STAR_RADIUS) {
+            val row = (y + dy) * width + x
+            for (dx in -STAR_RADIUS..STAR_RADIUS) {
+                val signal = pixels[row + dx] - (background + slopeX * dx + slopeY * dy)
+                if (signal < minSignal) continue
+                flux += signal
+                mx += dx * signal
+                my += dy * signal
+                mxx += dx * dx * signal
+                myy += dy * dy * signal
+                mxy += dx * dy * signal
             }
         }
-        if (wSum <= 1e-6) return 0f to 0f
+        if (flux <= 0.0) return null
+        val cx = mx / flux
+        val cy = my / flux
+        val xx = mxx / flux - cx * cx
+        val yy = myy / flux - cy * cy
+        val xy = mxy / flux - cx * cy
         val disc = sqrt((xx - yy) * (xx - yy) + 4.0 * xy * xy)
-        val lambda1 = (xx + yy + disc) / (2.0 * wSum)
-        val lambda2 = (xx + yy - disc) / (2.0 * wSum)
-        val lo = min(lambda1, lambda2).coerceAtLeast(0.0)
-        val hi = max(lambda1, lambda2).coerceAtLeast(0.0)
-        val major = sqrt(hi * 4.0)
-        val minor = sqrt(lo * 4.0)
-        val roundness = if (major <= 1e-6) 0f else (minor / major).toFloat().coerceIn(0f, 1f)
-        val size = ((major + minor) / 2.0).toFloat()
-        return roundness to size
+        val major = sqrt(2 * (xx + yy + disc).coerceAtLeast(0.0))
+        val minor = sqrt(2 * (xx + yy - disc).coerceAtLeast(0.0))
+        val size = ((major + minor) / 2).toFloat()
+        if (size !in MINIMUM_SIZE_PX..MAXIMUM_SIZE_PX) return null
+        val roundness = (minor / major).toFloat()
+        if (roundness < MINIMUM_ROUNDNESS) return null
+        return ExtractedStar((x + cx).toFloat(), (y + cy).toFloat(), peak, flux.toFloat(),
+            (contrast / sigma).toFloat(), background.toFloat(), roundness, size)
     }
 
     private fun medianOf(values: FloatArray, n: Int): Float {
-        if (n <= 0) return 0f
-        val copy = values.copyOf(n)
-        copy.sort(0, n)
-        return if (n % 2 == 1) copy[n / 2] else 0.5f * (copy[n / 2 - 1] + copy[n / 2])
-    }
-
-    private fun robustSigma(residuals: FloatArray, n: Int): Float {
-        if (n < 8) return 1f
-        val copy = residuals.copyOf(n)
-        copy.sort(0, n)
-        val med = if (n % 2 == 1) copy[n / 2] else 0.5f * (copy[n / 2 - 1] + copy[n / 2])
-        for (i in 0 until n) {
-            copy[i] = kotlin.math.abs(copy[i] - med)
-        }
-        copy.sort(0, n)
-        val mad = if (n % 2 == 1) copy[n / 2] else 0.5f * (copy[n / 2 - 1] + copy[n / 2])
-        return (mad * 1.4826f).coerceAtLeast(1e-3f)
+        if (n == 0) return 0f
+        values.sort(0, n)
+        return if (n % 2 == 1) values[n / 2] else 0.5f * (values[n / 2 - 1] + values[n / 2])
     }
 }

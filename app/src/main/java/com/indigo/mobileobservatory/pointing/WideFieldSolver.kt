@@ -361,8 +361,9 @@ internal object BlindWideFieldMatcher {
         return Mat3(x, y, cross(x, y).unit())
     }
     private fun imagePoint(star: ExtractedStar, w: Int, h: Int, fovW: Double, fovH: Double, scale: Double) : ImagePoint {
-        val x = ((star.x / w) * 2.0 - 1.0) * tan(Math.toRadians(fovW / 2.0))
-        val y = (1.0 - (star.y / h) * 2.0) * tan(Math.toRadians(fovH / 2.0))
+        // The right-handed ray basis is image-left, image-up, then the viewing direction.
+        val x = (1.0 - (star.x + 0.5) / w * 2.0) * tan(Math.toRadians(fovW / 2.0))
+        val y = (1.0 - (star.y + 0.5) / h * 2.0) * tan(Math.toRadians(fovH / 2.0))
         return ImagePoint(Vec(x * scale, y * scale, 1.0).unit(), hypot(x, y))
     }
     private fun vector(raDeg: Double, decDeg: Double): Vec { val ra = Math.toRadians(raDeg); val dec = Math.toRadians(decDeg); return Vec(cos(dec) * cos(ra), cos(dec) * sin(ra), sin(dec)) }

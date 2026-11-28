@@ -29,4 +29,19 @@
     <string name="wf_push_field_confirm">Use this field</string>
     <string name="wf_push_field_camera_conservative">Without a calibrated camera angle, verify within the inscribed circle.</string>
     <string name="wf_push_verification_rejected">Image solved; new pointing verification is needed.</string>
+    <string name="push_to_preview_image">Captured sky with star candidates</string>
+    <string name="push_to_preview_candidates">%1$d star candidates</string>
+    <string name="push_to_preview_solved">Sky image solved. Calibrate the camera to start guiding.</string>
+    <string name="push_to_waiting_site">Getting observing location…</string>
+    <string name="push_to_permissions_needed">Camera and location permissions are needed to capture the sky.</string>
+    <string name="push_to_grant_permissions">Grant permissions</string>
+    <string name="push_to_refresh_lenses">Refresh lenses</string>
+    <string name="push_to_recalibrate_axes">Phone image coordinates changed. Calibrate the phone and telescope again.</string>
+    <string name="push_to_diagnostic_solved">Sky image solved.</string>
+    <string name="push_to_solve_details">Show solve details</string>
+    <string name="push_to_hide_solve_details">Hide solve details</string>
+    <string name="push_to_fail_few_stars_single">Too few stars. Aim at open sky and keep the telescope still.</string>
+    <string name="push_to_diagnostic_frames">Exposures used: %1$d</string>
+    <string name="push_to_partial_burst">Used %1$d of %2$d requested exposures. Some frames could not be aligned.</string>
+    <string name="push_to_mirror_burst_fallback">Used one exposure. Aligning a mirrored burst requires a matching calibration and timed sensor poses.</string>
 </resources>

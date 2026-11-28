@@ -7,6 +7,10 @@ internal fun PhoneCaptureMetadata.pointingIdentity(installationRevision: Long, o
     OpticalIdentity("phone", "$logicalCameraId/${physicalCameraId ?: logicalCameraId}",
         "phone", installationRevision, opticsRevision)
 
+private const val PHONE_AXES_VERSION = "rear-image-axes-v2"
+
+internal fun String.hasCurrentPhoneImageAxes() = endsWith("/$PHONE_AXES_VERSION")
+
 internal fun PhoneCaptureMetadata.pointingGeometry(width: Int, height: Int, usedRaw: Boolean, mirrored: Boolean) =
     CameraGeometry(width, height, cropLeftPx ?: 0, cropTopPx ?: 0, cropWidthPx ?: width, cropHeightPx ?: height,
         if (mirrored) ImageParity.MIRRORED else ImageParity.NORMAL,
@@ -15,7 +19,7 @@ internal fun PhoneCaptureMetadata.pointingGeometry(width: Int, height: Int, used
             preCorrectionActiveArrayLeftPx, preCorrectionActiveArrayTopPx,
             preCorrectionActiveArrayWidthPx, preCorrectionActiveArrayHeightPx,
             cropLeftPx, cropTopPx, cropWidthPx, cropHeightPx, sensorOrientation, calibrationCoordinateDomain,
-            distortionCorrectionMode, lensCalibration, usedRaw, solveFootprint, solveReduction).joinToString("/"))
+            distortionCorrectionMode, lensCalibration, usedRaw, solveFootprint, solveReduction, PHONE_AXES_VERSION).joinToString("/"))
 
 /** X is the physical installation rotation; a parity flag alone cannot supply it. */
 internal fun AttitudeSnapshot.opticalPoseForCapture(mirrored: Boolean, opticalInImu: SkyPose?): SkyPose? {
