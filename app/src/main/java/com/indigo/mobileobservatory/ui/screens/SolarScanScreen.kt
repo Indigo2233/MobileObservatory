@@ -81,6 +81,7 @@ import com.indigo.mobileobservatory.solar.SolarScanIssueCode
 import com.indigo.mobileobservatory.solar.SolarScanIssueSeverity
 import com.indigo.mobileobservatory.solar.SolarScanPhase
 import com.indigo.mobileobservatory.solar.SolarScanTaskRecord
+import com.indigo.mobileobservatory.solar.SolarScanLegRecord
 import com.indigo.mobileobservatory.solar.SolarSourcePolicy
 import com.indigo.mobileobservatory.ui.viewmodel.SolarScanUiState
 import com.indigo.mobileobservatory.ui.viewmodel.SolarScanViewModel
@@ -306,7 +307,11 @@ private fun HardwareScanTab(
         if (paired) {
             OutlinedTextField(
                 value = countText,
-                onValueChange = { countText = it },
+                onValueChange = { input ->
+                    if (input.length <= SOLAR_REPEAT_SWEEP_COUNTS.last.toString().length &&
+                        input.all(Char::isDigit)
+                    ) countText = input
+                },
                 modifier = Modifier.fillMaxWidth(),
                 enabled = !state.busy,
                 singleLine = true,
@@ -706,12 +711,13 @@ private fun RecentRuns(runs: List<SolarScanTaskRecord>, onOpenResult: (File) -> 
         Text(stringResource(R.string.solar_scan_no_runs), color = MaterialTheme.colorScheme.outline)
         return
     }
-    runs.take(8).forEach { run ->
-        val result = run.legs.firstNotNullOfOrNull { leg ->
-            leg.reconstruction?.displayPng
-                ?: leg.reconstruction?.linearPng
-                ?: leg.reconstruction?.linearFits
-        }?.let(::File)?.takeIf(File::isFile)
+    runs.groupBy { it.batchId ?: it.id }.values.take(8).forEach { group ->
+        val run = group.first()
+        if (run.batchId != null) {
+            RecentHardwareBatch(group, onOpenResult)
+            return@forEach
+        }
+        val result = run.legs.firstNotNullOfOrNull(::solarResultFile)
         Card {
             Row(
                 Modifier.fillMaxWidth().padding(12.dp),
@@ -764,6 +770,58 @@ private fun RecentRuns(runs: List<SolarScanTaskRecord>, onOpenResult: (File) -> 
                 ) { Text(stringResource(R.string.solar_scan_open_result)) }
             }
         }
+    }
+}
+
+private fun solarResultFile(leg: SolarScanLegRecord): File? {
+    val result = leg.reconstruction ?: return null
+    return sequenceOf(result.displayPng, result.linearPng, result.linearFits)
+        .filterNotNull()
+        .map(::File)
+        .firstOrNull(File::isFile)
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun RecentHardwareBatch(group: List<SolarScanTaskRecord>, onOpenResult: (File) -> Unit) {
+    val latest = group.first()
+    var showResults by rememberSaveable(latest.batchId) { mutableStateOf(false) }
+    Card {
+        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(stringResource(R.string.solar_hardware_auto), style = MaterialTheme.typography.titleSmall)
+                Text(
+                    stringResource(R.string.solar_scan_run_summary, group.size,
+                        group.sumOf { run -> run.legs.sumOf { it.recordingFrames } }),
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Text(formatInstant(latest.completedAtUtc ?: latest.createdAtUtc),
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+            }
+            TextButton(onClick = { showResults = true }) {
+                Text(stringResource(R.string.solar_scan_open_result))
+            }
+        }
+    }
+    if (showResults) {
+        AlertDialog(
+            onDismissRequest = { showResults = false },
+            title = { Text(stringResource(R.string.solar_hardware_auto)) },
+            text = {
+                LazyColumn(Modifier.heightIn(max = 420.dp)) {
+                    items(group.sortedBy { it.legs.firstOrNull()?.number }, key = { it.id }) { run ->
+                        val result = run.legs.firstNotNullOfOrNull(::solarResultFile)
+                        TextButton(enabled = result != null, onClick = {
+                            showResults = false
+                            if (result != null) onOpenResult(result)
+                        }) { Text(run.title) }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showResults = false }) { Text(stringResource(R.string.close)) }
+            }
+        )
     }
 }
 

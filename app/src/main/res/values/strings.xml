@@ -1103,6 +1103,7 @@
     <string name="solar_hardware_start">Start scanning</string>
     <string name="solar_hardware_count">Number of sweeps</string>
     <string name="solar_hardware_count_range">Enter a whole number from %1$d to %2$d. Each direction counts as one sweep.</string>
+    <string name="solar_hardware_leg_result">Repeat scan · Sweep %1$d of %2$d</string>
     <string name="solar_hardware_confirm">Stay at the telescope for all %1$d sweeps. Verify the mount is at a calibrated starting position, with clearance in both directions. Each sweep is saved as SER and checked before the next starts.</string>
     <string name="solar_hardware_trial_summary">%1$s · %2$.2f s · slit margins L %3$d / R %4$d px</string>
     <string name="solar_hardware_pair_required">Run both directions between the same two endpoints with the same camera and mount settings.</string>

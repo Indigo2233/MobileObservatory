@@ -42,6 +42,34 @@ import org.junit.Test
 
 class SolarScanFeatureTest {
     @Test
+    fun sweepBatchIdSurvivesIndependentManifestCommits() = directory { root ->
+        val repository = SolarScanRepository(File(root, "recordings"), File(root, "captures"))
+        val settings = SolarReconstructionSettings()
+        val batchId = repository.newTaskId()
+        val date = Instant.now().toString()
+        val batches = listOf(null, batchId, batchId)
+        val committed = batches.map { batch ->
+            val id = repository.newTaskId()
+            val staging = repository.createStaging(id)
+            repository.commit(staging, id, SolarScanTaskRecord(
+                id = id,
+                createdAtUtc = date,
+                completedAtUtc = date,
+                title = "Scan",
+                configuration = configuration(),
+                analysis = null,
+                reconstructionSettings = settings,
+                legs = emptyList(),
+                sourcePolicy = SolarSourcePolicy.KEEP,
+                warnings = emptyList(),
+                resultDirectory = staging,
+                batchId = batch
+            )).resultDirectory
+        }
+        assertEquals(batches, committed.map { checkNotNull(repository.readTask(it)).batchId })
+    }
+
+    @Test
     fun trialTimingUsesTheAcceptedFrameIntervals() {
         val cadence = SolarFrameCadence()
         repeat(20) { cadence.observe(it * 100_000_000L) }

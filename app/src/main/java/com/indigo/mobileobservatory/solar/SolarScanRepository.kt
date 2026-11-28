@@ -113,7 +113,8 @@ data class SolarScanTaskRecord(
     val legs: List<SolarScanLegRecord>,
     val sourcePolicy: SolarSourcePolicy,
     val warnings: List<String>,
-    val resultDirectory: File
+    val resultDirectory: File,
+    val batchId: String? = null
 )
 
 data class SolarManifestWriteResult(
@@ -706,6 +707,7 @@ class SolarScanRepository(
         put("createdAtUtc", record.createdAtUtc)
         put("completedAtUtc", record.completedAtUtc)
         put("title", record.title)
+        record.batchId?.let { put("batchId", it) }
         put("configuration", configurationJson(record.configuration))
         record.analysis?.let { analysis ->
             put("analysis", analysisJson(analysis))
@@ -894,7 +896,8 @@ class SolarScanRepository(
             legs = legs,
             sourcePolicy = SolarSourcePolicy.valueOf(json.getString("sourcePolicy")),
             warnings = json.getJSONArray("warnings").toStringList(),
-            resultDirectory = storedRoot
+            resultDirectory = storedRoot,
+            batchId = json.optNullableString("batchId")
         )
     }
 

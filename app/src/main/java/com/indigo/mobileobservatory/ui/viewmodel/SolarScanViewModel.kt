@@ -245,7 +245,6 @@ class SolarScanViewModel(application: Application) : AndroidViewModel(applicatio
         launchHardware(count) { observer ->
             val key = camera.solarCaptureKey()
             val captures = mutableListOf<SolarCapturedSweep>()
-            val createdAt = Instant.now()
             camera.withSolarMount { mount ->
                 check(setup == SolarCaptureSetup(key, mount.revision, mount.rate, mount.pier)) {
                     "The capture or mount configuration changed. Repeat both trials."
@@ -277,16 +276,31 @@ class SolarScanViewModel(application: Application) : AndroidViewModel(applicatio
                     next = next.reverseSolar()
                 }
             }
-            val taskId = repository.newTaskId()
-            val staging = repository.createStaging(taskId)
-            try {
-                _state.update { it.copy(phase = SolarScanPhase.RECONSTRUCTING) }
-                reconstructionSettingsSession.markUsed(settings)
-                val legs = MediaUsageRegistry.acquire(captures.map { it.file }, waitForExclusive = false).use {
-                    captures.mapIndexed { index, sweep ->
-                        val direction = sweep.motion.direction.scanDirection()
-                        val legSettings = settings.copy(flipVertical = settings.flipVertical xor direction.flipVertical)
-                        val output = File(staging, "products/leg-${index + 1}").apply { mkdirs() }
+            val config = baseConfiguration.copy(
+                exposureUs = key.exposureUs.roundToInt().toLong().coerceAtLeast(1),
+                roi = SolarRoi(key.roi.x, key.roi.y, key.width, key.height),
+                pixelBytes = key.format.bytesPerPixel,
+                legCount = 1,
+                continuous = false,
+                sourcePolicy = SolarSourcePolicy.KEEP,
+                products = settings.products
+            )
+            val app = getApplication<Application>()
+            val batchId = repository.newTaskId()
+            reconstructionSettingsSession.markUsed(settings)
+            captures.forEachIndexed { index, sweep ->
+                currentCoroutineContext().ensureActive()
+                val number = index + 1
+                val direction = sweep.motion.direction.scanDirection()
+                _state.update {
+                    it.copy(phase = SolarScanPhase.RECONSTRUCTING, currentLeg = number, currentDirection = direction)
+                }
+                val taskId = repository.newTaskId(sweep.startedAt)
+                val staging = repository.createStaging(taskId)
+                try {
+                    val legSettings = settings.copy(flipVertical = settings.flipVertical xor direction.flipVertical)
+                    val output = File(staging, "products").apply { mkdirs() }
+                    val leg = MediaUsageRegistry.acquire(sweep.file, waitForExclusive = false).use {
                         val identity = SolarSourceIdentity.of(sweep.file)
                         val memoryTrace = ReconstructionMemoryTrace(::readSystemMemoryHeadroom)
                         val native = SolarScanNative.reconstruct(sweep.file, output, legSettings,
@@ -297,47 +311,41 @@ class SolarScanViewModel(application: Application) : AndroidViewModel(applicatio
                                 }
                             })
                         validateProducts(output, settings.products)
-                        SolarScanLegRecord(index + 1, direction, identity, sweep.coverage.frames, 0,
+                        SolarScanLegRecord(number, direction, identity, sweep.coverage.frames, 0,
                             native.toDomain(sweep.file, legSettings, memoryTrace.summary()),
                             SolarSourceDispositionState.KEPT, analysis = sweep.analysis, reconstructionSettings = legSettings)
                     }
-                }
-                File(staging, "coverage.txt").writeText(captures.joinToString("\n") { sweep ->
                     val motion = sweep.motion
                     val coverage = sweep.coverage
-                    "${sweep.file.name} ${motion.direction} ${motion.motionMs} ms " +
-                        "start=${motion.start} end=${motion.end} " +
-                        "diskFrames=[${coverage.firstDiskFrame},${coverage.endDiskFrame}) " +
-                        "diskCrossingMs=${sweep.timing.diskCrossingMs} fps=${sweep.timing.framesPerSecond} " +
-                        "left=${coverage.leftMargin} px right=${coverage.rightMargin} px"
-                }, Charsets.UTF_8)
-                val eastToWest = captures.first { it.motion.direction == MountDirection.WEST }
-                val config = baseConfiguration.copy(
-                    endpointA = eastToWest.motion.start.endpoint(eastToWest.startedAt),
-                    endpointB = eastToWest.motion.end.endpoint(eastToWest.startedAt.plusMillis(eastToWest.motion.motionMs)),
-                    scanDurationMs = eastToWest.motion.motionMs,
-                    diskCrossingMs = eastToWest.timing.diskCrossingMs,
-                    frameRate = eastToWest.timing.framesPerSecond,
-                    exposureUs = key.exposureUs.roundToInt().toLong().coerceAtLeast(1),
-                    roi = SolarRoi(key.roi.x, key.roi.y, key.width, key.height),
-                    pixelBytes = key.format.bytesPerPixel,
-                    legCount = count,
-                    continuous = false,
-                    sourcePolicy = SolarSourcePolicy.KEEP,
-                    products = settings.products
-                )
-                val app = getApplication<Application>()
-                if (observer.isCancelled()) throw CancellationException("Solar scan cancelled.")
-                _state.update { it.copy(phase = SolarScanPhase.COMMITTING) }
-                val record = repository.commit(staging, taskId, SolarScanTaskRecord(
-                    taskId, createdAt.toString(), Instant.now().toString(),
-                    app.getString(R.string.solar_hardware_auto), config, legs.first().analysis, settings,
-                    legs, SolarSourcePolicy.KEEP, legs.flatMap { it.reconstruction?.warnings.orEmpty() },
-                    staging
-                ))
-                _state.update { it.copy(lastResultDirectory = record.resultDirectory) }
-            } finally {
-                staging.deleteRecursively()
+                    File(staging, "coverage.txt").writeText(
+                        "${sweep.file.name} ${motion.direction} ${motion.motionMs} ms " +
+                            "start=${motion.start} end=${motion.end} " +
+                            "diskFrames=[${coverage.firstDiskFrame},${coverage.endDiskFrame}) " +
+                            "diskCrossingMs=${sweep.timing.diskCrossingMs} fps=${sweep.timing.framesPerSecond} " +
+                            "left=${coverage.leftMargin} px right=${coverage.rightMargin} px",
+                        Charsets.UTF_8
+                    )
+                    currentCoroutineContext().ensureActive()
+                    _state.update { it.copy(phase = SolarScanPhase.COMMITTING) }
+                    val start = motion.start.endpoint(sweep.startedAt)
+                    val end = motion.end.endpoint(sweep.startedAt.plusMillis(motion.motionMs))
+                    val legConfig = config.copy(
+                        endpointA = if (direction == SolarScanDirection.A_TO_B) start else end,
+                        endpointB = if (direction == SolarScanDirection.A_TO_B) end else start,
+                        scanDurationMs = motion.motionMs,
+                        diskCrossingMs = sweep.timing.diskCrossingMs,
+                        frameRate = sweep.timing.framesPerSecond
+                    )
+                    val record = repository.commit(staging, taskId, SolarScanTaskRecord(
+                        taskId, sweep.startedAt.toString(), Instant.now().toString(),
+                        app.getString(R.string.solar_hardware_leg_result, number, count), legConfig, sweep.analysis, settings,
+                        listOf(leg), SolarSourcePolicy.KEEP, leg.reconstruction?.warnings.orEmpty(),
+                        staging, batchId = batchId
+                    ))
+                    _state.update { it.copy(lastResultDirectory = record.resultDirectory) }
+                } finally {
+                    staging.deleteRecursively()
+                }
             }
             getApplication<Application>().getString(R.string.solar_scan_message_saved)
         }

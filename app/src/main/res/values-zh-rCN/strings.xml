@@ -1103,6 +1103,7 @@
     <string name="solar_hardware_start">开始扫描</string>
     <string name="solar_hardware_count">扫描趟数</string>
     <string name="solar_hardware_count_range">输入 %1$d 到 %2$d 的整数。单向扫描计为一趟。</string>
+    <string name="solar_hardware_leg_result">往复扫描 · 第 %1$d/%2$d 趟</string>
     <string name="solar_hardware_confirm">请在望远镜旁值守全部 %1$d 趟。确认赤道仪处于标定起点，并检查两侧运动空间。每趟保存 SER，检查通过后再换向。</string>
     <string name="solar_hardware_trial_summary">%1$s · %2$.2f 秒 · 狭缝余量 左 %3$d / 右 %4$d 像素</string>
     <string name="solar_hardware_pair_required">请使用相同的相机和赤道仪设置，在同一对端点完成两个方向的试扫。</string>
