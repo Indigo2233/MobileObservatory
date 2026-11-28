@@ -811,10 +811,20 @@ private fun RecentHardwareBatch(group: List<SolarScanTaskRecord>, onOpenResult: 
                 LazyColumn(Modifier.heightIn(max = 420.dp)) {
                     items(group.sortedBy { it.legs.firstOrNull()?.number }, key = { it.id }) { run ->
                         val result = run.legs.firstNotNullOfOrNull(::solarResultFile)
-                        TextButton(enabled = result != null, onClick = {
-                            showResults = false
-                            if (result != null) onOpenResult(result)
-                        }) { Text(run.title) }
+                        Column {
+                            TextButton(enabled = result != null, onClick = {
+                                showResults = false
+                                if (result != null) onOpenResult(result)
+                            }) { Text(run.title) }
+                            run.warnings.forEach { warning ->
+                                Text(
+                                    warning,
+                                    modifier = Modifier.padding(horizontal = 12.dp),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
+                        }
                     }
                 }
             },
