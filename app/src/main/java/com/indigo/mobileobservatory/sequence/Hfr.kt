@@ -100,36 +100,19 @@ fun countStars(pixels: IntArray, width: Int, height: Int): Int {
 data class LumaImage(val pixels: IntArray, val width: Int, val height: Int, val scale: Int = 1)
 
 fun monoLuma(data: ByteArray, width: Int, height: Int, bytesPerPixel: Int): LumaImage? {
-    val count = width * height
-    if (count <= 0) return null
-    val pixels = IntArray(count)
-    when (bytesPerPixel) {
-        1 -> {
-            if (data.size < count) return null
-            for (index in 0 until count) pixels[index] = data[index].toInt() and 0xFF
-        }
-        2 -> {
-            if (data.size < count * 2) return null
-            for (index in 0 until count) {
-                val base = index * 2
-                pixels[index] = (data[base].toInt() and 0xFF) or ((data[base + 1].toInt() and 0xFF) shl 8)
-            }
-        }
-        else -> return null
-    }
-    return downsample(pixels, width, height)
-}
-
-private fun downsample(pixels: IntArray, width: Int, height: Int): LumaImage {
+    if (width <= 0 || height <= 0 || bytesPerPixel !in 1..2) return null
+    if (width.toLong() * height > data.size / bytesPerPixel) return null
     val maxEdge = 320
     val step = maxOf(1, maxOf(width, height) / maxEdge)
-    if (step == 1) return LumaImage(pixels, width, height, scale = 1)
-    val outWidth = width / step
-    val outHeight = height / step
+    val outWidth = maxOf(1, width / step)
+    val outHeight = maxOf(1, height / step)
     val out = IntArray(outWidth * outHeight)
     for (y in 0 until outHeight) {
         for (x in 0 until outWidth) {
-            out[y * outWidth + x] = pixels[(y * step) * width + x * step]
+            val offset = ((y * step) * width + x * step) * bytesPerPixel
+            val low = data[offset].toInt() and 0xFF
+            out[y * outWidth + x] = if (bytesPerPixel == 1) low
+                else low or ((data[offset + 1].toInt() and 0xFF) shl 8)
         }
     }
     return LumaImage(out, outWidth, outHeight, scale = step)

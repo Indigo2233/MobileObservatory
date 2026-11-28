@@ -1,6 +1,7 @@
 package com.indigo.mobileobservatory.camera
 
 import kotlinx.coroutines.*
+import java.time.Instant
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** Owns one acquisition. A private snapshot is returned only after the camera has stopped.
@@ -12,10 +13,44 @@ suspend fun captureSingleExposureFrame(
     checkCamera: () -> Unit = {},
     acceptFrame: (FrameData) -> Boolean = { true },
     snapshot: (FrameData) -> CameraCfaLayout.Snapshot = { CameraCfaLayout.ownedSnapshot(it, camera.sciencePixelTraits) }
-): CameraCfaLayout.Snapshot? {
+): CameraCfaLayout.Snapshot? = captureOneFrame(camera, timeoutMs, elapsedMs, checkCamera, acceptFrame, snapshot)
+
+internal data class TimedScienceExposure(val frame: FrameData, val exposureStartedAt: Instant)
+
+internal suspend fun captureTimedScienceExposure(
+    camera: Camera,
+    exposureUs: Float,
+    timeoutMs: Long,
+    elapsedMs: () -> Long,
+    checkCamera: () -> Unit,
+    utcNow: () -> Instant = Instant::now,
+    snapshot: (FrameData) -> CameraCfaLayout.Snapshot
+): TimedScienceExposure? {
+    val requestedUtc = utcNow()
+    val requestedMs = elapsedMs()
+    val exposureNs = (exposureUs.toDouble() * 1000).toLong()
+    val minimumMs = kotlin.math.ceil(exposureUs / 1000.0).toLong()
+    val single = camera is CameraSingleExposureCapable
+    return captureOneFrame(camera, timeoutMs, elapsedMs, checkCamera, acceptFrame = { frame ->
+        val generation = camera.scienceCaptureGeneration
+        (generation == null || frame.captureGeneration == null || frame.captureGeneration == generation) &&
+            (single || elapsedMs() - requestedMs >= minimumMs)
+    }) { frame ->
+        // Stream adapters can flush several frames. Estimate the accepted exposure's start
+        // from host delivery time. SDK timestamps use different epochs and units.
+        val start = if (single) requestedUtc
+            else requestedUtc.plusMillis(elapsedMs() - requestedMs).minusNanos(exposureNs)
+        TimedScienceExposure(snapshot(frame).frame, start)
+    }
+}
+
+private suspend fun <T : Any> captureOneFrame(
+    camera: Camera, timeoutMs: Long, elapsedMs: () -> Long, checkCamera: () -> Unit,
+    acceptFrame: (FrameData) -> Boolean, snapshot: (FrameData) -> T
+): T? {
     require(timeoutMs > 0)
     check(camera.isCaptureStopped) { "Previous camera acquisition has not stopped" }
-    val received = CompletableDeferred<CameraCfaLayout.Snapshot>()
+    val received = CompletableDeferred<T>()
     val closed = AtomicBoolean(false)
     val claimed = AtomicBoolean(false)
     var failure: Throwable? = null

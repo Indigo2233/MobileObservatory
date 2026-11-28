@@ -1,6 +1,6 @@
 # 高级序列对齐 NINA 执行计划
 
-> 状态：**N0–N2 已落地；N3 历表/看门狗/中天翻转设置已落地；N4 板解同步与偏移后居中已落地（子帧不实施）；N5 模板与并行已落地；N6 真机未开始。** 追踪 [issue #4](https://github.com/Indigo2233/MobileObservatory/issues/4)。开发分支 `feature/dso-sequence`。
+> **序列在开发构建中按需启用。** N0–N5 的实现位于 `main`。N4 的子帧曝光保留原始字段，执行时提示跳过。正式版启用条件见 N6 真机验收。[issue #4](https://github.com/Indigo2233/MobileObservatory/issues/4)
 >
 > 本文替代 [`DSO_SEQUENCE_PLAN.md`](DSO_SEQUENCE_PLAN.md) 第 3.2 节里的高级序列部分、第 4 节（序列模型）和第 5.2–5.3 节（主循环与失败）。简单序列、状态页、会话记录、测量仍以那份文档为准。
 >
@@ -561,6 +561,18 @@ N5 实现：子项同时启动，全部结束后指令集结束，不评估条�
 - 在 NINA 里做一份含开始区、两个目标、智能曝光、循环条件、中天翻转、抖动触发器的序列，拷到手机上打开、执行、保存，再拷回 NINA 打开，字段不丢。
 - 反向：本应用做的序列在 NINA 里打开，结构和参数一致。
 - 其余夜间项沿用 `DSO_SEQUENCE_PLAN.md` 第 11 节和 `docs/testing/HARDWARE_SMOKE_TESTS.md`。
+
+## 启用计划（2026-11-28）
+
+| 阶段 | 交付与验收条件 |
+|---|---|
+| 开发构建 | 在 main 上使用现有拍摄、工具和星图入口。用 `Build.ps1 -NonCommercial -ShowSequence -InstallerDirectory bin/Installer/sequence-debug` 单独保存 arm64 开发 APK。用 `Build.ps1 -NonCommercial -EmulatorTest` 生成独立模拟器包。|
+| 执行与设备 | 用长曝光覆盖暂停、继续、停止、跳过及跳到结束。只计入已完成的曝光。验证重复启动、设备断连后重试、结束区失败、多目标指向和配件到位。|
+| 数据与恢复 | 每次运行使用独立目录，逐帧保存 FITS 与会话清单。验证重名、写入失败及进程中断后的已保存数据。恢复后由操作者重新发起设备动作。|
+| 自动化验收 | 执行序列 JVM 回归和 Android 编辑器测试。使用虚拟相机完成一次从编排、拍摄到读取 FITS 与会话清单的验收。|
+| 正式版启用 | 记录真实相机连续曝光、拔线与重连、赤道仪停止与到位、夜间导星/翻转以及桌面 NINA 双向往返结果。完成 N6 后统一调整构建默认值和更新清单校验。|
+
+开发构建已完成模拟器验收。全量 JVM 回归通过 1,634 项，Android 仪器测试通过 9 项。虚拟相机连续保存 120 帧，运行器重建后可找回上次运行已写完的曝光。桌面原生测试文件通过 Advanced API 往返核对。正式版继续执行 N6 验收条件。[验收记录](testing/NINA_SEQUENCE_ACCEPTANCE.md)
 
 ## 13. 测试
 

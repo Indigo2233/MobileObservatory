@@ -10,6 +10,64 @@
 
 ## 自动化基线
 
+### 2026-11-28 开发构建验收
+
+本轮使用 Android 14（API 34、x86_64）模拟器和本机 N.I.N.A. 3.2.0.9001，Advanced API 版本为 2.2.15.2。桌面侧通过 `POST /v2/api/sequence/load` 加载序列，通过 `GET /v2/api/sequence/state` 读取解析结果。设备动作在 Android 模拟器中执行。
+
+| 检查 | 实测结果 |
+|---|---|
+| JVM 回归 | 模拟器构建配置下，297 个测试类共 1,634 项全部通过，其中序列包 80 项。覆盖重复启动、曝光期间停止与跳过、条件超时、设备恢复后重试、结束区出错、写入失败、旧文件兼容和帧数计算。 |
+| Android 仪器测试 | 9 项全部通过。覆盖竖屏编辑、桌面文件读写、工具页端到端拍摄、预览相机拒绝科学曝光、虚拟架台 GOTO 到位、连续拍摄及中断恢复。工具页生成的两张 FITS 各 158,400 字节，均通过 2,880 字节块对齐检查。 |
+| 连续曝光与中断恢复 | 虚拟相机连续保存 120 帧。逐一核对文件名与清单后开始第二次拍摄，在至少 3 帧后取消运行作用域并重建运行器。测试构造了清单缺少最后一帧、清单引用已缺失文件、目录包含未写完临时文件三种情况。恢复数量与实际 FITS 数量一致，从 FITS 头找回了遗漏帧的滤镜和曝光时间。恢复后设备保持空闲。 |
+| 竖屏拍摄入口 | 在 320 dpi 模拟器上使用 360 dp 和 412 dp 宽度，各覆盖 100% 和 200% 字体。四种配置均可从工具页启动序列，完成两帧拍摄并返回工具页。六层编辑器的自动化检查使用 360×640 dp 视口。 |
+| 桌面原文件 → Android → 桌面 | 模拟器导入桌面 `test.json` 并导出新文件。两份 JSON 的全部字段、数组顺序及引用一致。Advanced API 重新加载后，三区、冷却和回温参数及整个 `Response` 与初次加载一致。原文件 SHA-256 为 `52d822af0af96b7065333d9bace07341fd201c8c8d870d288282ca8eb80faba7`。 |
+| Android 拍摄计划 → 桌面 | 桌面识别开始导星、每帧抖动、2 次循环、0.5 秒 LIGHT 曝光、增益 180、偏置 10、2×2 合并和结束时停止导星。Ha 保存在 Android 文件与图像头中。桌面滤镜轮报告 `Connected=false`、可用滤镜为空，切换指令的 `Filter` 返回 `null`。实际槽位映射待联机核对。 |
+
+本轮证据保存在本地 `bin/validation/sequence-enablement/`。N6 仍需使用实际设备验证连续曝光、掉线重连、架台停止、导星和中天翻转。下文的复杂桌面文件、真机屏幕与夜间观测项目保留各自的验收条件。
+
+两个开发包的构建标识为 `main-eaac88aa7144-dirty`，版本为 1.0.13，构建号为 67。已用 apksigner 验证两个包的签名，证书 SHA-256 均为 `bc4b926780ae1826eb2b66c3c2bea99a546bac91f5bc9f6274547680cc86c374`。
+
+| 开发包 | SHA-256 | 验证 |
+|---|---|---|
+| x86 / x86_64 模拟器 | `804a6010af2204fec41bcb71645bbc101c232b065d040619b6ae481ee5a154b5` | 交付包与完成 9 项仪器测试的安装包哈希一致。 |
+| arm64-v8a | `ef5ae97174d4f4e813555a8560da9955ca7503582f1efd9c9b3cf5578400af0f` | 构建、签名与包内 ABI 已验证。硬件运行待 N6。 |
+
+### ARM64 手机并装包与单目标验证
+
+`Build.ps1 -NonCommercial -PhoneSequenceTest` 生成独立安装包，应用名为靛空台·序列测试，包名为 `com.indigo.mobileobservatory.sequencetest`。该包启用序列和实际设备适配器，数据目录与正式版分开。版本为 1.0.13-sequence，构建号为 67，最低 Android 版本为 8.0。APK 的 SHA-256 为 `fa59d07cd535f655cb8888227387ac47db559804b27808db584a16d9d0a8c42d`。
+
+在支持 ARM64 转译的 Android 14 模拟器上先安装正式版，再安装上述 ARM64 文件。两个包同时存在。测试包冷启动成功，并从工具页进入了序列编辑器。相机未连接时，预检指出曝光缺少设备；继续启动后，序列暂停在曝光指令，计数为 0/1。停止操作返回已停止状态。
+
+使用手机构建配置运行的 81 项序列 JVM 测试全部通过。新增 M31 单目标测试用虚拟设备执行同一条简单序列，覆盖制冷、GOTO、居中、自动对焦、开始导星、抖动、L 滤镜 3×30 秒、Ha 滤镜 3×60 秒和结束收尾。测试核对 6 张 FITS 的滤镜、曝光时间和 LIGHT 类型，以及停止导星、停跟踪、回温和关盖后的状态。曝光时长是模拟计划参数，虚拟设备使用加速计时。真实设备的指向精度、板解闭环、导星质量、持续长曝光与中天翻转仍需联机验收。
+
+### 2026-11-28 序列手机包独立代码审查
+
+CodexReview 审查编号为 `cr-20261128-171256-4563cc`。审查范围为 `main` 基线 `eaac88aa7144` 之上的序列变更。最终审查快照为 `bd161fd3089d`，包含 33 个文件。快照使用独立 Git 索引生成。APK 从共享工作区构建，工作区已有的 QHY 驱动修改不在此次序列审查范围内。Rust 专项检查确认范围中没有 Rust、Cargo 或 JNI 文件变更。
+
+| 轮次 | 发现与处置 |
+|---|---|
+| 第一轮 | 修复 QHY 帧时钟单位导致的曝光超时和 FITS `DATE-OBS` 错误。流式相机以主机单调时钟检查收帧时序，以接收时刻减去曝光时间估算 UTC 开始时刻。单帧相机使用采集请求的 UTC 时刻。另修复抖动稳定判定过早的问题。 |
+| 第二轮 | 修复 `IDENTITY` 导星算法在微小修正脉冲下的抖动超时。序列在连续三次测量均满足各轴残差和修正位移阈值、导星任务空闲时继续曝光。 |
+| 第三轮 | 审查状态为 `completed`，剩余问题 0 项。审查快照也包含曝光与跟踪、导星命令互斥，以及 HFR 直接采样两项本地修复。 |
+
+修订版为 `bin/Installer/sequence-reviewed/IndigoObservatory_sequence_phone.apk`，版本 1.0.13-sequence，构建号 67，SHA-256 为 `3aafd8ef4c5ff1b7a332fd3fc6f67563bf68c5485725ac11cbe7cf8f9e478331`。签名与旧序列测试版一致。在支持 ARM64 转译的 Android 14 模拟器上覆盖安装、冷启动后，已安装文件与交付 APK 的哈希一致。
+
+手机配置的 1,640 项 JVM 测试全部通过，跳过 0 项。模拟器上的 7 项仪器测试全部通过，覆盖 120 帧虚拟连续采集、中断恢复、桌面原始序列文件往返和竖屏编辑。用于导入的桌面夹具是 N.I.N.A. 保存的 `test.json`。Advanced API 的 `sequence/state` 响应单独用于核对解析结果。原始审查结果、测试与签名记录位于 `bin/validation/sequence-enablement/codexreview/`。实体设备连续长曝光、板解居中、导星和中天翻转仍待联机验收。
+
+### 命令与夹具
+
+在桌面 N.I.N.A. 中打开测试用会话并启用 Advanced API 后，可以用以下命令加载 Android 导出的 UTF-8 文件并核对当前序列。加载操作会替换桌面当前打开的序列。
+
+```powershell
+$api = 'http://localhost:1888/v2/api'
+$file = 'bin/validation/sequence-enablement/android-sequence.json'
+$load = Invoke-RestMethod -Method Post -Uri "$api/sequence/load" -InFile $file -ContentType 'application/json'
+if (-not $load.Success) { throw $load.Error }
+$state = Invoke-RestMethod "$api/sequence/state"
+if (-not $state.Success) { throw $state.Error }
+$state.Response | ConvertTo-Json -Depth 64
+```
+
 执行以下命令：
 
 ```powershell

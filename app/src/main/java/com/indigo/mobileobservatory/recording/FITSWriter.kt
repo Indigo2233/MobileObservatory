@@ -61,15 +61,15 @@ class FITSWriter {
             cards.add(fitsCard("BZERO", "32768", "offset for unsigned 16-bit"))
             cards.add(fitsCard("BSCALE", "1", "default scaling"))
         }
-        cards.add(fitsCard("EXPOSURE", "%.6f".format(exposureSeconds), "exposure time in seconds"))
+        cards.add(fitsCard("EXPOSURE", "%.6f".format(java.util.Locale.ROOT, exposureSeconds), "exposure time in seconds"))
         if (gainKind == GainControlKind.ISO) {
             cards.add(fitsCard("ISOSPEED", gain.toInt().toString(), "camera ISO speed"))
         } else {
             val gainComment = listOfNotNull(gainLabel, gainUnit?.takeIf { it.isNotBlank() })
                 .joinToString(" ") + " native value"
-            cards.add(fitsCard("GAIN", "%.2f".format(gain), gainComment))
+            cards.add(fitsCard("GAIN", "%.2f".format(java.util.Locale.ROOT, gain), gainComment))
             gainDbEquivalent?.let { db ->
-                cards.add(fitsCard("GAINDB", "%.2f".format(db), "gain equivalent in dB"))
+                cards.add(fitsCard("GAINDB", "%.2f".format(java.util.Locale.ROOT, db), "gain equivalent in dB"))
             }
         }
         cards.add(fitsCard("DATE-OBS", "'$dateObs'", "observation date"))
@@ -78,18 +78,18 @@ class FITSWriter {
             cards.add(fitsCard("IMAGETYP", "'${type.uppercase()}'", "image type"))
         }
         if (pixelSizeUm != null && pixelSizeUm > 0f) {
-            cards.add(fitsCard("XPIXSZ", "%.4f".format(pixelSizeUm), "pixel size in microns"))
-            cards.add(fitsCard("YPIXSZ", "%.4f".format(pixelSizeUm), "pixel size in microns"))
+            cards.add(fitsCard("XPIXSZ", "%.4f".format(java.util.Locale.ROOT, pixelSizeUm), "pixel size in microns"))
+            cards.add(fitsCard("YPIXSZ", "%.4f".format(java.util.Locale.ROOT, pixelSizeUm), "pixel size in microns"))
         }
         cards.add(fitsCard("XBINNING", binning.coerceAtLeast(1).toString(), "binning factor"))
         cards.add(fitsCard("YBINNING", binning.coerceAtLeast(1).toString(), "binning factor"))
         if (focalLengthMm != null && focalLengthMm > 0f) {
-            cards.add(fitsCard("FOCALLEN", "%.3f".format(focalLengthMm), "focal length in mm"))
+            cards.add(fitsCard("FOCALLEN", "%.3f".format(java.util.Locale.ROOT, focalLengthMm), "focal length in mm"))
             if (pixelSizeUm != null && pixelSizeUm > 0f) {
                 val arcsecPerPixel = 206.265 * pixelSizeUm * binning.coerceAtLeast(1) / focalLengthMm
-                cards.add(fitsCard("PIXSCALE", "%.6f".format(arcsecPerPixel), "arcsec per pixel"))
-                cards.add(fitsCard("FOVW", "%.6f".format(arcsecPerPixel * naxis1 / 3600.0), "field width in degrees"))
-                cards.add(fitsCard("FOVH", "%.6f".format(arcsecPerPixel * naxis2 / 3600.0), "field height in degrees"))
+                cards.add(fitsCard("PIXSCALE", "%.6f".format(java.util.Locale.ROOT, arcsecPerPixel), "arcsec per pixel"))
+                cards.add(fitsCard("FOVW", "%.6f".format(java.util.Locale.ROOT, arcsecPerPixel * naxis1 / 3600.0), "field width in degrees"))
+                cards.add(fitsCard("FOVH", "%.6f".format(java.util.Locale.ROOT, arcsecPerPixel * naxis2 / 3600.0), "field height in degrees"))
             }
         }
         if (filterName != null) {

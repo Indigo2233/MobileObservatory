@@ -8,6 +8,30 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class SingleExposureCaptureTest {
+    @Test fun scienceCaptureUsesHostClocksForQhyAndSingleFrameAdapters(): Unit = runTest {
+        val epoch = java.time.Instant.parse("2026-11-28T08:17:00Z")
+        for (camera in listOf(StreamCamera(), SingleCamera())) {
+            val result = async {
+                captureTimedScienceExposure(camera, 2_000_000f, 5000, { currentTime }, {}, { epoch }) {
+                    CameraCfaLayout.ownedSnapshot(it, camera.sciencePixelTraits)
+                }
+            }
+            runCurrent()
+            if (camera !is SingleCamera) {
+                advanceTimeBy(100)
+                camera.emit(byteArrayOf(0, 0, 0, 0), timestamp = 123_456_789_000_000)
+                assertFalse(result.isCompleted)
+                advanceTimeBy(2170)
+            } else {
+                advanceTimeBy(1999)
+            }
+            camera.emit(byteArrayOf(1, 2, 3, 4), timestamp = 250_000)
+            val captured = checkNotNull(result.await())
+            assertArrayEquals(byteArrayOf(1, 2, 3, 4), captured.frame.data)
+            assertEquals(if (camera is SingleCamera) epoch else epoch.plusMillis(270), captured.exposureStartedAt)
+        }
+    }
+
     @Test fun automaticSolveRetriesStopTheCameraBeforeEverySolve(): Unit = runTest {
         val camera = SingleCamera()
         var solves = 0
@@ -162,8 +186,8 @@ class SingleExposureCaptureTest {
         protected fun begin(callback: FrameCallback) { this.callback = callback; stopConfirmed = false; isCapturing.value = true }
         override fun startCapture(callback: FrameCallback) { streamStarts++; begin(callback) }
         override fun stopCapture() { stops++; isCapturing.value = false; stopConfirmed = confirmStop }
-        fun emit(bytes: ByteArray, previewOnly: Boolean = false) {
-            callback!!.onFrame(FrameData(bytes,2,2,PixelFormat.MONO8,++sequence,0, previewOnly = previewOnly))
+        fun emit(bytes: ByteArray, previewOnly: Boolean = false, timestamp: Long = 0) {
+            callback!!.onFrame(FrameData(bytes,2,2,PixelFormat.MONO8,++sequence,timestamp, previewOnly = previewOnly))
         }
         override fun recycleBuffer(buf: ByteArray) { recycled += buf }
         override fun close() { isOpen.value = false }

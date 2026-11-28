@@ -34,6 +34,7 @@
     <string name="gemini_flat">Gemini 平场</string>
     <string name="close">关闭</string>
     <string name="app_name">靛空台</string>
+    <string name="sequence_test_app_name">靛空台·序列测试</string>
 
     <!-- CameraScreen -->
     <string name="resume">继续</string>
@@ -912,6 +913,7 @@
     <string name="sequence_file_imported">已导入 %1$s</string>
     <string name="sequence_file_exported">序列已导出</string>
     <string name="sequence_file_shared">已打开分享面板</string>
+    <string name="sequence_interrupted">上次序列已中断。已保存的图像和拍摄计划可供查看。请核对剩余曝光，再开始新的拍摄。</string>
     <string name="sequence_file_error">文件错误：%1$s</string>
     <string name="sequence_start">开始</string>
     <string name="sequence_stop">停止序列</string>
@@ -1225,4 +1227,5 @@
     <string name="solar_scan_warning_coverage">加速或减速区与日面重叠。</string>
     <string name="solar_scan_delete_confirm">全部结果提交后直接删除本次任务的源 SER。删除前会核对任务保存的策略和源文件身份。</string>
     <string name="solar_scan_trash_confirm">全部结果提交后把本次任务的源 SER 移入回收站，并在移入七天后到期。</string>
+    <string name="sequence_frames_saved">已拍 %1$d 张</string>
 </resources>

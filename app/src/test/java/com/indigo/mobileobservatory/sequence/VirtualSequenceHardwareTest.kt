@@ -1,12 +1,67 @@
 package com.indigo.mobileobservatory.sequence
 
 import java.nio.file.Files
+import com.indigo.mobileobservatory.util.FitsHeaderParser
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class VirtualSequenceHardwareTest {
+    @Test
+    fun singleTargetRunsFromCoolingThroughTwoFiltersToShutdown() = runBlocking {
+        val output = Files.createTempDirectory("sequence-m31").toFile()
+        try {
+            withTimeout(30_000) {
+                val hardware = VirtualSequenceHardware()
+                val sessions = output.resolve("sessions")
+                val sequence = SequenceRuntime(output.resolve("plans"), sessions, this, hardware, hardware)
+                val draft = SimpleSequenceDraft(
+                    title = "M31", raHours = 0.7123, decDegrees = 41.269,
+                    coolToC = -10.0, slewBefore = true, centerBefore = true,
+                    autofocusBefore = true, guideBefore = true, ditherEvery = 2,
+                    rows = listOf(SimpleExposureRow("L", 30.0, 120, 10, 3),
+                        SimpleExposureRow("Ha", 60.0, 180, 10, 3)),
+                    endStopGuide = true, endWarm = true, endStopTracking = true, endCloseCover = true
+                )
+                sequence.updateDraft(draft)
+                sequence.start()
+                val result = sequence.state.first { it.phase != SequencePhase.Running }
+                assertEquals(result.message, SequencePhase.Completed, result.phase)
+                assertEquals(null, result.message)
+                assertEquals(6, result.framesDone)
+                val session = sessions.listFiles()!!.single()
+                val manifest = JSONObject(session.resolve("session.json").readText())
+                assertEquals("Completed", manifest.getString("phase"))
+                val plan = parseNinaSequence(manifest.getJSONObject("sequence").toString())
+                val operations = listOf("CoolCamera", "SlewScopeToRaDec", "Center", "RunAutofocus",
+                    "StartGuiding", "Dither", "StopGuiding", "WarmCamera", "SetTracking", "CloseCover")
+                for (operation in operations) {
+                    val instruction = plan.find(operation).single()
+                    assertEquals(operation, "FINISHED", result.nodeStatus[instruction.id])
+                }
+                assertEquals(1, manifest.getJSONArray("autofocus").length())
+                assertEquals(6, manifest.getJSONArray("frames").length())
+                for (index in 0 until 6) {
+                    val frame = manifest.getJSONArray("frames").getJSONObject(index)
+                    val header = FitsHeaderParser.read(session.resolve(frame.getString("name")))
+                    assertEquals(if (index < 3) "L" else "Ha", header["FILTER"])
+                    assertEquals(if (index < 3) 30.0 else 60.0, header.doubleValue("EXPOSURE")!!, 0.00001)
+                    assertEquals("LIGHT", header["IMAGETYP"])
+                }
+                val status = hardware.status.value
+                assertEquals(draft.raHours, status.raHours, 0.0001)
+                assertEquals(draft.decDegrees, status.decDeg, 0.0001)
+                assertTrue(!status.guiding && !status.tracking && !status.coolerOn && !status.coverOpen)
+            }
+        } finally {
+            output.deleteRecursively()
+        }
+    }
+
     @Test
     fun exposureWritesDeterministicFitsWithRequestedMetadata() = runBlocking {
         val output = Files.createTempDirectory("virtual-sequence").toFile()

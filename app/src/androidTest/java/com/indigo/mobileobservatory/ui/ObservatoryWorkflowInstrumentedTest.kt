@@ -545,6 +545,73 @@ class ObservatoryWorkflowInstrumentedTest {
         workspace("CAPTURE").assertIsSelected()
     }
 
+    @Test fun sequenceRunsFromToolsAndSavesEveryRequestedFrame() {
+        org.junit.Assume.assumeTrue(BuildConfig.EMULATOR_TEST && BuildConfig.SEQUENCE_ENABLED)
+        val runtime = vm.sequenceRuntime
+        val title = "SequenceAcceptance-${System.currentTimeMillis()}"
+        compose.runOnIdle {
+            runtime.updateDraft(runtime.draft.value.copy(title = title, guideBefore = true,
+                ditherEvery = 1, endStopGuide = true, rows = listOf(
+                    com.indigo.mobileobservatory.sequence.SimpleExposureRow("Ha", 0.5, 180, 10, 2, 2, 2))))
+        }
+        selectWorkspace("TOOLS")
+        compose.onNodeWithTag("tool-sequence").performScrollTo().performClick()
+        compose.onNodeWithText(app.getString(R.string.sequence_start)).performScrollTo().performClick()
+        compose.waitUntil(30_000) { runtime.state.value.phase == com.indigo.mobileobservatory.sequence.SequencePhase.Completed }
+        org.junit.Assert.assertEquals(2, runtime.state.value.framesDone)
+        assertNull(runtime.state.value.message)
+        assertFalse(vm.virtualSequenceStatus.value!!.guiding)
+        val session = File(app.getExternalFilesDir("captures"), "Sequences").listFiles()!!.single { it.name.startsWith(title) }
+        val json = org.json.JSONObject(File(session, "session.json").readText())
+        org.junit.Assert.assertEquals("Completed", json.getString("phase"))
+        val names = runtime.frames.value.map { it.name }
+        org.junit.Assert.assertEquals(2, names.toSet().size)
+        org.junit.Assert.assertEquals(names, (0..1).map { json.getJSONArray("frames").getJSONObject(it).getString("name") })
+        names.forEach { name ->
+            val file = File(session, name)
+            val header = file.inputStream().use { input ->
+                val bytes = ByteArray(2880)
+                java.io.DataInputStream(input).readFully(bytes)
+                bytes.toString(Charsets.US_ASCII)
+            }
+            assertTrue(header.contains("FILTER  = 'Ha'"))
+            assertTrue(header.contains("XBINNING=                    2"))
+            assertTrue(header.contains("IMAGETYP= 'LIGHT'"))
+            org.junit.Assert.assertEquals(0L, file.length() % 2880)
+        }
+        systemBack()
+        workspace("TOOLS").assertIsSelected()
+    }
+
+    @Test fun sequenceAdapterRejectsPreviewOnlyCameraAndAwaitsVirtualMount() {
+        org.junit.Assume.assumeTrue(BuildConfig.EMULATOR_TEST)
+        compose.runOnIdle { vm.startVirtualObservation() }
+        compose.waitUntil(20_000) { vm.connectionState.value is ConnectionState.Connected }
+        val directory = File(app.cacheDir, "sequence-camera-${System.nanoTime()}")
+        val adapter = com.indigo.mobileobservatory.ui.viewmodel.CameraSequenceHardware(vm)
+        try {
+            kotlinx.coroutines.runBlocking {
+                val failure = runCatching { adapter.takeExposure(0.5, 100, -1, directory, 1, "LIGHT") }.exceptionOrNull()
+                assertTrue(failure is com.indigo.mobileobservatory.sequence.DeviceUnavailable)
+                assertTrue(directory.listFiles().isNullOrEmpty())
+                compose.waitUntil(20_000) { vm.mountCoordinates.value != null &&
+                    vm.mountConnectionState.value is com.indigo.mobileobservatory.mount.MountConnectionState.Connected }
+                val target = requireNotNull(vm.mountCoordinates.value)
+                val (ra, dec) = com.indigo.mobileobservatory.astro.EquatorialEpoch.toJnowHours(
+                    target.raHours, target.decDeg, "J2000")
+                adapter.slew(target.raHours, target.decDeg)
+                val actual = requireNotNull(vm.mountCoordinates.value)
+                val separation = com.indigo.mobileobservatory.mount.PrecisionGotoMath.angularSeparationDeg(
+                    actual, com.indigo.mobileobservatory.mount.MountCoordinates(ra, dec))
+                assertTrue("GOTO error $separation deg", separation < 0.2)
+
+            }
+        } finally {
+            compose.runOnIdle { vm.stopVirtualObservation() }
+            directory.deleteRecursively()
+        }
+    }
+
     private fun captureWorkflowEvidence(name: String) {
         val bitmap = compose.onRoot().captureToImage().asAndroidBitmap()
         val file = File(app.getExternalFilesDir(null), "workflow-ui-evidence/$name.png")

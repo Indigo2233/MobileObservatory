@@ -58,6 +58,24 @@ class SequencePortraitUsabilityTest {
     }
 
     @Test
+    fun importAndExportDesktopSequence() {
+        val name = InstrumentationRegistry.getArguments().getString("desktopSequence")
+        org.junit.Assume.assumeTrue("Provide a desktop NINA JSON fixture", !name.isNullOrBlank())
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val directory = File(context.getExternalFilesDir(null), "nina-roundtrip")
+        val incoming = File(directory, File(requireNotNull(name)).name)
+        val templates = File(context.cacheDir, "roundtrip-templates")
+        val runtime = SequenceRuntime(templates, File(context.cacheDir, "roundtrip-sessions"), scope, VirtualSequenceHardware())
+        runtime.importJson(incoming.name, incoming.readText())
+        val exported = runtime.exportJson()
+        val root = org.json.JSONObject(exported)
+        assertEquals("SequenceRootContainer", root.getString("\$type").substringBefore(',').substringAfterLast('.'))
+        File(directory, "android-export.json").writeText(exported)
+        val restored = com.indigo.mobileobservatory.sequence.parseNinaSequence(exported)
+        assertEquals(listOf("StartAreaContainer", "TargetAreaContainer", "EndAreaContainer"), restored.childItems().map { it.className })
+    }
+
+    @Test
     fun deeplyNestedSequenceCanBeEditedAndReachedOnPortraitScreen() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val root = emptyAdvancedSequence("Portrait nesting")

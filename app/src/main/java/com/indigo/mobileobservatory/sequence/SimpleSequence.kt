@@ -67,12 +67,13 @@ fun SimpleSequenceDraft.plannedFrames(): Int {
     return framesPerTarget * effectiveTargets().count { it.enabled }
 }
 
-fun NinaNode.plannedFrames(): Int {
-    fun count(node: NinaNode, multiplier: Long): Long {
+/** A time or sky condition without an iteration limit has no fixed frame count. */
+fun NinaNode.plannedFrames(): Int? {
+    fun count(node: NinaNode): Long? {
         if (sequenceNodeDisabled(node)) return 0
-        if (node.className == "TakeExposure") return multiplier
-        val loopIterations = node.collectionNodes("Conditions")
-            .filterNot(::sequenceNodeDisabled)
+        if (node.className == "TakeExposure") return 1
+        val conditions = node.collectionNodes("Conditions").filterNot(::sequenceNodeDisabled)
+        val loopIterations = conditions
             .filter { it.className == "LoopCondition" }
             .map {
                 (expressionNumber(it, "Iterations") ?: 1.0).toLong()
@@ -82,14 +83,13 @@ fun NinaNode.plannedFrames(): Int {
             ?: if (node.className == "SmartExposure" || node.className == "TakeManyExposures") {
                 (expressionNumber(node, "Iterations") ?: 1.0).toLong()
                     .coerceIn(0, Int.MAX_VALUE.toLong())
-            } else {
-                1
-            }
-        val childMultiplier = (multiplier * loopIterations).coerceAtMost(Int.MAX_VALUE.toLong())
-        return node.childItems().sumOf { count(it, childMultiplier) }
-            .coerceAtMost(Int.MAX_VALUE.toLong())
+            } else if (conditions.any { knownCondition(it.className) }) null else 1L
+        if (loopIterations == 0L) return 0
+        val perIteration = node.childItems().sumOf { count(it) ?: return null }.coerceAtMost(Int.MAX_VALUE.toLong())
+        if (perIteration == 0L) return 0
+        return loopIterations?.let { (perIteration * it).coerceAtMost(Int.MAX_VALUE.toLong()) }
     }
-    return count(this, 1).toInt()
+    return count(this)?.toInt()
 }
 
 private class NinaIds {
@@ -159,10 +159,13 @@ private fun deepSkyTarget(
     draft.altitudeEndDeg?.let { offset ->
         val condition = altitudeCondition(ids, offset)
         condition.fields["Parent"] = NinaValue.Ref(checkNotNull(target.id))
+        // The exposure rows define the batch size. Altitude can end it early.
+        val singlePass = loopCondition(ids, 1)
+        singlePass.fields["Parent"] = NinaValue.Ref(checkNotNull(target.id))
         target.fields["Conditions"] = itemCollection(
             ids,
             "NINA.Sequencer.Conditions.ISequenceCondition, NINA.Sequencer",
-            listOf(condition)
+            listOf(condition, singlePass)
         )
     }
     draft.ditherEvery?.let { every ->
@@ -324,19 +327,21 @@ private fun inputTarget(ids: NinaIds, target: SimpleSequenceTarget): NinaNode {
 private fun SimpleSequenceDraft.asTarget(): SimpleSequenceTarget =
     SimpleSequenceTarget(title, raHours, decDegrees, positionAngleDeg)
 
+private fun loopCondition(ids: NinaIds, count: Int): NinaNode = node(
+    ids,
+    "NINA.Sequencer.Conditions.LoopCondition, NINA.Sequencer",
+    LinkedHashMap<String, NinaValue>().also { fields ->
+        fields["CompletedIterations"] = NinaValue.Num(0.0, true)
+        putExpression(fields, "Iterations", count.toDouble(), ids.next())
+        fields["ErrorBehavior"] = NinaValue.Num(0.0, true)
+        fields["Attempts"] = NinaValue.Num(1.0, true)
+    }
+)
+
 private fun exposureLoop(ids: NinaIds, row: SimpleExposureRow): NinaNode {
     val loop = container(ids, "NINA.Sequencer.Container.SequentialContainer", row.filterName ?: "Exposure")
     if (!row.enabled) loop.fields["Status"] = NinaValue.Num(SEQUENCE_STATUS_DISABLED.toDouble(), true)
-    val condition = node(
-        ids,
-        "NINA.Sequencer.Conditions.LoopCondition, NINA.Sequencer",
-        LinkedHashMap<String, NinaValue>().also { fields ->
-            fields["CompletedIterations"] = NinaValue.Num(0.0, true)
-            putExpression(fields, "Iterations", row.count.toDouble(), ids.next())
-            fields["ErrorBehavior"] = NinaValue.Num(0.0, true)
-            fields["Attempts"] = NinaValue.Num(1.0, true)
-        }
-    )
+    val condition = loopCondition(ids, row.count)
     condition.fields["Parent"] = NinaValue.Ref(checkNotNull(loop.id))
     loop.fields["Conditions"] = itemCollection(ids, "NINA.Sequencer.Conditions.ISequenceCondition, NINA.Sequencer", listOf(condition))
     val steps = buildList {

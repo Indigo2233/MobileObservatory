@@ -31,7 +31,6 @@ import com.indigo.mobileobservatory.astro.EquatorialCoordinates
 import com.indigo.mobileobservatory.camera.ConnectionState
 import com.indigo.mobileobservatory.pointing.PointingCameraSource
 import com.indigo.mobileobservatory.sequence.SequenceFeature
-import com.indigo.mobileobservatory.sequence.plannedFrames
 import com.indigo.mobileobservatory.stacking.StackMode
 import com.indigo.mobileobservatory.ui.AppOrientationMode
 import com.indigo.mobileobservatory.ui.RememberAppOrientation
@@ -578,15 +577,20 @@ private fun ObservatorySequenceSummary(vm: CameraViewModel, current: Observatory
                                        open: (ObservatoryDestination) -> Unit) {
     if (!SequenceFeature.ENABLED) return
     val state by vm.sequenceRuntime.state.collectAsStateWithPageLifecycle()
-    val draft by vm.sequenceRuntime.draft.collectAsStateWithPageLifecycle()
     val paused = state.phase == com.indigo.mobileobservatory.sequence.SequencePhase.Paused
     if (current != ObservatoryDestination.SEQUENCE && (paused || state.phase == com.indigo.mobileobservatory.sequence.SequencePhase.Running)) {
         SequenceProgressStrip(title = state.currentClassName ?: stringResource(R.string.tab_sequence),
-            detail = stringResource(R.string.sequence_progress, state.framesDone, draft.plannedFrames()), paused = paused,
+            detail = sequenceFrameProgress(state.framesDone, vm.sequenceRuntime.plannedFrameCount()), paused = paused,
+            canResume = !vm.sequenceRuntime.control.requiresSkip,
             onOpen = { open(ObservatoryDestination.SEQUENCE) }, onPause = vm.sequenceRuntime::pause,
             onResume = vm.sequenceRuntime::resume, onStop = vm.sequenceRuntime::stop)
     }
 }
+
+@Composable
+internal fun sequenceFrameProgress(done: Int, planned: Int?): String =
+    if (planned == null) stringResource(R.string.sequence_frames_saved, done)
+    else stringResource(R.string.sequence_progress, done, planned)
 
 @Composable
 private fun SolarScanSummary(

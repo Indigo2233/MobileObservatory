@@ -139,6 +139,10 @@ val sequenceEnabled =
 
 val emulatorTest =
     providers.gradleProperty("emulatorTest").orNull?.toBooleanStrictOrNull() ?: false
+val phoneSequenceTest = providers.gradleProperty("phoneSequenceTest").orNull == "true"
+require(!phoneSequenceTest || (sequenceEnabled && !emulatorTest)) {
+    "phoneSequenceTest requires the sequence enabled and arm64 hardware adapters."
+}
 
 val observatoryBuildId =
     providers.gradleProperty("observatoryBuildId").orNull?.takeIf { it.isNotBlank() } ?: "development"
@@ -543,6 +547,7 @@ android {
 
     defaultConfig {
         applicationId = "com.indigo.mobileobservatory"
+        manifestPlaceholders["observatoryAppLabel"] = "@string/app_name"
         minSdk = 26
         targetSdk = 34
         versionCode = 67
@@ -596,9 +601,14 @@ android {
             if (emulatorTest) {
                 applicationIdSuffix = ".emulatortest"
                 versionNameSuffix = "-emulator-test"
+            } else if (phoneSequenceTest) {
+                applicationIdSuffix = ".sequencetest"
+                versionNameSuffix = "-sequence"
+                manifestPlaceholders["observatoryAppLabel"] = "@string/sequence_test_app_name"
             }
         }
         release {
+            buildConfigField("boolean", "SEQUENCE_ENABLED", "false")
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = if (releaseSigningConfigured) signingConfigs.getByName("release") else null
@@ -665,9 +675,9 @@ val verifyReleaseSigning = tasks.register<VerifyReleaseSigning>("verifyReleaseSi
 }
 
 tasks.matching { it.name == "preReleaseBuild" }.configureEach {
-    if (emulatorTest) {
+    if (emulatorTest || phoneSequenceTest) {
         doFirst {
-            throw GradleException("emulatorTest is restricted to debug builds.")
+            throw GradleException("Test installers require a debug build.")
         }
     }
     dependsOn(verifyReleaseSigning)

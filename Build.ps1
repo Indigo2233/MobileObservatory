@@ -5,14 +5,22 @@ param(
     [switch]$ShowSequence,
     [switch]$HideSequence,
     [switch]$EmulatorTest,
+    [switch]$PhoneSequenceTest,
     [switch]$SkipLint,
-    [string]$BuildId
+    [string]$BuildId,
+    [string]$InstallerDirectory = "bin\Installer"
 )
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
+if ($PhoneSequenceTest -and ($EmulatorTest -or $Release -or $HideSequence)) {
+    throw "PhoneSequenceTest requires an arm64 debug build with the sequence enabled."
+}
 if ($ShowSequence -and $HideSequence) {
     throw "Use either -ShowSequence or -HideSequence."
+}
+if ($ShowSequence -and $Release) {
+    throw "Sequence acceptance builds use the debug variant. Omit -Release."
 }
 if ($EmulatorTest -and $Release) {
     throw "EmulatorTest is restricted to debug builds."
@@ -21,17 +29,15 @@ if ($EmulatorTest -and $HideSequence) {
     throw "EmulatorTest requires the sequence UI."
 }
 # The advanced sequencer is hidden by default; opt in for development builds.
-$sequenceEnabled = $ShowSequence.IsPresent -or $EmulatorTest.IsPresent
+$sequenceEnabled = $ShowSequence.IsPresent -or $EmulatorTest.IsPresent -or $PhoneSequenceTest.IsPresent
 $buildType = if ($Release) { "release" } else { "debug" }
 $gradleTask = if ($Release) { "assembleRelease" } else { "assembleDebug" }
 $apk = Join-Path $root "app\build\outputs\apk\$buildType\app-$buildType.apk"
 $rotationApk = Join-Path $root "app\build\outputs\apk\$buildType\app-$buildType-rotation-signed.apk"
 $apkMetadata = Join-Path $root "app\build\outputs\apk\$buildType\output-metadata.json"
-$apkOut = if ($EmulatorTest) {
-    Join-Path $root "bin\Installer\IndigoObservatory_emulator_test.apk"
-} else {
-    Join-Path $root "bin\Installer\IndigoObservatory_android.apk"
-}
+$installerPath = if ([IO.Path]::IsPathRooted($InstallerDirectory)) { $InstallerDirectory } else { Join-Path $root $InstallerDirectory }
+$apkStem = if ($EmulatorTest) { "IndigoObservatory_emulator_test" } elseif ($PhoneSequenceTest) { "IndigoObservatory_sequence_phone" } else { "IndigoObservatory_android" }
+$apkOut = Join-Path $installerPath "$apkStem.apk"
 
 function Test-ValidApkArchive {
     param([Parameter(Mandatory = $true)][string]$Path)
@@ -121,6 +127,7 @@ try {
     }
     $gradleArgs += "-PsequenceEnabled=$($sequenceEnabled.ToString().ToLowerInvariant())"
     $gradleArgs += "-PemulatorTest=$($EmulatorTest.IsPresent.ToString().ToLowerInvariant())"
+    if ($PhoneSequenceTest) { $gradleArgs += "-PphoneSequenceTest=true" }
     $gradleArgs += "-PobservatoryBuildId=$buildIdentity"
 
     & .\gradlew.bat @gradleArgs
@@ -141,9 +148,8 @@ try {
         [string]::IsNullOrWhiteSpace([string]$apkElement.versionName)) {
         throw "Gradle APK metadata does not contain a version code and name: $apkMetadata"
     }
-    $apkStem = if ($EmulatorTest) { "IndigoObservatory_emulator_test" } else { "IndigoObservatory_android" }
-    $versionedApkOut = Join-Path $root (
-        "bin\Installer\{0}_v{1}-build{2}.apk" -f
+    $versionedApkOut = Join-Path $installerPath (
+        "{0}_v{1}-build{2}.apk" -f
         $apkStem,
         $apkElement.versionName,
         $apkElement.versionCode
@@ -245,6 +251,7 @@ try {
         "stellariumIncluded=$($NonCommercial.IsPresent)"
         "sequenceEnabled=$sequenceEnabled"
         "emulatorTest=$($EmulatorTest.IsPresent)"
+        "applicationId=$($metadata.applicationId)"
         "abis=$(if ($EmulatorTest) { 'x86,x86_64' } else { 'arm64-v8a' })"
         "builtAtUtc=$([DateTime]::UtcNow.ToString('o'))"
     ) | Set-Content -LiteralPath $buildInfoOut -Encoding utf8

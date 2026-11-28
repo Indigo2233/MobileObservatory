@@ -1,6 +1,15 @@
 package com.indigo.mobileobservatory.sequence
 
 import java.io.File
+import java.io.IOException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -67,6 +76,7 @@ interface SequenceHardware {
         binning: Int = 1,
         imageType: String = "LIGHT"
     ): SessionFrame
+    suspend fun switchFilter(name: String, fallbackPosition: Int?) = switchFilter(name)
     suspend fun switchFilter(name: String)
     suspend fun cool(targetC: Double, durationMinutes: Double = 0.0)
     suspend fun warm(durationMinutes: Double = 0.0)
@@ -102,6 +112,9 @@ class SequenceRuntime(
     private val world: SequenceWorld = SequenceWorld.System
 ) : SequenceDevicePort {
     private var sessionDir: File? = null
+    private var runRoot: NinaNode? = null
+    private val manifestMutex = Mutex()
+    private val opticalPathMutex = Mutex()
     private var runSettings = SequenceSettings()
 
     private val _state = MutableStateFlow(SequenceRunState(SequencePhase.Idle))
@@ -130,14 +143,19 @@ class SequenceRuntime(
     private val _canRedo = MutableStateFlow(false)
     val canRedo: StateFlow<Boolean> = _canRedo.asStateFlow()
 
-    private val engine = SequenceEngine(this, world = world) { next ->
-        _state.value = next
+    val control = SequenceControl()
+    private val engine = SequenceEngine(this, control, world) { next ->
+        // Publish terminal state after the session manifest has been committed.
+        if (next.phase == SequencePhase.Running || next.phase == SequencePhase.Paused) {
+            _state.value = if (next.phase == SequencePhase.Running && control.isPaused) {
+                _state.value.copy(phase = SequencePhase.Paused, framesDone = next.framesDone, nodeStatus = next.nodeStatus)
+            } else next
+        }
     }
     private var guidingWanted = false
 
-    val control: SequenceControl get() = engine.control
-
     fun setMode(mode: SequenceEditorMode) {
+        if (running()) return
         if (mode == SequenceEditorMode.Advanced && _document.value == null) {
             _document.value = emptyAdvancedSequence(_draft.value.title)
             history.clear()
@@ -148,6 +166,7 @@ class SequenceRuntime(
     }
 
     fun importSimpleDraft() {
+        if (running()) return
         _document.value = _draft.value.toNinaSequence()
         _mode.value = SequenceEditorMode.Advanced
         history.clear()
@@ -185,6 +204,7 @@ class SequenceRuntime(
     }
 
     fun setLocked(locked: Boolean) {
+        if (running()) return
         _locked.value = locked
     }
 
@@ -194,6 +214,7 @@ class SequenceRuntime(
     }
 
     fun updateDraft(draft: SimpleSequenceDraft) {
+        if (running()) return
         _draft.value = draft
     }
 
@@ -212,7 +233,7 @@ class SequenceRuntime(
     fun save(name: String) {
         templatesDir.mkdirs()
         val root = currentDocument()
-        File(templatesDir, "${sequenceFileStem(name)}.json").writeText(root.toJson())
+        File(templatesDir, "${sequenceFileStem(name)}.json").writeSequenceJson(root.toJson())
         _generation.value = _generation.value + 1
     }
 
@@ -225,18 +246,16 @@ class SequenceRuntime(
     }
 
     fun shareFile(): File {
-        templatesDir.mkdirs()
-        val file = File(templatesDir, suggestedFileName())
-        file.writeText(exportJson())
+        val shareDir = File(templatesDir, "shared").also { it.mkdirs() }
+        val file = File(shareDir, suggestedFileName())
+        file.writeSequenceJson(exportJson())
         return file
     }
 
     fun importJson(name: String?, json: String) {
+        check(!running()) { "Sequence is running" }
         val root = parseNinaSequence(json)
-        _document.value = root
-        _mode.value = SequenceEditorMode.Advanced
-        history.clear()
-        publishHistory()
+        require(root.className == "SequenceRootContainer") { "Expected a NINA sequence root" }
         templatesDir.mkdirs()
         val stem = sequenceFileStem(
             name
@@ -246,7 +265,11 @@ class SequenceRuntime(
                 ?: root.textField("Name")
                 ?: "sequence"
         )
-        File(templatesDir, "$stem.json").writeText(root.toJson())
+        File(templatesDir, "$stem.json").writeSequenceJson(root.toJson())
+        _document.value = root
+        _mode.value = SequenceEditorMode.Advanced
+        history.clear()
+        publishHistory()
         _generation.value = _generation.value + 1
     }
 
@@ -256,7 +279,7 @@ class SequenceRuntime(
         val name = sequenceFileStem(node.textField("Name") ?: node.className)
         val dir = File(templatesDir, "templates")
         dir.mkdirs()
-        File(dir, "$name.template.json").writeText(node.toJson())
+        File(dir, "$name.template.json").writeSequenceJson(node.toJson())
         _generation.value = _generation.value + 1
         return true
     }
@@ -267,7 +290,7 @@ class SequenceRuntime(
         val name = sequenceFileStem(dsoTargetName(node) ?: node.textField("Name") ?: "target")
         val dir = File(templatesDir, "targets")
         dir.mkdirs()
-        File(dir, "$name.json").writeText(node.toJson())
+        File(dir, "$name.json").writeSequenceJson(node.toJson())
         _generation.value = _generation.value + 1
         return true
     }
@@ -305,6 +328,7 @@ class SequenceRuntime(
     }
 
     fun load(name: String) {
+        if (running()) return
         val root = parseNinaSequence(File(templatesDir, "$name.json").readText())
         _document.value = root
         _mode.value = SequenceEditorMode.Advanced
@@ -314,12 +338,13 @@ class SequenceRuntime(
     }
 
     fun start(settings: SequenceSettings = SequenceSettings()) {
-        if (_state.value.phase == SequencePhase.Running || _state.value.phase == SequencePhase.Paused) return
+        if (running()) return
         val root = currentDocument()
-        _document.value = root
-        sessionDir = File(sessionsDir, "${root.textField("Name") ?: "sequence"}-${System.currentTimeMillis()}").also {
-            it.mkdirs()
-        }
+        runRoot = root
+        sessionDir = null
+        val wasLocked = _locked.value
+        control.reset()
+        _state.value = SequenceRunState(SequencePhase.Running)
         _frames.value = emptyList()
         _autofocus.value = emptyList()
         guidingWanted = false
@@ -333,13 +358,55 @@ class SequenceRuntime(
         _locked.value = true
         scope.launch {
             try {
-                val result = engine.run(root, runSettings)
+                sessionDir = withContext(Dispatchers.IO) {
+                    Files.createDirectories(sessionsDir.toPath())
+                    val prefix = sequenceFileStem(root.textField("Name") ?: "sequence")
+                    Files.createTempDirectory(sessionsDir.toPath(), "$prefix-${System.currentTimeMillis()}-").toFile()
+                }
+                writeSession(root, SequencePhase.Running)
+                val result = engine.runPrepared(root, runSettings).copy(framesDone = _frames.value.size)
+                writeSession(root, result.phase, result.message)
                 _state.value = result
-                writeSession(root)
+            } catch (cancelled: CancellationException) {
+                _state.value = _state.value.copy(phase = SequencePhase.Stopped)
+                throw cancelled
+            } catch (failure: Exception) {
+                _state.value = _state.value.copy(phase = SequencePhase.Failed, framesDone = _frames.value.size, message = failure.message)
             } finally {
-                _locked.value = false
+                runRoot = null
+                _locked.value = wasLocked
             }
         }
+    }
+
+    /** Restore the last interrupted run for inspection. Device actions require a new Start. */
+    suspend fun restoreInterruptedSession(): Boolean {
+        if (_state.value.phase != SequencePhase.Idle || _generation.value != 0 || _document.value != null) return false
+        val initialDraft = _draft.value
+        val saved = withContext(Dispatchers.IO) {
+            val latest = sessionsDir.listFiles()?.asSequence()?.filter { it.isDirectory }
+                ?.map { File(it, "session.json") }?.filter { it.isFile }?.maxByOrNull { it.lastModified() }
+                ?: return@withContext null
+            val json = JSONObject(latest.readText())
+            if (json.optString("phase") !in setOf("Running", "Paused")) return@withContext null
+            val root = parseNinaSequence(json.getJSONObject("sequence").toString())
+            val frames = recoverSessionFrames(checkNotNull(latest.parentFile), json.getJSONArray("frames"))
+            val focus = json.getJSONArray("autofocus").objects().map {
+                AutofocusRun(it.getLong("atMillis"), it.optDouble("temperatureC").takeIf(Double::isFinite),
+                    it.optionalString("filter"), it.getInt("position"), it.getDouble("hfr"),
+                    it.getJSONArray("curve").objects().map { p -> p.getInt("position") to p.getDouble("hfr") })
+            }
+            Triple(root, frames, focus)
+        } ?: return false
+        if (_state.value.phase != SequencePhase.Idle || _generation.value != 0 || _document.value != null ||
+            initialDraft !== _draft.value) return false
+        _document.value = saved.first
+        _mode.value = SequenceEditorMode.Advanced
+        _frames.value = saved.second
+        _autofocus.value = saved.third
+        _generation.value++
+        _state.value = SequenceRunState(SequencePhase.Interrupted, framesDone = saved.second.size)
+        return true
     }
 
     fun stop() = control.stop()
@@ -350,6 +417,14 @@ class SequenceRuntime(
 
     fun observingTarget(): Pair<Double, Double> =
         targetCoordinates() ?: (_draft.value.raHours to _draft.value.decDegrees)
+
+    fun plannedFrameCount(): Int? {
+        runRoot?.let { return it.plannedFrames() }
+        return when (_mode.value) {
+            SequenceEditorMode.Simple -> _draft.value.plannedFrames()
+            SequenceEditorMode.Advanced -> _document.value?.plannedFrames()
+        }
+    }
 
     fun pause() {
         control.pause()
@@ -367,24 +442,39 @@ class SequenceRuntime(
     }
 
     override suspend fun execute(instruction: NinaNode, className: String) {
-        val target = targetCoordinates(instruction)
+        // These instructions share the optical path and must not change it during a frame.
+        if (className in opticalInstructions) {
+            opticalPathMutex.withLock { executeHardware(instruction, className) }
+        } else executeHardware(instruction, className)
+    }
+
+    private suspend fun executeHardware(instruction: NinaNode, className: String) {
+        val target = instructionCoordinates(instruction)
         when (className) {
             "TakeExposure" -> {
                 if (guidingWanted && !hardware.guidingLocked()) throw GuideLost()
+                val bin = (instruction.fields["Binning"] as? NinaValue.Obj)?.node
+                val x = bin?.intField("X") ?: 1
+                if (x < 1 || (bin?.intField("Y") ?: x) != x) throw DeviceUnavailable("Square binning required")
                 val dir = sessionDir ?: sessionsDir
                 val frame = hardware.takeExposure(
                     seconds = expressionNumber(instruction, "ExposureTime") ?: 1.0,
                     gain = (expressionNumber(instruction, "Gain") ?: -1.0).toInt(),
                     offset = (expressionNumber(instruction, "Offset") ?: -1.0).toInt(),
                     destDir = dir,
-                    binning = ((instruction.fields["Binning"] as? NinaValue.Obj)?.node?.intField("X") ?: 1)
-                        .coerceAtLeast(1),
+                    binning = x,
                     imageType = instruction.textField("ImageType")?.ifBlank { "LIGHT" } ?: "LIGHT"
                 )
-                _frames.value = _frames.value + frame
-                writeSession(currentDocument())
+                withContext(NonCancellable) {
+                    _frames.value = _frames.value + frame
+                    runRoot?.let { writeSession(it, SequencePhase.Running) }
+                }
             }
-            "SwitchFilter" -> hardware.switchFilter(instruction.textField("ComboBoxText").orEmpty())
+            "SwitchFilter" -> {
+                val oldFilter = (instruction.fields["Filter"] as? NinaValue.Obj)?.node
+                val name = instruction.textField("ComboBoxText")?.takeIf(String::isNotBlank) ?: oldFilter?.textField("_name")
+                hardware.switchFilter(name.orEmpty(), oldFilter?.intField("_position"))
+            }
             "CoolCamera" -> hardware.cool(
                 targetC = expressionNumber(instruction, "Temperature") ?: 0.0,
                 durationMinutes = expressionNumber(instruction, "Duration") ?: 0.0
@@ -393,10 +483,8 @@ class SequenceRuntime(
                 durationMinutes = expressionNumber(instruction, "Duration") ?: 0.0
             )
             "SlewScopeToRaDec" -> {
-                val inherited = (instruction.fields["Inherited"] as? NinaValue.Bool)?.value == true
-                val ra = if (inherited) target?.first else instruction.doubleField("RAHours") ?: target?.first
-                val dec = if (inherited) target?.second else instruction.doubleField("DecDegrees") ?: target?.second
-                hardware.slew(ra ?: hardware.raHours() ?: 0.0, dec ?: hardware.decDeg() ?: 0.0)
+                val coordinates = target ?: throw DeviceUnavailable("target coordinates")
+                hardware.slew(coordinates.first, coordinates.second)
             }
             "SlewScopeToAltAz" -> {
                 val lat = world.observerLatitudeDeg() ?: throw DeviceUnavailable("site")
@@ -411,9 +499,13 @@ class SequenceRuntime(
                 )
                 hardware.slew(equatorial.first, equatorial.second)
             }
-            "Center" -> hardware.center(target?.first ?: 0.0, target?.second ?: 0.0)
+            "Center" -> {
+                val coordinates = target ?: throw DeviceUnavailable("target coordinates")
+                hardware.center(coordinates.first, coordinates.second)
+            }
             "CenterAndRotate" -> {
-                hardware.center(target?.first ?: 0.0, target?.second ?: 0.0)
+                val coordinates = target ?: throw DeviceUnavailable("target coordinates")
+                hardware.center(coordinates.first, coordinates.second)
                 rotateIfAvailable(instructionPositionAngle(instruction))
             }
             "SolveAndSync" -> {
@@ -428,13 +520,13 @@ class SequenceRuntime(
                 expressionNumber(instruction, "MechanicalAngle") ?: 0.0
             )
             "StartGuiding" -> {
-                guidingWanted = true
                 val forceCalibration = (instruction.fields["ForceCalibration"] as? NinaValue.Bool)?.value == true
                 hardware.guide(true, forceCalibration)
+                guidingWanted = true
             }
             "StopGuiding" -> {
-                guidingWanted = false
                 hardware.guide(false)
+                guidingWanted = false
             }
             "Dither" -> hardware.dither(runSettings.ditherPixels)
             "SetTracking" -> hardware.tracking(instruction.intField("TrackingMode") ?: 0)
@@ -454,8 +546,9 @@ class SequenceRuntime(
                 hardware.focuserPosition() + (expressionNumber(instruction, "RelativePosition") ?: 0.0).toInt()
             )
             "RunAutofocus" -> {
-                val run = hardware.autofocus(sessionDir ?: sessionsDir)
+                val run = hardware.autofocus(File(sessionDir ?: sessionsDir, "autofocus"))
                 _autofocus.value = _autofocus.value + run
+                runRoot?.let { writeSession(it, SequencePhase.Running) }
             }
             "WaitForTime" -> {
                 val deadline = nextClockTimeMillis(
@@ -471,7 +564,7 @@ class SequenceRuntime(
                 val seconds = (expressionNumber(instruction, "Time") ?: 60.0).coerceAtLeast(0.0)
                 kotlinx.coroutines.delay((seconds * 1000.0).toLong())
             }
-            "WaitForAltitude", "WaitUntilAboveHorizon" -> waitForAltitude(altitudeOffset(instruction))
+            "WaitForAltitude", "WaitUntilAboveHorizon" -> waitForAltitude(altitudeOffset(instruction), target)
             "WaitForSunAltitude" -> waitUntilCompared(
                 { world.sunAltitudeDeg() },
                 altitudeOffset(instruction),
@@ -496,6 +589,7 @@ class SequenceRuntime(
         positionAngleDeg: Double = 0.0,
         destination: SequenceEditorMode = _mode.value
     ) {
+        if (running()) return
         if (destination == SequenceEditorMode.Simple) {
             _draft.value = _draft.value.copy(
                 title = name,
@@ -549,6 +643,7 @@ class SequenceRuntime(
             rotateBefore = plan.rotateWithRotator,
             targets = panelTargets
         )
+        if (running()) return
         if (destination == SequenceEditorMode.Simple) {
             _draft.value = mosaicDraft
             _mode.value = SequenceEditorMode.Simple
@@ -640,6 +735,7 @@ class SequenceRuntime(
     }
 
     fun addSmartExposure(filterName: String, seconds: Double, count: Int, ditherEvery: Int) {
+        if (running()) return
         val root = ensureDocument()
         val target = root.childItems().getOrNull(1)?.childItems()?.lastOrNull {
             it.className == "DeepSkyObjectContainer"
@@ -662,6 +758,7 @@ class SequenceRuntime(
     }
 
     fun addTrigger(className: String) {
+        if (running()) return
         val root = ensureDocument()
         val target = root.childItems().getOrNull(1)?.childItems()?.lastOrNull {
             it.className == "DeepSkyObjectContainer"
@@ -682,6 +779,8 @@ class SequenceRuntime(
 
     override suspend fun measurePointing(): Pair<Double, Double>? = try {
         hardware.plateSolve()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
     } catch (_: Exception) {
         null
     }
@@ -701,11 +800,7 @@ class SequenceRuntime(
             expressionNumber(instruction, "PositionAngle")?.let { return it }
             instruction.doubleField("PositionAngle")?.let { return it }
         }
-        val dso = _document.value
-            ?.childItems()
-            ?.getOrNull(1)
-            ?.childItems()
-            ?.firstOrNull { it.className == "DeepSkyObjectContainer" }
+        val dso = targetContainer(instruction)
         return dsoPositionAngle(dso ?: instruction) ?: expressionNumber(instruction, "PositionAngle") ?: 0.0
     }
 
@@ -724,11 +819,12 @@ class SequenceRuntime(
         throw IllegalStateException(missing)
     }
 
-    private suspend fun waitForAltitude(offset: Double) {
+    private suspend fun waitForAltitude(offset: Double, target: Pair<Double, Double>?) {
         val deadline = world.nowMillis() + 12 * 60 * 60_000L
         while (world.nowMillis() < deadline) {
-            val altitude = world.altitudeDeg()
-            if (altitude == null || altitude >= offset) return
+            val altitude = world.altitudeDeg(target)
+            if (altitude == null) throw DeviceUnavailable("target altitude")
+            if (altitude >= offset) return
             kotlinx.coroutines.delay(1_000)
         }
         throw IllegalStateException("altitude")
@@ -746,33 +842,51 @@ class SequenceRuntime(
         SequenceEditorMode.Advanced -> _document.value ?: _draft.value.toNinaSequence()
     }
 
-    private fun targetCoordinates(instruction: NinaNode? = null): Pair<Double, Double>? {
-        val root = _document.value ?: return null
-        val targets = root.childItems().firstOrNull { it.className == "TargetAreaContainer" }
-            ?.childItems()
-            ?.filter { it.className == "DeepSkyObjectContainer" }
-            .orEmpty()
-        val target = instruction?.id?.let { instructionId ->
-            targets.firstOrNull { findSequenceNode(it, instructionId) != null }
-        } ?: targets.firstOrNull() ?: return null
-        val input = ((target.fields["Target"] as? NinaValue.Obj)?.node
-            ?.fields?.get("InputCoordinates") as? NinaValue.Obj)?.node ?: return null
-        val ra = (input.intField("RAHours") ?: 0) +
-            (input.intField("RAMinutes") ?: 0) / 60.0 +
-            (input.doubleField("RASeconds") ?: 0.0) / 3600.0
-        val sign = if ((input.fields["NegativeDec"] as? NinaValue.Bool)?.value == true) -1.0 else 1.0
-        val decAbs = kotlin.math.abs(input.intField("DecDegrees") ?: 0) +
-            (input.intField("DecMinutes") ?: 0) / 60.0 +
-            (input.doubleField("DecSeconds") ?: 0.0) / 3600.0
-        val signedDegrees = input.intField("DecDegrees") ?: 0
-        val dec = if (signedDegrees < 0) -decAbs else sign * decAbs
-        return ra to dec
+    private fun instructionCoordinates(node: NinaNode): Pair<Double, Double>? {
+        val inherited = (node.fields["Inherited"] as? NinaValue.Bool)?.value == true
+        val coordinates = (node.fields["Coordinates"] as? NinaValue.Obj)?.node
+        val target = when {
+            inherited -> targetCoordinates(node)
+            coordinates != null -> coordinateRaHours(coordinates)?.let { ra -> coordinateDecDegrees(coordinates)?.let { ra to it } }
+            node.fields.containsKey("RAHours") || node.fields.containsKey("DecDegrees") ->
+                node.doubleField("RAHours")?.let { ra -> node.doubleField("DecDegrees")?.let { ra to it } }
+            else -> targetCoordinates(node)
+        }
+        return target?.takeIf { (ra, dec) -> ra in 0.0..24.0 && dec in -90.0..90.0 }
     }
 
-    private fun writeSession(root: NinaNode) {
-        val dir = sessionDir ?: return
+    private fun targetCoordinates(instruction: NinaNode? = null): Pair<Double, Double>? {
+        val target = targetContainer(instruction) ?: return null
+        return (dsoRaHours(target) ?: return null) to (dsoDecDegrees(target) ?: return null)
+    }
+
+    private fun targetContainer(instruction: NinaNode?): NinaNode? {
+        if (instruction != null && runRoot != null) engine.targetContainer(instruction)?.let { return it }
+        val root = runRoot ?: _document.value ?: return null
+        val targets = root.childItems().firstOrNull { it.className == "TargetAreaContainer" }
+            ?.childItems()?.filter { it.className == "DeepSkyObjectContainer" && !sequenceNodeDisabled(it) }.orEmpty()
+        val id = instruction?.id ?: if (instruction == null) _state.value.currentNodeId else null
+        return id?.let { targets.firstOrNull { target -> findSequenceNode(target, it) != null } }
+            ?: targets.singleOrNull()
+    }
+
+    private suspend fun writeSession(root: NinaNode, phase: SequencePhase, message: String? = null) = manifestMutex.withLock {
+        val dir = sessionDir ?: return@withLock
+        val savedFrames = _frames.value
+        val savedFocus = _autofocus.value
+        try {
+            withContext(Dispatchers.IO) {
+                writeManifest(dir, root, savedFrames, savedFocus, phase, message)
+            }
+        } catch (error: IOException) {
+            throw SequenceStorageFailure(error)
+        }
+    }
+
+    private fun writeManifest(dir: File, root: NinaNode, savedFrames: List<SessionFrame>,
+                              savedFocus: List<AutofocusRun>, phase: SequencePhase, message: String?) {
         val frames = JSONArray()
-        _frames.value.forEach { frame ->
+        savedFrames.forEach { frame ->
             frames.put(JSONObject()
                 .put("name", frame.name)
                 .put("filter", frame.filter ?: JSONObject.NULL)
@@ -781,7 +895,7 @@ class SequenceRuntime(
                 .put("starCount", frame.starCount ?: JSONObject.NULL))
         }
         val focus = JSONArray()
-        _autofocus.value.forEach { run ->
+        savedFocus.forEach { run ->
             val curve = JSONArray()
             run.curve.forEach { (position, hfr) ->
                 curve.put(JSONObject().put("position", position).put("hfr", hfr))
@@ -794,7 +908,9 @@ class SequenceRuntime(
                 .put("hfr", run.hfr)
                 .put("curve", curve))
         }
-        File(dir, "session.json").writeText(JSONObject()
+        File(dir, "session.json").writeSequenceJson(JSONObject()
+            .put("phase", phase.name)
+            .put("message", message)
             .put("sequence", JSONObject(root.toJson()))
             .put("frames", frames)
             .put("autofocus", focus)
@@ -933,4 +1049,60 @@ class SequenceRuntime(
 
     private fun observableConditions(): String =
         "System.Collections.ObjectModel.ObservableCollection`1[[NINA.Sequencer.Conditions.ISequenceCondition, NINA.Sequencer]], System.ObjectModel"
+}
+
+private val opticalInstructions = setOf(
+    "TakeExposure", "SwitchFilter", "RunAutofocus", "MoveFocuserAbsolute", "MoveFocuserRelative",
+    "SlewScopeToRaDec", "SlewScopeToAltAz", "Center", "CenterAndRotate", "SolveAndSync",
+    "SolveAndRotate", "MoveRotatorMechanical", "FindHome", "OpenCover", "CloseCover",
+    "ToggleLight", "SetBrightness", "Dither", "SetTracking", "StartGuiding", "StopGuiding"
+)
+
+private fun File.writeSequenceJson(json: String) {
+    val temporary = Files.createTempFile(requireNotNull(parentFile).toPath(), ".sequence-", ".tmp")
+    try {
+        temporary.toFile().writeText(json)
+        Files.move(temporary, toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+    } finally {
+        Files.deleteIfExists(temporary)
+    }
+}
+
+internal fun writeSequenceFits(dir: File, stem: String, write: (File) -> Unit): File {
+    try {
+        Files.createDirectories(dir.toPath())
+        val temporary = Files.createTempFile(dir.toPath(), "${sequenceFileStem(stem)}-", ".partial").toFile()
+        try {
+            write(temporary)
+            val output = File(dir, "${temporary.nameWithoutExtension}.fits")
+            Files.move(temporary.toPath(), output.toPath())
+            return output
+        } finally {
+            Files.deleteIfExists(temporary.toPath())
+        }
+    } catch (failure: IOException) {
+        throw SequenceStorageFailure(failure)
+    }
+}
+
+private fun JSONArray.objects() = (0 until length()).map(::getJSONObject)
+private fun JSONObject.optionalString(key: String): String? = if (isNull(key)) null else getString(key)
+
+private fun recoverSessionFrames(directory: File, manifest: JSONArray): List<SessionFrame> {
+    val files = directory.listFiles { file -> file.isFile && file.extension == "fits" }
+        ?: throw IOException("Cannot read session directory $directory")
+    val byName = files.associateBy { it.name }.toMutableMap()
+    val frames = manifest.objects().mapNotNullTo(mutableListOf()) {
+        val name = it.getString("name")
+        if (byName.remove(name) == null) return@mapNotNullTo null
+        SessionFrame(name, it.optionalString("filter"), it.getDouble("exposureSeconds"),
+            it.optDouble("hfr").takeIf(Double::isFinite), it.optInt("starCount", -1).takeIf { n -> n >= 0 })
+    }
+    // A process can exit between renaming the completed FITS and replacing session.json.
+    for (file in byName.values.sortedBy { it.lastModified() }) {
+        val header = com.indigo.mobileobservatory.astrometry.FitsHeaderReader.read(file)
+        val seconds = header["EXPOSURE"]?.toDoubleOrNull()?.takeIf(Double::isFinite) ?: continue
+        frames += SessionFrame(file.name, header["FILTER"], seconds, hfr = null)
+    }
+    return frames
 }

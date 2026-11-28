@@ -837,6 +837,26 @@ class MountModule(
         }
     }
 
+    internal suspend fun slewForSequence(target: MountCoordinates) {
+        check(pointingCapabilities.value.goto) { "GOTO unavailable" }
+        runOwnedMotion(MountMotionType.GOTO, "Sequence GOTO") {
+            controller.slewTo(target)
+            awaitGotoTarget("sequence", target)
+        }
+    }
+
+    internal suspend fun homeForSequence() {
+        check(controller.isConnected && controller.accessMode.value == MountAccessMode.READ_WRITE)
+        runOwnedMotion(MountMotionType.HOME, "Sequence home") { moveHomeAndWait() }
+    }
+
+    internal suspend fun syncForSequence(target: MountCoordinates) {
+        check(controller.isConnected && controller.supportsSync && controller.accessMode.value == MountAccessMode.READ_WRITE)
+        check(!motionState.value.isActive) { "Mount is moving" }
+        controller.syncTo(target)
+        _mountCoordinates.value = controller.readCoordinates()
+    }
+
     /** Visual sync: mount stays put; its reported pointing becomes [raHours]/[decDeg]. */
     fun syncMountToTarget(name: String, raHours: Double, decDeg: Double) {
         if (!controller.isConnected) {
@@ -1410,13 +1430,7 @@ class MountModule(
             try {
                 trackingLock.withLock {
                     if (motionState.value.type == MountMotionType.SOLAR_SWEEP) return@launch
-                    try {
-                        if (rate.tracks) trackingStartedByApplication = true
-                        controller.setTrackingRate(rate)
-                        requestedTrackingRate = rate
-                    } finally {
-                        readMountTrackingLocked()
-                    }
+                    applyTrackingRateLocked(rate)
                 }
                 _mountMoveStatus.value = if (rate.tracks) {
                     "Tracking ${rate.name.lowercase(java.util.Locale.US)}"
@@ -1431,6 +1445,27 @@ class MountModule(
             } finally {
                 _mountBusy.value = false
             }
+        }
+    }
+
+    internal suspend fun setSequenceTrackingRate(rate: MountTrackingRate) = trackingLock.withLock {
+        check(controller.isConnected && controller.accessMode.value == MountAccessMode.READ_WRITE)
+        check(!motionState.value.isActive) { "Mount is moving" }
+        applyTrackingRateLocked(rate)
+        if (controller.supportsTrackingReadback) {
+            check(_mountTrackingEnabled.value == rate.tracks) { "Mount tracking state differs from request" }
+            val actual = _mountTrackingRate.value
+            if (rate.tracks && actual != null) check(actual == rate) { "Mount tracking rate differs from request" }
+        }
+    }
+
+    private suspend fun applyTrackingRateLocked(rate: MountTrackingRate) {
+        try {
+            if (rate.tracks) trackingStartedByApplication = true
+            controller.setTrackingRate(rate)
+            requestedTrackingRate = rate
+        } finally {
+            readMountTrackingLocked()
         }
     }
 
@@ -1495,14 +1530,7 @@ class MountModule(
         ) {
             _mountBusy.value = true
             try {
-                controller.goHome()
-                _mountMoveStatus.value = "Mount going home"
-                _statusMessage.value = _mountMoveStatus.value
-                awaitMountStopped()
-                controller.completeHome()
-                refreshMountTracking()
-                _mountMoveStatus.value = "Mount home complete"
-                _statusMessage.value = _mountMoveStatus.value
+                moveHomeAndWait()
             } finally {
                 _mountBusy.value = false
             }
@@ -1510,6 +1538,17 @@ class MountModule(
         if (!started) {
             _statusMessage.value = "Stop the current mount motion before going home"
         }
+    }
+
+    private suspend fun moveHomeAndWait() {
+        controller.goHome()
+        _mountMoveStatus.value = "Mount going home"
+        _statusMessage.value = _mountMoveStatus.value
+        awaitMountStopped()
+        controller.completeHome()
+        refreshMountTracking()
+        _mountMoveStatus.value = "Mount home complete"
+        _statusMessage.value = _mountMoveStatus.value
     }
 
     private suspend fun awaitMountStopped() {

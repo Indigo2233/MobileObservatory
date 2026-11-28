@@ -608,7 +608,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _guideRunning = MutableStateFlow(false)
     val guideRunning: StateFlow<Boolean> = _guideRunning.asStateFlow()
     @Volatile private var guideStarLost = false
-    private val pendingGuideDither = AtomicReference<Pair<Float, Float>?>(null)
+    private var guideDitherOffset = 0f to 0f // Guarded by guideOperationLock, in guide-camera pixels.
 
     private val _guideCalibrating = MutableStateFlow(false)
     val guideCalibrating: StateFlow<Boolean> = _guideCalibrating.asStateFlow()
@@ -825,8 +825,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             scope = viewModelScope,
             hardware = virtualSequenceHardware ?: CameraSequenceHardware(this),
             world = virtualSequenceHardware ?: object : SequenceWorld {
-                override fun altitudeDeg(): Double? = sequenceTargetAltitude()
-                override fun minutesToMeridian(): Double? = sequenceMinutesToMeridian()
+                override fun altitudeDeg(target: Pair<Double, Double>?): Double? = sequenceTargetAltitude(target)
+                override fun altitudeRising(target: Pair<Double, Double>?): Boolean? {
+                    val now = Instant.now()
+                    val altitude = sequenceTargetAltitude(target, now) ?: return null
+                    return (sequenceTargetAltitude(target, now.plusSeconds(60)) ?: return null) > altitude
+                }
+                override fun minutesToMeridian(target: Pair<Double, Double>?): Double? = sequenceMinutesToMeridian(target)
                 override fun temperatureC(): Double? {
                     if (cameraManager.activeCamera !is CoolingCapable) return null
                     return sensorTempTenths.value / 10.0
@@ -1424,6 +1429,19 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         mountModule.gotoMountTarget(name, jnowRa, jnowDec)
     }
 
+    internal suspend fun slewSequenceMount(raHours: Double, decDeg: Double) {
+        val (ra, dec) = EquatorialEpoch.toJnowHours(raHours, decDeg, "J2000")
+        mountModule.slewForSequence(MountCoordinates(ra, dec))
+    }
+
+    internal suspend fun syncSequenceMount(raHours: Double, decDeg: Double) {
+        val (ra, dec) = EquatorialEpoch.toJnowHours(raHours, decDeg, "J2000")
+        mountModule.syncForSequence(MountCoordinates(ra, dec))
+    }
+
+    internal suspend fun homeSequenceMount() = mountModule.homeForSequence()
+    internal suspend fun trackSequenceMount(rate: MountTrackingRate) = mountModule.setSequenceTrackingRate(rate)
+
     fun syncMountToTarget(
         name: String,
         raHours: Double,
@@ -2016,7 +2034,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _guideCalibrating.value = false
         guideStarLost = true
         guideTasks.cancel()
-        pendingGuideDither.set(null)
+        guideDitherOffset = 0f to 0f
         resetGuideAlgorithmState()
         guideDecBacklash.reset()
         if (_guideCalibrationState.value == GuideCalibrationState.RUNNING) {
@@ -2032,12 +2050,27 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun requestGuideDither(radiusPx: Double) {
-        val angle = Math.random() * 2.0 * Math.PI
-        val radius = Math.random() * radiusPx.coerceAtLeast(0.0)
-        pendingGuideDither.set(
-            (kotlin.math.cos(angle) * radius).toFloat() to (kotlin.math.sin(angle) * radius).toFloat()
-        )
+    internal suspend fun ditherSequenceAndWait(radiusPx: Double) {
+        require(radiusPx.isFinite() && radiusPx >= 0)
+        if (radiusPx == 0.0) return
+        val started = synchronized(guideOperationLock) {
+            if (!guideLocked()) throw DeviceUnavailable("guide lock")
+            val angle = Math.random() * 2.0 * Math.PI
+            val radius = kotlin.math.sqrt(Math.random()) * radiusPx
+            guideDitherOffset = (kotlin.math.cos(angle) * radius).toFloat() to (kotlin.math.sin(angle) * radius).toFloat()
+            android.os.SystemClock.elapsedRealtime()
+        }
+        val deadline = started + maxOf(60_000L, (_guideExposureUs.value / 1000).toLong() * 8)
+        while (android.os.SystemClock.elapsedRealtime() < deadline) {
+            if (!_guideRunning.value) throw DeviceUnavailable("guiding stopped")
+            val settled = synchronized(guideOperationLock) {
+                guideLocked() && !guideTasks.busy && com.indigo.mobileobservatory.guide.ditherHasSettled(
+                    _guideHistory.value, started, _guideMinMovePx.value, _guideDecMinMovePx.value)
+            }
+            if (settled) return
+            delay(200)
+        }
+        throw DeviceUnavailable("Guide dither did not settle")
     }
 
     fun setGuideRunning(enabled: Boolean) {
@@ -2566,12 +2599,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 return
             }
             guideStarLost = false
-            var dx = error.x
-            var dy = error.y
-            pendingGuideDither.getAndSet(null)?.let { (offsetX, offsetY) ->
-                dx += offsetX
-                dy += offsetY
-            }
+            val dx = error.x - guideDitherOffset.first
+            val dy = error.y - guideDitherOffset.second
             val solution = try { guideModule.solveCorrection(calibration, dx, dy, _guideAlgorithm.value,
                 _guideRaAggressiveness.value, _guideDecAggressiveness.value, _guideMinMovePx.value,
                 guideDecBacklash, _guideBacklashEnabled.value, _guideReverseRa.value, _guideReverseDec.value,
@@ -4575,33 +4604,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     val roi = cam.currentRoi
                     val bin = _binning.value
                     val format = cam.currentPixelFormat
-                    val requestedAt = System.currentTimeMillis()
-                    val timeout = com.indigo.mobileobservatory.astrometry.plateSolveFrameWaitMs(exposure)
-                    val earliestEnd = requestedAt + kotlin.math.ceil(exposure / 1000.0).toLong()
-                    val selection = loadCameraCfa(cam)
                     onCaptureGeometry(roi, cam.roiSensorScale)
-                    FileLogger.i("PolarCapture", "Single exposure camera=${cam.cameraInfo?.name} native=${cam is CameraSingleExposureCapable} exposureUs=$exposure gain=$gain roi=$roi format=$format waitMs=$timeout")
-                    val captured = captureSingleExposureFrame(
-                        camera = cam, timeoutMs = timeout, elapsedMs = android.os.SystemClock::elapsedRealtime,
-                        checkCamera = {
-                            check(cameraManager.activeCamera === cam && cam.isOpen.value) { app.getString(R.string.polar_capture_no_camera) }
-                            check(cam.currentExposureUs == exposure && cam.currentGain == gain && cam.currentRoi == roi &&
-                                cam.currentPixelFormat == format && _binning.value == bin) { app.getString(R.string.polar_capture_settings_changed) }
-                        },
-                        acceptFrame = { frame ->
-                            val generation = cam.scienceCaptureGeneration
-                            frame.timestamp >= earliestEnd &&
-                                (generation == null || frame.captureGeneration == null || frame.captureGeneration == generation)
-                        },
-                        snapshot = { frame ->
-                            val interpreted = CameraCfaLayout.interpret(frame, selection)
-                            val traits = cameraCfaTraits(cam, selection)
-                            val processed = softwareBinning.apply(interpreted, traits)
-                            try { CameraCfaLayout.ownedSnapshot(processed, traits) }
-                            finally { if (processed.data !== interpreted.data) softwareBinning.release(processed.data) }
-                        }
-                    ) ?: error(app.getString(R.string.polar_capture_timeout, timeout / 1000, exposure / 1_000_000f,
-                        cam.lastCaptureError ?: app.getString(R.string.polar_capture_no_sdk_error)))
+                    val captured = acquireScienceExposure(cam, exposure, gain, roi, bin, format)
                     val frame = captured.frame
                     FileLogger.i("PolarCapture", "Single exposure complete; camera stopped before FITS/solve")
                     val dir = File(app.cacheDir, "polar_align").also { check(it.isDirectory || it.mkdirs()) }
@@ -4614,8 +4618,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             cameraName = info?.name, filterName = currentFilterName(), configuredFormat = frame.pixelFormat,
                             pixelSizeUm = info?.pixelSizeUm,
                             focalLengthMm = focalLengthMm ?: prefs.getFloat("plate_focal_length_mm", 0f).takeIf { it > 0f }, binning = bin,
-                            exposureStartedAt = java.time.Instant.ofEpochMilli(frame.timestamp)
-                                .minusNanos((exposure.toDouble() * 1000).toLong()))
+                            exposureStartedAt = captured.exposureStartedAt)
                         currentCoroutineContext().ensureActive()
                         FileLogger.i("PolarCapture", "Captured file=${file.absolutePath} bytes=${file.length()} frame=${frame.width}x${frame.height} timestamp=${frame.timestamp}")
                         file
@@ -5012,6 +5015,29 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         return observation
     }
 
+    private suspend fun acquireScienceExposure(
+        cam: Camera, exposure: Float, gain: Float, roi: Roi, bin: Int, format: PixelFormat
+    ): TimedScienceExposure {
+        val timeout = com.indigo.mobileobservatory.astrometry.plateSolveFrameWaitMs(exposure)
+        val selection = loadCameraCfa(cam)
+        return captureTimedScienceExposure(
+            camera = cam, exposureUs = exposure, timeoutMs = timeout, elapsedMs = android.os.SystemClock::elapsedRealtime,
+            checkCamera = {
+                if (cameraManager.activeCamera !== cam || !cam.isOpen.value) throw DeviceUnavailable(app.getString(R.string.polar_capture_no_camera))
+                check(cam.currentExposureUs == exposure && cam.currentGain == gain && cam.currentRoi == roi &&
+                    cam.currentPixelFormat == format && _binning.value == bin) { app.getString(R.string.polar_capture_settings_changed) }
+            },
+            snapshot = { frame ->
+                val interpreted = CameraCfaLayout.interpret(frame, selection)
+                val traits = cameraCfaTraits(cam, selection)
+                val processed = softwareBinning.apply(interpreted, traits)
+                try { CameraCfaLayout.ownedSnapshot(processed, traits) }
+                finally { if (processed.data !== interpreted.data) softwareBinning.release(processed.data) }
+            }
+        ) ?: error(app.getString(R.string.polar_capture_timeout, timeout / 1000, exposure / 1_000_000f,
+            cam.lastCaptureError ?: app.getString(R.string.polar_capture_no_sdk_error)))
+    }
+
     suspend fun captureSequenceLight(
         exposureSeconds: Double,
         gain: Int,
@@ -5020,62 +5046,82 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         binning: Int = 1,
         imageType: String = "LIGHT"
     ): SessionFrame = withContext(Dispatchers.IO) {
-        check(!pointingCaptureOwned.get()) { "Reference capture in progress" }
         if (!License.canRecord) throw DeviceUnavailable("trial")
         val cam = cameraManager.activeCamera ?: throw DeviceUnavailable("camera")
         if (!cam.recordsLiveViewAsScience || cam.currentPixelFormat == PixelFormat.RGB24) {
-            throw DeviceUnavailable("camera")
+            throw DeviceUnavailable(app.getString(R.string.dslr_live_view_not_science))
         }
-        pendingCaptureChanges.incrementAndGet()
-        invalidateStackSettings(layoutChanged = binning != _binning.value)
-        try { applyCaptureSettingsAndRestart(cam) { exposureWriteMutex.withLock {
-            val uiMax = ExposureLimits.uiMaxUs(cam, true)
-            val requestedBinning = binning.coerceAtLeast(1)
-            if (binningNeedsApply(cam, requestedBinning)) applyBinning(cam, requestedBinning)
-            cam.longExposureEnabled = true
-            _longExposureEnabled.value = true
-            cam.setExposureTime((exposureSeconds * 1_000_000.0).toFloat().coerceIn(cam.exposureRange.min, uiMax))
-            if (gain >= 0) cam.setGain(gain.toFloat())
-            if (offset >= 0) (cam as? CameraOffsetCapable)?.setOffset(offset.toFloat())
-            if (cameraManager.activeCamera === cam) {
-                _exposureUs.value = cam.currentExposureUs
-                _gain.value = cam.currentGain
-                _offset.value = (cam as? CameraOffsetCapable)?.currentOffset
-            }
-        } } } finally { pendingCaptureChanges.decrementAndGet() }
-        val timeoutMs = (exposureSeconds * 1_000.0 + 20_000.0).toLong().coerceAtLeast(45_000L)
-        val frame = awaitFrameSnapshot(timeoutMs, "sequence") ?: throw IllegalStateException("frame")
-        destDir.mkdirs()
-        val filterName = currentFilterName()
-        val stamp = DateTimeFormatter.ofPattern("HHmmss").format(LocalDateTime.now())
-        val filterPart = filterName?.let { "-$it" }.orEmpty()
+        val exposureUs = (exposureSeconds * 1_000_000.0).toFloat()
+        require(exposureUs.isFinite() && exposureUs in cam.exposureRange.min..cam.hwExposureMaxUs) {
+            app.getString(R.string.polar_exposure_out_of_range, cam.exposureRange.min / 1_000_000f, cam.hwExposureMaxUs / 1_000_000f)
+        }
         val normalizedImageType = imageType.ifBlank { "LIGHT" }.uppercase()
-        val typePart = normalizedImageType.lowercase()
-        val file = File(destDir, "$stamp-$typePart$filterPart-${exposureSeconds.toInt()}s.fits")
-        val info = cam.cameraInfo
-        val focalLengthMm = prefs.getFloat("plate_focal_length_mm", 0f).takeIf { it > 0f }
-        fitsWriter.write(
-            file = file,
-            frame = frame,
-            exposureSeconds = cam.currentExposureUs / 1_000_000f,
-            gain = cam.currentGain,
-            gainKind = cam.gainCapability.kind,
-            gainLabel = cam.gainCapability.label,
-            gainUnit = cam.gainCapability.unit,
-            gainDbEquivalent = cam.gainDbEquivalent(cam.currentGain),
-            cameraName = info?.name,
-            filterName = filterName,
-            configuredFormat = frame.pixelFormat,
-            pixelSizeUm = info?.pixelSizeUm,
-            focalLengthMm = focalLengthMm,
-            binning = _binning.value,
-            imageType = normalizedImageType
-        )
+        val filterName = currentFilterName()
+        val (frame, actualExposure, file) = captureSettingsMutex.withLock {
+            synchronized(recordingLifecycleLock) {
+                if (_isRecording.value || recordingWriteSession != null || currentRecordingFile != null ||
+                    stacking.live.state.value.phase == LiveStackPhase.RUNNING || frameSnapshots.currentState != null ||
+                    pendingCaptureChanges.get() != 0 || autoExposureController.mode != AutoExposureMode.OFF ||
+                    !pointingCaptureOwned.compareAndSet(false, true)
+                ) throw DeviceUnavailable(app.getString(R.string.polar_exposure_capture_busy))
+            }
+            val restart = cam.isCapturing.value
+            try {
+                if (cameraManager.activeCamera !== cam || !cam.isOpen.value) throw DeviceUnavailable("camera")
+                previewEpoch.invalidate()
+                previewPipeline.stop(clearFrame = false)
+                stopExposureTimer()
+                withContext(NonCancellable) { cam.stopCapture() }
+                currentCoroutineContext().ensureActive()
+                check(cam.isCaptureStopped) { app.getString(R.string.polar_capture_stop_failed) }
+                invalidateStackSettings(layoutChanged = binning != _binning.value)
+                if (binningNeedsApply(cam, binning)) applyBinning(cam, binning)
+                cam.longExposureEnabled = exposureUs > ExposureLimits.SHORT_MAX_US
+                _longExposureEnabled.value = cam.longExposureEnabled
+                exposureWriteMutex.withLock { cam.setExposureTime(exposureUs) }
+                _exposureUs.value = cam.currentExposureUs
+                check(com.indigo.mobileobservatory.polar.PolarExposure.matchesReadback(exposureUs, cam.currentExposureUs)) {
+                    app.getString(R.string.polar_exposure_not_applied, exposureUs / 1_000_000f, cam.currentExposureUs / 1_000_000f)
+                }
+                if (gain >= 0) gainWriteMutex.withLock { cam.setGain(gain.toFloat()) }
+                if (offset >= 0) {
+                    val capable = cam as? CameraOffsetCapable ?: throw DeviceUnavailable("offset")
+                    capable.setOffset(offset.toFloat())
+                }
+                syncGainState(cam)
+                _offset.value = (cam as? CameraOffsetCapable)?.currentOffset
+                val exposure = cam.currentExposureUs
+                val actualGain = cam.currentGain
+                val bin = _binning.value
+                check(bin == binning) { "Binning $binning unavailable" }
+                val captured = acquireScienceExposure(cam, exposure, actualGain, cam.currentRoi, bin, cam.currentPixelFormat)
+                val frame = captured.frame
+                val stamp = DateTimeFormatter.ofPattern("HHmmss").format(LocalDateTime.now())
+                val stem = com.indigo.mobileobservatory.sequence.sequenceFileStem(
+                    "$stamp-${normalizedImageType.lowercase()}-${filterName.orEmpty()}"
+                )
+                val output = com.indigo.mobileobservatory.sequence.writeSequenceFits(destDir, stem) { temp ->
+                    val info = cam.cameraInfo
+                    fitsWriter.write(file = temp, frame = frame, exposureSeconds = exposure / 1_000_000f,
+                        gain = actualGain, gainKind = cam.gainCapability.kind, gainLabel = cam.gainCapability.label,
+                        gainUnit = cam.gainCapability.unit, gainDbEquivalent = cam.gainDbEquivalent(actualGain),
+                        cameraName = info?.name, filterName = filterName, configuredFormat = frame.pixelFormat,
+                        pixelSizeUm = info?.pixelSizeUm, binning = bin, imageType = normalizedImageType,
+                        focalLengthMm = prefs.getFloat("plate_focal_length_mm", 0f).takeIf { it > 0f },
+                        exposureStartedAt = captured.exposureStartedAt)
+                }
+                Triple(frame, exposure / 1_000_000.0, output)
+            } finally {
+                try {
+                    if (restart && cam.isCaptureStopped && !_previewPaused.value && cameraManager.activeCamera === cam) startPreview()
+                } finally { pointingCaptureOwned.set(false) }
+            }
+        }
         val luma = monoLuma(frame.data, frame.width, frame.height, frame.pixelFormat.bytesPerPixel)
         SessionFrame(
             name = file.name,
             filter = filterName,
-            exposureSeconds = exposureSeconds,
+            exposureSeconds = actualExposure,
             hfr = luma?.let { image ->
                 medianHalfLightRadius(image.pixels, image.width, image.height)?.times(image.scale)
             },
@@ -5103,7 +5149,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         for (delta in listOf(-200, -100, 0, 100, 200)) {
             val position = (origin + delta).coerceAtLeast(0)
             moveFocuserAndWait(position)
-            val frame = captureSequenceLight(1.0, _gain.value.toInt(), _offset.value?.toInt() ?: 0, destDir)
+            val frame = captureSequenceLight(1.0, -1, -1, destDir)
             val hfr = frame.hfr ?: continue
             samples += position to hfr
             if (hfr < bestHfr) {
@@ -5126,20 +5172,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         )
     }
 
-    private fun sequenceTargetAltitude(): Double? {
+    private fun sequenceTargetAltitude(coordinates: Pair<Double, Double>?, instant: Instant = Instant.now()): Double? {
         val site = mountSite.value ?: return null
-        val target = sequenceRuntime.observingTarget()
+        val target = coordinates ?: sequenceRuntime.observingTarget()
         return CoordinateTransform.j2000ToTopocentric(
             coordinates = EquatorialCoordinates(target.first * 15.0, target.second),
-            instant = Instant.now(),
+            instant = instant,
             site = ObserverSite(site.latitudeDeg, site.longitudeDeg),
             refraction = null
         ).altitudeDeg
     }
 
-    private fun sequenceMinutesToMeridian(): Double? {
+    private fun sequenceMinutesToMeridian(coordinates: Pair<Double, Double>?): Double? {
         val site = mountSite.value ?: return null
-        val target = sequenceRuntime.observingTarget()
+        val target = coordinates ?: sequenceRuntime.observingTarget()
         val lst = SkyWatcherEquatorialMath.localSiderealHours(site.longitudeDeg, Instant.now())
         val hourAngle = SkyWatcherEquatorialMath.hourAngleHours(lst, target.first)
         return -hourAngle * 60.0

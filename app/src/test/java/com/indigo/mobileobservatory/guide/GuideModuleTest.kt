@@ -3,6 +3,7 @@ package com.indigo.mobileobservatory.guide
 import com.indigo.mobileobservatory.camera.FrameData
 import com.indigo.mobileobservatory.camera.PixelFormat
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -10,6 +11,34 @@ import org.junit.Test
 
 class GuideModuleTest {
     private val module = GuideModule()
+
+    @Test
+    fun ditherNeedsThreePostOffsetMeasurementsWithSmallResidualsAndCorrections() {
+        val points = (1L..3L).map { GuideHistoryPoint(it, 0.1f, -0.25f) }
+        fun settled(history: List<GuideHistoryPoint>, start: Long = 0) = ditherHasSettled(history, start, 0.2f, 0.3f)
+        assertTrue(settled(points))
+        assertFalse(settled(points, start = 1))
+        assertFalse(settled(points.take(2)))
+        for (outside in listOf(points.last().copy(raErrorPx = 0.7f), points.last().copy(decErrorPx = -0.4f),
+            points.last().copy(raCorrectionPx = -0.25f), points.last().copy(decCorrectionPx = 0.5f))) {
+            assertFalse(settled(points.take(2) + outside))
+        }
+    }
+
+    @Test
+    fun identityGuideFilterCanSettleAfterSmallPulsesFinish() {
+        val calibration = GuideCalibration(0.002f, 0f, 0f, 0.002f, 500)
+        val points = (1L..3L).map { time ->
+            val solution = checkNotNull(module.solveCorrection(calibration, 0.12f, -0.1f, GuideAlgorithm.IDENTITY,
+                1f, 1f, 0.2f, GuideBacklashCompensation()))
+            val pulse = solution.correction
+            assertTrue(pulse.raPulseMs > 0 && pulse.decPulseMs > 0)
+            GuideHistoryPoint(time, solution.raErrorPx, solution.decErrorPx, pulse.raPulseMs, pulse.decPulseMs,
+                pulse.raPulseMs * calibration.eastRatePxPerSec / 1000,
+                pulse.decPulseMs * calibration.northRatePxPerSec / 1000)
+        }
+        assertTrue(ditherHasSettled(points, 0, 0.2f, 0.2f))
+    }
 
     @Test
     fun detectsBrightStarWithoutAllocatingFullFrameCopy() {

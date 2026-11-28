@@ -58,29 +58,32 @@ fun loopAllows(condition: NinaNode, completed: Int): Boolean {
 fun limitAllows(condition: NinaNode, signals: SequenceSignals, startedAtMillis: Long): Boolean {
     return when (condition.className) {
         "AltitudeCondition", "AboveHorizonCondition" -> {
-            val altitude = signals.altitudeDeg ?: return true
+            val altitude = signals.altitudeDeg ?: return false
             if (signals.altitudeRising == true) return true
             altitude >= altitudeOffset(condition)
         }
         "SunAltitudeCondition" -> {
-            val altitude = signals.sunAltitudeDeg ?: return true
+            val altitude = signals.sunAltitudeDeg ?: return false
             !compareOrdered(altitude, altitudeOffset(condition), altitudeComparator(condition))
         }
         "MoonAltitudeCondition" -> {
-            val altitude = signals.moonAltitudeDeg ?: return true
+            val altitude = signals.moonAltitudeDeg ?: return false
             !compareOrdered(altitude, altitudeOffset(condition), altitudeComparator(condition))
         }
         "MoonIlluminationCondition" -> {
-            val illumination = signals.moonIlluminationPct ?: return true
+            val illumination = signals.moonIlluminationPct ?: return false
             val limit = expressionNumber(condition, "UserMoonIllumination") ?: 0.0
             !compareOrdered(illumination, limit, condition.intField("Comparator") ?: 3)
         }
         "TimeCondition" -> !localTimeReached(condition, signals.nowMillis)
         "TimeSpanCondition" -> {
-            val minutes = expressionNumber(condition, "TimeSpan")
-                ?: condition.doubleField("Minutes")
-                ?: 1.0
-            signals.nowMillis - startedAtMillis < (minutes * 60_000.0).toLong()
+            val legacyMinutes = expressionNumber(condition, "TimeSpan")
+            val seconds = legacyMinutes?.times(60.0) ?: (
+                (condition.doubleField("Hours") ?: 0.0) * 3600.0 +
+                    (condition.doubleField("Minutes") ?: 0.0) * 60.0 +
+                    (condition.doubleField("Seconds") ?: 0.0)
+                )
+            signals.nowMillis - startedAtMillis < (seconds * 1000.0).toLong()
         }
         else -> true
     }

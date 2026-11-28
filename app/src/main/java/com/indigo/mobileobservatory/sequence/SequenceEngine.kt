@@ -3,11 +3,15 @@ package com.indigo.mobileobservatory.sequence
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 enum class InstructionErrorBehavior {
     ContinueOnError,
@@ -22,6 +26,7 @@ enum class SequencePhase {
     Paused,
     Completed,
     Stopped,
+    Interrupted,
     Failed
 }
 
@@ -46,16 +51,20 @@ class SequenceSkipToEnd : CancellationException("skip to sequence end")
 class SequenceControl {
     private val paused = AtomicBoolean(false)
     private val skip = AtomicBoolean(false)
+    private var skipOwner: NinaNode? = null
+    private var promptOwner: NinaNode? = null
     private val holdForSkip = AtomicBoolean(false)
     private val skipToEnd = AtomicBoolean(false)
-    private var stopCount = 0
+    @Volatile private var stopped = false
     @Volatile private var gate: CompletableDeferred<Unit> = CompletableDeferred<Unit>().also { it.complete(Unit) }
 
     val isPaused: Boolean get() = paused.get()
+    val isStopped: Boolean get() = stopped
+    val requiresSkip: Boolean get() = holdForSkip.get()
 
     fun pause() {
         synchronized(this) {
-            if (stopCount > 0 || skipToEnd.get() || paused.get()) return
+            if (stopped || skipToEnd.get() || paused.get()) return
             gate = CompletableDeferred()
             paused.set(true)
         }
@@ -71,6 +80,7 @@ class SequenceControl {
 
     fun requestSkip() {
         synchronized(this) {
+            skipOwner = promptOwner
             skip.set(true)
             holdForSkip.set(false)
             if (paused.compareAndSet(true, false)) gate.complete(Unit)
@@ -87,26 +97,28 @@ class SequenceControl {
 
     fun stop() {
         synchronized(this) {
-            stopCount += 1
+            stopped = true
             holdForSkip.set(false)
             if (paused.compareAndSet(true, false)) gate.complete(Unit)
         }
     }
 
     suspend fun checkpoint() {
-        val waiting = synchronized(this) {
-            if (stopCount > 0) throw SequenceStopped()
-            if (skipToEnd.get()) throw SequenceSkipToEnd()
-            if (paused.get()) gate else null
+        while (true) {
+            val waiting = synchronized(this) {
+                if (stopped) throw SequenceStopped()
+                if (skipToEnd.get()) throw SequenceSkipToEnd()
+                if (paused.get()) gate else return
+            }
+            waiting.await()
         }
-        waiting?.await()
-        if (stopCount > 0) throw SequenceStopped()
-        if (skipToEnd.get()) throw SequenceSkipToEnd()
     }
 
-    fun consumeSkip(): Boolean = skip.compareAndSet(true, false)
+    fun consumeSkip(node: NinaNode): Boolean = synchronized(this) {
+        (skipOwner == null || skipOwner === node) && skip.compareAndSet(true, false)
+    }
 
-    fun peekSkip(): Boolean = skip.get()
+    internal fun setPromptOwner(node: NinaNode?) = synchronized(this) { promptOwner = node }
 
     fun peekSkipToEnd(): Boolean = skipToEnd.get()
 
@@ -118,15 +130,18 @@ class SequenceControl {
         synchronized(this) {
             paused.set(false)
             skip.set(false)
+            skipOwner = null
+            promptOwner = null
             holdForSkip.set(false)
             skipToEnd.set(false)
-            stopCount = 0
+            stopped = false
             gate = CompletableDeferred<Unit>().also { it.complete(Unit) }
         }
     }
 
     fun holdUntilSkipped() {
         synchronized(this) {
+            if (stopped || skipToEnd.get() || skip.get()) return
             holdForSkip.set(true)
             if (!paused.get()) {
                 gate = CompletableDeferred()
@@ -139,6 +154,8 @@ class SequenceControl {
 class GuideLost : Exception("guide lost")
 
 class DeviceUnavailable(message: String) : Exception(message)
+
+class SequenceStorageFailure(cause: Exception) : Exception(cause.message, cause)
 
 class SequenceEngine(
     private val port: SequenceDevicePort,
@@ -155,6 +172,7 @@ class SequenceEngine(
     private val completedIterations = HashMap<NinaNode, Int>()
     private val parents = HashMap<NinaNode, NinaNode>()
     private val triggerMemory = TriggerMemory()
+    private val clockDeadlines = HashMap<NinaNode, Long>()
     private val containerStartedAt = HashMap<NinaNode, Long>()
     private var framesDone = 0
     private var exposuresSinceCenter = 0
@@ -165,6 +183,8 @@ class SequenceEngine(
     private var hfrAtAutofocus: Double? = null
     private var runStartedAt = 0L
     private var currentNodeId: String? = null
+    private var lastError: String? = null
+    private val promptMutex = Mutex()
 
     private fun snapshotStatus(): Map<String, String> =
         status.mapNotNull { (node, value) -> node.id?.let { it to value.name } }.toMap()
@@ -185,8 +205,14 @@ class SequenceEngine(
     }
 
     suspend fun run(root: NinaNode, settings: SequenceSettings = SequenceSettings()): SequenceRunState {
-        this.settings = settings
         control.reset()
+        return runPrepared(root, settings)
+    }
+
+    internal suspend fun runPrepared(root: NinaNode, settings: SequenceSettings): SequenceRunState {
+        this.settings = settings
+        lastError = null
+        currentNodeId = null
         framesDone = 0
         exposuresSinceCenter = 0
         exposuresSinceAutofocus = 0
@@ -201,6 +227,7 @@ class SequenceEngine(
         triggerMemory.meridianFired.clear()
         triggerMemory.lastFireFrame.clear()
         containerStartedAt.clear()
+        clockDeadlines.clear()
         indexParents(root)
         seedDisabled(root)
         runStartedAt = world.nowMillis()
@@ -209,30 +236,30 @@ class SequenceEngine(
         val end = areas.firstOrNull { it.className == "EndAreaContainer" }
         val beforeEnd = areas.filter { it !== end }
         try {
-            for (area in beforeEnd) {
-                when (val outcome = runNode(area)) {
-                    Outcome.Continue, Outcome.SkipRest -> Unit
-                    Outcome.JumpToEnd -> break
-                    Outcome.Abort -> {
-                        commit(snapshot(SequencePhase.Failed, area.className, "AbortOnError"))
-                        return state
+            try {
+                for (area in beforeEnd) {
+                    when (runNode(area)) {
+                        Outcome.Continue, Outcome.SkipRest -> Unit
+                        Outcome.JumpToEnd -> break
+                        Outcome.Abort -> {
+                            commit(snapshot(SequencePhase.Failed, area.className, lastError))
+                            return state
+                        }
                     }
                 }
+            } catch (_: SequenceSkipToEnd) {
+                control.clearSkipToEnd()
             }
-            if (end != null && status[end] != EntityStatus.FINISHED) runNode(end)
+            if (end != null && runNode(end) == Outcome.Abort) {
+                commit(snapshot(SequencePhase.Failed, end.className, lastError))
+                return state
+            }
+            control.checkpoint()
             currentNodeId = null
-            commit(snapshot(SequencePhase.Completed))
+            commit(snapshot(SequencePhase.Completed, message = lastError))
         } catch (_: SequenceSkipToEnd) {
-            control.clearSkipToEnd()
-            if (end != null && status[end] != EntityStatus.FINISHED && status[end] != EntityStatus.RUNNING) {
-                try {
-                    runNode(end)
-                } catch (_: SequenceStopped) {
-                } catch (_: SequenceSkipToEnd) {
-                }
-            }
             currentNodeId = null
-            commit(snapshot(SequencePhase.Completed))
+            commit(snapshot(SequencePhase.Completed, message = lastError))
         } catch (_: SequenceStopped) {
             currentNodeId = null
             commit(snapshot(SequencePhase.Stopped))
@@ -243,7 +270,7 @@ class SequenceEngine(
     private suspend fun runNode(node: NinaNode): Outcome {
         if (entityStatus(node) == EntityStatus.DISABLED) return Outcome.Continue
         control.checkpoint()
-        if (control.consumeSkip()) {
+        if (control.consumeSkip(node)) {
             status[node] = EntityStatus.SKIPPED
             return Outcome.Continue
         }
@@ -251,6 +278,7 @@ class SequenceEngine(
             return pauseOnUnknown(node, "mount cannot park")
         }
         if (node.className == "MessageBox") return pauseForMessage(node)
+        if (nodeHasUnsupportedExpression(node)) return pauseOnUnknown(node, "expression not supported")
         if (isContainer(node)) {
             status[node] = EntityStatus.RUNNING
             val outcome = if (node.className == "ParallelContainer") runParallel(node) else runContainer(node)
@@ -258,19 +286,30 @@ class SequenceEngine(
             return outcome
         }
         if (!isKnownInstruction(node)) return pauseOnUnknown(node)
-        if (nodeHasUnsupportedExpression(node)) {
-            return pauseOnUnknown(node, "expression not supported")
-        }
         return executeInstruction(node)
     }
 
-    private suspend fun runContainer(container: NinaNode): Outcome {
+    private suspend fun prepareContainer(container: NinaNode) {
+        val startedAt = world.nowMillis()
         for (condition in container.collectionNodes("Conditions")) {
             if (entityStatus(condition) == EntityStatus.DISABLED) continue
-            if (!knownCondition(condition.className)) pauseOnUnknown(condition)
+            when {
+                !knownCondition(condition.className) -> pauseOnUnknown(condition)
+                nodeHasUnsupportedExpression(condition) -> pauseOnUnknown(condition, "expression not supported")
+                condition.className == "TimeCondition" -> {
+                    val deadline = nextClockTimeMillis(condition, startedAt, world.observerLatitudeDeg(),
+                        world.observerLongitudeDeg(), inheritedTarget(condition)?.first)
+                    if (deadline == null) pauseOnUnknown(condition, "Time provider unavailable")
+                    else clockDeadlines[condition] = deadline
+                }
+            }
         }
         iterations[container] = 0
-        containerStartedAt[container] = world.nowMillis()
+        containerStartedAt[container] = startedAt
+    }
+
+    private suspend fun runContainer(container: NinaNode): Outcome {
+        prepareContainer(container)
         var previous: NinaNode? = null
         while (true) {
             var ran = false
@@ -303,31 +342,28 @@ class SequenceEngine(
             }
             if (!canContinue(container)) break
             container.childItems().forEach { child -> resetTree(child) }
+            kotlinx.coroutines.yield()
         }
         skipCreated(container)
         return Outcome.Continue
     }
 
     private suspend fun runParallel(container: NinaNode): Outcome {
-        for (condition in container.collectionNodes("Conditions")) {
-            if (entityStatus(condition) == EntityStatus.DISABLED) continue
-            if (!knownCondition(condition.className)) pauseOnUnknown(condition)
-        }
-        iterations[container] = 0
-        containerStartedAt[container] = world.nowMillis()
+        prepareContainer(container)
         while (canContinue(container)) {
             val items = container.childItems().filter { entityStatus(it) != EntityStatus.DISABLED }
             if (items.isEmpty()) break
-            val outcomes = coroutineScope {
-                items.map { item -> async { runNode(item) } }.awaitAll()
-            }
-            when {
-                outcomes.contains(Outcome.Abort) -> return Outcome.Abort
-                outcomes.contains(Outcome.JumpToEnd) -> return Outcome.JumpToEnd
-                outcomes.contains(Outcome.SkipRest) -> {
-                    skipCreated(container)
-                    return Outcome.Continue
+            try {
+                coroutineScope {
+                    items.map { item -> async {
+                        val outcome = runNode(item)
+                        if (outcome != Outcome.Continue) throw ParallelExit(outcome)
+                    } }.awaitAll()
                 }
+            } catch (exit: ParallelExit) {
+                if (exit.outcome != Outcome.SkipRest) return exit.outcome
+                skipCreated(container)
+                return Outcome.Continue
             }
             iterations[container] = (iterations[container] ?: 0) + 1
             container.collectionNodes("Conditions").forEach { condition ->
@@ -352,7 +388,7 @@ class SequenceEngine(
         }
         val loops = conditions.filter { it.className == "LoopCondition" }
         val limits = conditions.filter { it.className != "LoopCondition" && knownCondition(it.className) }
-        val loopOk = if (loops.isEmpty()) {
+        val loopOk = if (conditions.isEmpty()) {
             (iterations[container] ?: 0) < 1
         } else {
             loops.all { condition ->
@@ -361,7 +397,8 @@ class SequenceEngine(
             }
         }
         val limitOk = limits.all { condition ->
-            limitAllows(condition, liveSignals(), containerStartedAt[container] ?: world.nowMillis())
+            if (condition.className == "TimeCondition") world.nowMillis() < (clockDeadlines[condition] ?: Long.MIN_VALUE)
+            else limitAllows(condition, liveSignals(condition), containerStartedAt[container] ?: world.nowMillis())
         }
         val self = loopOk && limitOk
         val parent = parents[container] ?: return self
@@ -371,29 +408,28 @@ class SequenceEngine(
     private suspend fun executeInstruction(node: NinaNode): Outcome {
         currentNodeId = node.id
         status[node] = EntityStatus.RUNNING
-        publish(SequencePhase.Running, node.className)
         val attempts = (node.intField("Attempts") ?: 1).coerceAtLeast(1)
-        var lastFailure = false
         var attempt = 0
         while (attempt < attempts) {
             control.checkpoint()
-            if (control.consumeSkip()) {
+            if (control.consumeSkip(node)) {
                 status[node] = EntityStatus.SKIPPED
                 return Outcome.Continue
             }
+            currentNodeId = node.id
+            publish(SequencePhase.Running, node.className)
             val skippedByUser = AtomicBoolean(false)
             val conditionBroke = AtomicBoolean(false)
             try {
                 coroutineScope {
-                    val job = launch { port.execute(node, node.className) }
+                    val job = async { port.execute(node, node.className) }
                     val watch = launch {
                         while (job.isActive) {
-                            if (control.peekSkipToEnd()) {
+                            if (control.isStopped || control.peekSkipToEnd()) {
                                 job.cancel()
                                 break
                             }
-                            if (control.peekSkip()) {
-                                control.consumeSkip()
+                            if (control.consumeSkip(node)) {
                                 skippedByUser.set(true)
                                 job.cancel()
                                 break
@@ -407,8 +443,11 @@ class SequenceEngine(
                             delay(500)
                         }
                     }
-                    job.join()
-                    watch.cancel()
+                    try {
+                        job.await()
+                    } finally {
+                        watch.cancel()
+                    }
                 }
                 status[node] = EntityStatus.FINISHED
                 if (node.className == "TakeExposure") {
@@ -424,13 +463,17 @@ class SequenceEngine(
             } catch (skipEnd: SequenceSkipToEnd) {
                 throw skipEnd
             } catch (unavailable: DeviceUnavailable) {
-                return pauseOnUnknown(node, unavailable.message ?: "device unavailable")
+                if (awaitUser(node, unavailable.message)) {
+                    status[node] = EntityStatus.SKIPPED
+                    return Outcome.Continue
+                }
             } catch (_: GuideLost) {
-                publish(SequencePhase.Paused, node.className, "guide lost")
-                control.pause()
-                control.checkpoint()
-                publish(SequencePhase.Running, node.className)
-            } catch (_: CancellationException) {
+                if (awaitUser(node, "guide lost")) {
+                    status[node] = EntityStatus.SKIPPED
+                    return Outcome.Continue
+                }
+            } catch (cancelled: CancellationException) {
+                if (control.isStopped) throw SequenceStopped()
                 if (control.peekSkipToEnd()) throw SequenceSkipToEnd()
                 if (skippedByUser.get()) {
                     status[node] = EntityStatus.SKIPPED
@@ -440,13 +483,15 @@ class SequenceEngine(
                     status[node] = EntityStatus.SKIPPED
                     return Outcome.SkipRest
                 }
+                currentCoroutineContext().ensureActive()
                 throw SequenceStopped()
-            } catch (_: Exception) {
-                lastFailure = true
+            } catch (storage: SequenceStorageFailure) {
+                throw storage
+            } catch (failure: Exception) {
                 attempt += 1
+                if (attempt == attempts) lastError = "${node.className}: ${failure.message ?: failure.javaClass.simpleName}"
             }
         }
-        if (!lastFailure) return Outcome.Continue
         status[node] = EntityStatus.FAILED
         return when (errorBehavior(node)) {
             InstructionErrorBehavior.ContinueOnError -> Outcome.Continue
@@ -456,39 +501,44 @@ class SequenceEngine(
         }
     }
 
+    private suspend fun awaitUser(node: NinaNode, message: String?, skipRequired: Boolean = false): Boolean =
+        promptMutex.withLock {
+            control.checkpoint()
+            currentNodeId = node.id
+            control.setPromptOwner(node)
+            try {
+                if (skipRequired) control.holdUntilSkipped() else control.pause()
+                publish(SequencePhase.Paused, node.className, message)
+                control.checkpoint()
+                control.consumeSkip(node)
+            } finally {
+                control.setPromptOwner(null)
+            }
+        }
+
     private suspend fun pauseOnUnknown(node: NinaNode, message: String = "unsupported"): Outcome {
-        currentNodeId = node.id
-        commit(snapshot(SequencePhase.Paused, node.className, message))
-        control.holdUntilSkipped()
-        control.checkpoint()
-        control.consumeSkip()
+        awaitUser(node, message, skipRequired = true)
         status[node] = EntityStatus.SKIPPED
         publish(SequencePhase.Running)
         return Outcome.Continue
     }
 
     private suspend fun pauseForMessage(node: NinaNode): Outcome {
-        currentNodeId = node.id
         status[node] = EntityStatus.RUNNING
-        control.pause()
-        commit(snapshot(SequencePhase.Paused, node.className, node.textField("Text") ?: "message"))
-        control.checkpoint()
-        if (control.consumeSkip()) {
-            status[node] = EntityStatus.SKIPPED
-        } else {
-            status[node] = EntityStatus.FINISHED
-        }
+        val skipped = awaitUser(node, node.textField("Text") ?: "message")
+        status[node] = if (skipped) EntityStatus.SKIPPED else EntityStatus.FINISHED
         publish(SequencePhase.Running)
         return Outcome.Continue
     }
 
-    private fun liveSignals(): SequenceSignals {
+    private fun liveSignals(node: NinaNode): SequenceSignals {
         val now = world.nowMillis()
+        val target = inheritedTarget(node)
         return SequenceSignals(
             nowMillis = now,
-            altitudeDeg = world.altitudeDeg(),
-            altitudeRising = world.altitudeRising(),
-            minutesToMeridian = world.minutesToMeridian(),
+            altitudeDeg = world.altitudeDeg(target),
+            altitudeRising = world.altitudeRising(target),
+            minutesToMeridian = world.minutesToMeridian(target),
             temperatureC = world.temperatureC(),
             lastHfr = world.lastHfr(),
             filterName = world.filterName(),
@@ -528,12 +578,14 @@ class SequenceEngine(
             }
             current = parents[current]
         }
-        for (trigger in triggers.filterNot { knownTrigger(it.className) }) {
-            pauseOnUnknown(trigger)
+        for (trigger in triggers) {
+            if (!knownTrigger(trigger.className)) pauseOnUnknown(trigger)
+            else if (nodeHasUnsupportedExpression(trigger)) pauseOnUnknown(trigger, "expression not supported")
         }
-        val due = matchingTriggers(triggers, previous, next, moment, liveSignals(), triggerMemory, settings)
+        val enabled = triggers.filter { entityStatus(it) != EntityStatus.SKIPPED }
+        val due = matchingTriggers(enabled, previous, next, moment, liveSignals(anchor), triggerMemory, settings)
         for (trigger in due) {
-            markTriggerFired(trigger, liveSignals(), triggerMemory)
+            markTriggerFired(trigger, liveSignals(anchor), triggerMemory)
             try {
                 if (trigger.className == "CenterAfterDriftTrigger" && !driftExceeded(trigger)) continue
                 val runnerItems = triggerRunnerItems(trigger)
@@ -543,31 +595,40 @@ class SequenceEngine(
                     insertedInstructions(trigger, settings).map { NinaNode(type = it, id = null) }
                 }
                 for (item in items) {
+                    if (item.id == null) parents[anchor]?.let { parents[item] = it }
                     val outcome = if (item.id != null) runNode(item) else executeInstruction(item)
                     when (outcome) {
                         Outcome.Continue -> Unit
                         Outcome.JumpToEnd, Outcome.Abort, Outcome.SkipRest -> return
                     }
                     if (trigger.className == "MeridianFlipTrigger" && item.className == "StopGuiding") {
-                        waitMeridianWindow()
+                        waitMeridianWindow(anchor)
                     }
                 }
                 if (trigger.className == "MeridianFlipTrigger" && settings.settleTimeSeconds > 0) {
-                    delay(settings.settleTimeSeconds * 1000L)
+                    repeat(settings.settleTimeSeconds) {
+                        control.checkpoint()
+                        delay(1_000)
+                    }
                 }
             } catch (stopped: SequenceStopped) {
                 throw stopped
             } catch (skipEnd: SequenceSkipToEnd) {
                 throw skipEnd
-            } catch (_: Exception) {
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (storage: SequenceStorageFailure) {
+                throw storage
+            } catch (failure: Exception) {
+                lastError = "${trigger.className}: ${failure.message ?: failure.javaClass.simpleName}"
             }
         }
     }
 
-    private suspend fun waitMeridianWindow() {
+    private suspend fun waitMeridianWindow(anchor: NinaNode) {
         while (true) {
             control.checkpoint()
-            val minutes = world.minutesToMeridian() ?: return
+            val minutes = world.minutesToMeridian(inheritedTarget(anchor)) ?: throw DeviceUnavailable("site")
             if (-minutes >= settings.minutesAfterMeridian) return
             delay(1_000)
         }
@@ -581,13 +642,14 @@ class SequenceEngine(
     }
 
     private fun inheritedTarget(node: NinaNode): Pair<Double, Double>? {
+        val target = targetContainer(node) ?: return null
+        return (dsoRaHours(target) ?: return null) to (dsoDecDegrees(target) ?: return null)
+    }
+
+    internal fun targetContainer(node: NinaNode): NinaNode? {
         var current: NinaNode? = node
         while (current != null) {
-            if (current.className == "DeepSkyObjectContainer") {
-                val ra = dsoRaHours(current) ?: return null
-                val dec = dsoDecDegrees(current) ?: return null
-                return ra to dec
-            }
+            if (current.className == "DeepSkyObjectContainer") return current
             current = parents[current]
         }
         return null
@@ -626,21 +688,24 @@ class SequenceEngine(
     }
 
     private fun indexParents(root: NinaNode) {
-        val byId = HashMap<String, NinaNode>()
-        fun walk(node: NinaNode) {
-            if (node.id != null) byId[node.id] = node
-            node.fields.values.forEach { value -> walkValue(value, ::walk) }
-        }
-        walk(root)
+        // Execution follows containment. Imported Parent references can be missing or stale.
         fun link(node: NinaNode) {
-            val parentId = (node.fields["Parent"] as? NinaValue.Ref)?.id
-            if (parentId != null) byId[parentId]?.let { parents[node] = it }
-            node.fields.values.forEach { value -> walkValue(value, ::link) }
+            val children = node.childItems() + node.collectionNodes("Conditions") + node.collectionNodes("Triggers")
+            for (child in children) {
+                parents[child] = node
+                link(child)
+            }
+            (node.fields["TriggerRunner"] as? NinaValue.Obj)?.node?.let { runner ->
+                parents[runner] = node
+                link(runner)
+            }
         }
         link(root)
     }
 
     private enum class EntityStatus { CREATED, RUNNING, FINISHED, SKIPPED, FAILED, DISABLED }
+
+    private class ParallelExit(val outcome: Outcome) : Exception()
 
     private enum class Outcome { Continue, SkipRest, Abort, JumpToEnd }
 }
@@ -704,8 +769,11 @@ private val knownInstructions = setOf(
 interface SequenceWorld {
     fun nowMillis(): Long = java.lang.System.currentTimeMillis()
     fun altitudeDeg(): Double? = null
+    fun altitudeDeg(target: Pair<Double, Double>?): Double? = altitudeDeg()
     fun altitudeRising(): Boolean? = null
+    fun altitudeRising(target: Pair<Double, Double>?): Boolean? = altitudeRising()
     fun minutesToMeridian(): Double? = null
+    fun minutesToMeridian(target: Pair<Double, Double>?): Double? = minutesToMeridian()
     fun temperatureC(): Double? = null
     fun lastHfr(): Double? = null
     fun filterName(): String? = null

@@ -178,7 +178,7 @@ private fun parseObject(obj: JSONObject): NinaValue {
 private fun writeNode(node: NinaNode): JSONObject {
     val obj = JSONObject()
     if (node.id != null) obj.put("\$id", node.id)
-    obj.put("\$type", node.type)
+    if (node.type.isNotEmpty()) obj.put("\$type", node.type)
     for ((key, value) in node.fields) {
         obj.put(key, writeValue(value))
     }

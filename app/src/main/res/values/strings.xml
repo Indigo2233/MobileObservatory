@@ -34,6 +34,7 @@
     <string name="gemini_flat">Gemini Flat Panel</string>
     <string name="close">Close</string>
     <string name="app_name">Indigo Observatory</string>
+    <string name="sequence_test_app_name">Indigo Observatory Sequence Test</string>
 
     <!-- CameraScreen -->
     <string name="resume">Resume</string>
@@ -912,6 +913,7 @@
     <string name="sequence_file_imported">Imported %1$s</string>
     <string name="sequence_file_exported">Sequence exported</string>
     <string name="sequence_file_shared">Share sheet opened</string>
+    <string name="sequence_interrupted">The previous sequence was interrupted. Saved frames and the plan are available. Edit the remaining exposures before starting a new run.</string>
     <string name="sequence_file_error">File error: %1$s</string>
     <string name="sequence_start">Start</string>
     <string name="sequence_stop">Stop sequence</string>
@@ -1225,4 +1227,5 @@
     <string name="solar_scan_warning_coverage">Acceleration or deceleration overlaps the solar disk.</string>
     <string name="solar_scan_delete_confirm">Delete the source SER recordings after all results are committed. The signed task policy and source identity must match.</string>
     <string name="solar_scan_trash_confirm">Move the source SER recordings to Trash after all results are committed. They expire seven days after the move.</string>
+    <string name="sequence_frames_saved">%1$d frames captured</string>
 </resources>

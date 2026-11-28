@@ -6,7 +6,9 @@ import com.indigo.mobileobservatory.camera.CameraUsbBandwidthCapable
 import com.indigo.mobileobservatory.guide.GuideCalibrationState
 import com.indigo.mobileobservatory.mount.MountConnectionState
 import com.indigo.mobileobservatory.mount.MountTrackingRate
-import com.indigo.mobileobservatory.mount.MountMotionType
+import com.indigo.mobileobservatory.accessories.cover.CoverState
+import com.indigo.mobileobservatory.accessories.cover.CalibratorState
+import android.os.SystemClock
 import com.indigo.mobileobservatory.mount.PrecisionGotoPhase
 import com.indigo.mobileobservatory.sequence.AutofocusRun
 import com.indigo.mobileobservatory.sequence.DeviceUnavailable
@@ -14,8 +16,6 @@ import com.indigo.mobileobservatory.sequence.SequenceHardware
 import com.indigo.mobileobservatory.sequence.SessionFrame
 import java.io.File
 import kotlin.math.abs
-import kotlin.math.cos
-import kotlin.math.hypot
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 
@@ -38,19 +38,24 @@ class CameraSequenceHardware(
         imageType = imageType
     )
 
-    override suspend fun switchFilter(name: String) {
+    override suspend fun switchFilter(name: String) = switchFilter(name, null)
+
+    override suspend fun switchFilter(name: String, fallbackPosition: Int?) {
+        if (!viewModel.filterWheelConnected.value) throw DeviceUnavailable("filter wheel")
         val names = viewModel.filterWheelSlotNames.value
-        val index = names.indexOfFirst { it.equals(name, ignoreCase = true) }
-        if (index < 0) throw DeviceUnavailable("filter $name")
+        val index = names.indexOfFirst { name.isNotBlank() && it.equals(name, ignoreCase = true) }.takeIf { it >= 0 }
+            ?: fallbackPosition?.takeIf { it in names.indices } ?: throw DeviceUnavailable("filter $name")
         viewModel.setFilterWheelPosition(index)
-        delay(1_500)
+        awaitDevice("filter wheel", 60_000, { viewModel.filterWheelConnected.value }) {
+            !viewModel.filterWheelMoving.value && viewModel.filterWheelPosition.value == index
+        }
     }
 
     override suspend fun cool(targetC: Double, durationMinutes: Double) {
         val camera = viewModel.cameraManager.activeCamera as? CoolingCapable
             ?: throw DeviceUnavailable("cooler")
         if (camera.coolingInfo.value?.canSetTarget != true) throw DeviceUnavailable("cooler")
-        val startedAt = System.currentTimeMillis()
+        val startedAt = SystemClock.elapsedRealtime()
         val safeDurationMinutes = durationMinutes.coerceAtLeast(0.0)
         val durationMs = (safeDurationMinutes * 60_000.0).toLong()
         camera.startCoolDown(
@@ -58,78 +63,86 @@ class CameraSequenceHardware(
             durationMinutes = safeDurationMinutes.roundToInt().coerceAtLeast(0)
         )
         val deadline = startedAt + durationMs + 10 * 60_000L
-        while (System.currentTimeMillis() < deadline) {
+        while (SystemClock.elapsedRealtime() < deadline) {
+            if (viewModel.cameraManager.activeCamera !== camera) throw DeviceUnavailable("cooler")
             val sensor = viewModel.sensorTempTenths.value / 10.0
-            val durationComplete = System.currentTimeMillis() - startedAt >= durationMs
+            val durationComplete = SystemClock.elapsedRealtime() - startedAt >= durationMs
             if (durationComplete && abs(sensor - targetC) <= 1.0) return
             delay(1_000)
         }
+        throw DeviceUnavailable("Cooling target timed out")
     }
 
     override suspend fun warm(durationMinutes: Double) {
         val camera = viewModel.cameraManager.activeCamera as? CoolingCapable
             ?: throw DeviceUnavailable("cooler")
         if (camera.coolingInfo.value?.canSetTarget != true) throw DeviceUnavailable("cooler")
-        val startedAt = System.currentTimeMillis()
+        val startedAt = SystemClock.elapsedRealtime()
         val safeDurationMinutes = durationMinutes.coerceAtLeast(0.0)
         val durationMs = (safeDurationMinutes * 60_000.0).toLong()
         camera.startWarmUp(safeDurationMinutes.roundToInt().coerceAtLeast(0))
         val deadline = startedAt + durationMs + 2 * 60_000L
-        while (System.currentTimeMillis() < deadline) {
-            val durationComplete = System.currentTimeMillis() - startedAt >= durationMs
+        while (SystemClock.elapsedRealtime() < deadline) {
+            val durationComplete = SystemClock.elapsedRealtime() - startedAt >= durationMs
+            if (viewModel.cameraManager.activeCamera !== camera) throw DeviceUnavailable("cooler")
             if (durationComplete && !camera.coolerOn.value) return
             delay(1_000)
         }
+        throw DeviceUnavailable("Camera warming timed out")
     }
 
     override suspend fun slew(raHours: Double, decDeg: Double) {
         if (viewModel.mountConnectionState.value !is MountConnectionState.Connected) {
             throw DeviceUnavailable("mount")
         }
-        viewModel.gotoMountTarget("sequence", raHours, decDeg, "J2000")
-        awaitNear(raHours, decDeg, 180_000L)
+        viewModel.slewSequenceMount(raHours, decDeg)
     }
 
     override suspend fun center(raHours: Double, decDeg: Double) {
         val started = viewModel.startPrecisionGoto("sequence", raHours, decDeg, "J2000")
         if (!started) throw DeviceUnavailable("center")
-        val deadline = System.currentTimeMillis() + 180_000L
-        while (System.currentTimeMillis() < deadline) {
+        try {
+            awaitDevice("center", 300_000, { viewModel.mountConnectionState.value is MountConnectionState.Connected }) {
+                val progress = viewModel.precisionGotoProgress.value
+                !progress.isActive && progress.phase != PrecisionGotoPhase.IDLE && !viewModel.mountMotionState.value.isActive
+            }
             val progress = viewModel.precisionGotoProgress.value
-            if (!progress.isActive && progress.phase != PrecisionGotoPhase.IDLE) break
-            delay(400)
-        }
-        val progress = viewModel.precisionGotoProgress.value
-        if (progress.phase != PrecisionGotoPhase.SUCCEEDED) {
-            if (progress.isActive) viewModel.stopMountMotion()
-            throw IllegalStateException(progress.message.ifBlank { "center" })
+            if (progress.phase != PrecisionGotoPhase.SUCCEEDED) throw DeviceUnavailable(progress.message.ifBlank { "center" })
+        } finally {
+            if (viewModel.precisionGotoProgress.value.isActive) viewModel.stopMountMotion()
         }
     }
 
     override suspend fun plateSolve(): Pair<Double, Double> = viewModel.sequencePlateSolve()
 
     override suspend fun syncMount(raHours: Double, decDeg: Double) {
-        viewModel.syncMountToTarget("sequence", raHours, decDeg, "J2000")
+        viewModel.syncSequenceMount(raHours, decDeg)
     }
 
     override suspend fun guide(enabled: Boolean, forceCalibration: Boolean) {
         if (enabled && forceCalibration) {
-            viewModel.startGuideCalibration()
-            val deadline = System.currentTimeMillis() + 180_000L
-            while (viewModel.guideCalibrating.value && System.currentTimeMillis() < deadline) {
-                delay(500)
-            }
-            when (viewModel.guideCalibrationState.value) {
-                GuideCalibrationState.COMPLETE -> Unit
-                GuideCalibrationState.FAILED -> throw IllegalStateException("guide calibration")
-                else -> throw IllegalStateException("guide calibration timeout")
+            try {
+                viewModel.startGuideCalibration()
+                val deadline = SystemClock.elapsedRealtime() + 180_000L
+                while (viewModel.guideCalibrating.value && SystemClock.elapsedRealtime() < deadline) {
+                    delay(500)
+                }
+                when (viewModel.guideCalibrationState.value) {
+                    GuideCalibrationState.COMPLETE -> Unit
+                    GuideCalibrationState.FAILED -> throw IllegalStateException("guide calibration")
+                    else -> throw IllegalStateException("guide calibration timeout")
+                }
+            } finally {
+                if (viewModel.guideCalibrating.value) viewModel.setGuideRunning(false)
             }
         }
         viewModel.setGuideRunning(enabled)
+        if (viewModel.guideRunning.value != enabled) throw DeviceUnavailable(viewModel.guideStatus.value)
     }
 
     override suspend fun dither(radiusPx: Double) {
-        viewModel.requestGuideDither(radiusPx)
+        if (!guidingLocked()) throw DeviceUnavailable("guide lock")
+        viewModel.ditherSequenceAndWait(radiusPx)
     }
 
     override suspend fun tracking(mode: Int) {
@@ -138,22 +151,32 @@ class CameraSequenceHardware(
             2 -> MountTrackingRate.SOLAR
             5 -> MountTrackingRate.OFF
             3 -> throw DeviceUnavailable("king tracking")
-            else -> MountTrackingRate.SIDEREAL
+            0 -> MountTrackingRate.SIDEREAL
+            else -> throw DeviceUnavailable("tracking mode $mode")
         }
-        viewModel.setMountTrackingRate(rate)
+        viewModel.trackSequenceMount(rate)
     }
 
     override suspend fun goHome() {
         if (viewModel.mountConnectionState.value !is MountConnectionState.Connected) {
             throw DeviceUnavailable("mount")
         }
-        viewModel.goMountHome()
-        awaitMotion(MountMotionType.HOME, 120_000L)
+        viewModel.homeSequenceMount()
     }
 
     override suspend fun cover(open: Boolean) {
+        if (!viewModel.coverConnected.value) throw DeviceUnavailable("cover")
+        val target = if (open) CoverState.OPEN else CoverState.CLOSED
         if (open) viewModel.openCover() else viewModel.closeCover()
-        delay(1_000)
+        try {
+            awaitDevice("cover", 90_000, { viewModel.coverConnected.value }) {
+                val state = viewModel.coverState.value
+                if (state == CoverState.ERROR || state == CoverState.NOT_PRESENT) throw DeviceUnavailable("cover")
+                state == target
+            }
+        } finally {
+            if (viewModel.coverState.value == CoverState.MOVING) viewModel.haltCover()
+        }
     }
 
     override suspend fun dewHeater(on: Boolean) {
@@ -180,15 +203,21 @@ class CameraSequenceHardware(
         } else {
             viewModel.calibratorOff()
         }
-        delay(500)
+        awaitDevice("flat panel", 30_000, { viewModel.coverConnected.value }) {
+            viewModel.calibratorState.value == if (on) CalibratorState.READY else CalibratorState.OFF
+        }
     }
 
     override suspend fun flatBrightness(value: Int) {
         if (!viewModel.coverConnected.value) throw DeviceUnavailable("flat panel")
         val max = viewModel.calibratorMaxBrightness.value
         if (max <= 0) throw DeviceUnavailable("flat panel")
-        viewModel.setCalibratorBrightness(value.coerceIn(0, max))
-        delay(500)
+        require(value in 0..max) { "Flat brightness outside 0..$max" }
+        viewModel.setCalibratorBrightness(value)
+        awaitDevice("flat brightness", 30_000, { viewModel.coverConnected.value }) {
+            viewModel.calibratorBrightness.value == value &&
+                viewModel.calibratorState.value in setOf(CalibratorState.READY, CalibratorState.OFF)
+        }
     }
 
     override suspend fun moveFocuser(position: Int) {
@@ -198,13 +227,13 @@ class CameraSequenceHardware(
     override suspend fun rotateTo(angleDeg: Double) {
         if (!viewModel.rotatorConnected.value) throw DeviceUnavailable("rotator")
         viewModel.moveRotatorTo(angleDeg)
-        val deadline = System.currentTimeMillis() + 60_000L
-        var sawMove = false
-        while (System.currentTimeMillis() < deadline) {
-            if (viewModel.rotatorMoving.value) sawMove = true
-            if (sawMove && !viewModel.rotatorMoving.value) return
-            if (!sawMove && abs(viewModel.rotatorAngle.value - angleDeg) < 0.5) return
-            delay(200)
+        try {
+            awaitDevice("rotator", 60_000, { viewModel.rotatorConnected.value }) {
+                val difference = Math.IEEEremainder(viewModel.rotatorAngle.value - angleDeg, 360.0)
+                !viewModel.rotatorMoving.value && abs(difference) < 0.5
+            }
+        } finally {
+            if (viewModel.rotatorMoving.value) viewModel.haltRotator()
         }
     }
 
@@ -225,36 +254,15 @@ class CameraSequenceHardware(
 
     override fun focuserPosition(): Int = viewModel.eafPosition.value
 
-    private suspend fun awaitNear(raHours: Double, decDeg: Double, timeoutMs: Long) {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        var sawBusy = false
-        while (System.currentTimeMillis() < deadline) {
-            val motion = viewModel.mountMotionState.value.type
-            if (motion != MountMotionType.IDLE) sawBusy = true
-            val coords = viewModel.mountCoordinates.value
-            if (coords != null && separationDeg(coords.raHours, coords.decDeg, raHours, decDeg) < 0.2) return
-            if (sawBusy && motion == MountMotionType.IDLE && coords != null) return
-            delay(400)
+    private suspend fun awaitDevice(
+        name: String, timeoutMs: Long, connected: () -> Boolean, reached: () -> Boolean
+    ) {
+        val deadline = SystemClock.elapsedRealtime() + timeoutMs
+        while (true) {
+            if (!connected()) throw DeviceUnavailable("$name disconnected")
+            if (reached()) return
+            if (SystemClock.elapsedRealtime() >= deadline) throw DeviceUnavailable("$name timed out")
+            delay(200)
         }
-        throw IllegalStateException("slew")
-    }
-
-    private suspend fun awaitMotion(kind: MountMotionType, timeoutMs: Long) {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        var sawBusy = false
-        while (System.currentTimeMillis() < deadline) {
-            val motion = viewModel.mountMotionState.value.type
-            if (motion == kind) sawBusy = true
-            if (sawBusy && motion == MountMotionType.IDLE) return
-            delay(400)
-        }
-    }
-
-    private fun separationDeg(ra1: Double, dec1: Double, ra2: Double, dec2: Double): Double {
-        var deltaRa = (ra1 - ra2) * 15.0
-        while (deltaRa > 180.0) deltaRa -= 360.0
-        while (deltaRa < -180.0) deltaRa += 360.0
-        val raArc = deltaRa * cos(Math.toRadians(dec2))
-        return hypot(raArc, dec1 - dec2)
     }
 }

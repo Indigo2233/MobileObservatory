@@ -37,6 +37,14 @@ data class GuideHistoryPoint(
     val decCorrectionPx: Float = 0f
 )
 
+internal fun ditherHasSettled(history: List<GuideHistoryPoint>, startedMs: Long, raMinMovePx: Float, decMinMovePx: Float): Boolean {
+    val recent = history.takeLast(3)
+    return recent.size == 3 && recent.all {
+        it.timestampMs > startedMs && abs(it.raErrorPx) < raMinMovePx && abs(it.decErrorPx) < decMinMovePx &&
+            abs(it.raCorrectionPx) < raMinMovePx && abs(it.decCorrectionPx) < decMinMovePx
+    }
+}
+
 enum class GuideAlgorithm {
     IDENTITY,
     HYSTERESIS,

@@ -72,6 +72,7 @@ class SequenceEngineTest {
         val state = engine.run(sample())
 
         assertEquals(SequencePhase.Completed, state.phase)
+        assertEquals(2, state.framesDone)
         assertEquals(listOf(120.0, 30.0), port.finishedExposures)
     }
 
@@ -347,7 +348,7 @@ class SequenceEngineTest {
         val world = ClockWorld()
         world.altitude = 10.0
         world.rising = true
-        val port = RecordingPort()
+        val port = RecordingPort().apply { afterExposure = { world.rising = false } }
         val engine = SequenceEngine(port, world = world)
         val state = engine.run(twoTargets())
 
@@ -377,6 +378,7 @@ class SequenceEngineTest {
         job.join()
         assertEquals(SequencePhase.Completed, engine.state.phase)
         assertEquals(listOf(5.0, 7.0), port.exposures)
+        assertEquals(1, engine.state.framesDone)
         assertEquals(listOf(7.0), port.finishedExposures)
     }
 
@@ -461,6 +463,61 @@ class SequenceEngineTest {
         val state = SequenceEngine(port).run(root)
         assertEquals(SequencePhase.Completed, state.phase)
         assertEquals(listOf("SolveAndSync"), port.calls)
+    }
+
+    @Test
+    fun stopDuringLastExposureCancelsHardwareBeforePublishingStopped() = runTest {
+        val port = RecordingPort().apply { holdFirstExposure = true }
+        val engine = SequenceEngine(port)
+        val job = launch { engine.run(sample(endExposure = true)) }
+        testScheduler.runCurrent()
+        engine.control.stop()
+        job.join()
+        assertEquals(SequencePhase.Stopped, engine.state.phase)
+        assertTrue(testScheduler.currentTime < 1_000)
+        assertEquals(0, engine.state.framesDone)
+        assertTrue(port.finishedExposures.isEmpty())
+    }
+
+    @Test
+    fun reconnectAndResumeRetriesTheInterruptedInstruction() = runTest {
+        val port = RecordingPort().apply { beforeExposure = { if (it == 1) throw DeviceUnavailable("camera disconnected") } }
+        val engine = SequenceEngine(port)
+        val job = launch { engine.run(sample()) }
+        testScheduler.runCurrent()
+        assertEquals(SequencePhase.Paused, engine.state.phase)
+        assertEquals("camera disconnected", engine.state.message)
+        engine.control.resume()
+        job.join()
+        assertEquals(listOf(120.0, 120.0, 30.0), port.finishedExposures)
+        assertEquals(3, engine.state.framesDone)
+    }
+
+    @Test
+    fun abortDuringEndAreaReportsFailure() = runTest {
+        val root = sample(endExposure = true)
+        root.find("TakeExposure").last().fields["ErrorBehavior"] = NinaValue.Num(2.0, true)
+        val result = SequenceEngine(RecordingPort(failExposure = 4)).run(root)
+        assertEquals(SequencePhase.Failed, result.phase)
+        assertTrue(result.message.orEmpty().contains("camera"))
+    }
+
+    @Test
+    fun timeSpanAloneRepeatsUntilTheSpecifiedSecondsExpire() = runTest {
+        val root = emptyAdvancedSequence("Timed capture")
+        val start = root.childItems().first()
+        assertTrue(addSequenceNode(root, start.id!!, "SequentialContainer"))
+        val group = start.childItems().single()
+        assertTrue(addSequenceNode(root, group.id!!, "TimeSpanCondition"))
+        val condition = group.collectionNodes("Conditions").single()
+        assertTrue(setSequenceField(root, condition.id!!, "Minutes", "0"))
+        assertTrue(setSequenceField(root, checkNotNull(condition.id), "Seconds", "3"))
+        assertTrue(addSequenceNode(root, checkNotNull(group.id), "TakeExposure"))
+        val world = ClockWorld()
+        world.now = 0
+        val port = RecordingPort().apply { afterExposure = { world.now += 1000 } }
+        org.junit.Assert.assertNull(root.plannedFrames())
+        assertEquals(3, SequenceEngine(port, world = world).run(root).framesDone)
     }
 
     private fun sample(endExposure: Boolean = false): NinaNode {
@@ -705,7 +762,7 @@ private fun sequenceRoot(targets: List<NinaNode>): NinaNode {
     )
 }
 
-private fun NinaNode.find(className: String): List<NinaNode> {
+internal fun NinaNode.find(className: String): List<NinaNode> {
     val found = mutableListOf<NinaNode>()
     fun walk(node: NinaNode) {
         if (node.className == className) found += node

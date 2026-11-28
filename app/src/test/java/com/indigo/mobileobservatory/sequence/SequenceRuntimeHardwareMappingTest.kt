@@ -3,12 +3,99 @@ package com.indigo.mobileobservatory.sequence
 import com.indigo.mobileobservatory.sequence.catalog.SequenceCatalog
 import java.io.File
 import java.nio.file.Files
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SequenceRuntimeHardwareMappingTest {
+    @Test
+    fun parallelTrackingAndGuidingCommandsWaitForTheExposure() = runTest {
+        val finish = CompletableDeferred<Unit>()
+        val hardware = object : SequenceHardware by RecordingSequenceHardware() {
+            override suspend fun takeExposure(seconds: Double, gain: Int, offset: Int, destDir: File,
+                binning: Int, imageType: String): SessionFrame {
+                finish.await()
+                return SessionFrame("test.fits", null, seconds, null)
+            }
+        }
+        val directory = Files.createTempDirectory("sequence-tracking").toFile()
+        try {
+            val runtime = SequenceRuntime(directory, directory, this, hardware)
+            val capture = launch(start = CoroutineStart.UNDISPATCHED) {
+                runtime.execute(SequenceCatalog.create("TakeExposure"), "TakeExposure")
+            }
+            val commands = listOf("SetTracking", "StartGuiding", "StopGuiding").map { name ->
+                launch(start = CoroutineStart.UNDISPATCHED) { runtime.execute(SequenceCatalog.create(name), name) }
+            }
+            assertTrue(commands.none { it.isCompleted })
+            finish.complete(Unit)
+            capture.join()
+            commands.forEach { it.join() }
+        } finally {
+            finish.complete(Unit)
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun repeatedStartAndStopBeforeDispatchCreateOneStoppedSession() = runTest {
+        val sessions = Files.createTempDirectory("sequence-double-start").toFile()
+        val runtime = SequenceRuntime(sessions.resolve("templates"), sessions, this, RecordingSequenceHardware())
+        runtime.start()
+        runtime.start()
+        runtime.stop()
+        val stopped = runtime.state.first { it.phase == SequencePhase.Stopped }
+        assertEquals(0, stopped.framesDone)
+        val json = org.json.JSONObject(sessions.listFiles()!!.single().resolve("session.json").readText())
+        assertEquals("Stopped", json.getString("phase"))
+        assertEquals(0, json.getJSONArray("frames").length())
+    }
+
+    @Test
+    fun interruptedSessionRestoresPlanAndFramesWithoutLaunchingHardware() = runTest {
+        val sessions = Files.createTempDirectory("sequence-interrupted").toFile()
+        val runtime = SequenceRuntime(sessions.resolve("templates"), sessions, this, RecordingSequenceHardware())
+        val root = emptyAdvancedSequence("Saved run")
+        val dir = sessions.resolve("run").apply { mkdirs() }
+        val json = org.json.JSONObject().put("sequence", org.json.JSONObject(root.toJson())).put("phase", "Running")
+            .put("frames", org.json.JSONArray().put(org.json.JSONObject().put("name", "first.fits")
+                .put("exposureSeconds", 30.0))).put("autofocus", org.json.JSONArray())
+        dir.resolve("session.json").writeText(json.toString())
+        dir.resolve("first.fits").createNewFile()
+        assertTrue(runtime.restoreInterruptedSession())
+        assertEquals(SequencePhase.Interrupted, runtime.state.value.phase)
+        assertEquals("Saved run", runtime.document.value?.textField("Name"))
+        assertEquals(listOf("first.fits"), runtime.frames.value.map { it.name })
+        assertEquals(false, runtime.running())
+    }
+
+    @Test
+    fun storageFailureTerminatesRunAndUnlocksEditor() = runTest {
+        val invalidDirectory = Files.createTempFile("sequence", ".file").toFile()
+        val runtime = SequenceRuntime(invalidDirectory, invalidDirectory, this, RecordingSequenceHardware())
+        runtime.start()
+        runtime.state.first { it.phase == SequencePhase.Failed }
+        assertTrue(!runtime.locked.value)
+        assertTrue(!runtime.state.value.message.isNullOrBlank())
+    }
+
+    @Test
+    fun fitsWritesWithSameNameAreDistinctAndOnlyCompleteFilesArePublished() {
+        val dir = Files.createTempDirectory("sequence-fits").toFile()
+        val first = writeSequenceFits(dir, "same") { it.writeText("first") }
+        val second = writeSequenceFits(dir, "same") { it.writeText("second") }
+        val failure = runCatching { writeSequenceFits(dir, "same") { throw java.io.IOException("full") } }.exceptionOrNull()
+        assertTrue(failure is SequenceStorageFailure)
+        assertEquals("first", first.readText())
+        assertEquals("second", second.readText())
+        assertEquals(setOf(first, second), dir.listFiles()!!.toSet())
+    }
+
     @Test
     fun cameraDurationAndGuideCalibrationFieldsReachHardware() = runTest {
         val hardware = RecordingSequenceHardware()
@@ -81,6 +168,7 @@ class SequenceRuntimeHardwareMappingTest {
             scope = this,
             hardware = hardware
         )
+        runtime.addTarget("Target", 1.25, 10.0, destination = SequenceEditorMode.Advanced)
         val centerAndRotate = SequenceCatalog.create("CenterAndRotate")
         putExpression(centerAndRotate.fields, "PositionAngle", 42.0, "position-angle")
         val solveAndRotate = SequenceCatalog.create("SolveAndRotate")

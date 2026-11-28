@@ -92,7 +92,8 @@ fun SequenceAdvancedEditor(
     skyTarget: SequenceSkyTarget? = null,
     pointingRaHours: Double? = null,
     pointingDecDeg: Double? = null,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    fileAction: (() -> Unit) -> Unit = { it() }
 ) {
     val generation by runtime.generation.collectAsStateWithPageLifecycle()
     val document by runtime.document.collectAsStateWithPageLifecycle()
@@ -115,14 +116,8 @@ fun SequenceAdvancedEditor(
     val editing = enabled && !locked
     if (root == null || generation < 0) return
     drag.gapPx = with(density) { 8.dp.toPx() }
-    val issues = remember(generation, hardware) {
+    val issues = remember(generation, hardware, chinese) {
         validateSequence(root, hardware)
-            .filter { issue ->
-                issue.messageEn.contains("Not supported") ||
-                    issue.messageEn.contains("Expression") ||
-                    issue.messageEn.contains("below") ||
-                    issue.messageEn.contains("above")
-            }
             .groupBy { it.nodeId.orEmpty() }
             .mapValues { entry ->
                 entry.value.map { if (chinese) it.messageZh else it.messageEn }
@@ -165,8 +160,8 @@ fun SequenceAdvancedEditor(
                 }
             }
         },
-        onSaveTemplate = { id -> runtime.saveSetTemplate(id) },
-        onSaveTarget = { id -> runtime.saveTargetSnippet(id) }
+        onSaveTemplate = { id -> fileAction { runtime.saveSetTemplate(id) } },
+        onSaveTarget = { id -> fileAction { runtime.saveTargetSnippet(id) } }
     )
     val areas = root.collectionNodes("Items")
     val start = areas.firstOrNull { it.className == "StartAreaContainer" }
@@ -202,6 +197,7 @@ fun SequenceAdvancedEditor(
                 locked = locked,
                 canUndo = canUndo,
                 canRedo = canRedo,
+                fileAction = fileAction,
                 runtime = runtime
             )
             Box(
@@ -294,7 +290,7 @@ fun SequenceAdvancedEditor(
                                     runtime.editSequence { addSequenceNode(it, parent, entry.id) }
                                 }
                             },
-                            onPickTemplate = { runtime.load(it) },
+                            onPickTemplate = { name -> if (editing) fileAction { runtime.load(name) } },
                             skyTarget = skyTarget,
                             onAddSkyTarget = {
                                 if (skyTarget != null && editing) {
@@ -310,11 +306,11 @@ fun SequenceAdvancedEditor(
                             savedTargets = runtime.savedTargetNames(),
                             onInsertTemplate = { name ->
                                 val parent = adding?.parentId ?: start?.id
-                                if (parent != null && editing) runtime.insertSetTemplate(parent, name)
+                                if (parent != null && editing) fileAction { runtime.insertSetTemplate(parent, name) }
                             },
                             onInsertTarget = { name ->
                                 val parent = adding?.parentId ?: targets?.id
-                                if (parent != null && editing) runtime.insertSavedTarget(parent, name)
+                                if (parent != null && editing) fileAction { runtime.insertSavedTarget(parent, name) }
                             },
                             dragEnabled = editing,
                             onDropCatalog = { catalogId, parent, field, index ->
@@ -365,8 +361,8 @@ fun SequenceAdvancedEditor(
                     if (editing) runtime.editSequence { addSequenceNode(it, request.parentId, entry.id) }
                     adding = null
                 },
-                onPickTemplate = {
-                    runtime.load(it)
+                onPickTemplate = { name ->
+                    if (editing) fileAction { runtime.load(name) }
                     adding = null
                 },
                 skyTarget = skyTarget,
@@ -384,11 +380,11 @@ fun SequenceAdvancedEditor(
                 setTemplates = runtime.setTemplateNames(),
                 savedTargets = runtime.savedTargetNames(),
                 onInsertTemplate = { name ->
-                    if (editing) runtime.insertSetTemplate(request.parentId, name)
+                    if (editing) fileAction { runtime.insertSetTemplate(request.parentId, name) }
                     adding = null
                 },
                 onInsertTarget = { name ->
-                    if (editing) runtime.insertSavedTarget(request.parentId, name)
+                    if (editing) fileAction { runtime.insertSavedTarget(request.parentId, name) }
                     adding = null
                 },
                 modifier = Modifier.fillMaxWidth().padding(16.dp)
@@ -405,6 +401,7 @@ private fun EditorBar(
     locked: Boolean,
     canUndo: Boolean,
     canRedo: Boolean,
+    fileAction: (() -> Unit) -> Unit,
     runtime: SequenceRuntime
 ) {
     val id = root.id
@@ -433,7 +430,7 @@ private fun EditorBar(
             )
         }
         TextButton(
-            onClick = { runtime.save(name.ifBlank { "sequence" }) },
+            onClick = { fileAction { runtime.save(name.ifBlank { "sequence" }) } },
             enabled = editing
         ) { Text(stringResource(R.string.sequence_save)) }
     }

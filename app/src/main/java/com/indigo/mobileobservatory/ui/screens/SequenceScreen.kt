@@ -75,6 +75,7 @@ fun SequenceProgressStrip(
     title: String,
     detail: String,
     paused: Boolean,
+    canResume: Boolean,
     onOpen: () -> Unit,
     onPause: () -> Unit,
     onResume: () -> Unit,
@@ -88,7 +89,7 @@ fun SequenceProgressStrip(
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         TextButton(onClick = onOpen) { Text("$title  $detail") }
-        if (paused) TextButton(onClick = onResume) { Text(stringResource(R.string.resume)) }
+        if (paused) TextButton(onClick = onResume, enabled = canResume) { Text(stringResource(R.string.resume)) }
         else TextButton(onClick = onPause) { Text(stringResource(R.string.pause)) }
         TextButton(onClick = onStop) { Text(stringResource(R.string.sequence_stop)) }
     }
@@ -118,6 +119,7 @@ fun SequenceScreen(
     val tracking by viewModel.mountTrackingEnabled.collectAsStateWithPageLifecycle()
     val guideRms by viewModel.guideTotalRmsPx.collectAsStateWithPageLifecycle()
     val guideRunning by viewModel.guideRunning.collectAsStateWithPageLifecycle()
+    val wheelConnected by viewModel.filterWheelConnected.collectAsStateWithPageLifecycle()
     val filterNames by viewModel.filterWheelSlotNames.collectAsStateWithPageLifecycle()
     val skyTarget by viewModel.sequenceSkyPick.collectAsStateWithPageLifecycle()
     val connection by viewModel.connectionState.collectAsStateWithPageLifecycle()
@@ -145,7 +147,7 @@ fun SequenceScreen(
         coolingCapable = coolingInfo != null,
         usbBandwidthCapable = usbBandwidthRange != null,
         dewHeater = heaterSupported && heaterMaxLevel > 0,
-        filterWheelConnected = filterNames.any { it.isNotBlank() },
+        filterWheelConnected = wheelConnected,
         focuserConnected = eafConnected,
         guiderConnected = guideConnection is ConnectionState.Connected,
         mountConnected = mountConnection is MountConnectionState.Connected,
@@ -165,9 +167,17 @@ fun SequenceScreen(
     val plannedFrameCount = if (mode == SequenceEditorMode.Simple) {
         draft.plannedFrames()
     } else {
-        document?.plannedFrames() ?: 0
+        document?.plannedFrames()
     }
     val fileErrorText = stringResource(R.string.sequence_file_error)
+    val fileAction: (() -> Unit) -> Unit = { action ->
+        try {
+            action()
+            fileMessage = null
+        } catch (error: Exception) {
+            fileMessage = fileErrorText.format(error.message.orEmpty())
+        }
+    }
     val fileImportedText = stringResource(R.string.sequence_file_imported)
     val fileExportedText = stringResource(R.string.sequence_file_exported)
     val fileSharedText = stringResource(R.string.sequence_file_shared)
@@ -216,6 +226,17 @@ fun SequenceScreen(
         }
     }
 
+    LaunchedEffect(runtime) {
+        try {
+            if (runtime.restoreInterruptedSession()) page = "status"
+        } catch (error: java.io.IOException) {
+            fileMessage = fileErrorText.format(error.message.orEmpty())
+        } catch (error: org.json.JSONException) {
+            fileMessage = fileErrorText.format(error.message.orEmpty())
+        } catch (error: IllegalArgumentException) {
+            fileMessage = fileErrorText.format(error.message.orEmpty())
+        }
+    }
     LaunchedEffect(state.phase) {
         if (state.phase == SequencePhase.Running || state.phase == SequencePhase.Paused) page = "status"
     }
@@ -296,7 +317,7 @@ fun SequenceScreen(
                             modifier = Modifier.fillMaxWidth()
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = { runtime.save(templateName.ifBlank { draft.title }) }, enabled = !running) {
+                            Button(onClick = { fileAction { runtime.save(templateName.ifBlank { draft.title }) } }, enabled = !running) {
                                 Text(stringResource(R.string.sequence_save))
                             }
                             Button(onClick = {
@@ -322,6 +343,7 @@ fun SequenceScreen(
                 } else {
                     SequenceAdvancedEditor(
                         runtime = runtime,
+                        fileAction = fileAction,
                         enabled = !running,
                         hardware = hardware,
                         latitudeDeg = site?.latitudeDeg,
@@ -347,12 +369,16 @@ fun SequenceScreen(
             }
         } else {
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("${state.phase}  ${state.currentClassName.orEmpty()}  ${state.message.orEmpty()}")
-                Text(stringResource(R.string.sequence_progress, state.framesDone, plannedFrameCount))
+                if (state.phase == SequencePhase.Interrupted) {
+                    Text(stringResource(R.string.sequence_interrupted))
+                } else {
+                    Text("${state.phase}  ${state.currentClassName.orEmpty()}  ${state.message.orEmpty()}")
+                }
+                Text(sequenceFrameProgress(state.framesDone, plannedFrameCount))
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (state.phase == SequencePhase.Paused) {
-                            Button(onClick = runtime::resume, modifier = Modifier.weight(1f)) {
+                            Button(onClick = runtime::resume, enabled = !runtime.control.requiresSkip, modifier = Modifier.weight(1f)) {
                                 Text(stringResource(R.string.resume))
                             }
                         } else {
@@ -464,7 +490,8 @@ fun SequenceScreen(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     pendingIssues.take(12).forEach { issue ->
-                        Text("· ${issue.messageZh}", style = MaterialTheme.typography.bodySmall)
+                        val chinese = context.resources.configuration.locales[0].language == "zh"
+                        Text("${issue.className} · ${if (chinese) issue.messageZh else issue.messageEn}", style = MaterialTheme.typography.bodySmall)
                     }
                 }
             },

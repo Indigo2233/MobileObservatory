@@ -177,7 +177,10 @@ fun dsoTargetName(node: NinaNode): String? =
     ((node.fields["Target"] as? NinaValue.Obj)?.node)?.textField("TargetName")
 
 fun dsoRaHours(node: NinaNode): Double? {
-    val coordinates = dsoCoordinates(node) ?: return null
+    return dsoCoordinates(node)?.let(::coordinateRaHours)
+}
+
+internal fun coordinateRaHours(coordinates: NinaNode): Double? {
     val hours = coordinates.doubleField("RAHours") ?: return null
     val minutes = coordinates.doubleField("RAMinutes") ?: 0.0
     val seconds = coordinates.doubleField("RASeconds") ?: 0.0
@@ -185,7 +188,10 @@ fun dsoRaHours(node: NinaNode): Double? {
 }
 
 fun dsoDecDegrees(node: NinaNode): Double? {
-    val coordinates = dsoCoordinates(node) ?: return null
+    return dsoCoordinates(node)?.let(::coordinateDecDegrees)
+}
+
+internal fun coordinateDecDegrees(coordinates: NinaNode): Double? {
     val degrees = coordinates.doubleField("DecDegrees") ?: return null
     val minutes = coordinates.doubleField("DecMinutes") ?: 0.0
     val seconds = coordinates.doubleField("DecSeconds") ?: 0.0

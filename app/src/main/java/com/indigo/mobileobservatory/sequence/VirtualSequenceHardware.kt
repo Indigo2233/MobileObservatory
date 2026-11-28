@@ -89,25 +89,24 @@ class VirtualSequenceHardware(
         val filter = _status.value.filterName
         val safeFilter = filter.replace(Regex("[^A-Za-z0-9_-]"), "_")
         destDir.mkdirs()
-        val file = File(
-            destDir,
-            "virtual-${frameId.toString().padStart(4, '0')}-${normalizedType.lowercase(Locale.US)}-$safeFilter.fits"
-        )
-        fitsWriter.write(
-            file = file,
-            frame = frame,
-            exposureSeconds = seconds.toFloat(),
-            gain = currentGain.toFloat(),
-            gainKind = GainControlKind.NATIVE_GAIN,
-            gainLabel = "Gain",
-            cameraName = "Indigo Virtual Camera",
-            filterName = filter,
-            configuredFormat = PixelFormat.MONO16,
-            pixelSizeUm = 3.76f,
-            focalLengthMm = 480f,
-            binning = safeBin,
-            imageType = normalizedType
-        )
+        val stem = "virtual-${frameId.toString().padStart(4, '0')}-${normalizedType.lowercase(Locale.US)}-$safeFilter"
+        val file = writeSequenceFits(destDir, stem) { temporary ->
+            fitsWriter.write(
+                file = temporary,
+                frame = frame,
+                exposureSeconds = seconds.toFloat(),
+                gain = currentGain.toFloat(),
+                gainKind = GainControlKind.NATIVE_GAIN,
+                gainLabel = "Gain",
+                cameraName = "Indigo Virtual Camera",
+                filterName = filter,
+                configuredFormat = PixelFormat.MONO16,
+                pixelSizeUm = 3.76f,
+                focalLengthMm = 480f,
+                binning = safeBin,
+                imageType = normalizedType
+            )
+        }
         val hfr = 2.0 + (frameId % 5) * 0.08
         lastFrameHfr = hfr
         return SessionFrame(
